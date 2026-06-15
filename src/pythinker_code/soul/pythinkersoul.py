@@ -97,6 +97,7 @@ from pythinker_code.soul.dynamic_injections.orchestration import OrchestrationIn
 from pythinker_code.soul.dynamic_injections.permissions_state import PermissionsInjectionProvider
 from pythinker_code.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from pythinker_code.soul.flow_runner import FLOW_COMMAND_PREFIX, FlowRunner
+from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.soul.message import (
     check_message,
     system,
@@ -110,7 +111,6 @@ from pythinker_code.soul.permission import (
 )
 from pythinker_code.soul.slash import registry as soul_slash_registry
 from pythinker_code.soul.toolset import PythinkerToolset
-from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.subagents.usage import accumulate_usage, estimate_cost_usd
 from pythinker_code.thinking import (
     available_thinking_levels,

@@ -276,7 +276,7 @@ def test_report_block_counts_findings():
 
 def test_report_block_empty_findings_is_parsed():
     """{"findings": []} is a valid structured report — was_parsed must be True."""
-    text = "```report\n{\"findings\": []}\n```\n"
+    text = '```report\n{"findings": []}\n```\n'
     counts, was_parsed = _parse_reviewer_findings(text)
     assert was_parsed is True
     assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}

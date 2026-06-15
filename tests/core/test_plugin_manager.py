@@ -200,32 +200,31 @@ def test_remove_rejects_plugin_root_name(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_skill_discovery_includes_plugins_dir(tmp_path: Path, monkeypatch):
-    """Plugins dir should be included in skill discovery roots."""
+    """An installed plugin's ``skills/`` subdir is included in skill roots.
+
+    Plugins live under ``<share>/plugins/cache/<marketplace>/<plugin>/<version>/``
+    and contribute the skills nested inside them — not the plugins root itself.
+    """
     from pythinker_host.path import HostPath
 
     from pythinker_code.skill import resolve_skills_roots
 
-    plugins_dir = tmp_path / "plugins"
-    plugins_dir.mkdir()
-
-    # Create a valid plugin with SKILL.md
-    plugin_dir = plugins_dir / "my-plugin"
-    plugin_dir.mkdir()
-    (plugin_dir / "SKILL.md").write_text(
-        "---\nname: my-plugin\ndescription: test\n---\n# Test",
-        encoding="utf-8",
-    )
-    (plugin_dir / "plugin.json").write_text(
-        json.dumps({"name": "my-plugin", "version": "1.0.0"}),
-        encoding="utf-8",
-    )
+    # Install a plugin in the pythinker cache with a nested skill.
+    plugin_root = tmp_path / "plugins" / "cache" / "market" / "my-plugin" / "1.0.0"
+    manifest = plugin_root / ".pythinker-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"name": "my-plugin", "version": "1.0.0"}), encoding="utf-8")
+    skills_dir = plugin_root / "skills"
+    skill_md = skills_dir / "my-skill" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: my-skill\ndescription: test\n---\n# Test", encoding="utf-8")
 
     # Point PYTHINKER_SHARE_DIR to tmp_path so get_plugins_dir() returns tmp_path/plugins
     monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
 
     scoped = await resolve_skills_roots(HostPath(str(tmp_path)))
     root_strs = [str(s.root) for s in scoped]
-    assert str(plugins_dir) in root_strs
+    assert str(skills_dir.resolve()) in root_strs
 
 
 # --- collect_host_values tests ---

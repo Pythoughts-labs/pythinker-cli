@@ -48,6 +48,7 @@ def test_wellformed_table_is_passed_through_unchanged_in_render():
     for token in ("A", "B", "1", "2", "3", "4"):
         assert token in out
 
+
 # ---------------------------------------------------------------------------
 # _loosen_tight_ordered_lists — behavior specs (not pinned characterization)
 # ---------------------------------------------------------------------------

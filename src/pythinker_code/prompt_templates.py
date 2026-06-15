@@ -9,7 +9,7 @@ from pythinker_code.utils.frontmatter import parse_frontmatter, strip_frontmatte
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.path import find_project_root
 
-PromptTemplateScope = Literal["project", "user"]
+PromptTemplateScope = Literal["project", "user", "plugin"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +90,8 @@ async def discover_prompt_templates(work_dir: HostPath) -> dict[str, PromptTempl
 
     Project templates win over user templates.
     """
+    from pythinker_code.plugin.integration import plugin_command_dirs
+
     roots: list[tuple[PromptTemplateScope, HostPath]] = []
     project_root = await find_project_root(work_dir)
     roots.extend(
@@ -98,6 +100,8 @@ async def discover_prompt_templates(work_dir: HostPath) -> dict[str, PromptTempl
             ("user", HostPath.home() / ".pythinker" / "prompts"),
         ]
     )
+    # Enabled plugins contribute commands at lowest priority (project/user win).
+    roots.extend(("plugin", HostPath.unsafe_from_local_path(d)) for d in plugin_command_dirs())
 
     templates: dict[str, PromptTemplate] = {}
     for scope, root in roots:

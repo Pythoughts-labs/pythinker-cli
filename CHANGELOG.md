@@ -15,6 +15,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **MCP tool lists refresh automatically when servers change.** Connected MCP
+  sessions stay open for `tools/list_changed` (and resources/prompts) notifications;
+  inventory is re-published without a manual `/mcp refresh`.
+- **Shell live token readouts track output throughput.** The spinner and background
+  status line show session-wide output tokens produced during the current turn or
+  background stretch instead of the context-size snapshot.
 - **MCP servers can be managed without a full reload.** `/mcp disconnect`, `/mcp reconnect`, and
   `/mcp refresh` (or `retry`) update the live toolset for one server; disconnect unregisters its
   tools and marks the server failed until reconnect.

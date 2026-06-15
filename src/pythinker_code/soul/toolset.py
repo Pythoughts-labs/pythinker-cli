@@ -238,6 +238,78 @@ def _configure_mcp_client_stderr_log(client: Any, runtime: Runtime, server_name:
     _set_transport_log_file(getattr(client, "transport", None))
 
 
+def _make_mcp_live_refresh_handler(
+    client: Any,
+    toolset: PythinkerToolset,
+    runtime: Runtime,
+    server_name: str,
+) -> Any:
+    """Message handler that refreshes inventory on MCP list_changed notifications."""
+    from fastmcp.client.tasks import TaskNotificationHandler
+
+    class _McpLiveRefreshHandler(TaskNotificationHandler):
+        async def on_tool_list_changed(
+            self, message: mcp.types.ToolListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("tools")
+
+        async def on_resource_list_changed(
+            self, message: mcp.types.ResourceListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("resources")
+
+        async def on_prompt_list_changed(
+            self, message: mcp.types.PromptListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("prompts")
+
+        async def _refresh_inventory(self, capability: str) -> None:
+            info = toolset.mcp_servers.get(server_name)
+            if info is None or info.status != "connected":
+                return
+            try:
+                await toolset.refresh_mcp_server(server_name, runtime)
+            except Exception as exc:
+                logger.warning(
+                    "MCP server {server_name} live {capability} refresh failed: {error}",
+                    server_name=server_name,
+                    capability=capability,
+                    error=exc,
+                )
+
+    return _McpLiveRefreshHandler(client)
+
+
+def _configure_mcp_client_handlers(
+    client: Any,
+    toolset: PythinkerToolset,
+    runtime: Runtime,
+    server_name: str,
+) -> None:
+    _configure_mcp_client_stderr_log(client, runtime, server_name)
+    client._session_kwargs["message_handler"] = _make_mcp_live_refresh_handler(
+        client, toolset, runtime, server_name
+    )
+
+
+async def _hold_mcp_session(server_name: str, info: MCPServerInfo) -> None:
+    """Keep one MCP client session open so list_changed notifications can arrive."""
+    stop = asyncio.Event()
+    info.session_stop = stop
+    try:
+        async with info.client:
+            await stop.wait()
+    except Exception as exc:
+        logger.debug(
+            "MCP session holder exited for {server_name}: {error}",
+            server_name=server_name,
+            error=exc,
+        )
+    finally:
+        info.session_stop = None
+        info.session_holder_task = None
+
+
 def _classify_mcp_connect_error(error: BaseException, server_name: str) -> str:
     """One short actionable line for /mcp explaining a connect failure.
 
@@ -1247,7 +1319,7 @@ class PythinkerToolset:
                     oauth_servers[server_name] = server_config.url
 
                 client = fastmcp.Client(MCPConfig(mcpServers={server_name: server_config}))
-                _configure_mcp_client_stderr_log(client, runtime, server_name)
+                _configure_mcp_client_handlers(client, self, runtime, server_name)
                 self._mcp_servers[server_name] = MCPServerInfo(
                     status="pending",
                     client=client,
@@ -1339,6 +1411,7 @@ class PythinkerToolset:
             )
             server_info.status = "connected"
             server_info.error = None
+            self._start_mcp_session_holder(server_name, server_info)
             logger.info("Connected MCP server: {server_name}", server_name=server_name)
             return server_name, None
         except Exception as e:
@@ -1368,19 +1441,53 @@ class PythinkerToolset:
         if self._mcp_loading_task is not None and not self._mcp_loading_task.done():
             raise MCPRuntimeError("MCP servers are still loading")
 
+    def _start_mcp_session_holder(self, server_name: str, info: MCPServerInfo) -> None:
+        task = info.session_holder_task
+        if task is not None and not task.done():
+            return
+        info.session_holder_task = asyncio.create_task(_hold_mcp_session(server_name, info))
+
+    async def _stop_mcp_session_holder(self, info: MCPServerInfo) -> None:
+        if info.session_stop is not None:
+            info.session_stop.set()
+        task = info.session_holder_task
+        if task is None:
+            return
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     async def disconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
         """Disconnect one MCP server and unregister its tools."""
         self._ensure_mcp_idle()
         info = self._mcp_servers.get(server_name)
         if info is None:
             raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        await self._stop_mcp_session_holder(info)
         self._unregister_mcp_server_tools(server_name, runtime)
+        prior_error = info.error
+        close_error: str | None = None
         try:
             await asyncio.wait_for(info.client.close(), timeout=_MCP_CLOSE_TIMEOUT_S)
+        except TimeoutError as exc:
+            logger.warning(
+                "MCP disconnect close timed out for {server_name}: {error}",
+                server_name=server_name,
+                error=exc,
+            )
+            close_error = "disconnect timed out while closing the MCP session"
         except Exception as exc:
-            logger.debug("MCP disconnect close failed: {error}", error=exc)
+            logger.warning(
+                "MCP disconnect close failed for {server_name}: {error}",
+                server_name=server_name,
+                error=exc,
+            )
+            close_error = f"disconnect failed while closing the MCP session: {exc}"
         info.status = "failed"
-        info.error = "disconnected"
+        if close_error is not None:
+            if prior_error is None:
+                info.error = close_error
+        else:
+            info.error = "disconnected"
         info.resources = []
         info.prompts = []
 
@@ -1417,12 +1524,14 @@ class PythinkerToolset:
             raise MCPRuntimeError(f"MCP server '{server_name}' has no stored config to reconnect")
         await self.disconnect_mcp_server(server_name, runtime)
         info.client = fastmcp.Client(MCPConfig(mcpServers={server_name: info.server_config}))
-        _configure_mcp_client_stderr_log(info.client, runtime, server_name)
+        _configure_mcp_client_handlers(info.client, self, runtime, server_name)
         info.status = "pending"
         info.error = None
         _server_name, error = await self._connect_mcp_server(server_name, info, runtime)
         if error is not None:
-            raise MCPRuntimeError(f"Failed to reconnect MCP server '{server_name}': {error}")
+            raise MCPRuntimeError(
+                info.error or f"Failed to reconnect MCP server '{server_name}': {error}"
+            )
         self._publish_mcp_server_tools(server_name, runtime)
 
     async def cleanup(self) -> None:
@@ -1436,6 +1545,7 @@ class PythinkerToolset:
         # Close every MCP client concurrently with a per-server timeout, so one
         # hung or slow client cannot block teardown of the rest (mcpext-3).
         async def _close(info: MCPServerInfo) -> None:
+            await self._stop_mcp_session_holder(info)
             try:
                 await asyncio.wait_for(info.client.close(), timeout=_MCP_CLOSE_TIMEOUT_S)
             except Exception as exc:
@@ -1459,6 +1569,9 @@ class MCPServerInfo:
     tool_filter: McpToolFilter | None = None
     # Original server config for per-server reconnect (mcpext-2).
     server_config: Any = None
+    # Background task holding the client session open for list_changed notifications.
+    session_stop: asyncio.Event | None = None
+    session_holder_task: asyncio.Task[None] | None = None
 
 
 class MCPTool[T: ClientTransport](CallableTool):

@@ -598,12 +598,12 @@ class _PromptLiveView(_LiveView):
     def should_handle_running_prompt_key(self, key: str) -> bool:
         if key in {"c-o", "c-e"}:
             return self.has_expandable_panel()
+        if key == "escape":
+            return self._cancel_event is not None
         if self._current_approval_request_panel is not None:
             return key in {"up", "down", "enter", "1", "2", "3", "4"}
         if self._turn_ended:
             return False
-        if key == "escape":
-            return self._cancel_event is not None
         if key == "c-t":
             return bool(getattr(self, "_latest_todos", ()))
         # ↑ on empty buffer: recall last queued message.

@@ -30,7 +30,7 @@
 | Permissions UI | `components/permissions/`, `utils/permissions/` | `soul/permission.py`, `soul/approval.py`, `approval_runtime/` | adopt invariants | verify-existing | Phase 1.3–1.4 |
 | Background tasks | `Task.ts`, `tasks/**` | `background/`, `tools/background/` | adapt; skip remote/dream | adapt | native-equivalent partial |
 | Services core | `services/tools/`, `services/compact/` | `soul/toolset.py`, `soul/compaction.py` | adopt/adapt | todo | Phase 2 |
-| MCP | `services/mcp/**` | `soul/toolset.py`, `tools/mcp_resource/`, `cli/mcp.py` | adopt portable | verify-existing | Phase 4; reconnect todo |
+| MCP | `services/mcp/**` | `soul/toolset.py`, `tools/mcp_resource/`, `cli/mcp.py` | adopt portable | verify-existing | Phase 4; live list_changed refresh |
 | Memory | `memdir/**` | `project_memory.py`, `memory/`, `tools/memory/`, `tools/recall/` | adopt hygiene | verify-existing | Phase 3 |
 | Skills | `skills/**` | `skill/__init__.py`, `tools/skill/`, `skills/**` | adapt | todo | Phase 3.4–3.8 |
 | Agents/subagents | `tools/AgentTool/**` | `agentspec.py`, `subagents/`, `tools/agent/` | adapt | todo | Phase 5 |
@@ -87,7 +87,7 @@
 | 3.8 | 3 | skill frontmatter | `skill/__init__.py`, `tools/skill/` | done | `tests/core/test_skill.py` | adopts name/description/type/scope; ignores non-Pythinker fields |
 | 3.9 | 3 | `plugins/**` | `skill/__init__.py`, `plugin/` | done | ledger audit | plugins expose tools/config/skill roots; marketplace/output styles skipped |
 | 4.1 | 4 | `services/mcp/client.ts` | `tools/mcp_resource/` | done | `tests/tools/test_mcp_resource.py` | resources + prompts listed; reads untrusted |
-| 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py`, `ui/shell/slash.py` | in_progress | `tests/core/test_mcp_lifecycle.py` | Slash disconnect/reconnect/refresh done; `tools/list_changed` deferred |
+| 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py`, `ui/shell/slash.py` | done | `tests/core/test_mcp_lifecycle.py` | Persistent MCP sessions plus `tools/list_changed` / resources / prompts handlers call `refresh_mcp_server`; manual `/mcp refresh` remains |
 | 4.3 | 4 | MCP docker stdio | `soul/toolset.py`, `cli/mcp.py` | done | `tests/core/test_mcp_docker_rm.py`, `tests/core/test_mcp_cleanup.py`, `tests/tools/test_mcp_startup_timeout.py` | --rm on add + config load via prepare_mcp_config_dict |
 | 4.4 | 4 | MCP prompts | `tools/mcp_resource/`, `agents/default/agent.yaml` | done | `tests/tools/test_mcp_resource.py` | InvokeMcpPrompt returns untrusted messages |
 | 4.5 | 4 | `elicitationHandler.ts` | `wire/`, `acp/` | future-approved-only | — | Needs Wire contract approval |

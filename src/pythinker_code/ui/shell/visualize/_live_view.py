@@ -663,11 +663,11 @@ class _LiveView:
     def _turn_token_rate(self, now: float) -> int | None:
         """Stable recent tokens/sec for the running turn, or None until known.
 
-        Samples the cumulative context token counter at refresh cadence and
+        Samples the session-wide output-token counter at refresh cadence and
         derives the rate over a short sliding window, so the readout tracks
         live throughput instead of a whole-turn average.
         """
-        tokens = getattr(self, "_latest_context_tokens", None) or 0
+        tokens = get_turn_output_tokens()
         # Lazy init: subclasses used in tests don't always run __init__.
         samples = getattr(self, "_turn_token_samples", None)
         if samples is None:
@@ -691,8 +691,9 @@ class _LiveView:
     ) -> Text:
         label = _todo_activity_label(label)
         parts = [format_elapsed(elapsed_s)]
-        if self._latest_context_tokens:
-            parts.append(f"↓ {format_token_count(self._latest_context_tokens)} tokens")
+        turn_tokens = get_turn_output_tokens()
+        if turn_tokens:
+            parts.append(f"↓ {format_token_count(turn_tokens)} tokens")
         rate = self._turn_token_rate(time.monotonic())
         if rate:
             parts.append(f"{rate} t/s")

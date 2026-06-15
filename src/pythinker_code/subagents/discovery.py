@@ -16,7 +16,7 @@ from pythinker_code.utils.frontmatter import parse_frontmatter, strip_frontmatte
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.path import find_project_root
 
-AgentScope = Literal["project"]
+AgentScope = Literal["project", "plugin"]
 
 CLAUDE_TOOL_MAP: dict[str, str] = {
     "Agent": "pythinker_code.tools.agent:Agent",
@@ -84,6 +84,13 @@ async def resolve_agent_roots(work_dir: HostPath) -> list[ScopedAgentRoot]:
             roots.append(ScopedAgentRoot(root=canon, scope=scope))
 
     await add_existing(_project_agent_dir_candidates(project_root), "project")
+
+    # Enabled plugins (pythinker/Claude/Codex installs) contribute agent roots
+    # below project scope, so a project-local agent of the same name wins.
+    from pythinker_code.plugin.integration import plugin_agent_dirs
+
+    plugin_roots = [HostPath.unsafe_from_local_path(d) for d in plugin_agent_dirs()]
+    await add_existing(plugin_roots, "plugin")
     return roots
 
 

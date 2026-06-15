@@ -101,6 +101,36 @@ def test_render_report_hanging_indents_wrapped_locations():
     assert location_lines[0].index("packages") == location_lines[1].index("packages")
 
 
+def test_render_report_hang_indents_wrapped_finding_title():
+    """A wrapped finding title aligns with the body/location column, not back
+    under the ● marker — so a long title never reads as a separate finding."""
+    report = Report(
+        title="Deep Code Scan Results",
+        findings=(
+            ReportFinding(
+                "disconnect_mcp_server swallows close errors and overwrites info.error on timeout",
+                "high",
+                location="src/pythinker_code/soul/toolset.py:1378-1385",
+                body="The bare except swallows the timeout.",
+            ),
+        ),
+    )
+
+    out = _plain(render_report(report), width=60)
+    lines = out.splitlines()
+    marker_line = next(line for line in lines if "● disconnect_mcp_server" in line)
+    wrap_line = next(line for line in lines if "overwrites" in line and "●" not in line)
+    location_line = next(line for line in lines if "toolset.py" in line)
+
+    marker_col = marker_line.index("●")
+    title_col = marker_line.index("disconnect_mcp_server")
+    # The wrapped title and the location start at the title column, both deeper
+    # than the marker — an unambiguous, cohesive finding block.
+    assert wrap_line.index("overwrites") == title_col
+    assert location_line.index("src/pythinker") == title_col
+    assert title_col > marker_col
+
+
 def test_render_report_groups_in_severity_order_regardless_of_input():
     report = Report(
         title="t",
