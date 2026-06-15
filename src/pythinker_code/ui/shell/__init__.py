@@ -2701,7 +2701,7 @@ def _print_welcome_info(
     # Boot animation: blink the antenna 7 times, then stop. Only when the
     # Unicode logo actually rendered, on a real terminal tall enough that the
     # antenna row is still on screen, and never under reduced motion.
-    if logo_rendered and console.is_terminal and not motion_disabled():
+    if logo_rendered and console.is_terminal and not console.record and not motion_disabled():
         cell = _antenna_cell(panel, panel_width)
         if cell is not None:
             rows_up, column = cell

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from rich.console import Console
 
+from pythinker_code.ui.shell.components.render_utils import sanitize_ansi
 from pythinker_code.ui.shell.components.report import (
     Report,
     ReportFinding,
@@ -18,7 +19,7 @@ def _plain(renderable, *, width: int = 80) -> str:
     console = Console(width=width, no_color=True, legacy_windows=False)
     with console.capture() as cap:
         console.print(renderable)
-    return cap.get()
+    return sanitize_ansi(cap.get())
 
 
 # ---------------------------------------------------------------------------

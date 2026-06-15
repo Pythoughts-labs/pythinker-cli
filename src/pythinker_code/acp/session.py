@@ -17,6 +17,7 @@ from pythinker_code.acp.convert import (
 from pythinker_code.acp.types import ACPContentBlock
 from pythinker_code.app import PythinkerCLI
 from pythinker_code.soul import LLMNotSet, LLMNotSupported, MaxStepsReached, RunCancelled
+from pythinker_code.soul.btw import generate_max_steps_handoff
 from pythinker_code.tools import extract_key_argument
 from pythinker_code.utils.logging import logger
 from pythinker_code.wire.types import (
@@ -242,6 +243,13 @@ class ACPSession:
             raise acp.RequestError.internal_error({"error": str(e)}) from e
         except MaxStepsReached as e:
             logger.warning("Max steps reached: {n_steps}", n_steps=e.n_steps)
+            try:
+                handoff = await generate_max_steps_handoff(self._cli.soul)
+            except Exception:
+                logger.warning("Max-steps handoff failed", exc_info=True)
+                handoff = None
+            if handoff:
+                await self._send_text(f"\n── handoff ──\n{handoff}")
             return acp.PromptResponse(stop_reason="max_turn_requests")
         except RunCancelled:
             logger.info("Prompt cancelled by user")

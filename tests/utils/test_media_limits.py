@@ -5,7 +5,6 @@ from __future__ import annotations
 from pythinker_code.utils.media_limits import (
     MAX_IMAGE_BYTES,
     MAX_IMAGE_PIXELS,
-    MAX_PDF_BYTES,
     MAX_VIDEO_BYTES,
     format_byte_limit,
 )
@@ -14,7 +13,6 @@ from pythinker_code.utils.media_limits import (
 def test_byte_limits_are_positive_and_ordered() -> None:
     assert MAX_IMAGE_BYTES > 0
     assert MAX_VIDEO_BYTES >= MAX_IMAGE_BYTES
-    assert MAX_PDF_BYTES > 0
     assert MAX_IMAGE_PIXELS > 0
 
 

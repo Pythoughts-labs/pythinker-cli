@@ -1201,74 +1201,8 @@ class PythinkerToolset:
         ) -> tuple[str, Exception | None]:
             if server_info.status != "pending":
                 return server_name, None
-
             server_info.status = "connecting"
-
-            async def _open_and_inventory() -> None:
-                async with server_info.client as client:
-                    skipped: list[str] = []
-                    local_tools: list[MCPTool[Any]] = []
-                    for tool in await client.list_tools():
-                        if server_info.tool_filter and not server_info.tool_filter.allows(
-                            tool.name
-                        ):
-                            skipped.append(tool.name)
-                            continue
-                        local_tools.append(
-                            MCPTool(
-                                server_name,
-                                tool,
-                                client,
-                                runtime=runtime,
-                                tool_filter=server_info.tool_filter,
-                            )
-                        )
-                    if skipped:
-                        logger.info(
-                            "MCP server {server_name}: {n} tools filtered out by "
-                            "mcp.json enabledTools/disabledTools: {names}",
-                            server_name=server_name,
-                            n=len(skipped),
-                            names=", ".join(sorted(skipped)),
-                        )
-                    # Resources/prompts are optional MCP capabilities; a server
-                    # that exposes none (or does not support the request) must
-                    # still connect, so capture them best-effort (mcpext-1). A
-                    # METHOD_NOT_FOUND means the capability is genuinely absent; any
-                    # other error is surfaced (WARNING) rather than masked as "none".
-                    local_resources = await _discover_optional_capability(
-                        server_name, "resources", client.list_resources
-                    )
-                    local_prompts = await _discover_optional_capability(
-                        server_name, "prompts", client.list_prompts
-                    )
-                    server_info.tools = local_tools
-                    server_info.resources = local_resources
-                    server_info.prompts = local_prompts
-
-            try:
-                # Bound connect+inventory: a hung server would otherwise block
-                # every agent turn (the loop awaits MCP loading).
-                await asyncio.wait_for(
-                    _open_and_inventory(),
-                    timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
-                )
-
-                server_info.status = "connected"
-                logger.info("Connected MCP server: {server_name}", server_name=server_name)
-                return server_name, None
-            except Exception as e:
-                from pythinker_code.telemetry.errors import report_handled_error
-
-                report_handled_error(e, site="soul.toolset.mcp.connect")
-                logger.error(
-                    "Failed to connect MCP server: {server_name}, error: {error}",
-                    server_name=server_name,
-                    error=e,
-                )
-                server_info.status = "failed"
-                server_info.error = _classify_mcp_connect_error(e, server_name)
-                return server_name, e
+            return await self._connect_mcp_server(server_name, server_info, runtime)
 
         async def _connect():
             _toast_mcp("connecting to mcp servers...")
@@ -1321,6 +1255,7 @@ class PythinkerToolset:
                     resources=[],
                     prompts=[],
                     tool_filter=McpToolFilter.from_server_config(server_config),
+                    server_config=server_config,
                 )
 
         if not any(server_info.status == "pending" for server_info in self._mcp_servers.values()):
@@ -1345,6 +1280,150 @@ class PythinkerToolset:
         finally:
             if self._mcp_loading_task is task and task.done():
                 self._mcp_loading_task = None
+
+    def _unregister_mcp_server_tools(self, server_name: str, runtime: Runtime) -> None:
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            return
+        from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
+
+        for tool in info.tools:
+            registered = self._tool_dict.get(tool.name)
+            if registered is tool:
+                del self._tool_dict[tool.name]
+            runtime.mcp_tools.pop(mcp_tool_runtime_key(server_name, tool.name), None)
+        info.tools = []
+
+    async def _inventory_mcp_server(
+        self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
+    ) -> None:
+        async with server_info.client as client:
+            skipped: list[str] = []
+            local_tools: list[MCPTool[Any]] = []
+            for tool in await client.list_tools():
+                if server_info.tool_filter and not server_info.tool_filter.allows(tool.name):
+                    skipped.append(tool.name)
+                    continue
+                local_tools.append(
+                    MCPTool(
+                        server_name,
+                        tool,
+                        client,
+                        runtime=runtime,
+                        tool_filter=server_info.tool_filter,
+                    )
+                )
+            if skipped:
+                logger.info(
+                    "MCP server {server_name}: {n} tools filtered out by "
+                    "mcp.json enabledTools/disabledTools: {names}",
+                    server_name=server_name,
+                    n=len(skipped),
+                    names=", ".join(sorted(skipped)),
+                )
+            server_info.tools = local_tools
+            server_info.resources = await _discover_optional_capability(
+                server_name, "resources", client.list_resources
+            )
+            server_info.prompts = await _discover_optional_capability(
+                server_name, "prompts", client.list_prompts
+            )
+
+    async def _connect_mcp_server(
+        self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
+    ) -> tuple[str, Exception | None]:
+        try:
+            await asyncio.wait_for(
+                self._inventory_mcp_server(server_name, server_info, runtime),
+                timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
+            )
+            server_info.status = "connected"
+            server_info.error = None
+            logger.info("Connected MCP server: {server_name}", server_name=server_name)
+            return server_name, None
+        except Exception as e:
+            from pythinker_code.telemetry.errors import report_handled_error
+
+            report_handled_error(e, site="soul.toolset.mcp.connect")
+            logger.error(
+                "Failed to connect MCP server: {server_name}, error: {error}",
+                server_name=server_name,
+                error=e,
+            )
+            server_info.status = "failed"
+            server_info.error = _classify_mcp_connect_error(e, server_name)
+            return server_name, e
+
+    def _publish_mcp_server_tools(self, server_name: str, runtime: Runtime) -> None:
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            return
+        self._register_mcp_tools(server_name, info.tools)
+        from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
+
+        for tool in info.tools:
+            runtime.mcp_tools[mcp_tool_runtime_key(server_name, tool.name)] = tool
+
+    def _ensure_mcp_idle(self) -> None:
+        if self._mcp_loading_task is not None and not self._mcp_loading_task.done():
+            raise MCPRuntimeError("MCP servers are still loading")
+
+    async def disconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Disconnect one MCP server and unregister its tools."""
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        self._unregister_mcp_server_tools(server_name, runtime)
+        try:
+            await asyncio.wait_for(info.client.close(), timeout=_MCP_CLOSE_TIMEOUT_S)
+        except Exception as exc:
+            logger.debug("MCP disconnect close failed: {error}", error=exc)
+        info.status = "failed"
+        info.error = "disconnected"
+        info.resources = []
+        info.prompts = []
+
+    def connected_mcp_server_names(self) -> tuple[str, ...]:
+        return tuple(name for name, info in self._mcp_servers.items() if info.status == "connected")
+
+    async def refresh_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Re-list tools/resources/prompts for a connected MCP server."""
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        if info.status != "connected":
+            raise MCPRuntimeError(
+                f"MCP server '{server_name}' is not connected (status={info.status})"
+            )
+        self._unregister_mcp_server_tools(server_name, runtime)
+        await asyncio.wait_for(
+            self._inventory_mcp_server(server_name, info, runtime),
+            timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
+        )
+        self._publish_mcp_server_tools(server_name, runtime)
+
+    async def reconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Close and reconnect one MCP server from its stored config."""
+        import fastmcp
+        from fastmcp.mcp_config import MCPConfig
+
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        if info.server_config is None:
+            raise MCPRuntimeError(f"MCP server '{server_name}' has no stored config to reconnect")
+        await self.disconnect_mcp_server(server_name, runtime)
+        info.client = fastmcp.Client(MCPConfig(mcpServers={server_name: info.server_config}))
+        _configure_mcp_client_stderr_log(info.client, runtime, server_name)
+        info.status = "pending"
+        info.error = None
+        _server_name, error = await self._connect_mcp_server(server_name, info, runtime)
+        if error is not None:
+            raise MCPRuntimeError(f"Failed to reconnect MCP server '{server_name}': {error}")
+        self._publish_mcp_server_tools(server_name, runtime)
 
     async def cleanup(self) -> None:
         """Cleanup any resources held by the toolset."""
@@ -1378,6 +1457,8 @@ class MCPServerInfo:
     error: str | None = None
     # Optional mcp.json enabledTools/disabledTools scoping for this server.
     tool_filter: McpToolFilter | None = None
+    # Original server config for per-server reconnect (mcpext-2).
+    server_config: Any = None
 
 
 class MCPTool[T: ClientTransport](CallableTool):

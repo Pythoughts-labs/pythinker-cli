@@ -74,6 +74,14 @@ def test_summarize_batch_sums_children() -> None:
     assert lines[1] == "total_child_cost_usd: 0.0500"
 
 
+def test_summarize_batch_counts_each_child_once_not_per_resume_line() -> None:
+    """Resume metadata in the child body must not inflate token roll-up totals."""
+    resumed = _result({EXTRA_INPUT_TOKENS: 80, EXTRA_OUTPUT_TOKENS: 20})
+    fresh = _result({EXTRA_INPUT_TOKENS: 20, EXTRA_OUTPUT_TOKENS: 10})
+    lines = summarize_batch([resumed, fresh])
+    assert lines[0] == "total_child_tokens: 100 in / 30 out"
+
+
 def test_summarize_batch_empty_when_no_usage() -> None:
     results = [_result(None), _result({"unrelated": 1})]
     assert summarize_batch(results) == []

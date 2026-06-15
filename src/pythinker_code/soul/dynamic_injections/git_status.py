@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -40,9 +41,10 @@ class GitStatusInjectionProvider(DynamicInjectionProvider):
         if not raw:
             return []
 
-        if raw == self._last_fingerprint:
+        fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if fingerprint == self._last_fingerprint:
             return []
-        self._last_fingerprint = raw
+        self._last_fingerprint = fingerprint
 
         inner = raw
         prefix = "<git-context>\n"

@@ -594,6 +594,97 @@ async def test_proactive_compaction_failure_yields_handoff(
 
 
 @pytest.mark.asyncio
+async def test_proactive_compaction_failure_below_threshold_continues_turn(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With max_compaction_failures > 1, a single failed compaction must not abort the turn."""
+    runtime.config.loop_control.max_compaction_failures = 2
+    provider = RecoveringSequenceProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100,
+        capabilities=set(),
+    )
+    soul, context = _make_soul(runtime, llm, tmp_path)
+    await context.update_token_count(100_000)
+
+    async def fake_compact_context() -> None:
+        raise RuntimeError("compact failed")
+
+    step_ran = False
+
+    async def fake_step() -> object:
+        nonlocal step_ran
+        from pythinker_code.soul.pythinkersoul import StepOutcome
+
+        step_ran = True
+        return StepOutcome(
+            stop_reason="no_tool_calls",
+            assistant_message=Message(role="assistant", content="continued after compact miss"),
+        )
+
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    monkeypatch.setattr(soul, "_step", fake_step)
+
+    await run_soul(
+        soul,
+        "trigger proactive compaction",
+        lambda wire: _collect_ui_messages(wire, []),
+        asyncio.Event(),
+    )
+
+    assert step_ran
+    assert not any(
+        "compaction failed" in message.extract_text(" ").lower() for message in context.history
+    )
+
+
+@pytest.mark.asyncio
+async def test_proactive_compaction_failure_threshold_requires_multiple_failures(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.config.loop_control.max_compaction_failures = 2
+    llm = LLM(
+        chat_provider=RecoveringSequenceProvider(),
+        max_context_size=100,
+        capabilities=set(),
+    )
+    soul, context = _make_soul(runtime, llm, tmp_path)
+    await context.update_token_count(100_000)
+    step_calls = 0
+
+    async def fake_compact_context() -> None:
+        raise RuntimeError("compact failed")
+
+    async def fake_step() -> object | None:
+        nonlocal step_calls
+        from pythinker_code.soul.pythinkersoul import StepOutcome
+
+        step_calls += 1
+        if step_calls < 2:
+            return None
+        return StepOutcome(
+            stop_reason="no_tool_calls",
+            assistant_message=Message(role="assistant", content="should not reach"),
+        )
+
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    monkeypatch.setattr(soul, "_step", fake_step)
+
+    await run_soul(
+        soul,
+        "trigger proactive compaction",
+        lambda wire: _collect_ui_messages(wire, []),
+        asyncio.Event(),
+    )
+
+    assert step_calls == 1
+    final_text = context.history[-1].extract_text(" ")
+    assert "compaction failed" in final_text.lower()
+    assert "should not reach" not in final_text
+
+
+@pytest.mark.asyncio
 async def test_context_overflow_recovery_is_one_shot_per_turn(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

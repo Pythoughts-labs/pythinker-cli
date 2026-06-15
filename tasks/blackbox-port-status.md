@@ -87,14 +87,14 @@
 | 3.8 | 3 | skill frontmatter | `skill/__init__.py`, `tools/skill/` | done | `tests/core/test_skill.py` | adopts name/description/type/scope; ignores non-Pythinker fields |
 | 3.9 | 3 | `plugins/**` | `skill/__init__.py`, `plugin/` | done | ledger audit | plugins expose tools/config/skill roots; marketplace/output styles skipped |
 | 4.1 | 4 | `services/mcp/client.ts` | `tools/mcp_resource/` | done | `tests/tools/test_mcp_resource.py` | resources + prompts listed; reads untrusted |
-| 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py` | todo | MCP tests | reconnect/list_changed — see tasks/todo.md |
+| 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py`, `ui/shell/slash.py` | in_progress | `tests/core/test_mcp_lifecycle.py` | Slash disconnect/reconnect/refresh done; `tools/list_changed` deferred |
 | 4.3 | 4 | MCP docker stdio | `soul/toolset.py`, `cli/mcp.py` | done | `tests/core/test_mcp_docker_rm.py`, `tests/core/test_mcp_cleanup.py`, `tests/tools/test_mcp_startup_timeout.py` | --rm on add + config load via prepare_mcp_config_dict |
 | 4.4 | 4 | MCP prompts | `tools/mcp_resource/`, `agents/default/agent.yaml` | done | `tests/tools/test_mcp_resource.py` | InvokeMcpPrompt returns untrusted messages |
 | 4.5 | 4 | `elicitationHandler.ts` | `wire/`, `acp/` | future-approved-only | — | Needs Wire contract approval |
 | 4.6 | 4 | MCP naming | `utils/mcp_names.py`, `soul/toolset.py`, `cli/mcp.py` | done | `tests/core/test_mcp_name_normalization.py` | Server key normalization + collision errors at load |
 | 4.7 | 4 | MCP OAuth | `soul/toolset.py`, `cli/mcp.py` | done | `tests/tools/test_mcp_startup_timeout.py` | OAuth servers skip unauthorized with auth hint; hosted/XAA skipped |
 | 5.1 | 5 | plan mode | `soul/permission.py`, subagents | verify-existing | `tests/core/test_permission_profiles.py` | profile downgrade + shell denial; MCP/plugin child E2E thin |
-| 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | verify-existing | `tests/subagents/test_usage_rollup.py` | roll-up helpers wired; resume/batch double-count tests missing |
+| 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | verify-existing | `tests/subagents/test_usage_rollup.py` | batch resume double-count regression test added |
 | 5.3 | 5 | plan tool | `tools/plan/`, `soul/dynamic_injections/plan_mode.py` | done | `tests/tools/test_tool_descriptions.py`, `tests/core/test_plan_mode_injection_provider.py` | written plans must include verification |
 | 5.4 | 5 | `TodoWriteTool` | `tools/todo/` | done | `tests/tools/test_todo.py` | cancelled status persists and renders distinctly |
 | 5.5 | 5 | progress UI | `tools/progress/` | done | `tests/tools/test_progress.py` | ProgressNote producer exists; description anti-spam |
@@ -103,14 +103,14 @@
 | 5.8 | 5 | `schemas/hooks.ts` | `hooks/events.py` | verify-existing | `tests/e2e/test_hooks_wire_e2e.py`, `tests/tools/test_agent_tool.py` | supported lifecycle events include PostCompact/SessionEnd/SubagentStart/SubagentStop/Notification; prompt/HTTP hooks skipped |
 | 5.9 | 5 | markdown agents | `subagents/discovery.py` | verify-existing | `tests/core/test_subagent_discovery.py` | max_turns/steps + disallowed_tools/exclude_tools mapped |
 | 5.10 | 5 | `processUserInput/` | `ui/shell/` | verify-existing | `tests/ui_and_conv/test_shell_slash_commands.py`, `tests/utils/test_slash_command.py` | native slash and shell-mode routing covered |
-| 5.11 | 5 | `keybindings/` | `ui/shell/keymap.py` | todo | shell tests | Keybinding parity |
+| 5.11 | 5 | `keybindings/` | `ui/shell/keymap.py` | verify-existing | `tests/ui_and_conv/test_keymap_thinking.py`, `test_tui_card_keymap.py`, `test_slash_completer.py` | Registry + slash fuzzy completion covered; ctrl+r history search deferred |
 | 5.12 | 5 | REPL tips | `ui/shell/` | future-approved-only | — | static tips require UX approval; no analytics |
 | 5.13 | 5 | suggestions fork | `tools/suggest/` | done | `tests/tools/test_suggest.py` | uses Suggestion tool/event; speculation fork skipped |
 | 6.1 | 6 | telemetry tree | `telemetry/` | done | `tests/core/test_otel_span_tree.py`, `tests/telemetry/test_telemetry.py`, `tests/telemetry/test_otel_resource.py` | connected spans, GenAI attribute plumbing, telemetry-off no-op |
 | 6.2 | 6 | `services/vcr.ts` | `tests_e2e/` | future-approved-only | — | requires explicit cassette/redaction design |
 | 6.3 | 6 | eval harness | `tests_ai/eval_gate.py`, `tests_e2e/eval_schema.py` | verify-existing | `tests/test_eval_harness_wiring.py`, `tests_e2e/test_eval_schema.py` | Offline schema + report budget gate; Harbor live metrics deferred |
 | 6.4 | 6 | failure thresholds | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_stuck_loop.py` | stuck/failure-threshold handoff with reset behavior |
-| 6.5 | 6 | max steps | `soul/pythinkersoul.py`, `soul/btw.py` | verify-existing | `tests/core/test_max_steps_handoff.py`, `tests/core/test_pythinkersoul_stuck_loop.py` | shell/print handoff done; wire/ACP still status-only |
+| 6.5 | 6 | max steps | `soul/pythinkersoul.py`, `soul/btw.py`, `wire/server.py`, `acp/session.py` | done | `tests/core/test_max_steps_handoff.py` | shell/print/wire/ACP handoff on MaxStepsReached |
 | 6.6 | 6 | telemetry sanitize | `telemetry/names.py`, `soul/toolset.py` | done | `tests/telemetry/test_tool_name_sanitize.py` | Span/metric labels sanitized; runtime tool names unchanged |
 | 6.7 | 6 | VCR fixtures | `tests_e2e/` | future-approved-only | — | depends on Task 6.2 cassette design |
 | 7.1 | 7 | model defense | `soul/dynamic_injections/model_defense.py` | verify-existing | injection tests | Model-keyed defense |
@@ -121,7 +121,7 @@
 | 7.6 | 7 | `utils/auth.ts` | `auth/**` | todo | auth tests | Provider pattern audit |
 | 7.7 | 7 | `migrations/**` | `config.py` | todo | config tests | Migration audit |
 | 7.8 | 7 | `utils/sandbox/**` | none | future-approved-only | — | Sandbox decision |
-| 7.9 | 7 | session search | `soul/context.py` | todo | session tests | Search semantics |
+| 7.9 | 7 | session search | `tools/recall/` | in_progress | `tests/tools/test_recall.py` | title/id/plan_slug lexical search; branch/tag ranking deferred |
 
 ## Explicit De-Scope (skip proof)
 
@@ -141,6 +141,6 @@
 | phase | gate | status |
 | ---: | --- | --- |
 | 0 | Ledger complete; maintainers see remain/skip | done |
-| 1 | `make check-pythinker-code && make test-pythinker-code` | verify-existing done; full suite has 7 pre-existing UI failures on branch |
+| 1 | `make check-pythinker-code && make test-pythinker-code` | verify-existing done; branch UI ANSI/welcome test fixes landed |
 | 2 | focused + check; full test if shared context changed | pending |
 | 3–8 | per plan dashboard | pending |

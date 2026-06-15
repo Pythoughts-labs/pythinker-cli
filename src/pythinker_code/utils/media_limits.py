@@ -6,7 +6,6 @@ from __future__ import annotations
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_VIDEO_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
-MAX_PDF_BYTES = 32 * 1024 * 1024
 
 
 def format_byte_limit(limit_bytes: int) -> str:

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pythinker_core.message import Message, ToolCall
 from pythinker_core.tooling import ToolError, ToolResult
 
@@ -100,3 +102,61 @@ def test_handoff_returns_none_when_summary_cannot_be_produced() -> None:
         summary = asyncio.run(generate_max_steps_handoff(soul))
 
     assert summary is None
+
+
+@pytest.mark.asyncio
+async def test_wire_server_streams_handoff_on_max_steps(
+    runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wire clients get a handoff event and result field when the step ceiling hits."""
+    from pythinker_core.tooling.simple import SimpleToolset
+
+    from pythinker_code.soul import MaxStepsReached
+    from pythinker_code.soul.agent import Agent
+    from pythinker_code.soul.context import Context
+    from pythinker_code.soul.pythinkersoul import PythinkerSoul
+    from pythinker_code.wire.jsonrpc import JSONRPCPromptMessage, JSONRPCSuccessResponse
+    from pythinker_code.wire.server import WireServer
+
+    agent = Agent(
+        name="Max Steps Wire Test",
+        system_prompt="sys",
+        toolset=SimpleToolset(),
+        runtime=runtime,
+    )
+    soul = PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
+    server = WireServer(soul)
+
+    async def fake_run_soul(*_args, **_kwargs) -> None:
+        raise MaxStepsReached(3)
+
+    monkeypatch.setattr("pythinker_code.wire.server.run_soul", fake_run_soul)
+
+    sent_events: list[object] = []
+    original_send = server._send_msg
+
+    async def capture_send(msg):  # type: ignore[no-untyped-def]
+        if getattr(msg, "method", None) == "event":
+            sent_events.append(msg.params)
+        return await original_send(msg)
+
+    monkeypatch.setattr(server, "_send_msg", capture_send)
+
+    with patch(
+        "pythinker_code.soul.btw.generate_max_steps_handoff",
+        new=AsyncMock(return_value="Resume with step Z."),
+    ):
+        response = await server._handle_prompt(
+            JSONRPCPromptMessage(
+                id="1",
+                params=JSONRPCPromptMessage.Params(user_input="hello"),
+            )
+        )
+
+    assert isinstance(response, JSONRPCSuccessResponse)
+    assert response.result == {
+        "status": "max_steps_reached",
+        "steps": 3,
+        "handoff": "Resume with step Z.",
+    }
+    assert any(getattr(event, "text", "").endswith("Resume with step Z.") for event in sent_events)

@@ -62,17 +62,27 @@ class Params(BaseModel):
     )
 
 
+def _session_search_blob(session: Session) -> str:
+    """Lexical search text for a session (title, id, plan slug)."""
+    title = (session.state.custom_title or session.title or "").strip()
+    parts = [title, session.id]
+    plan_slug = session.state.plan_slug
+    if plan_slug:
+        parts.append(plan_slug)
+    return " ".join(parts).lower()
+
+
 def _rank_sessions(
     sessions: list[Session], *, query: str, current_id: str, limit: int
 ) -> list[Session]:
-    """Rank prior sessions by title keyword overlap then recency (pure)."""
+    """Rank prior sessions by keyword overlap then recency (pure)."""
     terms = query.lower().split()
     scored: list[tuple[int, float, Session]] = []
     for session in sessions:
         if session.id == current_id:
             continue
-        title = (session.state.custom_title or session.title or "").strip()
-        score = sum(1 for term in terms if term in title.lower())
+        blob = _session_search_blob(session)
+        score = sum(1 for term in terms if term in blob)
         if terms and score == 0:
             continue
         scored.append((score, session.updated_at, session))

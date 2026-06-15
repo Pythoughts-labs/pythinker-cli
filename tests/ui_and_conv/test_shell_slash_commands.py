@@ -249,9 +249,11 @@ async def test_mcp_slash_persists_only_final_snapshot(
     assert cmd is not None
     await _invoke_slash_command(cmd, SimpleNamespace())
 
-    output = capsys.readouterr().out
+    from pythinker_code.ui.shell.components.render_utils import sanitize_ansi
+
+    output = sanitize_ansi(capsys.readouterr().out)
     assert live_transient_values == [True]
-    assert "🔌  MCP Tools" in output
+    assert "MCP Tools" in output
     assert "context7" in output
     assert "Status: connected" in output
     assert "query-docs" in output

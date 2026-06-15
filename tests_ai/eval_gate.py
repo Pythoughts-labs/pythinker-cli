@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from tests_e2e.eval_schema import EvalCase, EvalVerdict, ObservedMetrics, score_eval_case
+from tests_ai.eval_schema import EvalCase, EvalVerdict, ObservedMetrics, score_eval_case
 
 _EVAL_CASES = TypeAdapter(list[EvalCase])
 

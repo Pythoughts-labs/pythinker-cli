@@ -2244,8 +2244,59 @@ async def _prompt_auto_update_selection(*, current: bool) -> bool | None:
 
 @registry.command
 async def mcp(app: Shell, args: str):
-    """Show MCP servers and tools"""
+    """Show MCP servers and tools, or manage one server (reconnect/disconnect/refresh)."""
     from rich.live import Live
+
+    from pythinker_code.exception import MCPRuntimeError
+    from pythinker_code.ui.theme import get_tui_tokens as _get_tok_mcp
+
+    parts = args.strip().split()
+    if parts:
+        verb = parts[0].lower()
+        if verb in {"reconnect", "disconnect", "refresh", "retry"}:
+            soul = ensure_pythinker_soul(app)
+            if soul is None:
+                return
+            server_name = parts[1] if len(parts) > 1 else None
+            if verb == "retry":
+                verb = "reconnect"
+            try:
+                if verb == "disconnect":
+                    if not server_name:
+                        console.print(
+                            f"[{_get_tok_mcp().warning}]Usage: /mcp disconnect <server>[/]"
+                        )
+                        return
+                    await soul.disconnect_mcp_server(server_name)
+                    console.print(
+                        f"[{_get_tok_mcp().success}]Disconnected MCP server "
+                        f"{_rich_escape(server_name)}.[/]"
+                    )
+                    return
+                if verb == "reconnect":
+                    if not server_name:
+                        console.print(
+                            f"[{_get_tok_mcp().warning}]Usage: /mcp reconnect <server>[/]"
+                        )
+                        return
+                    await soul.reconnect_mcp_server(server_name)
+                    console.print(
+                        f"[{_get_tok_mcp().success}]Reconnected MCP server "
+                        f"{_rich_escape(server_name)}.[/]"
+                    )
+                    return
+                # refresh [server]
+                targets = await soul.refresh_mcp_inventory(server_name)
+                if not targets:
+                    console.print(f"[{_get_tok_mcp().warning}]No connected MCP servers.[/]")
+                    return
+                console.print(
+                    f"[{_get_tok_mcp().success}]Refreshed MCP inventory for "
+                    f"{len(targets)} server(s).[/]"
+                )
+            except MCPRuntimeError as exc:
+                console.print(f"[{_get_tok_mcp().warning}]{exc}[/]")
+            return
 
     soul = ensure_pythinker_soul(app)
     if soul is None:

@@ -1035,6 +1035,33 @@ class PythinkerSoul:
             return
         await self._agent.toolset.wait_for_mcp_tools()
 
+    async def disconnect_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.disconnect_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def refresh_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.refresh_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def reconnect_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.reconnect_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def refresh_mcp_inventory(self, server_name: str | None = None) -> list[str]:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return []
+        toolset = self._agent.toolset
+        targets = [server_name] if server_name else list(toolset.connected_mcp_server_names())
+        for name in targets:
+            await self.refresh_mcp_server(name)
+        return targets
+
     async def _checkpoint(self):
         await self._context.checkpoint(self._checkpoint_with_user_message)
 
@@ -1651,7 +1678,7 @@ class PythinkerSoul:
                                 final_message=message,
                                 step_count=step_no - 1,
                             )
-                        raise
+                        # Below threshold: skip compaction this step and continue the turn.
 
                     # Compaction makes a billable LLM call that folds into
                     # self._session_cost_usd. Re-check the ceiling here so a session

@@ -14,6 +14,8 @@ from collections.abc import Callable
 
 from rich.console import Console, RenderableType
 
+from pythinker_code.ui.shell.components.render_utils import sanitize_ansi
+
 # Widths that exercise reflow boundaries: very narrow, a normal width, and an
 # exactly-typical report width. Add the exact-full-width case per test.
 WIDTHS: tuple[int, ...] = (24, 40, 80)
@@ -25,7 +27,7 @@ def render_plain(renderable: RenderableType, *, width: int = 80) -> str:
     console = Console(width=width, no_color=True, legacy_windows=False)
     with console.capture() as cap:
         console.print(renderable)
-    return cap.get()
+    return sanitize_ansi(cap.get())
 
 
 def render_ansi(renderable: RenderableType, *, width: int = 80) -> str:

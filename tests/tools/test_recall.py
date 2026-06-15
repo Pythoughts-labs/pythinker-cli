@@ -19,13 +19,29 @@ def _session(sid: str, *, title: str = "", custom_title: str = "", updated_at: f
         id=sid,
         title=title,
         updated_at=updated_at,
-        state=SimpleNamespace(custom_title=custom_title),
+        state=SimpleNamespace(custom_title=custom_title, plan_slug=None),
     )
 
 
 def _ranked_ids(sessions: list[Any], *, query: str, current_id: str) -> list[str]:
     ranked = _rank_sessions(cast(Any, sessions), query=query, current_id=current_id, limit=10)
     return [s.id for s in ranked]
+
+
+def test_rank_matches_session_id_and_plan_slug() -> None:
+    sessions = [
+        _session("sess-auth-1", custom_title="misc", updated_at=1.0),
+        _session(
+            "other",
+            custom_title="plan work",
+            updated_at=2.0,
+        ),
+    ]
+    sessions[1].state.plan_slug = "auth-migration"
+    ids = _ranked_ids(sessions, query="auth-migration", current_id="cur")
+    assert ids == ["other"]
+    ids_by_id = _ranked_ids(sessions, query="sess-auth", current_id="cur")
+    assert ids_by_id == ["sess-auth-1"]
 
 
 def test_rank_excludes_current_and_filters_non_matches() -> None:
