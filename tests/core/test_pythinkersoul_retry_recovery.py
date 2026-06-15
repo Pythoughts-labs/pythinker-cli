@@ -27,7 +27,7 @@ from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.wire import Wire
-from pythinker_code.wire.types import StepBegin, StepRetry
+from pythinker_code.wire.types import ContextOverflowRecovered, StepBegin, StepRetry
 
 
 class StaticStreamedMessage:
@@ -155,6 +155,62 @@ class StatusErrorThenSuccessProvider:
     def on_retryable_error(self, error: BaseException) -> bool:
         self.recovery_calls += 1
         return True
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
+
+
+class ContextOverflowThenSuccessProvider:
+    name = "context-overflow-then-success"
+
+    def __init__(self) -> None:
+        self.generate_attempts = 0
+
+    @property
+    def model_name(self) -> str:
+        return "context-overflow-then-success"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StaticStreamedMessage:
+        self.generate_attempts += 1
+        if self.generate_attempts == 1:
+            raise APIStatusError(413, "context length exceeded")
+        return StaticStreamedMessage([TextPart(text="recovered after overflow")])
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
+
+
+class AlwaysContextOverflowProvider:
+    name = "always-context-overflow"
+
+    def __init__(self) -> None:
+        self.generate_attempts = 0
+
+    @property
+    def model_name(self) -> str:
+        return "always-context-overflow"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StaticStreamedMessage:
+        self.generate_attempts += 1
+        raise APIStatusError(413, "context length exceeded")
 
     def with_thinking(self, effort: ThinkingEffort) -> Self:
         return self
@@ -432,6 +488,119 @@ async def test_step_status_error_still_uses_tenacity_retries(
 
 
 @pytest.mark.asyncio
+async def test_context_overflow_recovery_emits_recovered_event(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.config.loop_control.max_retries_per_step = 1
+    provider = ContextOverflowThenSuccessProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100_000,
+        capabilities=set(),
+    )
+    soul, context = _make_soul(runtime, llm, tmp_path)
+    compact_calls = 0
+
+    async def fake_prune_context() -> bool:
+        return False
+
+    async def fake_compact_context() -> None:
+        nonlocal compact_calls
+        compact_calls += 1
+
+    monkeypatch.setattr(soul, "prune_context", fake_prune_context)
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    seen: list[object] = []
+
+    await run_soul(
+        soul,
+        "trigger context overflow",
+        lambda wire: _collect_ui_messages(wire, seen),
+        asyncio.Event(),
+    )
+
+    assert provider.generate_attempts == 2
+    assert compact_calls == 1
+    assert context.history[-1].extract_text(" ").strip() == "recovered after overflow"
+    assert [msg for msg in seen if isinstance(msg, ContextOverflowRecovered)] == [
+        ContextOverflowRecovered(outcome="recovered", trigger_step=1)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_recovery_emits_failed_event(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.config.loop_control.max_retries_per_step = 1
+    provider = AlwaysContextOverflowProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100_000,
+        capabilities=set(),
+    )
+    soul, _ = _make_soul(runtime, llm, tmp_path)
+
+    async def fake_compact_context() -> None:
+        raise RuntimeError("compact failed")
+
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    seen: list[object] = []
+
+    with pytest.raises(APIStatusError):
+        await run_soul(
+            soul,
+            "trigger context overflow",
+            lambda wire: _collect_ui_messages(wire, seen),
+            asyncio.Event(),
+        )
+
+    assert provider.generate_attempts == 1
+    assert [msg for msg in seen if isinstance(msg, ContextOverflowRecovered)] == [
+        ContextOverflowRecovered(outcome="failed", trigger_step=1)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_recovery_is_one_shot_per_turn(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.config.loop_control.max_retries_per_step = 1
+    provider = AlwaysContextOverflowProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100_000,
+        capabilities=set(),
+    )
+    soul, _ = _make_soul(runtime, llm, tmp_path)
+    compact_calls = 0
+
+    async def fake_prune_context() -> bool:
+        return False
+
+    async def fake_compact_context() -> None:
+        nonlocal compact_calls
+        compact_calls += 1
+
+    monkeypatch.setattr(soul, "prune_context", fake_prune_context)
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    seen: list[object] = []
+
+    with pytest.raises(APIStatusError):
+        await run_soul(
+            soul,
+            "trigger context overflow twice",
+            lambda wire: _collect_ui_messages(wire, seen),
+            asyncio.Event(),
+        )
+
+    assert provider.generate_attempts == 2
+    assert compact_calls == 1
+    assert [msg for msg in seen if isinstance(msg, ContextOverflowRecovered)] == [
+        ContextOverflowRecovered(outcome="recovered", trigger_step=1)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_step_retry_event_after_partial_stream(runtime: Runtime, tmp_path: Path) -> None:
     runtime.config.loop_control.max_retries_per_step = 2
     provider = PartialStreamThenStatusErrorProvider(status_code=429)
@@ -526,3 +695,69 @@ async def test_step_connection_recovery_then_401_triggers_oauth_refresh(
     assert context.history[-1].extract_text(" ").strip() == "auth recovered"
     assert len(refresh_mock.await_args_list) == 2
     assert any(call.kwargs.get("force") is True for call in refresh_mock.await_args_list)
+
+
+class OverflowThenOkProvider:
+    name = "overflow-then-ok"
+
+    def __init__(self) -> None:
+        self.generate_attempts = 0
+
+    @property
+    def model_name(self) -> str:
+        return "overflow-then-ok"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StaticStreamedMessage:
+        self.generate_attempts += 1
+        if self.generate_attempts == 1:
+            raise APIStatusError(400, "context length exceeded")
+        return StaticStreamedMessage([TextPart(text="recovered after reactive compact")])
+
+    def on_retryable_error(self, error: BaseException) -> bool:
+        _ = error
+        return False
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
+
+
+class TestReactiveOverflowRecovery:
+    @pytest.mark.asyncio
+    async def test_context_overflow_triggers_one_shot_reactive_recovery(
+        self, runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider = OverflowThenOkProvider()
+        llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
+        soul, context = _make_soul(runtime, llm, tmp_path)
+        seen: list[object] = []
+        compact_calls = 0
+
+        async def _count_compact() -> None:
+            nonlocal compact_calls
+            compact_calls += 1
+
+        monkeypatch.setattr(soul, "compact_context", _count_compact)
+
+        await run_soul(
+            soul,
+            "overflow then recover",
+            lambda wire: _collect_ui_messages(wire, seen),
+            asyncio.Event(),
+        )
+
+        assert provider.generate_attempts == 2
+        assert compact_calls == 1
+        assert context.history[-1].extract_text(" ").strip() == "recovered after reactive compact"
+        recovered = [msg for msg in seen if isinstance(msg, ContextOverflowRecovered)]
+        assert len(recovered) == 1
+        assert recovered[0].outcome == "recovered"
+        assert recovered[0].trigger_step == 1

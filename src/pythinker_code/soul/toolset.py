@@ -12,6 +12,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
@@ -32,6 +33,7 @@ from pythinker_core.tooling.error import (
 )
 from pythinker_core.tooling.mcp import convert_mcp_content
 from pythinker_core.utils.typing import JsonType
+from pythinker_host.path import HostPath
 
 from pythinker_code.exception import InvalidToolError, MCPRuntimeError
 from pythinker_code.hooks.engine import HookEngine
@@ -49,6 +51,7 @@ from pythinker_code.wire.types import (
     ToolExecutionStarted,
     ToolResult,
     ToolReturnValue,
+    ToolUseSkipped,
     VideoURLPart,
 )
 
@@ -118,6 +121,34 @@ def emit_current_tool_execution_started() -> None:
             "Failed to emit tool execution start: {tool_name} (call_id={call_id}): {error}",
             tool_name=tool_call.function.name,
             call_id=tool_call.id,
+            error=exc,
+        )
+
+
+def _emit_tool_use_skipped(
+    *,
+    tool_call_id: str,
+    tool_name: str,
+    reason: Literal["dedup", "policy", "interrupt", "concurrent_inflight"],
+    resumed: bool = False,
+) -> None:
+    try:
+        from pythinker_code.soul import get_wire_or_none
+
+        if wire := get_wire_or_none():
+            wire.soul_side.send(
+                ToolUseSkipped(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    reason=reason,
+                    resumed=resumed,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 - observability must not break tool execution
+        logger.debug(
+            "Failed to emit tool skipped event: {tool_name} (call_id={call_id}): {error}",
+            tool_name=tool_name,
+            call_id=tool_call_id,
             error=exc,
         )
 
@@ -280,6 +311,8 @@ _REMINDER_TEXT_1 = (
     "\n</system-reminder>"
 )
 
+TOOL_USE_SKIPPED_REASONS = frozenset({"dedup", "policy", "interrupt", "concurrent_inflight"})
+
 
 def _make_reminder_text_2(tool_name: str, repeat_count: int, canonical_args: str) -> str:
     # Echo only a bounded preview of the arguments: large-payload tools
@@ -357,6 +390,24 @@ def _append_reminder_to_return_value(return_value: Any, reminder_text: str) -> A
     return return_value.model_copy(update={"output": new_output})
 
 
+def _emit_tool_use_skipped_if_opted_in(
+    tool: ToolType,
+    *,
+    tool_call_id: str,
+    tool_name: str,
+    reason: Literal["dedup", "policy", "interrupt", "concurrent_inflight"],
+    resumed: bool = False,
+) -> None:
+    if not getattr(tool, "emits_tool_use_skipped", False):
+        return
+    _emit_tool_use_skipped(
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        reason=reason,
+        resumed=resumed,
+    )
+
+
 _DEFAULT_MAX_CONCURRENT_READERS = 10
 """Cap on concurrent parallel-safe tool calls. A turn that fans out many readers
 (e.g. dozens of FetchURL) overlaps freely up to this bound rather than opening an
@@ -370,7 +421,8 @@ class _ReadWriteGate:
     a mutating tool (writer) waits for in-flight readers to drain and excludes
     everything while it runs. Writers hold the lock while draining, which also
     blocks new readers behind a queued writer — dispatch order stays deterministic
-    and writers cannot starve.
+    and writers cannot starve. Unflagged/plugin-style tools default to the
+    exclusive writer path unless they explicitly declare ``supports_parallel=True``.
     """
 
     def __init__(self, max_concurrent_readers: int = _DEFAULT_MAX_CONCURRENT_READERS) -> None:
@@ -382,6 +434,8 @@ class _ReadWriteGate:
 
     @contextlib.asynccontextmanager
     async def shared(self) -> AsyncGenerator[None]:
+        # Only tools that opted into ``supports_parallel=True`` should enter this
+        # shared path; unflagged/plugin adapters stay exclusive by default.
         # Cap concurrent readers. Acquire the slot BEFORE the writer lock / counter
         # bump: a reader still queued here has not incremented _active_readers, so it
         # never holds _readers_drained open, and writers (which never touch the
@@ -507,6 +561,21 @@ class PythinkerToolset:
     @property
     def tools(self) -> list[Tool]:
         return [tool.base for tool in self._tool_dict.values() if self._is_tool_visible(tool)]
+
+    def set_work_dir_override(self, work_dir: HostPath | None) -> HostPath | None:
+        """Apply a process-local operational cwd override to this toolset's runtime and tools."""
+        if self._runtime is None:
+            return None
+        self._runtime.work_dir_override = work_dir
+        effective_work_dir = self._runtime.work_dir
+        self._runtime.builtin_args = dataclass_replace(
+            self._runtime.builtin_args,
+            PYTHINKER_WORK_DIR=effective_work_dir,
+        )
+        for tool in self._tool_dict.values():
+            if hasattr(tool, "_work_dir"):
+                cast(Any, tool)._work_dir = effective_work_dir
+        return effective_work_dir
 
     def _is_tool_visible(self, tool: ToolType) -> bool:
         """Return whether *tool* should be advertised to the model for this step.
@@ -667,6 +736,13 @@ class PythinkerToolset:
             if call_key in self._current_step_tasks:
                 from pythinker_code.telemetry import track
 
+                _emit_tool_use_skipped_if_opted_in(
+                    tool,
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.function.name,
+                    reason="dedup",
+                    resumed=True,
+                )
                 track(
                     "tool_call_dedup_detected",
                     turn_id=self._turn_id,
@@ -707,6 +783,14 @@ class PythinkerToolset:
                     reminder_text = _make_reminder_text_2(
                         tool_call.function.name, repeat_count, canonical_args
                     )
+                if reminder_text is not None:
+                    _emit_tool_use_skipped_if_opted_in(
+                        tool,
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.function.name,
+                        reason="dedup",
+                        resumed=False,
+                    )
 
             async def _call():
                 started_ids_token = _current_tool_execution_started_ids.set(set[str]())
@@ -727,6 +811,12 @@ class PythinkerToolset:
                         tool_input_dict,
                         tool=tool,
                     ):
+                        _emit_tool_use_skipped_if_opted_in(
+                            tool,
+                            tool_call_id=tool_call.id,
+                            tool_name=tool_call.function.name,
+                            reason="policy",
+                        )
                         return ToolResult(tool_call_id=tool_call.id, return_value=err)
 
                 # --- PreToolUse ---
@@ -745,6 +835,12 @@ class PythinkerToolset:
                 )
                 for result in results:
                     if result.action == "block":
+                        _emit_tool_use_skipped_if_opted_in(
+                            tool,
+                            tool_call_id=tool_call.id,
+                            tool_name=tool_call.function.name,
+                            reason="policy",
+                        )
                         return ToolResult(
                             tool_call_id=tool_call.id,
                             return_value=ToolError(

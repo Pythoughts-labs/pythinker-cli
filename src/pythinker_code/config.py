@@ -592,6 +592,9 @@ class LoopControl(BaseModel):
     this value, instead of continuing to ``max_steps_per_turn``. Off by default
     (``None``). Best-effort: cost is estimated from token usage and is ``0`` for models
     with unknown pricing, so the ceiling never blocks when spend cannot be estimated."""
+    budget_nudge_ratio: float = Field(default=0.75, ge=0.0, le=0.99)
+    """Append a one-shot per-turn reminder after a turn crosses this fraction of
+    ``max_session_cost_usd``. The nudge is advisory and never auto-continues."""
     max_retries_per_step: int = Field(default=3, ge=1)
     """Maximum number of retries in one step"""
     max_ralph_iterations: int = Field(default=0, ge=-1)
@@ -616,6 +619,9 @@ class LoopControl(BaseModel):
     prune_min_chars: int = Field(default=2000, ge=0)
     """Only tool outputs whose text exceeds this many characters are pruned, so
     small results are left intact. Default: 2000."""
+    prune_tool_result_max_chars: int = Field(default=0, ge=0)
+    """Optional per-tool-result character budget for old tool messages before
+    full pruning. ``0`` keeps current behavior. Default: 0."""
 
 
 class BackgroundConfig(BaseModel):
@@ -676,6 +682,10 @@ class MemoryConfig(BaseModel):
         description=(
             "Persist safe decisions/blockers/next steps before compaction discards history."
         ),
+    )
+    harvest_on_stop: bool = Field(
+        default=False,
+        description="Stage safe decisions/blockers/next steps after a turn reaches Stop.",
     )
     journal_recaps: bool = Field(
         default=False,

@@ -43,6 +43,7 @@ from pythinker_code.notifications import (
     extract_notification_ids,
 )
 from pythinker_code.prompt_templates import PromptTemplate, expand_prompt_template
+from pythinker_code.prompts import BUDGET_CONTINUATION_NUDGE
 from pythinker_code.skill import Skill, read_skill_text_with_local_specialization
 from pythinker_code.soul import (
     LLMNotSet,
@@ -66,6 +67,7 @@ from pythinker_code.soul.approval import deliberation_scope
 from pythinker_code.soul.compaction import (
     CompactionResult,
     SimpleCompaction,
+    cap_stale_tool_result_bodies,
     estimate_text_tokens,
     prune_stale_tool_outputs,
     should_auto_compact,
@@ -85,6 +87,7 @@ from pythinker_code.soul.dynamic_injection import (
     injection_budget_from_runtime,
     normalize_history,
 )
+from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
 from pythinker_code.soul.dynamic_injections.auto_mode import AutoModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.goal_mode import GoalModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.inline_commands import InlineCommandReminderProvider
@@ -125,6 +128,7 @@ from pythinker_code.wire.types import (
     CompactionBegin,
     CompactionEnd,
     ContentPart,
+    ContextOverflowRecovered,
     MCPLoadingBegin,
     MCPLoadingEnd,
     QuestionItem,
@@ -281,6 +285,31 @@ def _budget_exhausted_message(session_cost_usd: float, ceiling: float) -> Messag
         f"`loop_control.max_session_cost_usd` in config, or start a new session, to continue."
     )
     return Message(role="assistant", content=[TextPart(text=text)])
+
+
+def _crossed_budget_nudge_threshold(
+    *,
+    before_usd: float,
+    after_usd: float,
+    ceiling: float | None,
+    ratio: float,
+    stop_reason: StepStopReason,
+) -> bool:
+    if ceiling is None or ceiling <= 0 or after_usd <= 0:
+        return False
+    if stop_reason == "budget_exhausted":
+        return False
+    threshold = ratio * ceiling
+    return before_usd < threshold <= after_usd
+
+
+def _budget_nudge_message(*, session_cost_usd: float, ceiling: float, ratio: float) -> Message:
+    text = BUDGET_CONTINUATION_NUDGE.format(
+        ratio=ratio,
+        spent=session_cost_usd,
+        ceiling=ceiling,
+    )
+    return Message(role="user", content=[system_reminder(text[:500])])
 
 
 def _user_message_with_hook_context(
@@ -521,6 +550,9 @@ class PythinkerSoul:
             # Self-filtering: root-only; posture-fingerprinted so it re-emits
             # exactly when yolo/auto/safe-mode/profile/session-approvals change.
             PermissionsInjectionProvider(),
+            # Self-filtering: root-only; keeps the model's subagent list current
+            # without tying it to the static tool description cache.
+            AgentListInjectionProvider(),
             *(
                 []
                 if self._runtime.config.skip_auto_prompt_injection
@@ -1090,6 +1122,7 @@ class PythinkerSoul:
             user_message = _user_message_with_hook_context(user_input, hook_results)
             # Slash-command parsing must see only the user's text, never appended hook context.
             text_input = Message(role="user", content=user_input).extract_text(" ").strip()
+            stop_harvest_start_index = len(self._context.history)
 
             primary_outcome: TurnOutcome | None = None
             if command_call := parse_slash_command_call(text_input):
@@ -1131,6 +1164,9 @@ class PythinkerSoul:
 
             if primary_outcome is not None:
                 await self._run_goal_continuations(primary_outcome)
+
+            if getattr(self._runtime.config.memory, "harvest_on_stop", False):
+                await self._harvest_on_stop(stop_harvest_start_index)
 
             wire_send(TurnEnd())
             turn_finished = True
@@ -1289,7 +1325,25 @@ class PythinkerSoul:
                 await self._checkpoint()  # this creates the checkpoint 0 on first run
                 await self._context.append_message(user_message)
                 logger.debug("Appended user message to context")
+                cost_before_turn = self._session_cost_usd
                 outcome = await self._agent_loop()
+                ceiling = self._loop_control.max_session_cost_usd
+                goal_config = self._runtime.config.goal
+                if not goal_config.auto_continue and _crossed_budget_nudge_threshold(
+                    before_usd=cost_before_turn,
+                    after_usd=self._session_cost_usd,
+                    ceiling=ceiling,
+                    ratio=self._loop_control.budget_nudge_ratio,
+                    stop_reason=outcome.stop_reason,
+                ):
+                    assert ceiling is not None
+                    await self._context.append_message(
+                        _budget_nudge_message(
+                            session_cost_usd=self._session_cost_usd,
+                            ceiling=ceiling,
+                            ratio=self._loop_control.budget_nudge_ratio,
+                        )
+                    )
                 span.set_attribute("turn.stop_reason", outcome.stop_reason)
                 span.set_attribute("turn.step_count", outcome.step_count)
                 # Observable signal that a turn ended without a substantive answer (a
@@ -1502,6 +1556,8 @@ class PythinkerSoul:
         self._truncation_recoveries = 0
         # One-shot per turn: reactive compact-and-retry after a provider
         # context-length rejection (proactive thresholds can undercount).
+        # A second overflow in the same turn must propagate instead of looping
+        # through repeated compactions.
         overflow_recovery_used = False
         while True:
             # Spend ceiling: stop before starting another (paid) step once the session's
@@ -1622,7 +1678,14 @@ class PythinkerSoul:
                 track("api_error", **api_error_props)
                 if error_type == "context_overflow" and not overflow_recovery_used:
                     overflow_recovery_used = True
-                    if await self._recover_from_context_overflow(step_no):
+                    recovered = await self._recover_from_context_overflow(step_no)
+                    wire_send(
+                        ContextOverflowRecovered(
+                            outcome="recovered" if recovered else "failed",
+                            trigger_step=step_no,
+                        )
+                    )
+                    if recovered:
                         continue
                 # --- StopFailure hook ---
                 from pythinker_code.hooks import events as _hook_events
@@ -2183,11 +2246,17 @@ class PythinkerSoul:
         when there is nothing worth pruning. Runs silently — no compaction wire
         events — since it may fire often and is not a user-visible summary.
         """
-        pruned, freed = prune_stale_tool_outputs(
+        capped, cap_freed = cap_stale_tool_result_bodies(
             self._context.history,
+            protect_last=self._loop_control.prune_protect_last,
+            max_chars=self._loop_control.prune_tool_result_max_chars,
+        )
+        pruned, prune_freed = prune_stale_tool_outputs(
+            capped,
             protect_last=self._loop_control.prune_protect_last,
             min_chars=self._loop_control.prune_min_chars,
         )
+        freed = cap_freed + prune_freed
         if freed <= 0:
             return False
 
@@ -2453,6 +2522,48 @@ class PythinkerSoul:
                 persisted += 1
             except Exception as exc:
                 logger.warning("append_scratch_note failed for kind={!r}: {!r}", note.kind, exc)
+        if persisted:
+            try:
+                self.rearm_injection("project_memory")
+            except Exception as exc:
+                logger.warning("rearm_injection(project_memory) failed: {!r}", exc)
+
+    async def _harvest_on_stop(self, history_start_index: int) -> None:
+        recent_history = list(self._context.history[history_start_index:])
+        if not recent_history:
+            return
+        try:
+            from pythinker_code.memory.harvest import CompactionHarvester
+            from pythinker_code.scratchpad import append_scratch_note
+
+            notes = CompactionHarvester().harvest(recent_history)
+        except Exception as exc:
+            logger.warning("stop-time memory harvester crashed: {!r}", exc)
+            return
+        persisted = 0
+        for note in notes:
+            try:
+                append_result = await append_scratch_note(
+                    self._runtime.work_dir,
+                    kind=note.kind,
+                    content=note.content,
+                    session_id=self._runtime.session.id,
+                    session_title=self._runtime.session.title,
+                    labels=["source:stop"],
+                )
+                if append_result.appended:
+                    persisted += 1
+                else:
+                    logger.debug(
+                        "stop-time memory note was not appended: reason={reason}",
+                        reason=append_result.reason,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "append_scratch_note failed during stop harvest for kind={!r}: {!r}",
+                    note.kind,
+                    exc,
+                )
         if persisted:
             try:
                 self.rearm_injection("project_memory")

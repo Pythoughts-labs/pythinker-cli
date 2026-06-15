@@ -9,6 +9,11 @@ LEARN = (Path(__file__).parent / "learn.md").read_text(encoding="utf-8")
 GOAL_SET = (Path(__file__).parent / "goal_set.md").read_text(encoding="utf-8")
 GOAL_CONTINUATION = (Path(__file__).parent / "goal_continuation.md").read_text(encoding="utf-8")
 GOAL_WRAP_UP = (Path(__file__).parent / "goal_wrap_up.md").read_text(encoding="utf-8")
+BUDGET_CONTINUATION_NUDGE = (
+    "The session has crossed {ratio:.0%} of its configured spend ceiling "
+    "(estimated ${spent:.2f} of ${ceiling:.2f}). Continue only if the remaining work is "
+    "worth the budget; prefer summarizing progress or asking the user before expensive next steps."
+)
 
 
 def apply_always_on_best_practices(system_prompt: str, *, enabled: bool) -> str:

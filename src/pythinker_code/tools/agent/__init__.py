@@ -22,7 +22,7 @@ from pythinker_code.subagents.runner import (
 from pythinker_code.subagents.usage import aggregate_findings, summarize_batch
 from pythinker_code.tools.utils import ToolResultStatus, load_desc, tool_status_line
 from pythinker_code.utils.logging import logger
-from pythinker_code.wire.types import MCPStatusSnapshot
+from pythinker_code.wire.types import MCPStatusSnapshot, SubagentToolFallback
 
 
 def _missing_required_mcp_servers(
@@ -42,6 +42,38 @@ def _missing_required_mcp_servers(
         {s.name for s in snapshot.servers if s.status == "connected"} if snapshot else set()
     )
     return [name for name in required if name not in connected]
+
+
+def _emit_subagent_tool_fallback(
+    *,
+    reason: Literal[
+        "unavailable_agent_type",
+        "mcp_unavailable",
+        "policy_denied",
+        "timeout",
+        "exception",
+    ],
+    requested_type: str,
+    runtime: Runtime,
+) -> None:
+    try:
+        from pythinker_code.soul import get_wire_or_none
+
+        if wire := get_wire_or_none():
+            wire.soul_side.send(
+                SubagentToolFallback(
+                    reason=reason,
+                    requested_type=requested_type,
+                    available_types=tuple(sorted(runtime.labor_market.builtin_types)),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 - observability must not break Agent tool errors
+        logger.debug(
+            "Failed to emit subagent fallback event: {type} ({reason}): {error}",
+            type=requested_type,
+            reason=reason,
+            error=exc,
+        )
 
 
 NAME = "Agent"
@@ -334,10 +366,20 @@ class AgentTool(CallableTool2[Params]):
             )
         requested_type = params.subagent_type or "coder"
         if err := self.check_execution_policy(requested_type):
+            _emit_subagent_tool_fallback(
+                reason="policy_denied",
+                requested_type=requested_type,
+                runtime=self._runtime,
+            )
             return err
         # Gate a FRESH spawn on the agent type's required MCP servers (resume is not a
         # fresh spawn — the instance already exists, so it is not re-gated).
         if params.resume is None and (err := self.check_required_mcp_servers(requested_type)):
+            _emit_subagent_tool_fallback(
+                reason="mcp_unavailable",
+                requested_type=requested_type,
+                runtime=self._runtime,
+            )
             return err
         if params.fork_context and (params.resume is not None or params.run_in_background):
             return ToolError(
@@ -375,6 +417,11 @@ class AgentTool(CallableTool2[Params]):
                 return await asyncio.wait_for(runner.run(req), timeout=timeout)
             return await runner.run(req)
         except TimeoutError as exc:
+            _emit_subagent_tool_fallback(
+                reason="timeout",
+                requested_type=requested_type,
+                runtime=self._runtime,
+            )
             # Note: TimeoutError from run_soul internals (e.g. aiohttp) is now caught
             # by run_soul_checked and converted to SoulRunFailure. This handler mainly
             # covers wait_for's task-level timeout and pre-run_soul TimeoutErrors.
@@ -406,6 +453,11 @@ class AgentTool(CallableTool2[Params]):
         except KeyError as exc:
             # Hallucinated subagent type: routine model error, not a crash —
             # name the valid types so the model can self-correct.
+            _emit_subagent_tool_fallback(
+                reason="unavailable_agent_type",
+                requested_type=requested_type,
+                runtime=self._runtime,
+            )
             return ToolError(
                 message=(
                     f"{exc.args[0] if exc.args else exc}. Available types: "
@@ -418,6 +470,11 @@ class AgentTool(CallableTool2[Params]):
 
             report_handled_error(exc, site="tool.agent.foreground", tool="Agent")
             logger.exception("Foreground agent run failed")
+            _emit_subagent_tool_fallback(
+                reason="exception",
+                requested_type=requested_type,
+                runtime=self._runtime,
+            )
             return ToolError(message=f"Failed to run agent: {exc}", brief="Agent failed")
 
     async def _run_in_background(self, params: Params) -> ToolReturnValue:
@@ -563,6 +620,11 @@ class AgentTool(CallableTool2[Params]):
             # Malformed resume id (store.instance_dir validates [A-Za-z0-9_-]{1,64}).
             return ToolError(message=str(exc), brief="Agent not found")
         except KeyError as exc:
+            _emit_subagent_tool_fallback(
+                reason="unavailable_agent_type",
+                requested_type=params.subagent_type or "coder",
+                runtime=self._runtime,
+            )
             return ToolError(
                 message=(
                     f"{exc.args[0] if exc.args else exc}. Available types: "

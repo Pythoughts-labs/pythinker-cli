@@ -297,9 +297,14 @@ async function sendSupportEmail(env: Env, subject: string, body: string): Promis
 }
 
 function parseMailbox(value: string): { email: string; name?: string } {
-  const match = value.match(/^(.+?)\s*<([^>]+)>$/);
-  if (!match) return { email: value.trim() };
-  return { name: match[1].trim().replace(/^"|"$/g, ""), email: match[2].trim() };
+  // Linear parse (no backtracking regex) for the "Name <addr>" form to avoid
+  // polynomial ReDoS on uncontrolled header input.
+  const trimmed = value.trim();
+  const lt = trimmed.indexOf("<");
+  if (lt === -1 || !trimmed.endsWith(">")) return { email: trimmed };
+  const email = trimmed.slice(lt + 1, -1).trim();
+  const name = trimmed.slice(0, lt).trim().replace(/^"|"$/g, "");
+  return { name, email };
 }
 
 function splitCsv(value: string): string[] {

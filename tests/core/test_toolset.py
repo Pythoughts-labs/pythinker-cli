@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import mcp
 from pydantic import BaseModel
@@ -14,7 +15,16 @@ from pythinker_core.tooling import CallableTool2, ToolOk, ToolReturnValue
 from pythinker_core.tooling.error import ToolNotFoundError as PythinkerCoreToolNotFoundError
 
 from pythinker_code.soul.toolset import MCPTool, PythinkerToolset, _configure_mcp_client_stderr_log
-from pythinker_code.wire.types import ToolCall, ToolResult
+from pythinker_code.wire.types import ToolCall, ToolResult, ToolUseSkipped
+
+
+class _RecordingWire:
+    def __init__(self, captured: list[object]) -> None:
+        self.soul_side = self
+        self._captured = captured
+
+    def send(self, msg: object) -> None:
+        self._captured.append(msg)
 
 
 class DummyParams(BaseModel):
@@ -309,6 +319,73 @@ async def test_same_step_dedup():
     assert ts.end_step() == [("ToolA", '{"value":"x"}'), ("ToolA", '{"value":"x"}')]
 
 
+async def test_same_step_dedup_default_off_does_not_emit_tool_use_skipped(monkeypatch):
+    """Unflagged tools still dedup, but do not emit the opt-in skip wire event."""
+    ts = _make_toolset()
+    ts.begin_step([])
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+
+    args = json.dumps({"value": "x"})
+    result_1 = ts.handle(
+        ToolCall(
+            id="tc-dedup-1",
+            function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+        )
+    )
+    result_2 = ts.handle(
+        ToolCall(
+            id="tc-dedup-2",
+            function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+        )
+    )
+    assert isinstance(result_1, asyncio.Task)
+    assert isinstance(result_2, asyncio.Task)
+
+    await asyncio.gather(result_1, result_2)
+
+    assert [msg for msg in captured if isinstance(msg, ToolUseSkipped)] == []
+
+
+async def test_same_step_dedup_opt_in_emits_tool_use_skipped(monkeypatch):
+    """A same-step duplicate reuses the original task and emits only for opt-in tools."""
+    ts = _make_toolset()
+    tool = ts.find("ToolA")
+    assert tool is not None
+    object.__setattr__(tool, "emits_tool_use_skipped", True)
+    ts.begin_step([])
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+
+    args = json.dumps({"value": "x"})
+    result_1 = ts.handle(
+        ToolCall(
+            id="tc-dedup-1",
+            function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+        )
+    )
+    result_2 = ts.handle(
+        ToolCall(
+            id="tc-dedup-2",
+            function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+        )
+    )
+    assert isinstance(result_1, asyncio.Task)
+    assert isinstance(result_2, asyncio.Task)
+
+    await asyncio.gather(result_1, result_2)
+
+    skipped = [msg for msg in captured if isinstance(msg, ToolUseSkipped)]
+    assert skipped == [
+        ToolUseSkipped(
+            tool_call_id="tc-dedup-2",
+            tool_name="ToolA",
+            reason="dedup",
+            resumed=True,
+        )
+    ]
+
+
 async def test_same_step_dedup_canonicalizes_argument_key_order():
     """Equivalent JSON objects with different key order should share the original result."""
     ts = _make_toolset()
@@ -398,6 +475,77 @@ async def test_cross_step_duplicate_appends_reminder_at_three_consecutive():
     assert isinstance(output, str)
     assert "You are repeating the exact same tool call" in output
     assert "repeated_times" not in output
+
+
+async def test_cross_step_duplicate_opt_in_emits_tool_use_skipped(monkeypatch):
+    """The cross-step dedup reminder emits a non-resumed skip event only for opt-in tools."""
+    ts = _make_toolset()
+    tool = ts.find("ToolA")
+    assert tool is not None
+    object.__setattr__(tool, "emits_tool_use_skipped", True)
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+    args = json.dumps({"value": "x"})
+    previous_calls: list[tuple[str, str]] = []
+
+    for i in range(2):
+        ts.begin_step(previous_calls, step_no=i + 1)
+        result = ts.handle(
+            ToolCall(
+                id=f"tc-repeat-prior-{i}",
+                function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+            )
+        )
+        assert isinstance(result, asyncio.Task)
+        _ = await result
+        previous_calls = ts.end_step()
+
+    ts.begin_step(previous_calls, step_no=3)
+    result = ts.handle(
+        ToolCall(
+            id="tc-repeat-third",
+            function=ToolCall.FunctionBody(name="ToolA", arguments=args),
+        )
+    )
+    assert isinstance(result, asyncio.Task)
+    _ = await result
+
+    assert [msg for msg in captured if isinstance(msg, ToolUseSkipped)] == [
+        ToolUseSkipped(
+            tool_call_id="tc-repeat-third",
+            tool_name="ToolA",
+            reason="dedup",
+            resumed=False,
+        )
+    ]
+
+
+async def test_pre_tool_use_policy_block_opt_in_emits_tool_use_skipped(monkeypatch):
+    """Policy/PreToolUse blocks emit skip telemetry only when the tool opts in."""
+    ts = _make_toolset()
+    tool = ts.find("ToolA")
+    assert tool is not None
+    object.__setattr__(tool, "emits_tool_use_skipped", True)
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+
+    async def fake_trigger(*_args: object, **_kwargs: object) -> list[SimpleNamespace]:
+        return [SimpleNamespace(action="block", reason="blocked")]
+
+    monkeypatch.setattr(ts._hook_engine, "trigger", fake_trigger)
+    ts.begin_step([])
+    result = ts.handle(
+        ToolCall(
+            id="tc-policy",
+            function=ToolCall.FunctionBody(name="ToolA", arguments="{}"),
+        )
+    )
+    assert isinstance(result, asyncio.Task)
+    _ = await result
+
+    assert [msg for msg in captured if isinstance(msg, ToolUseSkipped)] == [
+        ToolUseSkipped(tool_call_id="tc-policy", tool_name="ToolA", reason="policy")
+    ]
 
 
 async def test_cross_step_duplicate_uses_sparse_stronger_reminders():
@@ -596,3 +744,55 @@ def test_tool_defers_execution_started_reads_flag_only() -> None:
     # the explicit flag is the single contract.
     approval_only = SimpleNamespace(_approval=object())
     assert _tool_defers_execution_started(cast(Any, approval_only)) is False
+
+
+# --- ToolUseSkipped wire event (opt-in per tool) ---
+
+
+class DummyToolEmitsSkipped(DummyToolA):
+    emits_tool_use_skipped: ClassVar[bool] = True
+
+
+async def test_streaming_skip_when_concurrent_inflight_does_not_emit_when_queued(
+    tmp_path: Path,
+) -> None:
+    """Exclusive tools queue behind in-flight calls; no ToolUseSkipped for that path."""
+    from unittest.mock import patch
+
+    from pythinker_code.hooks.engine import HookEngine
+
+    events: list[tuple[str, str]] = []
+
+    class _SlowShell:
+        name = "Shell"
+
+        async def call(self, arguments: object) -> ToolReturnValue:
+            events.append(("enter", "Shell"))
+            await asyncio.sleep(0.2)
+            events.append(("exit", "Shell"))
+            return ToolOk(output="ok")
+
+    captured: list[object] = []
+    toolset = PythinkerToolset()
+    toolset._hook_engine = HookEngine([], cwd=str(tmp_path))
+    toolset._tool_dict["Shell"] = _SlowShell()  # type: ignore[assignment]
+
+    with patch("pythinker_code.soul.get_wire_or_none", return_value=_RecordingWire(captured)):
+        toolset.begin_step([])
+        t1 = toolset.handle(
+            ToolCall(id="tc1", function=ToolCall.FunctionBody(name="Shell", arguments='{"n":1}'))
+        )
+        t2 = toolset.handle(
+            ToolCall(id="tc2", function=ToolCall.FunctionBody(name="Shell", arguments='{"n":2}'))
+        )
+        assert isinstance(t1, asyncio.Task)
+        assert isinstance(t2, asyncio.Task)
+        await asyncio.gather(t1, t2)
+
+    assert events == [
+        ("enter", "Shell"),
+        ("exit", "Shell"),
+        ("enter", "Shell"),
+        ("exit", "Shell"),
+    ]
+    assert not any(isinstance(e, type) and e.__name__ == "ToolUseSkipped" for e in captured)

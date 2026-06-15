@@ -52,6 +52,7 @@ def test_default_config_dump():
                 "max_consecutive_failures": 8,
                 "max_truncation_recoveries": 3,
                 "max_session_cost_usd": None,
+                "budget_nudge_ratio": 0.75,
                 "max_retries_per_step": 3,
                 "max_ralph_iterations": 0,
                 "reserved_context_size": 50000,
@@ -59,6 +60,7 @@ def test_default_config_dump():
                 "prune_trigger_ratio": 0.7,
                 "prune_protect_last": 20,
                 "prune_min_chars": 2000,
+                "prune_tool_result_max_chars": 0,
             },
             "background": {
                 "max_running_tasks": 4,
@@ -88,6 +90,7 @@ def test_default_config_dump():
                 "injection_bus": True,
                 "injection_ceiling_tokens": 2048,
                 "harvest_on_compaction": False,
+                "harvest_on_stop": False,
                 "journal_recaps": False,
                 "consolidation": False,
                 "durable_memory": False,

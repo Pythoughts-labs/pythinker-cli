@@ -10,6 +10,7 @@ from pythinker_code.soul.agent import Runtime
 from pythinker_code.tools.display import TodoDisplayBlock, TodoDisplayItem
 from pythinker_code.tools.utils import load_desc
 from pythinker_code.utils.logging import logger
+from pythinker_code.wire.types import TodoListUpdated
 
 TodoStatus = Literal["pending", "in_progress", "done", "cancelled"]
 _STATUS_ALIASES: dict[str, TodoStatus] = {
@@ -83,6 +84,23 @@ def _normalize_single_in_progress(todos: list[Todo]) -> tuple[list[Todo], int]:
             seen = True
         normalized.append(todo)
     return normalized, demoted
+
+
+def _emit_todo_list_updated(todos: list[Todo]) -> None:
+    try:
+        from pythinker_code.soul import get_wire_or_none
+
+        if wire := get_wire_or_none():
+            complete = not todos or all(todo.status in {"done", "cancelled"} for todo in todos)
+            wire.soul_side.send(
+                TodoListUpdated(
+                    items=tuple((todo.title, todo.status) for todo in todos),
+                    complete=complete,
+                    source="tool",
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 - observability must not break the todo tool
+        logger.debug("Failed to emit TodoListUpdated wire event: {error}", error=exc)
 
 
 class SetTodoList(CallableTool2[Params]):
@@ -162,6 +180,7 @@ class SetTodoList(CallableTool2[Params]):
     def _write_todos(self, todos: list[Todo]) -> ToolReturnValue:
         """Persist the todo list and return confirmation."""
         self._save_todos(todos)
+        _emit_todo_list_updated(todos)
 
         items = [TodoDisplayItem(title=todo.title, status=todo.status) for todo in todos]
         return ToolReturnValue(
@@ -176,6 +195,7 @@ class SetTodoList(CallableTool2[Params]):
     def _read_todos(self) -> ToolReturnValue:
         """Return the current todo list as text output for the model."""
         todos = self._load_todos()
+        _emit_todo_list_updated(todos)
         if not todos:
             return ToolReturnValue(
                 is_error=False,

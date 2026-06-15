@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pythinker_core import StepResult
@@ -15,7 +16,7 @@ from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection
-from pythinker_code.soul.pythinkersoul import PythinkerSoul
+from pythinker_code.soul.pythinkersoul import PythinkerSoul, TurnOutcome
 from pythinker_code.wire.types import StepBegin, StepInterrupted, TextPart, TurnBegin, TurnEnd
 
 
@@ -117,6 +118,96 @@ async def test_run_does_not_duplicate_turn_end_for_blocked_prompt(
         TextPart(text="blocked by hook"),
         TurnEnd(),
     ]
+
+
+@pytest.mark.asyncio
+async def test_turn_appends_budget_nudge_after_crossing_ratio(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime.config.loop_control.max_session_cost_usd = 1.0
+    runtime.config.loop_control.budget_nudge_ratio = 0.75
+    soul = _make_soul(runtime, tmp_path)
+    soul._session_cost_usd = 0.70
+    calls = 0
+
+    async def fake_agent_loop() -> TurnOutcome:
+        nonlocal calls
+        calls += 1
+        soul._session_cost_usd = 0.80
+        final_message = Message(role="assistant", content=[TextPart(text="done")])
+        await soul.context.append_message(final_message)
+        return TurnOutcome(stop_reason="no_tool_calls", final_message=final_message, step_count=1)
+
+    monkeypatch.setattr(soul, "_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(soul, "_checkpoint", AsyncMock())
+
+    await soul.turn(Message(role="user", content=[TextPart(text="go")]))
+
+    assert calls == 1  # nudge is context-only; it must not auto-continue the turn
+    nudge = soul.context.history[-1]
+    assert nudge.role == "user"
+    text = nudge.extract_text(" ")
+    assert "system-reminder" in text
+    assert "75%" in text
+    assert "spend ceiling" in text
+    assert len(text) <= 500
+
+
+@pytest.mark.asyncio
+async def test_turn_does_not_append_budget_nudge_when_budget_exhausted(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime.config.loop_control.max_session_cost_usd = 1.0
+    runtime.config.loop_control.budget_nudge_ratio = 0.75
+    soul = _make_soul(runtime, tmp_path)
+    soul._session_cost_usd = 0.99
+
+    async def fake_agent_loop() -> TurnOutcome:
+        soul._session_cost_usd = 1.00
+        final_message = Message(role="assistant", content=[TextPart(text="budget hit")])
+        await soul.context.append_message(final_message)
+        return TurnOutcome(
+            stop_reason="budget_exhausted", final_message=final_message, step_count=1
+        )
+
+    monkeypatch.setattr(soul, "_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(soul, "_checkpoint", AsyncMock())
+
+    await soul.turn(Message(role="user", content=[TextPart(text="go")]))
+
+    assert "budget hit" in soul.context.history[-1].extract_text(" ")
+    assert "system-reminder" not in soul.context.history[-1].extract_text(" ")
+
+
+@pytest.mark.asyncio
+async def test_turn_does_not_append_budget_nudge_when_goal_auto_continue_enabled(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime.config.loop_control.max_session_cost_usd = 1.0
+    runtime.config.loop_control.budget_nudge_ratio = 0.75
+    runtime.config.goal.auto_continue = True
+    soul = _make_soul(runtime, tmp_path)
+    soul._session_cost_usd = 0.70
+
+    async def fake_agent_loop() -> TurnOutcome:
+        soul._session_cost_usd = 0.80
+        final_message = Message(role="assistant", content=[TextPart(text="goal continues")])
+        await soul.context.append_message(final_message)
+        return TurnOutcome(stop_reason="no_tool_calls", final_message=final_message, step_count=1)
+
+    monkeypatch.setattr(soul, "_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(soul, "_checkpoint", AsyncMock())
+
+    await soul.turn(Message(role="user", content=[TextPart(text="go")]))
+
+    assert "goal continues" in soul.context.history[-1].extract_text(" ")
+    assert "system-reminder" not in soul.context.history[-1].extract_text(" ")
 
 
 @pytest.mark.asyncio
@@ -237,3 +328,33 @@ async def test_step_persists_markers_when_cancelled_twice(
     tool_messages = [m for m in history if m.role == "tool"]
     assert tool_messages, f"marker write was orphaned; history={history}"
     assert tool_messages[0].tool_call_id == tool_call.id
+
+
+@pytest.mark.asyncio
+async def test_token_budget_nudge_does_not_fire_when_under_threshold(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime.config.loop_control.max_session_cost_usd = 10.0
+    runtime.config.goal.auto_continue = False
+    soul = _make_soul(runtime, tmp_path)
+    soul._session_cost_usd = 0.5
+
+    async def fake_agent_loop() -> TurnOutcome:
+        return TurnOutcome(
+            stop_reason="no_tool_calls",
+            final_message=Message(role="assistant", content=[TextPart(text="done")]),
+            step_count=1,
+        )
+
+    async def fake_checkpoint() -> None:
+        return None
+
+    monkeypatch.setattr(soul, "_agent_loop", fake_agent_loop)
+    monkeypatch.setattr(soul, "_checkpoint", fake_checkpoint)
+
+    before = len(soul.context.history)
+    await soul.turn(Message(role="user", content=[TextPart(text="hello")]))
+    assert len(soul.context.history) == before + 1
+    assert not any("spend ceiling" in message.extract_text(" ") for message in soul.context.history)

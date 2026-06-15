@@ -451,7 +451,7 @@ async def test_plan_only_execution_profile_limits_subagent_types(runtime: Runtim
     with tool_call_context("Agent"):
         tool = AgentTool(runtime)
         denied = await tool(
-            tool.params(description="implement fix", prompt="write code", subagent_type="coder")
+            tool.params(description="implement fix", prompt="write code", subagent_type="mocker")
         )
 
     assert denied.is_error

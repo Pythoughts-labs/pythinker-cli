@@ -495,11 +495,17 @@ def _is_glm_model(model_name: str) -> bool:
 
 def _is_dashscope_endpoint(base_url: str) -> bool:
     """True for any Alibaba DashScope endpoint (standard, intl, workspace)."""
-    return "aliyuncs.com" in base_url
+    from urllib.parse import urlparse
+
+    host = urlparse(base_url).hostname or ""
+    return host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
 
 
 def _is_alibaba_workspace_endpoint(base_url: str) -> bool:
-    return "://ws-" in base_url and ".maas.aliyuncs.com" in base_url
+    from urllib.parse import urlparse
+
+    host = urlparse(base_url).hostname or ""
+    return host.startswith("ws-") and host.endswith(".maas.aliyuncs.com")
 
 
 def _load_scripted_echo_scripts() -> list[str]:

@@ -3,7 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Literal, TypeGuard, cast
 
-from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from pythinker_core.chat_provider import TokenUsage
 from pythinker_core.message import (
     AudioURLPart,
@@ -284,6 +291,69 @@ class BtwEnd(BaseModel):
     """The LLM's response text, or None if it failed."""
     error: str | None = None
     """Error message if the side question failed."""
+
+
+class TodoListUpdated(BaseModel):
+    """Todo list state was persisted or refreshed (independent of ToolResult rendering)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: tuple[tuple[str, str], ...]
+    """Todo (title, status) pairs in display order."""
+    complete: bool
+    """True when the list is closed (all done or cleared)."""
+    source: Literal["tool", "scratch", "compaction"]
+    """What produced this update."""
+
+
+class SubagentToolFallback(BaseModel):
+    """Agent tool launch was rejected before a subagent started."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: Literal[
+        "unavailable_agent_type",
+        "mcp_unavailable",
+        "policy_denied",
+        "timeout",
+        "exception",
+    ]
+    requested_type: str
+    available_types: tuple[str, ...] = ()
+    """Known built-in types when the rejection is type-related."""
+
+
+class AgentListDelta(BaseModel):
+    """Dynamic agent-type listing for cache-stable prompt injection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    items: tuple[str, ...]
+    """Formatted agent lines, or delta lines when ``complete`` is False."""
+    complete: bool
+    """True closes the list; False means apply as a delta on the prior open list."""
+
+
+class ToolUseSkipped(BaseModel):
+    """A tool call did not execute normally (dedup, policy, interrupt, or busy skip)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tool_call_id: str
+    tool_name: str
+    reason: Literal["dedup", "policy", "interrupt", "concurrent_inflight"]
+    resumed: bool = False
+    """True when the skip is a reuse/resume of an in-flight or prior result."""
+
+
+class ContextOverflowRecovered(BaseModel):
+    """Reactive context-overflow recovery attempt finished."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    outcome: Literal["recovered", "failed"]
+    trigger_step: int
+    """Step number that triggered the overflow rejection."""
 
 
 class SubagentEvent(BaseModel):
@@ -627,6 +697,11 @@ type Event = (
     | PlanDisplay
     | BtwBegin
     | BtwEnd
+    | TodoListUpdated
+    | SubagentToolFallback
+    | AgentListDelta
+    | ToolUseSkipped
+    | ContextOverflowRecovered
 )
 """Any event, including control flow and content/tooling events."""
 
@@ -781,6 +856,11 @@ __all__ = [
     "PlanDisplay",
     "BtwBegin",
     "BtwEnd",
+    "TodoListUpdated",
+    "SubagentToolFallback",
+    "AgentListDelta",
+    "ToolUseSkipped",
+    "ContextOverflowRecovered",
     "ApprovalRequest",
     "ToolCallRequest",
     "QuestionOption",

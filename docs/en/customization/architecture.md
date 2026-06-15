@@ -87,6 +87,12 @@ The end-to-end flow when a session starts and processes a turn:
 The soul is the heart of the runtime. Beyond the loop itself it owns approvals, context and
 compaction, slash commands, dynamic prompt injection, and a checkpoint-rewind mechanism.
 
+The agent loop emits per-turn and per-step wire events for orchestration observability. The
+canonical list lives in `src/pythinker_code/wire/types.py` (`Event` union): `StepBegin`,
+`StepRetry`, `StepInterrupted`, `ToolExecutionStarted`, `StatusUpdate`, plus
+`TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
+`ContextOverflowRecovered`.
+
 | Path | Purpose | Key entry points and interfaces |
 | --- | --- | --- |
 | `src/pythinker_code/soul/pythinkersoul.py` | Core loop: user input, slash commands, LLM calls, tool runs, compaction, telemetry spans. | `PythinkerSoul`, `PythinkerSoul.run`, `FLOW_COMMAND_PREFIX` |
@@ -167,6 +173,12 @@ model; `/usage` defaults to the active provider, with `/usage all` as the explic
 | `src/pythinker_code/ui/shell/` | Default interactive TUI: prompt, slash autocomplete, streaming visualization, tool renderers, theme, usage display. | `Shell`, `CustomPromptSession`, `register_tool_renderer`, `visualize`, `get_tui_tokens` |
 | `src/pythinker_code/ui/print/` | Non-interactive output (text / stream-json). | `Print` |
 | `src/pythinker_code/ui/acp/` | Deprecated single-session ACP shim (raises on use); the live server is `src/pythinker_code/acp/`. | `ACP` |
+
+The agent loop emits per-turn and per-step events for UI, replay, and dashboard consumers. The
+canonical list lives in the `Event` union in `src/pythinker_code/wire/types.py`; commonly consumed
+events include `StepBegin`, `StepRetry`, `StepInterrupted`, `ToolExecutionStarted`, `StatusUpdate`,
+`TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
+`ContextOverflowRecovered`.
 
 The shell can run with a working directory inside its subtree, so `src/pythinker_code/ui/`
 is a candidate for a focused nested guide on prompt, visualization, and component layout.

@@ -85,6 +85,7 @@ def should_prune(token_count: int, max_context_size: int, *, ratio: float) -> bo
 
 
 PRUNE_PLACEHOLDER = "[tool output elided to save context: {n} chars]"
+CAP_PLACEHOLDER = "\n[tool output capped: removed {n} chars]"
 
 
 def prune_stale_tool_outputs(
@@ -114,6 +115,44 @@ def prune_stale_tool_outputs(
         placeholder = TextPart(text=PRUNE_PLACEHOLDER.format(n=len(body)))
         pruned.append(msg.model_copy(update={"content": [placeholder]}))
     return pruned, freed
+
+
+def _cap_text_to_budget(body: str, max_chars: int) -> str:
+    removed = len(body) - max_chars
+    while True:
+        suffix = CAP_PLACEHOLDER.format(n=removed)
+        if len(suffix) >= max_chars:
+            return suffix[:max_chars]
+        prefix_chars = max_chars - len(suffix)
+        capped = body[:prefix_chars] + suffix
+        new_removed = len(body) - len(capped)
+        if new_removed == removed:
+            return capped
+        removed = new_removed
+
+
+def cap_stale_tool_result_bodies(
+    messages: Sequence[Message], *, protect_last: int, max_chars: int
+) -> tuple[list[Message], int]:
+    """Cap old tool-result text bodies without dropping messages or tool IDs."""
+    if max_chars <= 0:
+        return list(messages), 0
+
+    cutoff = max(0, len(messages) - protect_last)
+    capped_messages: list[Message] = []
+    freed = 0
+    for index, msg in enumerate(messages):
+        if index >= cutoff or msg.role != "tool":
+            capped_messages.append(msg)
+            continue
+        body = msg.extract_text("")
+        if len(body) <= max_chars:
+            capped_messages.append(msg)
+            continue
+        capped_body = _cap_text_to_budget(body, max_chars)
+        freed += len(body) - len(capped_body)
+        capped_messages.append(msg.model_copy(update={"content": [TextPart(text=capped_body)]}))
+    return capped_messages, freed
 
 
 @runtime_checkable

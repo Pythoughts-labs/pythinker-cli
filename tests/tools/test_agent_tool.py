@@ -24,9 +24,19 @@ from pythinker_code.wire.types import (
     ApprovalRequest,
     MCPServerSnapshot,
     MCPStatusSnapshot,
+    SubagentToolFallback,
     TextPart,
 )
 from tests.conftest import tool_call_context
+
+
+class _RecordingWire:
+    def __init__(self, captured: list[object]) -> None:
+        self.soul_side = self
+        self._captured = captured
+
+    def send(self, msg: object) -> None:
+        self._captured.append(msg)
 
 
 def _extract_agent_id(output: str) -> str:
@@ -270,6 +280,55 @@ async def test_agent_tool_rejects_resume_when_instance_is_already_running(agent_
     assert result.is_error
     assert result.brief == "Agent already running"
     assert "cannot be resumed concurrently" in result.message
+
+
+async def test_unknown_subagent_type_emits_fallback_wire_event(
+    agent_tool, monkeypatch: pytest.MonkeyPatch
+):
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+
+    result = await agent_tool(
+        agent_tool.params(
+            description="unknown type",
+            prompt="look into parser issue",
+            subagent_type="does-not-exist",
+        )
+    )
+
+    assert result.is_error
+    assert captured == [
+        SubagentToolFallback(
+            reason="unavailable_agent_type",
+            requested_type="does-not-exist",
+            available_types=("mocker",),
+        )
+    ]
+
+
+async def test_policy_denied_subagent_type_emits_fallback_wire_event(
+    agent_tool, runtime, monkeypatch: pytest.MonkeyPatch
+):
+    runtime.config.agent_execution_profile = "plan_only"
+    captured: list[object] = []
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire(captured))
+
+    result = await agent_tool(
+        agent_tool.params(
+            description="policy denied",
+            prompt="look into parser issue",
+            subagent_type="mocker",
+        )
+    )
+
+    assert result.is_error
+    assert captured == [
+        SubagentToolFallback(
+            reason="policy_denied",
+            requested_type="mocker",
+            available_types=("mocker",),
+        )
+    ]
 
 
 async def test_agent_tool_keeps_result_when_summary_continuation_hits_max_steps(
@@ -1451,7 +1510,7 @@ async def test_agent_tool_background_rejects_invalid_subagent_type(agent_tool, r
 
     assert result.is_error
     assert result.brief == "Invalid subagent type"
-    assert "Builtin subagent type not found" in result.message
+    assert "Builtin subagent type not found: does-not-exist" in result.message
 
 
 async def test_agent_tool_background_rejects_invalid_model_alias_before_start(

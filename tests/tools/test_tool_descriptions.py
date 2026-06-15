@@ -57,6 +57,13 @@ instance can preserve previous findings and work.
 - Cross-check at least one load-bearing subagent finding before making changes from it.
 - The subagent result is only visible to you. If the user should see it, summarize it yourself.
 
+**Prompt Hygiene**
+
+When spawning a fresh agent, brief it like a smart colleague who just walked in: include the goal,
+what was tried, what is in and out of scope, the expected output contract, and how the result will
+be verified. For lookups, pass the exact command or symbol; for investigations, pass the question,
+not a prescribed sequence of steps.
+
 **Agent Workflow Design**
 
 Use subagents as focused logical roles, not just extra tool capacity:
@@ -112,6 +119,8 @@ Match the number of parallel agents to the task's independent subparts, not to a
 - Only genuinely broad, cross-cutting work → more, up to the `RunAgents` cap of 8.
 
 Prefer the fewest children that cover the independent objectives — the cap of 8 is a ceiling, not a target. Over-provisioning burns the multi-agent token premium (a fan-out can cost several times a single thread) and produces results you then have to reconcile. Do not launch a subagent for what one or two direct reads or greps would answer.
+
+When spawning a fresh agent, brief it like a smart colleague who just walked in — include the goal, what was tried, what is in/out of scope, the expected output contract, and how the result will be verified. Lookups: pass the exact command. Investigations: pass the question, not prescribed steps.
 """
     )
 

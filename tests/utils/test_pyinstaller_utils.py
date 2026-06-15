@@ -253,8 +253,20 @@ def test_pyinstaller_datas():
             "pythinker_code/tools/web",
         ),
         (
+            "src/pythinker_code/tools/tool_search/tool_search.md",
+            "pythinker_code/tools/tool_search",
+        ),
+        (
             "src/pythinker_code/tools/web/search.md",
             "pythinker_code/tools/web",
+        ),
+        (
+            "src/pythinker_code/tools/worktree/enter_worktree.md",
+            "pythinker_code/tools/worktree",
+        ),
+        (
+            "src/pythinker_code/tools/worktree/exit_worktree.md",
+            "pythinker_code/tools/worktree",
         ),
     ]
     if has_rg_binary:
@@ -330,11 +342,13 @@ def test_pyinstaller_hiddenimports():
             "pythinker_code.tools.test",
             "pythinker_code.tools.think",
             "pythinker_code.tools.todo",
+            "pythinker_code.tools.tool_search",
             "pythinker_code.tools.utils",
             "pythinker_code.tools.web",
             "pythinker_code.tools.web._allowlist",
             "pythinker_code.tools.web.fetch",
             "pythinker_code.tools.web.search",
+            "pythinker_code.tools.worktree",
             "setproctitle",
         ]
     )

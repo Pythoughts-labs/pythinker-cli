@@ -15,6 +15,28 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Stop-time memory extraction can now be enabled explicitly.** Added an opt-in
+  `memory.harvest_on_stop` setting that stages safe assistant decisions, blockers, evidence, and
+  next steps into the existing scratchpad recall flow at turn end without writing directly to
+  durable `MEMORY.md`.
+- **Agents can now discover visible tools and temporarily work from a session worktree.** Added
+  `ToolSearch` plus root-session `EnterWorktree` and `ExitWorktree` tools so agents can find
+  currently available capabilities by keyword and isolate a session's operational working directory
+  in a git worktree without deleting user work on exit.
+- **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
+  `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
+  `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool
+  reuse/policy skips for tools that explicitly opt in, agent-list injections, and
+  context-overflow recovery now surfaced best-effort over Wire without changing existing tool
+  results.
+- **Spend ceilings now warn before they stop a session.** When `max_session_cost_usd` is configured,
+  the loop appends a bounded system reminder after a turn crosses `budget_nudge_ratio` of the
+  ceiling, nudging the agent to conserve budget without auto-continuing or hiding a later
+  `budget_exhausted` stop.
+- **The Agent tool description now gives clearer prompt-briefing guidance.** Fresh subagents should
+  receive the goal, scope, expected output contract, and verification criteria; the Haiku-style
+  tool-use summary from the blackbox reference was deliberately not ported.
+
 ## 0.46.0 (2026-06-14)
 
 - **Startup auto-update now picks up new releases within half an hour instead of up to a day.** The background update check was throttled to once every 24h, so a freshly published release could go unnoticed for a full day after the last check; the interval is now 30 minutes. The silent installer also no longer marks the throttle *before* the network call — a transient startup network error returns `FAILED` and is retried on the next launch instead of suppressing updates for the whole window.

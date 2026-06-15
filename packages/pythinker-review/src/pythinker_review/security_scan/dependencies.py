@@ -14,7 +14,7 @@ from pythinker_review.security_intel.models import DependencyIntel, PackageRef
 from pythinker_review.security_intel.service import scan_packages
 from pythinker_review.security_scan.paths import data_dir
 
-_VERSION_PREFIX_RE = re.compile(r"^[\^~>=<\s=]+")
+_VERSION_PREFIX_RE = re.compile(r"^[\^~>=<\s]+")
 _REQUIREMENT_RE = re.compile(
     r"^([A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,]+\])?)\s*(==|>=|<=|~=|!=|>|<)\s*([A-Za-z0-9_.\-+*,<>=]+)"
 )
