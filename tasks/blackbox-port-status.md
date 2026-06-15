@@ -24,7 +24,7 @@
 | Tool contract | `services/tools/`, `tools/**` | `soul/toolset.py`, `tools/**`, `hooks/**` | adopt/adapt | todo | Phase 2 gate |
 | CLI/bootstrap | `entrypoints/cli.tsx`, `main.tsx` | `cli/__init__.py`, `app.py`, `ui/shell/` | adapt; skip Bun/Ink | skip | De-scope: Typer/Rich native |
 | Non-interactive transports | `cli/print.ts`, `entrypoints/sdk/` | `ui/print/`, `wire/`, `acp/` | adapt; skip CCR | skip | De-scope: CCR remote transport |
-| Terminal UI | `screens/`, `components/`, `ink/` | `ui/shell/`, `wire/` | adapt; skip Ink | adapt | Phase 7 gate |
+| Terminal UI | `screens/`, `components/`, `ink/` | `ui/shell/`, `wire/` | native-equivalent; skip Ink | verify-existing | Phase 7 gate |
 | Slash commands | `commands/**` | `soul/slash.py`, `ui/shell/slash.py` | adapt | todo | Phase 5 |
 | Keybindings | `keybindings/`, `components/PromptInput/` | `ui/shell/keymap.py`, `ui/shell/prompt.py` | adapt | todo | Phase 5.11 |
 | Permissions UI | `components/permissions/`, `utils/permissions/` | `soul/permission.py`, `soul/approval.py`, `approval_runtime/` | adopt invariants | verify-existing | Phase 1.3–1.4 |
@@ -36,17 +36,17 @@
 | Agents/subagents | `tools/AgentTool/**` | `agentspec.py`, `subagents/`, `tools/agent/` | adapt | todo | Phase 5 |
 | Hooks | `utils/hooks/**` | `hooks/**` | adapt | todo | Phase 5.8 |
 | Plugins | `plugins/**` | `plugin/`, `cli/plugin.py` | adapt if approved | todo | Phase 3.9 |
-| Settings | `utils/settings/**` | `config.py` | adapt selective | todo | Phase 7.7 |
+| Settings | `utils/settings/**` | `config.py` | native-equivalent | verify-existing | Phase 7.7 audit |
 | Output styles | `outputStyles/**` | dynamic injections | skip | skipped | De-scope: not Pythinker goal |
 | Auth/providers | `utils/auth.ts`, `services/oauth/**` | `auth/**`, `llm.py` | native-equivalent | verify-existing | Phase 7.6 audit |
 | Constants/schemas | `constants/**`, `schemas/**` | `agents/default/system.md`, `wire/types.py` | adapt | verify-existing | Phase 1.1 |
-| Native TS | `native-ts/file-index/` | `ui/shell/prompt.py` | adapt ideas | todo | Phase 7.4 |
+| Native TS | `native-ts/file-index/` | `ui/shell/prompt.py` | adapt ideas | done | Phase 7.4 |
 | File/search UX | `tools/GrepTool`, `tools/FileReadTool` | `tools/file/**` | adapt | verify-existing | Phase 1.2 |
 | LSP | `services/lsp/**` | none | future-approved-only | future-approved-only | Too large without approval |
 | Sandbox | `utils/sandbox/**` | none | future-approved-only | future-approved-only | Phase 7.8 decision |
 | Computer/voice/buddy | `voice/**`, `buddy/**` | none | skip | skipped | Product-only features |
 | Remote/bridge | `bridge/**`, `remote/**` | `acp/`, `wire/` | native-equivalent IDE | skipped | CCR not a goal |
-| Migrations | `migrations/**` | `config.py` helpers | adapt patterns | todo | Phase 7.7 |
+| Migrations | `migrations/**` | `config.py` helpers | native-equivalent | verify-existing | Phase 7.7 audit |
 | Scratch/runtime | `.pythinker/scratch/` | `scratchpad.py` | native-equivalent | done | Existing |
 | Harness/evals | `services/vcr.ts` | `tests_e2e/`, `tests_ai/` | adapt | todo | Phase 6 |
 
@@ -114,14 +114,14 @@
 | 6.6 | 6 | telemetry sanitize | `telemetry/names.py`, `soul/toolset.py` | done | `tests/telemetry/test_tool_name_sanitize.py` | Span/metric labels sanitized; runtime tool names unchanged |
 | 6.7 | 6 | VCR fixtures | `tests_e2e/` | future-approved-only | — | depends on Task 6.2 cassette design |
 | 7.1 | 7 | model defense | `soul/dynamic_injections/model_defense.py` | verify-existing | injection tests | Model-keyed defense |
-| 7.2 | 7 | `screens/REPL.tsx` | `ui/shell/` | todo | shell tests | Shell UI surfaces |
+| 7.2 | 7 | `screens/REPL.tsx` | `ui/shell/` | verify-existing | shell tests | Native-equivalent shell surfaces exist across live view, prompt, slash, keymap, pickers, approvals, questions, suggestions, and task/model/session/MCP panels. Ink/Buddy/cost/idle/message-selector surfaces remain de-scoped |
 | 7.3 | 7 | Ink engine | `ui/shell/` | skipped | — | De-scope: no Pi-TUI replacement |
-| 7.4 | 7 | `native-ts/file-index/` | `ui/shell/prompt.py` | todo | prompt tests | File mention polish |
+| 7.4 | 7 | `native-ts/file-index/` | `ui/shell/prompt.py` | done | prompt tests | File mention polish: source paths now rank ahead of equally relevant test paths; native-ts indexer, .rgignore expansion, and async refresh remain separate future work |
 | 7.5 | 7 | media limits | `utils/media_limits.py`, `tools/file/read_media.py` | done | `tests/utils/test_media_limits.py` | Per-kind byte caps + image pixel ceiling |
-| 7.6 | 7 | `utils/auth.ts` | `auth/**` | todo | auth tests | Provider pattern audit |
-| 7.7 | 7 | `migrations/**` | `config.py` | todo | config tests | Migration audit |
+| 7.6 | 7 | `utils/auth.ts` | `auth/**` | verify-existing | auth tests | Native-equivalent: managed provider registry, OAuthManager precedence/refresh, and llm.py ambient-key guards. Skipped apiKeyHelper, CCR managed-session isolation, Pythoughts OAuth/beta router |
+| 7.7 | 7 | `migrations/**` | `config.py` | verify-existing | config tests | Native-equivalent: idempotent JSON→TOML, github_repo, OAuth keyring→file migrations plus scoped TOML merge/locks. No migration_version registry until a real Pythinker deprecation ships |
 | 7.8 | 7 | `utils/sandbox/**` | none | future-approved-only | — | Sandbox decision |
-| 7.9 | 7 | session search | `tools/recall/` | in_progress | `tests/tools/test_recall.py` | title/id/plan_slug lexical search; branch/tag ranking deferred |
+| 7.9 | 7 | session search | `tools/recall/` | done | `tests/tools/test_recall.py` | title/id/plan_slug lexical search and output documented; branch/tag ranking deferred until sessions persist branch/tag metadata |
 
 ## Explicit De-Scope (skip proof)
 

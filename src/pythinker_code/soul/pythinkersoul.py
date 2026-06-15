@@ -110,6 +110,7 @@ from pythinker_code.soul.permission import (
 )
 from pythinker_code.soul.slash import registry as soul_slash_registry
 from pythinker_code.soul.toolset import PythinkerToolset
+from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.subagents.usage import accumulate_usage, estimate_cost_usd
 from pythinker_code.thinking import (
     available_thinking_levels,
@@ -1932,6 +1933,10 @@ class PythinkerSoul:
                 if u is not None:
                     self._cumulative_usage = accumulate_usage(self._cumulative_usage, u)
                     self._session_cost_usd += estimate_cost_usd(u, self.model_name)
+                    # Feed the session-wide live counter so the spinner's "↓ tokens"
+                    # readout reflects this step's output — including subagent and
+                    # background souls, which all funnel through this one point.
+                    add_total_output_tokens(u.output)
 
                 def _opt_int(attr: str) -> int | None:
                     """Read an optional usage counter as int — None when usage or the

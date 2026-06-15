@@ -39,8 +39,10 @@ class Params(BaseModel):
     )
     query: str | None = Field(
         default=None,
-        description="Keywords to match against prior session titles (mode=search). "
-        "Omit to list recent sessions.",
+        description=(
+            "Keywords to match against prior session titles, session_ids, and plan slugs "
+            "(mode=search). Omit to list recent sessions."
+        ),
     )
     session_id: str | None = Field(
         default=None,
@@ -202,6 +204,8 @@ class Recall(CallableTool2[Params]):
             title = session.state.custom_title or session.title or "(untitled)"
             lines.append(f"- session_id: {session.id}")
             lines.append(f"  title: {title}")
+            if session.state.plan_slug:
+                lines.append(f"  plan_slug: {session.state.plan_slug}")
         lines.append("")
         lines.append('Read one with Recall(mode="read", session_id="...").')
         return ToolOk(output="\n".join(lines), message=f"Found {len(top)} prior session(s).")

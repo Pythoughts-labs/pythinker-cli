@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import cast
+from typing import TypedDict, cast
 
 from rich import box as rich_box
 from rich.console import Group, RenderableType
@@ -61,8 +61,17 @@ _RE_HEADER = re.compile(r"^#{1,4}\s+(.*)")
 _RE_SEVERITY_IN_HEADER = re.compile(r"\b(critical|high|medium|low)\b(?!-)", re.IGNORECASE)
 # Markdown table row starting with a severity cell: `| HIGH | description |`
 _RE_TABLE_SEVERITY_ROW = re.compile(r"^\|\s*(critical|high|medium|low)\s*\|", re.IGNORECASE)
-# ponytail: tolerant of LLM fencing drift (no line-start anchor, any closing backtick count)
+# Primary machine-readable format: ```report\n{"findings":[{"severity":"high",...}]}\n```
+# ponytail: no line-start anchor — tolerates LLM fencing drift; tighten if reviewers stabilize
 _RE_REPORT_BLOCK = re.compile(r"```report\s*\n(.*?)```", re.DOTALL)
+
+
+class _ReportFinding(TypedDict, total=False):
+    severity: str
+
+
+class _ReportBlock(TypedDict, total=False):
+    findings: list[_ReportFinding]
 
 
 @dataclass
@@ -112,12 +121,13 @@ def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
     if json_blocks:
         for block_match in json_blocks:
             try:
-                data = json.loads(block_match.group(1))
+                parsed = json.loads(block_match.group(1))
             except json.JSONDecodeError:
                 continue  # malformed JSON — block found but not parseable
-            if not isinstance(data, dict):
+            if not isinstance(parsed, dict):
                 continue  # wrong shape (array / scalar)
-            for finding in data.get("findings", []):
+            data = cast(_ReportBlock, parsed)
+            for finding in data.get("findings", ()):
                 sev = str(finding.get("severity", "")).lower()
                 if sev in counts:
                     counts[sev] += 1

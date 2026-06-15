@@ -1589,8 +1589,9 @@ class LocalFileMentionCompleter(Completer):
                     cat = 1
                 else:
                     cat = 2
+                test_penalty = int(any("test" in segment.lower() for segment in path.split("/")))
                 # preserve original FuzzyCompleter's order in the same category
-                return (cat,)
+                return (cat, test_penalty)
 
             candidates.sort(key=_rank)
             yield from candidates

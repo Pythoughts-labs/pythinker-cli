@@ -28,6 +28,10 @@ from rich.text import Text
 
 from pythinker_code.session_recap import build_turn_recap_line
 from pythinker_code.soul import format_token_count
+from pythinker_code.soul.live_tokens import (
+    get_turn_output_tokens,
+    snapshot_output_tokens_for_turn,
+)
 from pythinker_code.tools.display import DiffDisplayBlock, TodoDisplayBlock, TodoDisplayItem
 from pythinker_code.ui.shell.components.render_utils import (
     cell_width,
@@ -644,7 +648,7 @@ class _LiveView:
             ActivitySnapshot(
                 label=spinner_message(now),
                 elapsed_s=elapsed,
-                tokens=getattr(self, "_latest_context_tokens", None) or 0,
+                tokens=get_turn_output_tokens(),
                 token_rate=self._turn_token_rate(now),
             ),
             width=width,
@@ -862,6 +866,7 @@ class _LiveView:
             if self._active_turn_depth == 0:
                 self._active_turn_depth = 1
                 self._turn_start_time = time.monotonic()
+                snapshot_output_tokens_for_turn()
             self.refresh_soon()
             return
         if isinstance(msg, StepRetry):
@@ -873,6 +878,7 @@ class _LiveView:
             case TurnBegin(user_input=user_input):
                 if self._active_turn_depth == 0:
                     self._turn_start_time = time.monotonic()
+                    snapshot_output_tokens_for_turn()
                     self._recap_user_input = (
                         user_input
                         if isinstance(user_input, str)

@@ -174,6 +174,22 @@ async def test_recall_search_lists_matching_sessions(
     assert "s2" not in result.output
 
 
+async def test_recall_search_includes_plan_slug_when_present(
+    runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_list(work_dir: Any) -> list[Any]:
+        session = _session("s1", custom_title="plan work", updated_at=2.0)
+        session.state.plan_slug = "auth-migration"
+        return [session]
+
+    monkeypatch.setattr(Session, "list", staticmethod(fake_list))
+    result = await Recall(runtime)(Recall.params(mode="search", query="auth-migration"))
+
+    assert not result.is_error
+    assert isinstance(result.output, str)
+    assert "plan_slug: auth-migration" in result.output
+
+
 async def test_recall_read_returns_untrusted_transcript(
     runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
