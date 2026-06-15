@@ -39,6 +39,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **MCP prompt templates can now be invoked from connected servers.** `InvokeMcpPrompt` renders a
   server-published prompt with structured arguments and wraps the returned messages as untrusted
   external content.
+- **Plan-mode exit guidance now requires verification.** The `ExitPlanMode` tool now tells agents
+  that written plans must include a Verification section with the smallest command, test, or check
+  for each meaningful change.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

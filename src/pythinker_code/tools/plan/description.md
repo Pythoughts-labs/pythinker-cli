@@ -20,6 +20,9 @@ If your plan contains multiple alternative approaches:
 ## Before Using
 - Yolo mode does not auto-approve this tool. In yolo mode, this tool still presents
   the plan to the user for approval.
+- The plan file must include a Verification section. For each meaningful change,
+  name the smallest command, test, or check that would prove the change worked
+  end-to-end.
 - If auto mode is active, do NOT use AskUserQuestion; make the best decision from available context.
 - If auto mode is active, this tool is auto-approved because no user is present.
 - If auto mode is not active and you have unresolved questions, use AskUserQuestion first.

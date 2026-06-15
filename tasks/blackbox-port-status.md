@@ -95,17 +95,17 @@
 | 4.7 | 4 | MCP OAuth | `soul/toolset.py`, `cli/mcp.py` | done | `tests/tools/test_mcp_startup_timeout.py` | OAuth servers skip unauthorized with auth hint; hosted/XAA skipped |
 | 5.1 | 5 | plan mode | `soul/permission.py`, subagents | todo | plan mode tests | Subagent restrictions |
 | 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | todo | agent tests | Token/cost roll-up |
-| 5.3 | 5 | plan tool | `tools/plan/` | todo | plan tests | Verification in written plans |
-| 5.4 | 5 | `TodoWriteTool` | `tools/todo/` | verify-existing | `tests/tools/test_todo.py` | cancelled status |
-| 5.5 | 5 | progress UI | `tools/progress/` | verify-existing | progress tests | ProgressNote producer |
-| 5.6 | 5 | suggestions | `tools/suggest/` | verify-existing | suggest tests | Non-blocking suggestions |
-| 5.7 | 5 | ACP questions | `acp/`, `tools/ask_user/` | todo | ACP tests | Question consistency |
-| 5.8 | 5 | `schemas/hooks.ts` | `hooks/events.py` | todo | hook tests | Event parity matrix |
+| 5.3 | 5 | plan tool | `tools/plan/`, `soul/dynamic_injections/plan_mode.py` | done | `tests/tools/test_tool_descriptions.py`, `tests/core/test_plan_mode_injection_provider.py` | written plans must include verification |
+| 5.4 | 5 | `TodoWriteTool` | `tools/todo/` | done | `tests/tools/test_todo.py` | cancelled status persists and renders distinctly |
+| 5.5 | 5 | progress UI | `tools/progress/` | done | `tests/tools/test_progress.py` | ProgressNote producer exists; description anti-spam |
+| 5.6 | 5 | suggestions | `tools/suggest/` | done | `tests/tools/test_suggest.py` | Non-blocking Suggest tool/event |
+| 5.7 | 5 | ACP questions | `acp/`, `tools/ask_user/` | done | `tests/acp/test_session_question.py` | unsupported ACP clients get unsupported/fallback semantics |
+| 5.8 | 5 | `schemas/hooks.ts` | `hooks/events.py` | verify-existing | `tests/e2e/test_hooks_wire_e2e.py`, `tests/tools/test_agent_tool.py` | supported lifecycle events include PostCompact/SessionEnd/SubagentStart/SubagentStop/Notification; prompt/HTTP hooks skipped |
 | 5.9 | 5 | markdown agents | `agentspec.py` | todo | agentspec tests | Field parity |
-| 5.10 | 5 | `processUserInput/` | `ui/shell/` | todo | shell tests | Command processing |
+| 5.10 | 5 | `processUserInput/` | `ui/shell/` | verify-existing | `tests/ui_and_conv/test_shell_slash_commands.py`, `tests/utils/test_slash_command.py` | native slash and shell-mode routing covered |
 | 5.11 | 5 | `keybindings/` | `ui/shell/keymap.py` | todo | shell tests | Keybinding parity |
-| 5.12 | 5 | REPL tips | `ui/shell/` | todo | manual smoke | Spinner tips |
-| 5.13 | 5 | suggestions fork | `tools/suggest/` | todo | suggest tests | No speculation fork |
+| 5.12 | 5 | REPL tips | `ui/shell/` | future-approved-only | — | static tips require UX approval; no analytics |
+| 5.13 | 5 | suggestions fork | `tools/suggest/` | done | `tests/tools/test_suggest.py` | uses Suggestion tool/event; speculation fork skipped |
 | 6.1 | 6 | telemetry tree | `telemetry/` | todo | telemetry tests | GenAI trace tree |
 | 6.2 | 6 | `services/vcr.ts` | `tests_e2e/` | todo | replay tests | Record/replay HTTP |
 | 6.3 | 6 | eval harness | `tests_ai/` | todo | eval gates | Trajectory evals |

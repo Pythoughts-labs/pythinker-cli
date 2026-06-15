@@ -15,11 +15,19 @@ from pythinker_code.tools.file.read import ReadFile
 from pythinker_code.tools.file.read_media import ReadMediaFile
 from pythinker_code.tools.file.replace import StrReplaceFile
 from pythinker_code.tools.file.write import WriteFile
+from pythinker_code.tools.plan import ExitPlanMode
 from pythinker_code.tools.shell import Shell
 from pythinker_code.tools.think import Think
 from pythinker_code.tools.todo import SetTodoList
 from pythinker_code.tools.web.fetch import FetchURL
 from pythinker_code.tools.web.search import SearchWeb
+
+
+def test_exit_plan_mode_description_requires_verification_section():
+    tool = ExitPlanMode()
+
+    assert "Verification section" in tool.base.description
+    assert "smallest command, test, or check" in tool.base.description
 
 
 def test_agent_description(agent_tool: AgentTool):
