@@ -1090,6 +1090,13 @@ class Config(BaseModel):
             "Yolo mode does not inject a system reminder."
         ),
     )
+    git_status_injection: bool = Field(
+        default=True,
+        description=(
+            "When true, inject a bounded, explicitly stale git working-tree snapshot "
+            "(branch, dirty summary, recent commits) into the root agent prompt at turn start."
+        ),
+    )
     default_plan_mode: bool = Field(default=False, description="Default plan mode for new sessions")
     default_editor: str = Field(
         default="",

@@ -25,6 +25,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
   `ToolSearch` plus root-session `EnterWorktree` and `ExitWorktree` tools so agents can find
   currently available capabilities by keyword and isolate a session's operational working directory
   in a git worktree without deleting user work on exit.
+- **Root sessions now get a bounded git snapshot in the prompt.** When `git_status_injection` is
+  enabled (default), the agent receives branch, dirty-file summary, and recent commits as an
+  explicitly stale point-in-time reminder; disable via config or set `git_status_injection = false`.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

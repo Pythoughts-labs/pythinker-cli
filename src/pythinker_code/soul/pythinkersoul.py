@@ -89,6 +89,7 @@ from pythinker_code.soul.dynamic_injection import (
 )
 from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
 from pythinker_code.soul.dynamic_injections.auto_mode import AutoModeInjectionProvider
+from pythinker_code.soul.dynamic_injections.git_status import GitStatusInjectionProvider
 from pythinker_code.soul.dynamic_injections.goal_mode import GoalModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.inline_commands import InlineCommandReminderProvider
 from pythinker_code.soul.dynamic_injections.model_defense import ModelDefenseInjectionProvider
@@ -550,6 +551,8 @@ class PythinkerSoul:
             # Self-filtering: root-only; posture-fingerprinted so it re-emits
             # exactly when yolo/auto/safe-mode/profile/session-approvals change.
             PermissionsInjectionProvider(),
+            # Self-filtering: root-only; bounded git snapshot for working-tree orientation.
+            GitStatusInjectionProvider(),
             # Self-filtering: root-only; keeps the model's subagent list current
             # without tying it to the static tool description cache.
             AgentListInjectionProvider(),
