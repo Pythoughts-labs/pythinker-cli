@@ -106,13 +106,13 @@
 | 5.11 | 5 | `keybindings/` | `ui/shell/keymap.py` | todo | shell tests | Keybinding parity |
 | 5.12 | 5 | REPL tips | `ui/shell/` | future-approved-only | — | static tips require UX approval; no analytics |
 | 5.13 | 5 | suggestions fork | `tools/suggest/` | done | `tests/tools/test_suggest.py` | uses Suggestion tool/event; speculation fork skipped |
-| 6.1 | 6 | telemetry tree | `telemetry/` | todo | telemetry tests | GenAI trace tree |
-| 6.2 | 6 | `services/vcr.ts` | `tests_e2e/` | todo | replay tests | Record/replay HTTP |
+| 6.1 | 6 | telemetry tree | `telemetry/` | done | `tests/core/test_otel_span_tree.py`, `tests/telemetry/test_telemetry.py`, `tests/telemetry/test_otel_resource.py` | connected spans, GenAI attribute plumbing, telemetry-off no-op |
+| 6.2 | 6 | `services/vcr.ts` | `tests_e2e/` | future-approved-only | — | requires explicit cassette/redaction design |
 | 6.3 | 6 | eval harness | `tests_ai/` | todo | eval gates | Trajectory evals |
-| 6.4 | 6 | failure thresholds | `soul/pythinkersoul.py` | todo | soul tests | Graceful yield |
-| 6.5 | 6 | max steps | `soul/pythinkersoul.py` | todo | soul tests | Final handoff turn |
+| 6.4 | 6 | failure thresholds | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_stuck_loop.py` | stuck/failure-threshold handoff with reset behavior |
+| 6.5 | 6 | max steps | `soul/pythinkersoul.py`, `soul/btw.py` | done | `tests/core/test_max_steps_handoff.py`, `tests/core/test_pythinkersoul_stuck_loop.py` | tools-disabled final handoff before static fallback |
 | 6.6 | 6 | telemetry sanitize | `telemetry/` | todo | telemetry tests | Tool name sanitization |
-| 6.7 | 6 | VCR fixtures | `tests_e2e/` | todo | fixture discipline | Eval fixture rules |
+| 6.7 | 6 | VCR fixtures | `tests_e2e/` | future-approved-only | — | depends on Task 6.2 cassette design |
 | 7.1 | 7 | model defense | `soul/dynamic_injections/model_defense.py` | verify-existing | injection tests | Model-keyed defense |
 | 7.2 | 7 | `screens/REPL.tsx` | `ui/shell/` | todo | shell tests | Shell UI surfaces |
 | 7.3 | 7 | Ink engine | `ui/shell/` | skipped | — | De-scope: no Pi-TUI replacement |
