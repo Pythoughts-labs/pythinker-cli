@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Softer TUI chrome in the dark theme.** Panel borders (welcome banner, menus) and the input-area
+  rules now render in a mid grey (`#8a8d91`) instead of near-white, for a less glaring look.
 - **Stop-time memory extraction can now be enabled explicitly.** Added an opt-in
   `memory.harvest_on_stop` setting that stages safe assistant decisions, blockers, evidence, and
   next steps into the existing scratchpad recall flow at turn end without writing directly to

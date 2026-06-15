@@ -166,7 +166,7 @@ _PROMPT_STYLE_DARK = {
     # reads as a single line of text rather than a chrome panel.
     "compact-input": "",
     "compact-input.prompt": "fg:#F4F4F5 bold",
-    "compact-input.frame": "fg:#e8ebed",
+    "compact-input.frame": "fg:#8a8d91",
     # Muted level word in the top-border effort label (the dot carries the color).
     "compact-input.effort": "fg:#A3A3A3",
     "running-prompt-placeholder": "fg:#A3A3A3 italic",
@@ -610,7 +610,7 @@ TUI_TOKEN_NAMES = frozenset(field.name for field in fields(TuiTokens))
 
 _TUI_TOKENS_DARK = TuiTokens(
     accent="#B3B9F4",
-    border="#e8ebed",
+    border="#8a8d91",
     border_accent="#7C88DE",
     border_muted="#b8bcc0",
     info="#AFE3F1",

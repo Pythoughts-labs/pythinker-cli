@@ -42,7 +42,7 @@ def test_dark_tokens_have_brand_values():
     t = get_tui_tokens()
     assert t.accent == "#B3B9F4"  # periwinkle brand accent (≈ Catppuccin Mocha lavender)
     assert t.border_accent == "#7C88DE"  # accent-family chrome (active borders)
-    assert t.border == "#e8ebed"  # light grey
+    assert t.border == "#8a8d91"  # mid grey
     assert t.info == "#AFE3F1"  # cyan (unchanged; markdown code/links use ANSI cyan)
     assert t.success == "#7BC97F"
     assert t.error == "#EF5E62"
