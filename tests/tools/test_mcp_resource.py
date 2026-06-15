@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pythinker_code.soul.toolset import MCPServerInfo, PythinkerToolset
-from pythinker_code.tools.mcp_resource import ListMcpResources, ReadMcpResource
+from pythinker_code.tools.mcp_resource import InvokeMcpPrompt, ListMcpResources, ReadMcpResource
 
 
 async def test_discover_optional_capability_distinguishes_absent_from_transient() -> None:
@@ -82,6 +82,7 @@ class _FakeClient:
         self._contents = contents or []
         self._raise = raise_on_read
         self._raise_on_enter = raise_on_enter
+        self.prompt_calls: list[tuple[str, dict[str, Any]]] = []
 
     async def __aenter__(self) -> _FakeClient:
         if self._raise_on_enter:
@@ -95,6 +96,16 @@ class _FakeClient:
         if self._raise:
             raise RuntimeError("boom")
         return self._contents
+
+    async def get_prompt(self, name: str, arguments: dict[str, Any]) -> Any:
+        if self._raise:
+            raise RuntimeError("boom")
+        self.prompt_calls.append((name, arguments))
+        return type(
+            "PromptResult",
+            (),
+            {"messages": [type("PromptMessage", (), {"role": "user", "content": "summarize"})()]},
+        )()
 
 
 def _toolset_with_server(name: str, **kw: Any) -> PythinkerToolset:
@@ -171,3 +182,30 @@ async def test_read_resource_from_unconnectable_server_errors() -> None:
     result = await ReadMcpResource(ts)(ReadMcpResource.params(server="db", uri="x"))
     assert result.is_error
     assert result.brief == "Resource read failed"
+
+
+async def test_invoke_prompt_returns_untrusted_messages() -> None:
+    client = _FakeClient()
+    ts = _toolset_with_server("db", client=client, prompts=[_Prompt("summarize")])
+
+    result = await InvokeMcpPrompt(ts)(
+        InvokeMcpPrompt.params(server="db", name="summarize", arguments={"table": "users"})
+    )
+
+    assert not result.is_error
+    assert client.prompt_calls == [("summarize", {"table": "users"})]
+    assert isinstance(result.output, str)
+    assert "role: user" in result.output
+    assert "summarize" in result.output
+    assert "untrusted_data" in result.output
+
+
+async def test_invoke_prompt_unknown_prompt_errors() -> None:
+    ts = _toolset_with_server("db", prompts=[_Prompt("summarize")])
+
+    result = await InvokeMcpPrompt(ts)(
+        InvokeMcpPrompt.params(server="db", name="missing", arguments={})
+    )
+
+    assert result.is_error
+    assert result.brief == "Unknown MCP prompt"

@@ -86,13 +86,13 @@
 | 3.7 | 3 | memory prompts | `agents/default/system.md`, `memory/recall.py` | done | `tests/core/test_memory_phase_bcd.py`, prompt audit | memory is background/stale reference |
 | 3.8 | 3 | skill frontmatter | `skill/__init__.py`, `tools/skill/` | done | `tests/core/test_skill.py` | adopts name/description/type/scope; ignores non-Pythinker fields |
 | 3.9 | 3 | `plugins/**` | `skill/__init__.py`, `plugin/` | done | ledger audit | plugins expose tools/config/skill roots; marketplace/output styles skipped |
-| 4.1 | 4 | `services/mcp/client.ts` | `tools/mcp_resource/` | verify-existing | `tests/tools/test_mcp_resource.py` | Resources; prompts deferred |
+| 4.1 | 4 | `services/mcp/client.ts` | `tools/mcp_resource/` | done | `tests/tools/test_mcp_resource.py` | resources + prompts listed; reads untrusted |
 | 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py` | todo | MCP tests | reconnect/list_changed — see tasks/todo.md |
-| 4.3 | 4 | MCP docker stdio | `soul/toolset.py` | todo | MCP tests | Close timeouts |
-| 4.4 | 4 | MCP prompts | future `tools/mcp_prompt/` | todo | MCP prompt tests | InvokeMcpPrompt |
+| 4.3 | 4 | MCP docker stdio | `soul/toolset.py`, `cli/mcp.py` | done | `tests/core/test_mcp_docker_rm.py`, `tests/core/test_mcp_cleanup.py`, `tests/tools/test_mcp_startup_timeout.py` | --rm injection + close/startup timeouts |
+| 4.4 | 4 | MCP prompts | `tools/mcp_resource/`, `agents/default/agent.yaml` | done | `tests/tools/test_mcp_resource.py` | InvokeMcpPrompt returns untrusted messages |
 | 4.5 | 4 | `elicitationHandler.ts` | `wire/`, `acp/` | future-approved-only | — | Needs Wire contract approval |
 | 4.6 | 4 | MCP naming | `soul/toolset.py` | todo | MCP tests | Server name normalization |
-| 4.7 | 4 | MCP OAuth | `auth/`, `cli/mcp.py` | future-approved-only | — | Maintainer decision |
+| 4.7 | 4 | MCP OAuth | `soul/toolset.py`, `cli/mcp.py` | done | `tests/tools/test_mcp_startup_timeout.py` | OAuth servers skip unauthorized with auth hint; hosted/XAA skipped |
 | 5.1 | 5 | plan mode | `soul/permission.py`, subagents | todo | plan mode tests | Subagent restrictions |
 | 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | todo | agent tests | Token/cost roll-up |
 | 5.3 | 5 | plan tool | `tools/plan/` | todo | plan tests | Verification in written plans |

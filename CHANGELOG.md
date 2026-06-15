@@ -36,6 +36,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **Recall can now read bounded transcript windows.** `Recall(mode="read")` accepts
   `message_offset` and `max_messages` so agents can inspect a precise, sanitized slice of a prior
   workspace session without pulling the whole transcript into context.
+- **MCP prompt templates can now be invoked from connected servers.** `InvokeMcpPrompt` renders a
+  server-published prompt with structured arguments and wraps the returned messages as untrusted
+  external content.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

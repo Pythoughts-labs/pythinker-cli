@@ -38,6 +38,7 @@ agent:
     - "pythinker_code.tools.web:FetchURL"
     - "pythinker_code.tools.mcp_resource:ListMcpResources"
     - "pythinker_code.tools.mcp_resource:ReadMcpResource"
+    - "pythinker_code.tools.mcp_resource:InvokeMcpPrompt"
     - "pythinker_code.tools.plan:ExitPlanMode"
     - "pythinker_code.tools.plan.enter:EnterPlanMode"
   subagents:
