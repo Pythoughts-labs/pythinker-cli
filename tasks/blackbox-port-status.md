@@ -93,12 +93,12 @@
 | 4.5 | 4 | `elicitationHandler.ts` | `wire/`, `acp/` | future-approved-only | — | Needs Wire contract approval |
 | 4.6 | 4 | MCP naming | `soul/toolset.py` | todo | MCP tests | Server name normalization |
 | 4.7 | 4 | MCP OAuth | `soul/toolset.py`, `cli/mcp.py` | done | `tests/tools/test_mcp_startup_timeout.py` | OAuth servers skip unauthorized with auth hint; hosted/XAA skipped |
-| 5.1 | 5 | plan mode | `soul/permission.py`, subagents | todo | plan mode tests | Subagent restrictions |
-| 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | todo | agent tests | Token/cost roll-up |
+| 5.1 | 5 | plan mode | `soul/permission.py`, subagents | verify-existing | `tests/core/test_permission_profiles.py` | profile downgrade + shell denial; MCP/plugin child E2E thin |
+| 5.2 | 5 | subagent usage | `subagents/`, `tools/agent/` | verify-existing | `tests/subagents/test_usage_rollup.py` | roll-up helpers wired; resume/batch double-count tests missing |
 | 5.3 | 5 | plan tool | `tools/plan/`, `soul/dynamic_injections/plan_mode.py` | done | `tests/tools/test_tool_descriptions.py`, `tests/core/test_plan_mode_injection_provider.py` | written plans must include verification |
 | 5.4 | 5 | `TodoWriteTool` | `tools/todo/` | done | `tests/tools/test_todo.py` | cancelled status persists and renders distinctly |
 | 5.5 | 5 | progress UI | `tools/progress/` | done | `tests/tools/test_progress.py` | ProgressNote producer exists; description anti-spam |
-| 5.6 | 5 | suggestions | `tools/suggest/` | done | `tests/tools/test_suggest.py` | Non-blocking Suggest tool/event |
+| 5.6 | 5 | suggestions | `tools/suggest/` | verify-existing | `tests/tools/test_suggest.py` | emit/render done; accept→prefill + dismiss UX still open |
 | 5.7 | 5 | ACP questions | `acp/`, `tools/ask_user/` | done | `tests/acp/test_session_question.py` | unsupported ACP clients get unsupported/fallback semantics |
 | 5.8 | 5 | `schemas/hooks.ts` | `hooks/events.py` | verify-existing | `tests/e2e/test_hooks_wire_e2e.py`, `tests/tools/test_agent_tool.py` | supported lifecycle events include PostCompact/SessionEnd/SubagentStart/SubagentStop/Notification; prompt/HTTP hooks skipped |
 | 5.9 | 5 | markdown agents | `agentspec.py` | todo | agentspec tests | Field parity |
@@ -110,7 +110,7 @@
 | 6.2 | 6 | `services/vcr.ts` | `tests_e2e/` | future-approved-only | — | requires explicit cassette/redaction design |
 | 6.3 | 6 | eval harness | `tests_ai/` | todo | eval gates | Trajectory evals |
 | 6.4 | 6 | failure thresholds | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_stuck_loop.py` | stuck/failure-threshold handoff with reset behavior |
-| 6.5 | 6 | max steps | `soul/pythinkersoul.py`, `soul/btw.py` | done | `tests/core/test_max_steps_handoff.py`, `tests/core/test_pythinkersoul_stuck_loop.py` | tools-disabled final handoff before static fallback |
+| 6.5 | 6 | max steps | `soul/pythinkersoul.py`, `soul/btw.py` | verify-existing | `tests/core/test_max_steps_handoff.py`, `tests/core/test_pythinkersoul_stuck_loop.py` | shell/print handoff done; wire/ACP still status-only |
 | 6.6 | 6 | telemetry sanitize | `telemetry/` | todo | telemetry tests | Tool name sanitization |
 | 6.7 | 6 | VCR fixtures | `tests_e2e/` | future-approved-only | — | depends on Task 6.2 cassette design |
 | 7.1 | 7 | model defense | `soul/dynamic_injections/model_defense.py` | verify-existing | injection tests | Model-keyed defense |
