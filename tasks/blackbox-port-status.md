@@ -70,10 +70,10 @@
 | 2.3 | 2 | tool descriptions | `tools/**/*.md`, `tools/agent/` | done | `tests/tools/test_tool_descriptions.py` | when-to-use in tool .md files |
 | 2.4 | 2 | `query.ts` | `soul/pythinkersoul.py` | verify-existing | soul recovery tests | orphan repair, truncation nudge |
 | 2.5 | 2 | hooks/permissions | `hooks/engine.py`, `soul/permission.py` | verify-existing | `tests/hooks/test_engine.py` | PreToolUse block tests |
-| 2.6 | 2 | `toolExecution.ts` | `soul/toolset.py` | todo | tool input tests | Immutability audit pending |
-| 2.7 | 2 | `toolOrchestration.ts` | `soul/toolset.py` | todo | shell parallel tests | Cascade decision pending |
+| 2.6 | 2 | `toolExecution.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | tool input snapshots isolated |
+| 2.7 | 2 | `toolOrchestration.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | Shell remains exclusive; no parallel cascade |
 | 2.8 | 2 | `context.ts` | `soul/dynamic_injections/git_status.py` | done | `tests/core/test_git_status_injection_provider.py` | Reuses collect_git_context |
-| 2.9 | 2 | compaction | `soul/compaction.py` | todo | compaction tests | API-round grouping |
+| 2.9 | 2 | compaction | `soul/compaction.py` | done | `tests/core/test_simple_compaction.py` | multi-round tool pair regression |
 | 2.10 | 2 | `query.ts` | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_retry_recovery.py` | compaction_failed handoff |
 | 2.11 | 2 | compaction cleanup | `soul/pythinkersoul.py`, `soul/context.py` | verify-existing | `tests/core/test_dynamic_injection_hooks.py`, `tests/core/test_compaction_restore.py` | provider rearm + restore invariants |
 | 2.12 | 2 | `tools.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | deterministic MCP publish order |

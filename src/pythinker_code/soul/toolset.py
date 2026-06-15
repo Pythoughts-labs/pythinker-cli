@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import difflib
 import hashlib
 import importlib
@@ -814,7 +815,7 @@ class PythinkerToolset:
                     _current_tool_execution_started_ids.reset(started_ids_token)
 
             async def _call_with_lifecycle():
-                tool_input_dict = arguments if isinstance(arguments, dict) else {}
+                tool_input_dict = copy.deepcopy(arguments) if isinstance(arguments, dict) else {}
 
                 if self._runtime is not None:
                     from pythinker_code.soul.permission import check_tool_call_allowed
@@ -843,7 +844,7 @@ class PythinkerToolset:
                         session_id=_get_session_id(),
                         cwd=str(Path.cwd()),
                         tool_name=tool_call.function.name,
-                        tool_input=tool_input_dict,
+                        tool_input=copy.deepcopy(tool_input_dict),
                         tool_call_id=tool_call.id,
                     ),
                 )
@@ -883,7 +884,7 @@ class PythinkerToolset:
                 )
                 _tool_span = _tool_span_cm.__enter__()
                 try:
-                    ret = await self._gated_call(tool, arguments)
+                    ret = await self._gated_call(tool, copy.deepcopy(arguments))
                 except Exception as e:
                     tool_elapsed = time.monotonic() - t0
                     _tool_span.set_attribute("tool.success", False)
@@ -910,7 +911,7 @@ class PythinkerToolset:
                             session_id=_get_session_id(),
                             cwd=str(Path.cwd()),
                             tool_name=tool_call.function.name,
-                            tool_input=tool_input_dict,
+                            tool_input=copy.deepcopy(tool_input_dict),
                             error=str(e),
                             tool_call_id=tool_call.id,
                         ),
@@ -978,7 +979,7 @@ class PythinkerToolset:
                         session_id=_get_session_id(),
                         cwd=str(Path.cwd()),
                         tool_name=tool_call.function.name,
-                        tool_input=tool_input_dict,
+                        tool_input=copy.deepcopy(tool_input_dict),
                         tool_output=str(ret)[:2000],
                         tool_call_id=tool_call.id,
                     ),

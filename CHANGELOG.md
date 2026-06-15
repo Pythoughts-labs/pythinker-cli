@@ -31,7 +31,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **Context compaction and MCP tool registration now fail more predictably.** Proactive compaction
   failures hand back with an explicit `compaction_failed` stop instead of bubbling an unstructured
   loop error, and MCP duplicate tool-name resolution now follows configured server order instead of
-  connection completion order.
+  connection completion order. Tool hooks also retain the original model input even if a tool
+  mutates a nested argument object during execution.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

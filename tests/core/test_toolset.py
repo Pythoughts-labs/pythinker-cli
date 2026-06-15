@@ -11,7 +11,7 @@ from typing import Any, ClassVar, cast
 
 import mcp
 from pydantic import BaseModel
-from pythinker_core.tooling import CallableTool2, ToolOk, ToolReturnValue
+from pythinker_core.tooling import CallableTool, CallableTool2, ToolOk, ToolReturnValue
 from pythinker_core.tooling.error import ToolNotFoundError as PythinkerCoreToolNotFoundError
 
 from pythinker_code.soul.toolset import (
@@ -52,6 +52,20 @@ class DummyToolB(CallableTool2[DummyParams]):
 
     async def __call__(self, params: DummyParams) -> ToolReturnValue:
         return ToolOk(output="b")
+
+
+class MutatesNestedInputTool(CallableTool):
+    name: str = "MutatesNestedInput"
+    description: str = "Mutates nested input"
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {"payload": {"type": "object"}},
+        "required": ["payload"],
+    }
+
+    async def __call__(self, payload: dict[str, str]) -> ToolReturnValue:
+        payload["value"] = "mutated"
+        return ToolOk(output="mutated")
 
 
 def _make_toolset() -> PythinkerToolset:
@@ -263,6 +277,41 @@ async def test_cleanup_suppresses_cancelled_mcp_loading_task():
     await ts.cleanup()
 
     assert task.cancelled()
+
+
+async def test_tool_execution_mutation_does_not_rewrite_hook_input() -> None:
+    ts = PythinkerToolset()
+    ts.add(MutatesNestedInputTool())
+    post_inputs: list[dict[str, Any]] = []
+
+    async def trigger(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    def fire_and_forget_trigger(*args: Any, **kwargs: Any) -> None:
+        if args[0] == "PostToolUse":
+            post_inputs.append(kwargs["input_data"]["tool_input"])
+
+    ts._hook_engine = cast(  # pyright: ignore[reportPrivateUsage]
+        Any,
+        SimpleNamespace(
+            trigger=trigger,
+            fire_and_forget_trigger=fire_and_forget_trigger,
+        ),
+    )
+
+    result = ts.handle(
+        ToolCall(
+            id="mutating-call",
+            function=ToolCall.FunctionBody(
+                name="MutatesNestedInput",
+                arguments='{"payload":{"value":"original"}}',
+            ),
+        )
+    )
+    assert isinstance(result, asyncio.Task)
+    await result
+
+    assert post_inputs == [{"payload": {"value": "original"}}]
 
 
 # --- hide/unhide cycle ---
