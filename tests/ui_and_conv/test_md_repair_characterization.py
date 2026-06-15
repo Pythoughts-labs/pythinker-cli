@@ -11,6 +11,7 @@ NOT refactored. If a characterized output looks imperfect, mark it with a
 from __future__ import annotations
 
 from pythinker_code.ui.shell.components.markdown import (
+    _loosen_tight_ordered_lists,
     _normalize_markdown_tables,
     _repair_crammed_markdown_tables,
     pythinker_markdown,
@@ -46,3 +47,38 @@ def test_wellformed_table_is_passed_through_unchanged_in_render():
     out = render_plain(pythinker_markdown(clean), width=40)
     for token in ("A", "B", "1", "2", "3", "4"):
         assert token in out
+
+# ---------------------------------------------------------------------------
+# _loosen_tight_ordered_lists — behavior specs (not pinned characterization)
+# ---------------------------------------------------------------------------
+
+
+def test_loosen_tight_ol_inserts_blank_between_items():
+    inp = "1. First\n2. Second\n3. Third\n"
+    out = _loosen_tight_ordered_lists(inp)
+    assert out == "1. First\n\n2. Second\n\n3. Third\n"
+
+
+def test_loosen_tight_ol_skips_already_spaced():
+    inp = "1. First\n\n2. Second\n"
+    out = _loosen_tight_ordered_lists(inp)
+    assert out == "1. First\n\n2. Second\n"
+
+
+def test_loosen_tight_ol_ignores_inside_fence():
+    inp = "```\n1. inside\n2. fence\n```\n"
+    out = _loosen_tight_ordered_lists(inp)
+    assert out == "```\n1. inside\n2. fence\n```\n"
+
+
+def test_loosen_tight_ol_preserves_surrounding_text():
+    inp = "intro\n1. First\n2. Second\noutro\n"
+    out = _loosen_tight_ordered_lists(inp)
+    assert out == "intro\n1. First\n\n2. Second\noutro\n"
+
+
+def test_loosen_tight_ol_unordered_list_unchanged():
+    """Unordered list items are not loosened — function is OL-only."""
+    inp = "- a\n- b\n- c\n"
+    out = _loosen_tight_ordered_lists(inp)
+    assert out == "- a\n- b\n- c\n"

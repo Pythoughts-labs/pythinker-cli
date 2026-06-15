@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pythinker_code.ui.shell.components.markdown import (
     PythinkerMarkdown,
+    _loosen_tight_ordered_lists,
     _unwrap_fenced_markdown_tables,
     pythinker_markdown,
 )
@@ -114,3 +115,43 @@ def test_small_code_block_still_highlights_without_notice() -> None:
     out = render_plain(pythinker_markdown("```python\nx = 1\n```"), width=80)
     assert "highlighting skipped" not in out
     assert "x = 1" in out
+
+
+# ---------------------------------------------------------------------------
+# _loosen_tight_ordered_lists
+# ---------------------------------------------------------------------------
+
+
+def test_tight_ol_gets_blank_lines_between_items() -> None:
+    text = "1. first\n2. second\n3. third\n"
+    result = _loosen_tight_ordered_lists(text)
+    assert result == "1. first\n\n2. second\n\n3. third\n"
+
+
+def test_already_loose_ol_unchanged() -> None:
+    text = "1. first\n\n2. second\n"
+    assert _loosen_tight_ordered_lists(text) == text
+
+
+def test_single_ol_item_unchanged() -> None:
+    text = "1. only item\n"
+    assert _loosen_tight_ordered_lists(text) == text
+
+
+def test_ol_inside_fence_not_loosened() -> None:
+    text = "```\n1. inside fence\n2. still inside\n```\n1. outside\n2. outside too\n"
+    result = _loosen_tight_ordered_lists(text)
+    # Items inside the fence must stay tight; items outside get the blank line
+    assert "1. inside fence\n2. still inside" in result
+    assert "1. outside\n\n2. outside too" in result
+
+
+def test_unordered_list_not_affected() -> None:
+    text = "- bullet one\n- bullet two\n"
+    assert _loosen_tight_ordered_lists(text) == text
+
+
+def test_ol_mixed_with_prose_inserts_only_between_items() -> None:
+    text = "Intro.\n1. first\n2. second\nOutro.\n"
+    result = _loosen_tight_ordered_lists(text)
+    assert result == "Intro.\n1. first\n\n2. second\nOutro.\n"

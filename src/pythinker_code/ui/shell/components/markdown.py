@@ -75,6 +75,7 @@ _MARKDOWN_ICON_KEYS: tuple[str, ...] = tuple(
     sorted(_MARKDOWN_ICON_REPLACEMENTS, key=len, reverse=True)
 )
 _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
+_OL_ITEM_RE = re.compile(r"^\d+\.\s")
 _PRIORITY_MATRIX_ROW_RE = re.compile(
     r"^\s*(?P<id>[A-Z]{1,3}\d+)\s*(?:[─━—-]|\s){2,}\s*"
     r"(?P<severity>CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*$",
@@ -718,6 +719,44 @@ def _normalize_table_block(text: str) -> str:
         text = remainder if remainder.startswith("\n") else "\n" + remainder
 
 
+def _loosen_tight_ordered_lists(markup: str) -> str:
+    """Insert a blank line before each ordered-list item that immediately follows another."""
+    lines = markup.splitlines(keepends=True)
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    prev_was_ol = False
+
+    for line in lines:
+        m = _FENCE_RE.match(line)
+        if in_fence:
+            out.append(line)
+            if m:
+                fence = m.group("fence")
+                if fence.startswith(fence_char) and len(fence) >= fence_len:
+                    in_fence = False
+                    fence_char = ""
+                    fence_len = 0
+            prev_was_ol = False
+            continue
+        if m:
+            in_fence = True
+            fence_char = m.group("fence")[0]
+            fence_len = len(m.group("fence"))
+            out.append(line)
+            prev_was_ol = False
+            continue
+
+        is_ol = bool(_OL_ITEM_RE.match(line))
+        if is_ol and prev_was_ol:
+            out.append("\n")
+        out.append(line)
+        prev_was_ol = is_ol
+
+    return "".join(out)
+
+
 def _normalize_markdown_tables(markup: str) -> str:
     """Apply :func:`_normalize_table_block` to every fence-free span of markup."""
     if "|" not in markup or "-" not in markup:
@@ -779,7 +818,8 @@ class PythinkerMarkdown(Markdown):
         unwrapped_markup = _unwrap_fenced_markdown_tables(safe_markup)
         repaired_markup = _repair_crammed_markdown_tables(unwrapped_markup)
         normalized_markup = _normalize_markdown_tables(repaired_markup)
-        super().__init__(_simplify_markdown_report_icons(normalized_markup), *args, **kwargs)
+        loosened_markup = _loosen_tight_ordered_lists(normalized_markup)
+        super().__init__(_simplify_markdown_report_icons(loosened_markup), *args, **kwargs)
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         overrides = _markdown_style_overrides()
