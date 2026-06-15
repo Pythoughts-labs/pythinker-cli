@@ -901,6 +901,9 @@ class _LiveView:
             case CompactionBegin():
                 self._compaction_block = _CompactionBlock(
                     context_tokens=self._latest_context_tokens,
+                    todos_renderable=self._pinned_todo_block(
+                        width=80, hide_active=False, elapsed_s=0.0
+                    ),
                 )
                 self.refresh_soon()
             case CompactionEnd():
