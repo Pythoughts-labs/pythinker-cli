@@ -65,14 +65,14 @@
 | 1.2 | 1 | `utils/messages.ts`, `tools/` | `tools/web/*`, `tools/file/grep_local.py`, `tools/shell/`, `tools/mcp_resource/`, `tools/recall/` | done | `tests/tools/test_untrusted_wrapping.py` | Verified 2026-06-15; wrapping tests pass |
 | 1.3 | 1 | `utils/permissions/` | `tools/file/__init__.py`, `soul/approval.py` | done | `tests/core/test_approval_auto.py` | Verified 2026-06-15; config/dangerous edit gates covered |
 | 1.4 | 1 | `utils/permissions/permissions.ts` | `soul/permission.py`, `approval_runtime/` | done | `tests/core/test_approval_auto.py`, `tests/core/test_permission_profiles.py` | Verified 2026-06-15; 102 approval tests pass |
-| 2.1 | 2 | `query.ts`, `services/tools/toolExecution.ts` | `tools/utils.py`, `tools/shell/` | todo | tool-result builder tests | Spill truncated outputs |
-| 2.2 | 2 | compaction reference | `soul/compaction.py`, `soul/context.py` | todo | compaction tests | Stale tool-output pruning |
-| 2.3 | 2 | tool descriptions | `tools/**/*.md`, `tools/agent/` | todo | prompt invariant tests | When-to-use guidance |
-| 2.4 | 2 | `query.ts` | `soul/pythinkersoul.py` | todo | soul loop tests | Recovery invariants |
-| 2.5 | 2 | hooks/permissions | `hooks/engine.py`, `soul/permission.py` | todo | hook precedence tests | PreToolUse block never discarded |
-| 2.6 | 2 | `toolExecution.ts` | `soul/toolset.py` | todo | tool input tests | Immutability + backfill |
-| 2.7 | 2 | `toolOrchestration.ts` | `soul/toolset.py` | todo | shell parallel tests | Shell failure cascade decision |
-| 2.8 | 2 | dynamic context | dynamic injections | todo | injection tests | Git status snapshot |
+| 2.1 | 2 | `query.ts`, `services/tools/toolExecution.ts` | `tools/utils.py`, `tools/shell/` | done | `tests/utils/test_result_builder.py` | Verified; spill + recovery hints |
+| 2.2 | 2 | compaction reference | `soul/compaction.py`, `soul/context.py` | done | `tests/core/test_context_pruning.py` | prune_stale_tool_outputs present |
+| 2.3 | 2 | tool descriptions | `tools/**/*.md`, `tools/agent/` | done | `tests/tools/test_tool_descriptions.py` | when-to-use in tool .md files |
+| 2.4 | 2 | `query.ts` | `soul/pythinkersoul.py` | verify-existing | soul recovery tests | orphan repair, truncation nudge |
+| 2.5 | 2 | hooks/permissions | `hooks/engine.py`, `soul/permission.py` | verify-existing | `tests/hooks/test_engine.py` | PreToolUse block tests |
+| 2.6 | 2 | `toolExecution.ts` | `soul/toolset.py` | todo | tool input tests | Immutability audit pending |
+| 2.7 | 2 | `toolOrchestration.ts` | `soul/toolset.py` | todo | shell parallel tests | Cascade decision pending |
+| 2.8 | 2 | `context.ts` | `soul/dynamic_injections/git_status.py` | done | `tests/core/test_git_status_injection_provider.py` | Reuses collect_git_context |
 | 2.9 | 2 | compaction | `soul/compaction.py` | todo | compaction tests | API-round grouping |
 | 2.10 | 2 | `query.ts` | `soul/compaction.py` | todo | compaction failure tests | Autocompact circuit breaker |
 | 2.11 | 2 | compaction cleanup | `soul/compaction.py`, `soul/context.py` | todo | compaction tests | Post-compact cleanup |
@@ -139,6 +139,6 @@
 | phase | gate | status |
 | ---: | --- | --- |
 | 0 | Ledger complete; maintainers see remain/skip | done |
-| 1 | `make check-pythinker-code && make test-pythinker-code` | in_progress |
+| 1 | `make check-pythinker-code && make test-pythinker-code` | verify-existing done; full suite has 7 pre-existing UI failures on branch |
 | 2 | focused + check; full test if shared context changed | pending |
 | 3–8 | per plan dashboard | pending |
