@@ -78,14 +78,14 @@
 | 2.11 | 2 | compaction cleanup | `soul/pythinkersoul.py`, `soul/context.py` | verify-existing | `tests/core/test_dynamic_injection_hooks.py`, `tests/core/test_compaction_restore.py` | provider rearm + restore invariants |
 | 2.12 | 2 | `tools.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | deterministic MCP publish order |
 | 3.1 | 3 | memdir recall | `tools/recall/__init__.py` | done | `tests/tools/test_recall.py` | search/read + bounded read windows |
-| 3.2 | 3 | `memdir/**` | `project_memory.py`, `memory/` | todo | memory tests | Durable defaults |
-| 3.3 | 3 | working-set recall | `memory/recall.py` | verify-existing | recall injection tests | Re-arm on working-set shift |
-| 3.4 | 3 | `skills/loadSkillsDir.ts` | `skill/__init__.py` | todo | skill tests | Resource manifests |
-| 3.5 | 3 | bundled skills | `skills/**` | todo | skill load tests | Config authoring skills |
-| 3.6 | 3 | `memoryScan.ts` | `project_memory.py` | todo | memory scan tests | Manifest scan |
-| 3.7 | 3 | memory prompts | `agents/default/system.md` | todo | prompt tests | Ignore/trust invariants |
-| 3.8 | 3 | skill frontmatter | `skill/__init__.py` | todo | skill tests | Frontmatter parity |
-| 3.9 | 3 | `plugins/**` | `plugin/` | todo | docs | Plugin scope ledger |
+| 3.2 | 3 | `memdir/**` | `config.py`, `project_memory.py`, `memory/` | done | `tests/core/test_project_memory.py`, `tests/core/test_memory_phase_bcd.py` | durable memory remains opt-in |
+| 3.3 | 3 | working-set recall | `memory/recall.py` | done | `tests/core/test_memory_phase_bcd.py` | re-arms on working-set shift + memory mtime |
+| 3.4 | 3 | `skills/loadSkillsDir.ts` | `skill/__init__.py`, `tools/skill/` | done | `tests/tools/test_skill_tool.py` | resource manifests present |
+| 3.5 | 3 | bundled skills | `skills/customize-pythinker/`, `skills/agent-creator/` | done | `tests/core/test_builtin_authoring_skills.py` | config + agent authoring skills present |
+| 3.6 | 3 | `memoryScan.ts` | `memory/recall.py`, `project_memory.py` | done | `tests/core/test_memory_phase_bcd.py` | lexical manifest scan with source/mtime |
+| 3.7 | 3 | memory prompts | `agents/default/system.md`, `memory/recall.py` | done | `tests/core/test_memory_phase_bcd.py`, prompt audit | memory is background/stale reference |
+| 3.8 | 3 | skill frontmatter | `skill/__init__.py`, `tools/skill/` | done | `tests/core/test_skill.py` | adopts name/description/type/scope; ignores non-Pythinker fields |
+| 3.9 | 3 | `plugins/**` | `skill/__init__.py`, `plugin/` | done | ledger audit | plugins expose tools/config/skill roots; marketplace/output styles skipped |
 | 4.1 | 4 | `services/mcp/client.ts` | `tools/mcp_resource/` | verify-existing | `tests/tools/test_mcp_resource.py` | Resources; prompts deferred |
 | 4.2 | 4 | MCP live refresh | `cli/mcp.py`, `soul/toolset.py` | todo | MCP tests | reconnect/list_changed — see tasks/todo.md |
 | 4.3 | 4 | MCP docker stdio | `soul/toolset.py` | todo | MCP tests | Close timeouts |
@@ -133,6 +133,8 @@
 | Output styles directory | skip | Use dynamic injections only if approved |
 | CCR remote bridge | skip | ACP/wire cover IDE integration |
 | Pi-TUI engine replacement | skip | Phase 7.3 explicit |
+| Blackbox skill-only frontmatter (`allowed-tools`, `disable-model-invocation`, hooks/context/path/shell metadata) | skip | Pythinker skill loader intentionally keeps skills as instructional resources; agent/tool execution fields live in agent specs, hooks, and config |
+| Plugin marketplace, plugin agents, plugin MCP expansion, plugin output styles | skip | Current Pythinker plugin scope is local tools/config plus skill-root discovery; expansion needs product approval |
 
 ## Phase Exit Gates
 
