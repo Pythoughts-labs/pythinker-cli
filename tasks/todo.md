@@ -54,6 +54,12 @@
       tree-kill, `-EncodedCommand` UTF-16LE for PowerShell args. Full brief in
       session notes 2026-06-12; permission tokenization is POSIX-blind for
       PowerShell syntax (gate review needed before shipping).
+- [ ] Live MCP reconnect / `tools/list_changed` — the one real remnant left
+      from the (now-deleted) blackbox-port and agent-enhancement plans. Today
+      `cli/mcp.py` has list/remove/auth/reset-auth/test only and
+      `toolset.py:1435` is just a forward-looking comment. Add
+      `/mcp reconnect|disconnect|refresh` verbs + a `tools/list_changed`
+      handler so a server's tool set can re-bind without a session restart.
 
 Merged from `refactor/agent-contract-and-tool-metadata` — step 1 of
 `tasks/design-adoption-blueprint.md` (agent-logic/coding-flow cleanup):
