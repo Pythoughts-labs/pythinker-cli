@@ -62,6 +62,7 @@ def test_load_default_agent_spec():
             "pythinker_code.tools.web:FetchURL",
             "pythinker_code.tools.mcp_resource:ListMcpResources",
             "pythinker_code.tools.mcp_resource:ReadMcpResource",
+            "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
             "pythinker_code.tools.plan:ExitPlanMode",
             "pythinker_code.tools.plan.enter:EnterPlanMode",
         ]
@@ -271,6 +272,7 @@ The `edge_cases_claimed` key is optional; omit it if you have no distinct edge c
             "pythinker_code.tools.web:FetchURL",
             "pythinker_code.tools.mcp_resource:ListMcpResources",
             "pythinker_code.tools.mcp_resource:ReadMcpResource",
+            "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
             "pythinker_code.tools.plan:ExitPlanMode",
             "pythinker_code.tools.plan.enter:EnterPlanMode",
         ]
@@ -402,6 +404,7 @@ Bullet list of missing context/capabilities or `None.`.
             "pythinker_code.tools.web:FetchURL",
             "pythinker_code.tools.mcp_resource:ListMcpResources",
             "pythinker_code.tools.mcp_resource:ReadMcpResource",
+            "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
             "pythinker_code.tools.plan:ExitPlanMode",
             "pythinker_code.tools.plan.enter:EnterPlanMode",
         ]
@@ -543,6 +546,7 @@ Bullet list of questions that must be answered before execution, or `None.`.
             "pythinker_code.tools.web:FetchURL",
             "pythinker_code.tools.mcp_resource:ListMcpResources",
             "pythinker_code.tools.mcp_resource:ReadMcpResource",
+            "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
             "pythinker_code.tools.plan:ExitPlanMode",
             "pythinker_code.tools.plan.enter:EnterPlanMode",
         ]
@@ -669,6 +673,7 @@ vantage points. A single-seed result signals the task is not worth parallelizing
             "pythinker_code.tools.web:FetchURL",
             "pythinker_code.tools.mcp_resource:ListMcpResources",
             "pythinker_code.tools.mcp_resource:ReadMcpResource",
+            "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
             "pythinker_code.tools.plan:ExitPlanMode",
             "pythinker_code.tools.plan.enter:EnterPlanMode",
         ]
@@ -843,6 +848,7 @@ agent:
                 "pythinker_code.tools.web:FetchURL",
                 "pythinker_code.tools.mcp_resource:ListMcpResources",
                 "pythinker_code.tools.mcp_resource:ReadMcpResource",
+                "pythinker_code.tools.mcp_resource:InvokeMcpPrompt",
                 "pythinker_code.tools.plan:ExitPlanMode",
                 "pythinker_code.tools.plan.enter:EnterPlanMode",
             ]

@@ -51,6 +51,7 @@ def test_default_config_dump():
                 "max_steps_per_turn": 1000,
                 "max_consecutive_failures": 8,
                 "max_truncation_recoveries": 3,
+                "max_compaction_failures": 1,
                 "max_session_cost_usd": None,
                 "budget_nudge_ratio": 0.75,
                 "max_retries_per_step": 3,
@@ -109,6 +110,7 @@ def test_default_config_dump():
             "telemetry": True,
             "session_retention_days": 30,
             "skip_auto_prompt_injection": False,
+            "git_status_injection": True,
             "tui": {
                 "style": "card",
                 "prompt_history_enabled": True,

@@ -224,6 +224,10 @@ def test_pyinstaller_datas():
             "pythinker_code/tools/mcp_resource",
         ),
         (
+            "src/pythinker_code/tools/mcp_resource/prompt_description.md",
+            "pythinker_code/tools/mcp_resource",
+        ),
+        (
             "src/pythinker_code/tools/mcp_resource/read_description.md",
             "pythinker_code/tools/mcp_resource",
         ),
