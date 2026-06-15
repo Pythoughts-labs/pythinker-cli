@@ -561,6 +561,39 @@ async def test_context_overflow_recovery_emits_failed_event(
 
 
 @pytest.mark.asyncio
+async def test_proactive_compaction_failure_yields_handoff(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.config.loop_control.max_compaction_failures = 1
+    provider = RecoveringSequenceProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100,
+        capabilities=set(),
+    )
+    soul, context = _make_soul(runtime, llm, tmp_path)
+    await context.update_token_count(100_000)
+
+    async def fake_compact_context() -> None:
+        raise RuntimeError("compact failed")
+
+    monkeypatch.setattr(soul, "compact_context", fake_compact_context)
+    seen: list[object] = []
+
+    await run_soul(
+        soul,
+        "trigger proactive compaction",
+        lambda wire: _collect_ui_messages(wire, seen),
+        asyncio.Event(),
+    )
+
+    assert provider.generate_attempts == 0
+    final_text = context.history[-1].extract_text(" ")
+    assert "compaction failed" in final_text.lower()
+    assert any("compaction failed" in tp.text.lower() for tp in seen if isinstance(tp, TextPart))
+
+
+@pytest.mark.asyncio
 async def test_context_overflow_recovery_is_one_shot_per_turn(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -74,9 +74,9 @@
 | 2.7 | 2 | `toolOrchestration.ts` | `soul/toolset.py` | todo | shell parallel tests | Cascade decision pending |
 | 2.8 | 2 | `context.ts` | `soul/dynamic_injections/git_status.py` | done | `tests/core/test_git_status_injection_provider.py` | Reuses collect_git_context |
 | 2.9 | 2 | compaction | `soul/compaction.py` | todo | compaction tests | API-round grouping |
-| 2.10 | 2 | `query.ts` | `soul/compaction.py` | todo | compaction failure tests | Autocompact circuit breaker |
-| 2.11 | 2 | compaction cleanup | `soul/compaction.py`, `soul/context.py` | todo | compaction tests | Post-compact cleanup |
-| 2.12 | 2 | `tools.ts` | `soul/toolset.py` | todo | toolset tests | Pool ordering + collisions |
+| 2.10 | 2 | `query.ts` | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_retry_recovery.py` | compaction_failed handoff |
+| 2.11 | 2 | compaction cleanup | `soul/pythinkersoul.py`, `soul/context.py` | verify-existing | `tests/core/test_dynamic_injection_hooks.py`, `tests/core/test_compaction_restore.py` | provider rearm + restore invariants |
+| 2.12 | 2 | `tools.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | deterministic MCP publish order |
 | 3.1 | 3 | memdir recall | `tools/recall/__init__.py` | verify-existing | `tests/tools/test_recall.py` | Cross-session recall |
 | 3.2 | 3 | `memdir/**` | `project_memory.py`, `memory/` | todo | memory tests | Durable defaults |
 | 3.3 | 3 | working-set recall | `memory/recall.py` | verify-existing | recall injection tests | Re-arm on working-set shift |

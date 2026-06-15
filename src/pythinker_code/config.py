@@ -586,6 +586,9 @@ class LoopControl(BaseModel):
     """When a model response is cut off by the output-token limit and makes no tool call,
     nudge the model to continue at most this many times per turn before surfacing the
     truncated answer. ``0`` disables truncation recovery. Default: 3."""
+    max_compaction_failures: int = Field(default=1, ge=1)
+    """Yield to the user after this many consecutive proactive compaction failures
+    instead of repeatedly attempting compaction. Default: 1."""
     max_session_cost_usd: float | None = Field(default=None, gt=0)
     """Optional per-session spend ceiling in USD. When set, the turn stops with a
     ``budget_exhausted`` outcome once the session's accumulated estimated cost reaches

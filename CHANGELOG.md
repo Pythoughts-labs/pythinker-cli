@@ -28,6 +28,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **Root sessions now get a bounded git snapshot in the prompt.** When `git_status_injection` is
   enabled (default), the agent receives branch, dirty-file summary, and recent commits as an
   explicitly stale point-in-time reminder; disable via config or set `git_status_injection = false`.
+- **Context compaction and MCP tool registration now fail more predictably.** Proactive compaction
+  failures hand back with an explicit `compaction_failed` stop instead of bubbling an unstructured
+  loop error, and MCP duplicate tool-name resolution now follows configured server order instead of
+  connection completion order.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

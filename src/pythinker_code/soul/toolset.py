@@ -534,6 +534,20 @@ class PythinkerToolset:
                 )
             self.add(tool)
 
+    def _publish_connected_mcp_tools(self, runtime: Runtime) -> None:
+        """Publish connected MCP tools in configured server order.
+
+        Servers connect concurrently, so registering inside each connection task
+        makes duplicate tool-name resolution depend on task completion order.
+        Publishing after the gather keeps the collision policy deterministic.
+        """
+        for server_name, server_info in self._mcp_servers.items():
+            if server_info.status != "connected":
+                continue
+            self._register_mcp_tools(server_name, server_info.tools)
+            for tool in server_info.tools:
+                runtime.mcp_tools[f"mcp__{server_name}__{tool.name}"] = tool
+
     def hide(self, tool_name: str) -> bool:
         """Hide a tool from the LLM tool list. Returns True if the tool exists."""
         if tool_name in self._tool_dict:
@@ -1235,10 +1249,6 @@ class PythinkerToolset:
                     timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
                 )
 
-                self._register_mcp_tools(server_name, server_info.tools)
-                for tool in server_info.tools:
-                    runtime.mcp_tools[f"mcp__{server_name}__{tool.name}"] = tool
-
                 server_info.status = "connected"
                 logger.info("Connected MCP server: {server_name}", server_name=server_name)
                 return server_name, None
@@ -1282,6 +1292,7 @@ class PythinkerToolset:
             if failed_servers:
                 _toast_mcp("mcp connection failed")
                 raise MCPRuntimeError(f"Failed to connect MCP servers: {failed_servers}")
+            self._publish_connected_mcp_tools(runtime)
             if unauthorized_servers:
                 _toast_mcp("mcp authorization needed")
             else:

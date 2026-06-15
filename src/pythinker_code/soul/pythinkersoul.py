@@ -199,7 +199,9 @@ def _is_hard_usage_limit(exception: BaseException) -> bool:
     return "usage_limit_reached" in text or "usage limit" in text
 
 
-type StepStopReason = Literal["no_tool_calls", "tool_rejected", "stuck", "budget_exhausted"]
+type StepStopReason = Literal[
+    "no_tool_calls", "tool_rejected", "stuck", "budget_exhausted", "compaction_failed"
+]
 
 
 _MISSING_REQUIRED_FIELD_RE = re.compile(
@@ -284,6 +286,16 @@ def _budget_exhausted_message(session_cost_usd: float, ceiling: float) -> Messag
         f"Stopping: this session has reached its configured spend ceiling "
         f"(estimated ${session_cost_usd:.2f} of ${ceiling:.2f}). Raise "
         f"`loop_control.max_session_cost_usd` in config, or start a new session, to continue."
+    )
+    return Message(role="assistant", content=[TextPart(text=text)])
+
+
+def _compaction_failed_message(failures: int, threshold: int) -> Message:
+    """Handoff message when proactive compaction cannot make progress."""
+    text = (
+        "Stopping: proactive context compaction failed "
+        f"{failures} consecutive time(s), reaching the configured threshold "
+        f"of {threshold}. I am handing back instead of retrying compaction blindly."
     )
     return Message(role="assistant", content=[TextPart(text=text)])
 
@@ -500,6 +512,7 @@ class PythinkerSoul:
             )
         self._current_step_no = 0
         self._consecutive_failures = 0
+        self._compaction_failures = 0
         self._truncation_recoveries = 0
         # Cumulative LLM token usage for this soul instance (one run), so a subagent
         # can report its spend back to the orchestrating parent (subagent-2). A
@@ -1614,9 +1627,11 @@ class PythinkerSoul:
                     logger.info("Context too long, compacting...")
                     try:
                         await self.compact_context()
+                        self._compaction_failures = 0
                     except Exception as compact_err:
                         from pythinker_code.telemetry.errors import report_handled_error
 
+                        self._compaction_failures += 1
                         report_handled_error(compact_err, site="soul.context.compact")
                         logger.error(
                             "Context compaction failed at step {step_no}: {error_type}: {error}",
@@ -1624,6 +1639,18 @@ class PythinkerSoul:
                             error_type=type(compact_err).__name__,
                             error=compact_err,
                         )
+                        threshold = self._loop_control.max_compaction_failures
+                        if self._compaction_failures >= threshold:
+                            message = _compaction_failed_message(
+                                self._compaction_failures, threshold
+                            )
+                            await self._context.append_message(message)
+                            wire_send(TextPart(text=message.extract_text(" ")))
+                            return TurnOutcome(
+                                stop_reason="compaction_failed",
+                                final_message=message,
+                                step_count=step_no - 1,
+                            )
                         raise
 
                     # Compaction makes a billable LLM call that folds into
@@ -1640,6 +1667,8 @@ class PythinkerSoul:
                             final_message=message,
                             step_count=step_no - 1,  # this step's _step() never ran
                         )
+                else:
+                    self._compaction_failures = 0
 
                 logger.debug("Beginning step {step_no}", step_no=step_no)
                 await self._checkpoint()
