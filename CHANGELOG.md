@@ -33,6 +33,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
   loop error, and MCP duplicate tool-name resolution now follows configured server order instead of
   connection completion order. Tool hooks also retain the original model input even if a tool
   mutates a nested argument object during execution.
+- **Recall can now read bounded transcript windows.** `Recall(mode="read")` accepts
+  `message_offset` and `max_messages` so agents can inspect a precise, sanitized slice of a prior
+  workspace session without pulling the whole transcript into context.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

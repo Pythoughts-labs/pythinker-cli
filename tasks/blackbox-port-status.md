@@ -77,7 +77,7 @@
 | 2.10 | 2 | `query.ts` | `soul/pythinkersoul.py`, `config.py` | done | `tests/core/test_pythinkersoul_retry_recovery.py` | compaction_failed handoff |
 | 2.11 | 2 | compaction cleanup | `soul/pythinkersoul.py`, `soul/context.py` | verify-existing | `tests/core/test_dynamic_injection_hooks.py`, `tests/core/test_compaction_restore.py` | provider rearm + restore invariants |
 | 2.12 | 2 | `tools.ts` | `soul/toolset.py` | done | `tests/core/test_toolset.py` | deterministic MCP publish order |
-| 3.1 | 3 | memdir recall | `tools/recall/__init__.py` | verify-existing | `tests/tools/test_recall.py` | Cross-session recall |
+| 3.1 | 3 | memdir recall | `tools/recall/__init__.py` | done | `tests/tools/test_recall.py` | search/read + bounded read windows |
 | 3.2 | 3 | `memdir/**` | `project_memory.py`, `memory/` | todo | memory tests | Durable defaults |
 | 3.3 | 3 | working-set recall | `memory/recall.py` | verify-existing | recall injection tests | Re-arm on working-set shift |
 | 3.4 | 3 | `skills/loadSkillsDir.ts` | `skill/__init__.py` | todo | skill tests | Resource manifests |

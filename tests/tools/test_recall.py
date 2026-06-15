@@ -118,6 +118,28 @@ def test_render_transcript_budget_truncates(tmp_path: Path) -> None:
     assert len(rendered) < 700
 
 
+def test_render_transcript_supports_message_window(tmp_path: Path) -> None:
+    log = tmp_path / "context.jsonl"
+    log.write_text(
+        "\n".join(
+            [
+                '{"role": "_checkpoint", "content": [{"type": "text", "text": "internal"}]}',
+                Message(role="user", content=[TextPart(text="first")]).model_dump_json(),
+                Message(role="assistant", content=[TextPart(text="second")]).model_dump_json(),
+                Message(role="user", content=[TextPart(text="third")]).model_dump_json(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _render_transcript(log, budget=10_000, message_offset=1, max_messages=1)
+
+    assert "[assistant] second" in rendered
+    assert "first" not in rendered
+    assert "third" not in rendered
+    assert "internal" not in rendered
+
+
 async def test_recall_search_lists_matching_sessions(
     runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -153,6 +175,33 @@ async def test_recall_read_returns_untrusted_transcript(
     assert isinstance(result.output, str)
     assert "prior decision: use JWT" in result.output
     assert "untrusted_data" in result.output
+
+
+async def test_recall_read_passes_message_window(
+    runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "context.jsonl"
+    _write_log(
+        log,
+        [
+            Message(role="user", content=[TextPart(text="first")]),
+            Message(role="assistant", content=[TextPart(text="second")]),
+        ],
+    )
+    fake = SimpleNamespace(id="s1", context_file=log)
+
+    async def fake_find(work_dir: Any, session_id: str) -> Any:
+        return fake if session_id == "s1" else None
+
+    monkeypatch.setattr(Session, "find", staticmethod(fake_find))
+    result = await Recall(runtime)(
+        Recall.params(mode="read", session_id="s1", message_offset=1, max_messages=1)
+    )
+
+    assert not result.is_error
+    assert isinstance(result.output, str)
+    assert "second" in result.output
+    assert "first" not in result.output
 
 
 async def test_recall_read_unknown_session_errors(runtime, monkeypatch: pytest.MonkeyPatch) -> None:
