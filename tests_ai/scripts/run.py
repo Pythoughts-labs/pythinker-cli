@@ -120,6 +120,11 @@ def render_summary_line(summary: str, duration: float, *, use_color: bool, faile
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("tests_dir", nargs="?", default="tests_ai")
+    parser.add_argument(
+        "--eval-cases",
+        default=None,
+        help="Optional EvalCase JSON path for post-run efficiency budget gate (obs-eval-4).",
+    )
     args = parser.parse_args(argv)
 
     script_dir = Path(__file__).resolve().parent
@@ -135,6 +140,22 @@ def main(argv: list[str] | None = None) -> int:
     report = load_report(tests_dir / "report.json")
     use_color = sys.stdout.isatty()
     passed, failed = emit_results(report, use_color=use_color)
+
+    if args.eval_cases:
+        from tests_ai.eval_gate import gate_report, load_eval_cases
+
+        cases = load_eval_cases(Path(args.eval_cases).resolve())
+        budget_failures = [v for v in gate_report(report, cases) if not v.passed]
+        for verdict in budget_failures:
+            print(
+                colorize(
+                    f'EVAL BUDGET FAILED "{verdict.name}" breaches={verdict.breaches} '
+                    f"missing_tools={verdict.missing_expected_tools}",
+                    RED,
+                    use_color,
+                )
+            )
+        failed += len(budget_failures)
 
     if failed:
         summary = f"{failed} failed"

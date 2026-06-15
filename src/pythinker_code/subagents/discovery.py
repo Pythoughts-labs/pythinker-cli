@@ -46,9 +46,11 @@ class MarkdownAgentSpec:
     prompt_file: HostPath
     scope: AgentScope
     tools: tuple[str, ...] | None = None
+    exclude_tools: tuple[str, ...] | None = None
     model: str | None = None
     when_to_use: str = ""
     required_mcp_servers: tuple[str, ...] = ()
+    steps: int | None = None
 
 
 def _project_agent_dir_candidates(project_root: HostPath) -> tuple[HostPath, ...]:
@@ -129,6 +131,11 @@ def parse_markdown_agent(
     model = _as_nonempty_str(fm.get("model"))
     when_to_use = _as_nonempty_str(fm.get("when_to_use")) or description
     tools = _map_tools(fm.get("tools"), source=prompt_file)
+    exclude_source = fm.get("disallowed_tools")
+    if exclude_source is None:
+        exclude_source = fm.get("exclude_tools")
+    exclude_tools = _map_tools(exclude_source, source=prompt_file)
+    steps = _as_positive_int(fm.get("max_turns")) or _as_positive_int(fm.get("steps"))
     raw_required = fm.get("required_mcp_servers")
     if raw_required is not None and not isinstance(raw_required, list):
         logger.info(
@@ -148,9 +155,11 @@ def parse_markdown_agent(
         prompt_file=prompt_file,
         scope=scope,
         tools=tools,
+        exclude_tools=exclude_tools,
         model=model,
         when_to_use=when_to_use,
         required_mcp_servers=required_mcp_servers,
+        steps=steps,
     )
 
 
@@ -209,8 +218,12 @@ def materialize_markdown_agent_specs(
         model = agent.model if available_models is None or agent.model in available_models else None
         if model:
             payload["agent"]["model"] = model
+        if agent.steps is not None:
+            payload["agent"]["steps"] = agent.steps
         if agent.tools is not None:
             payload["agent"]["allowed_tools"] = list(agent.tools)
+        if agent.exclude_tools is not None:
+            payload["agent"]["exclude_tools"] = list(agent.exclude_tools)
         wrapper_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
         policy = (
             ToolPolicy(mode="allowlist", tools=agent.tools)
@@ -252,6 +265,17 @@ def _map_tools(value: Any, *, source: HostPath) -> tuple[str, ...] | None:
         if tool not in mapped:
             mapped.append(tool)
     return tuple(mapped)
+
+
+def _as_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 1:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed >= 1 else None
+    return None
 
 
 def _as_nonempty_str(value: Any) -> str | None:

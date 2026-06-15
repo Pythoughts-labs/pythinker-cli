@@ -621,11 +621,14 @@ async def load_agent(
 
             for mcp_config in mcp_configs:
                 try:
-                    validated_mcp_configs.append(
-                        mcp_config
-                        if isinstance(mcp_config, MCPConfig)
-                        else MCPConfig.model_validate(mcp_config)
-                    )
+                    if isinstance(mcp_config, dict):
+                        raw_config = mcp_config
+                    else:
+                        raw_config = mcp_config.model_dump(mode="json")
+                    from pythinker_code.cli.mcp import prepare_mcp_config_dict
+
+                    prepare_mcp_config_dict(raw_config)
+                    validated_mcp_configs.append(MCPConfig.model_validate(raw_config))
                 except pydantic.ValidationError as e:
                     raise MCPConfigError(f"Invalid MCP config: {e}") from e
         if start_mcp_loading:

@@ -55,6 +55,7 @@ from pythinker_code.wire.types import (
     StatusUpdate,
     SteerInput,
     StepInterrupted,
+    Suggestion,
     TurnEnd,
     WireMessage,
 )
@@ -513,6 +514,11 @@ class _PromptLiveView(_LiveView):
             # answer.
             return
         super().dispatch_wire_message(msg)
+
+    def display_suggestion(self, event: Suggestion) -> None:
+        super().display_suggestion(event)
+        if event.prefill.strip():
+            self._prompt_session.stage_suggestion_prefill(event.prefill)
 
     # -- Running prompt rendering --------------------------------------------
 

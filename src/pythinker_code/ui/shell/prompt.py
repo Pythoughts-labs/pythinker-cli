@@ -2399,6 +2399,18 @@ class CustomPromptSession:
             track("shortcut_editor")
             self._open_in_external_editor(event)
 
+        def _has_staged_suggestion_prefill() -> bool:
+            return bool(getattr(self, "_staged_suggestion_prefill", None))
+
+        @_kb.add("escape", "s", eager=True, filter=Condition(_has_staged_suggestion_prefill))
+        def _(event: KeyPressEvent) -> None:
+            """Accept the latest agent suggestion into the prompt buffer."""
+            if self.accept_staged_suggestion_prefill():
+                from pythinker_code.telemetry import track
+
+                track("suggestion_accepted")
+            event.app.invalidate()
+
         @_kb.add(
             "up",
             eager=True,
@@ -3563,6 +3575,23 @@ class CustomPromptSession:
         """
         self._prefill_text = text
 
+    def stage_suggestion_prefill(self, prefill: str) -> None:
+        """Remember a non-blocking Suggestion prefill until the user accepts it."""
+        text = prefill.strip()
+        self._staged_suggestion_prefill = text or None
+
+    def accept_staged_suggestion_prefill(self) -> bool:
+        """Insert a staged suggestion prefill into the prompt buffer."""
+        text = getattr(self, "_staged_suggestion_prefill", None)
+        if not text:
+            return False
+        self._staged_suggestion_prefill = None
+        buffer = self._session.default_buffer
+        if buffer.text and not buffer.text.endswith((" ", "\n")):
+            buffer.insert_text(" ")
+        buffer.insert_text(text)
+        return True
+
     async def prompt_next(self) -> UserInput:
         return await self._prompt_once(append_history=None)
 
@@ -3642,6 +3671,7 @@ class CustomPromptSession:
         # Consume one-shot prefill text if set
         default = getattr(self, "_prefill_text", None) or ""
         self._prefill_text = None
+        self._staged_suggestion_prefill = None
         with patch_stdout(raw=True):
             command = str(
                 await self._session.prompt_async(placeholder=placeholder, default=default)

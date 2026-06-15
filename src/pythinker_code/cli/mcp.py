@@ -2,7 +2,7 @@ import contextlib
 import json
 import os
 from pathlib import Path, PurePath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import typer
 
@@ -25,6 +25,35 @@ def ensure_docker_rm(command: str, args: list[str]) -> list[str]:
     if not args or args[0] != "run" or "--rm" in args:
         return args
     return [args[0], "--rm", *args[1:]]
+
+
+def apply_docker_rm_to_mcp_config_dict(config: dict[str, Any]) -> dict[str, Any]:
+    """Inject ``--rm`` into stdio docker/podman servers when loading mcp.json (mcpext-3)."""
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return config
+    typed_servers = cast(dict[str, Any], servers)
+    for raw_server in typed_servers.values():
+        if not isinstance(raw_server, dict):
+            continue
+        server = cast(dict[str, Any], raw_server)
+        command = server.get("command")
+        if not isinstance(command, str):
+            continue
+        raw_args = server.get("args")
+        args: list[str] = []
+        if isinstance(raw_args, list):
+            args = [str(item) for item in cast(list[object], raw_args)]
+        server["args"] = ensure_docker_rm(command, args)
+    return config
+
+
+def prepare_mcp_config_dict(config: dict[str, Any]) -> dict[str, Any]:
+    """Apply portable MCP config fixes before validation (docker ``--rm``, name normalization)."""
+    from pythinker_code.utils.mcp_names import normalize_mcp_servers_in_config
+
+    apply_docker_rm_to_mcp_config_dict(config)
+    return normalize_mcp_servers_in_config(config)
 
 
 def get_global_mcp_config_file() -> Path:
@@ -171,8 +200,18 @@ def mcp_add(
     ] = None,
 ):
     """Add an MCP server."""
+    from pythinker_code.exception import MCPConfigError
+    from pythinker_code.utils.mcp_names import normalize_mcp_server_name
+
     config = _load_mcp_config()
     server_args = server_args or []
+    try:
+        stored_name = normalize_mcp_server_name(name)
+    except MCPConfigError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if stored_name != name:
+        typer.echo(f"Normalized MCP server name '{name}' to '{stored_name}'.")
 
     if transport not in {"stdio", "http"}:
         typer.echo(f"Unsupported transport: {transport}.", err=True)
@@ -221,9 +260,12 @@ def mcp_add(
 
     if "mcpServers" not in config:
         config["mcpServers"] = {}
-    config["mcpServers"][name] = server_config
+    if stored_name in config["mcpServers"]:
+        typer.echo(f"MCP server '{stored_name}' already exists.", err=True)
+        raise typer.Exit(code=1)
+    config["mcpServers"][stored_name] = server_config
     _save_mcp_config(config)
-    typer.echo(f"Added MCP server '{name}' to {get_global_mcp_config_file()}.")
+    typer.echo(f"Added MCP server '{stored_name}' to {get_global_mcp_config_file()}.")
 
 
 @cli.command("remove")

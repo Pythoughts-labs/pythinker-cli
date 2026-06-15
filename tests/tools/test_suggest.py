@@ -48,5 +48,21 @@ def test_suggestion_block_renders_label_and_prefill() -> None:
     from pythinker_code.ui.shell.visualize._blocks import _SuggestionBlock
 
     block = _SuggestionBlock(Suggestion(label="Review my changes", prefill="/review"))
-    # compose() must build a renderable without error.
-    assert block.compose() is not None
+    rendered = block.compose()
+    assert rendered is not None
+
+
+def test_accept_staged_suggestion_prefill_inserts_text() -> None:
+    from unittest.mock import MagicMock
+
+    from pythinker_code.ui.shell.prompt import CustomPromptSession
+
+    session = CustomPromptSession.__new__(CustomPromptSession)
+    buffer = MagicMock()
+    buffer.text = ""
+    session._session = MagicMock(default_buffer=buffer)
+    session.stage_suggestion_prefill("/review")
+
+    assert session.accept_staged_suggestion_prefill() is True
+    buffer.insert_text.assert_called_once_with("/review")
+    assert session.accept_staged_suggestion_prefill() is False

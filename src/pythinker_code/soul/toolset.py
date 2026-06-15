@@ -38,6 +38,7 @@ from pythinker_host.path import HostPath
 
 from pythinker_code.exception import InvalidToolError, MCPRuntimeError
 from pythinker_code.hooks.engine import HookEngine
+from pythinker_code.telemetry.names import sanitize_telemetry_tool_name
 from pythinker_code.tools import SkipThisTool
 from pythinker_code.utils.logging import logger
 from pythinker_code.wire.types import (
@@ -547,7 +548,9 @@ class PythinkerToolset:
                 continue
             self._register_mcp_tools(server_name, server_info.tools)
             for tool in server_info.tools:
-                runtime.mcp_tools[f"mcp__{server_name}__{tool.name}"] = tool
+                from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
+
+                runtime.mcp_tools[mcp_tool_runtime_key(server_name, tool.name)] = tool
 
     def hide(self, tool_name: str) -> bool:
         """Hide a tool from the LLM tool list. Returns True if the tool exists."""
@@ -872,14 +875,15 @@ class PythinkerToolset:
                     emit_current_tool_execution_started()
 
                 t0 = time.monotonic()
+                telemetry_tool_name = sanitize_telemetry_tool_name(tool_call.function.name)
                 _tool_span_cm = _otel.start_span(
                     "pythinker.tool",
                     {
-                        "tool.name": tool_call.function.name,
+                        "tool.name": telemetry_tool_name,
                         "tool.call_id": tool_call.id,
                         # GenAI semconv so GenAI-aware backends recognize the tool layer.
                         "gen_ai.operation.name": "execute_tool",
-                        "gen_ai.tool.name": tool_call.function.name,
+                        "gen_ai.tool.name": telemetry_tool_name,
                     },
                 )
                 _tool_span = _tool_span_cm.__enter__()
@@ -892,7 +896,7 @@ class PythinkerToolset:
                     _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
                     _tool_span_cm.__exit__(type(e), e, e.__traceback__)
                     _m.record_tool_call(
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         duration_seconds=tool_elapsed,
                         success=False,
                         error_type=type(e).__name__,
@@ -921,12 +925,12 @@ class PythinkerToolset:
                     _error_type = type(e).__name__
                     track(
                         "tool_error",
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         error_type=_error_type,
                     )
                     track(
                         "tool_call",
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         success=False,
                         duration_ms=int(tool_elapsed * 1000),
                         error_type=_error_type,
@@ -951,7 +955,7 @@ class PythinkerToolset:
                 _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
                 _tool_span_cm.__exit__(None, None, None)
                 _m.record_tool_call(
-                    tool_name=tool_call.function.name,
+                    tool_name=telemetry_tool_name,
                     duration_seconds=tool_elapsed,
                     success=_tool_succeeded,
                 )
@@ -965,7 +969,7 @@ class PythinkerToolset:
 
                 _track_tool_call(
                     "tool_call",
-                    tool_name=tool_call.function.name,
+                    tool_name=telemetry_tool_name,
                     success=not isinstance(ret, ToolError),
                     duration_ms=int(tool_elapsed * 1000),
                     dup_type="cross_step" if is_cross_step_dup else "normal",
@@ -1459,7 +1463,10 @@ class MCPTool[T: ClientTransport](CallableTool):
             return result.rejection_error()
 
         from pythinker_code.telemetry import otel as _otel
+        from pythinker_code.telemetry.names import sanitize_telemetry_tool_name
 
+        telemetry_server = sanitize_telemetry_tool_name(self._mcp_server_name)
+        telemetry_tool = sanitize_telemetry_tool_name(self._mcp_tool.name)
         # `start_span` returns a sync context manager (the OTel SDK uses
         # `_AgnosticContextManager`, which intentionally has no __aenter__).
         # Keep it as a sync `with` and use `async with` only on the fastmcp
@@ -1468,11 +1475,11 @@ class MCPTool[T: ClientTransport](CallableTool):
             with _otel.start_span(
                 "pythinker.mcp.call",
                 {
-                    "mcp.server": self._mcp_server_name,
-                    "mcp.tool": self._mcp_tool.name,
+                    "mcp.server": telemetry_server,
+                    "mcp.tool": telemetry_tool,
                     "mcp.timeout_ms": int(self._timeout.total_seconds() * 1000),
                     "gen_ai.operation.name": "execute_tool",
-                    "gen_ai.tool.name": self._mcp_tool.name,
+                    "gen_ai.tool.name": telemetry_tool,
                 },
             ) as span:
                 async with self._client as client:

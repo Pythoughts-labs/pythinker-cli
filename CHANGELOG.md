@@ -38,7 +38,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
   workspace session without pulling the whole transcript into context.
 - **MCP prompt templates can now be invoked from connected servers.** `InvokeMcpPrompt` renders a
   server-published prompt with structured arguments and wraps the returned messages as untrusted
-  external content.
+  input for the model.
+- **Telemetry, MCP config, and shell UX hardening.** Tool spans and metrics sanitize MCP/plugin
+  names; `mcp.json` load paths inject docker `--rm` and normalize server keys with collision
+  errors; shell suggestions accept via Alt+S into the prompt; markdown agent frontmatter maps
+  `max_turns`/`disallowed_tools`; `ReadMediaFile` enforces per-kind byte/pixel caps; written plans
+  without a Verification section get a soft warning; AI eval budgets can gate `tests_ai` reports.
 - **Plan-mode exit guidance now requires verification.** The `ExitPlanMode` tool now tells agents
   that written plans must include a Verification section with the smallest command, test, or check
   for each meaningful change.

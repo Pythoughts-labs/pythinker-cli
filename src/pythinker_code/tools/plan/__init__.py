@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import override
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 NAME = "ExitPlanMode"
 
 _RESERVED_LABELS = {"reject", "revise", "approve", "reject and exit"}
+
+_VERIFICATION_SECTION_RE = re.compile(r"^#+\s*verification\b", re.MULTILINE | re.IGNORECASE)
+
+
+def _plan_lacks_verification_section(content: str) -> bool:
+    return _VERIFICATION_SECTION_RE.search(content) is None
 
 
 class PlanOption(BaseModel):
@@ -221,7 +228,14 @@ class ExitPlanMode(CallableTool2[Params]):
             ]
 
         # Display plan content inline in the chat
-        wire_send(PlanDisplay(content=plan_content, file_path=str(plan_path)))
+        display_content = plan_content
+        if _plan_lacks_verification_section(plan_content):
+            display_content = (
+                f"{plan_content}\n\n"
+                "> **Warning:** This plan has no Verification section. Add the smallest "
+                "command, test, or check per meaningful change before approval."
+            )
+        wire_send(PlanDisplay(content=display_content, file_path=str(plan_path)))
 
         request = QuestionRequest(
             id=str(uuid4()),

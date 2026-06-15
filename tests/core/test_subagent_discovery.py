@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from pythinker_host.path import HostPath
 
 from pythinker_code.agentspec import DEFAULT_AGENT_FILE
@@ -20,6 +21,31 @@ from pythinker_code.subagents.discovery import (
 def _write_agent(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def test_parse_markdown_agent_maps_max_turns_and_disallowed_tools(tmp_path: Path) -> None:
+    path = tmp_path / "worker.md"
+    spec = parse_markdown_agent(
+        """---
+name: worker
+description: Scoped worker
+max_turns: 12
+disallowed_tools: ["Write", "Bash"]
+---
+Body
+""",
+        prompt_file=HostPath.unsafe_from_local_path(path),
+        scope="project",
+    )
+    assert spec.steps == 12
+    assert spec.exclude_tools == (
+        "pythinker_code.tools.file:WriteFile",
+        "pythinker_code.tools.shell:Shell",
+    )
+    [type_def] = materialize_markdown_agent_specs([spec], output_dir=tmp_path / "out2")
+    payload = yaml.safe_load(type_def.agent_file.read_text(encoding="utf-8"))
+    assert payload["agent"]["steps"] == 12
+    assert payload["agent"]["exclude_tools"] == list(spec.exclude_tools or ())
 
 
 @pytest.mark.asyncio

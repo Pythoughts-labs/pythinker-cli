@@ -13,11 +13,17 @@ from pythinker_code.tools import SkipThisTool
 from pythinker_code.tools.file.utils import MEDIA_SNIFF_BYTES, FileType, detect_file_type
 from pythinker_code.tools.utils import load_desc
 from pythinker_code.utils.logging import logger
+from pythinker_code.utils.media_limits import (
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_PIXELS,
+    MAX_VIDEO_BYTES,
+    format_byte_limit,
+)
 from pythinker_code.utils.media_tags import wrap_media_part
 from pythinker_code.utils.path import is_within_workspace
 from pythinker_code.wire.types import ImageURLPart, VideoURLPart
 
-MAX_MEDIA_MEGABYTES = 100
+MAX_MEDIA_MEGABYTES = max(MAX_IMAGE_BYTES, MAX_VIDEO_BYTES) // (1024 * 1024)
 
 
 def _to_data_url(mime_type: str, data: bytes) -> str:
@@ -101,11 +107,12 @@ class ReadMediaFile(CallableTool2[Params]):
                 message=f"`{path}` is empty.",
                 brief="Empty file",
             )
-        if size > (MAX_MEDIA_MEGABYTES << 20):
+        max_bytes = MAX_IMAGE_BYTES if file_type.kind == "image" else MAX_VIDEO_BYTES
+        if size > max_bytes:
             return ToolError(
                 message=(
                     f"`{path}` is {size} bytes, which exceeds the max "
-                    f"{MAX_MEDIA_MEGABYTES}MB bytes for media files."
+                    f"{format_byte_limit(max_bytes)} limit for {file_type.kind} files."
                 ),
                 brief="File too large",
             )
@@ -113,10 +120,20 @@ class ReadMediaFile(CallableTool2[Params]):
         match file_type.kind:
             case "image":
                 data = await path.read_bytes()
+                image_size = _extract_image_size(data)
+                if image_size is not None:
+                    width, height = image_size
+                    if width * height > MAX_IMAGE_PIXELS:
+                        return ToolError(
+                            message=(
+                                f"`{path}` is {width}x{height}px, which exceeds the max "
+                                f"{MAX_IMAGE_PIXELS:,} pixel limit for images."
+                            ),
+                            brief="Image too large",
+                        )
                 data_url = _to_data_url(file_type.mime_type, data)
                 part = ImageURLPart(image_url=ImageURLPart.ImageURL(url=data_url))
                 wrapped = wrap_media_part(part, tag="image", attrs={"path": media_path})
-                image_size = _extract_image_size(data)
             case "video":
                 data = await path.read_bytes()
                 if (llm := self._runtime.llm) and isinstance(llm.chat_provider, Pythinker):

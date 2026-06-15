@@ -270,9 +270,11 @@ def _load_mcp_configs_from_cli_inputs(
             file_configs.append(project_mcp_file)
 
     configs: list[Any] = []
+    from .mcp import prepare_mcp_config_dict
+
     for conf in file_configs:
         try:
-            configs.append(json.loads(conf.read_text(encoding="utf-8")))
+            configs.append(prepare_mcp_config_dict(json.loads(conf.read_text(encoding="utf-8"))))
         except json.JSONDecodeError as e:
             raise typer.BadParameter(
                 f"Invalid JSON in MCP config file {conf}: {e}",
@@ -286,7 +288,7 @@ def _load_mcp_configs_from_cli_inputs(
 
     for conf in raw_mcp_config:
         try:
-            configs.append(json.loads(conf))
+            configs.append(prepare_mcp_config_dict(json.loads(conf)))
         except json.JSONDecodeError as e:
             raise typer.BadParameter(f"Invalid JSON: {e}", param_hint="--mcp-config") from e
 

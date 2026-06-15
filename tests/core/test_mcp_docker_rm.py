@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pythinker_code.cli.mcp import ensure_docker_rm
+from pythinker_code.cli.mcp import apply_docker_rm_to_mcp_config_dict, ensure_docker_rm
 
 
 @pytest.mark.parametrize("cmd", ["docker", "podman"])
@@ -40,6 +40,20 @@ def test_ignores_non_container_runtime() -> None:
 
 def test_handles_empty_args() -> None:
     assert ensure_docker_rm("docker", []) == []
+
+
+def test_apply_docker_rm_to_mcp_config_dict() -> None:
+    config = apply_docker_rm_to_mcp_config_dict(
+        {
+            "mcpServers": {
+                "ctx": {
+                    "command": "docker",
+                    "args": ["run", "-i", "ghcr.io/example/mcp"],
+                }
+            }
+        }
+    )
+    assert config["mcpServers"]["ctx"]["args"] == ["run", "--rm", "-i", "ghcr.io/example/mcp"]
 
 
 def test_full_path_runtime_is_recognized() -> None:
