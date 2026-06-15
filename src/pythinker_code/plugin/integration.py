@@ -55,3 +55,15 @@ def plugin_command_dirs(
     for plugin in enabled:
         dirs.extend(artifacts.command_dirs(plugin))
     return dirs
+
+
+def plugin_mcp_servers(
+    *, include_external: bool = False, is_enabled: set[str] | None = None
+) -> dict[str, object]:
+    """MCP server configs contributed by enabled plugins (earlier plugins win)."""
+    enabled = discover_plugins(include_external=include_external, is_enabled=is_enabled).enabled
+    servers: dict[str, object] = {}
+    for plugin in enabled:
+        for key, value in artifacts.mcp_servers(plugin).items():
+            servers.setdefault(key, value)
+    return servers
