@@ -276,6 +276,11 @@ def test_plugin_hook_defs_substitutes_user_config(
     defs = integration.plugin_hook_defs(PluginPolicy(options={"sp": {"flag": "on"}}))
     assert defs[0].command == "run on"
 
+    # No value configured for ${user_config.flag} -> hook skipped fail-soft,
+    # mirroring the MCP skip-path so an unresolved placeholder never reaches an
+    # executable command literally.
+    assert integration.plugin_hook_defs(PluginPolicy(options={})) == []
+
 
 def test_plugin_hook_defs_translates_claude_hooks(
     tmp_path: Path, monkeypatch, _no_external

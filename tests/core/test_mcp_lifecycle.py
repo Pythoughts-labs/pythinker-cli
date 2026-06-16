@@ -79,13 +79,16 @@ async def test_refresh_relists_tools_for_connected_server(monkeypatch: pytest.Mo
     toolset.add(old_tool)
     runtime.mcp_tools["mcp__alpha__OldTool"] = old_tool
 
-    async def _inventory(_server: str, server_info: MCPServerInfo, _runtime: Any) -> None:
-        server_info.tools = [new_tool]
+    # _inventory_mcp_server discovers without mutating; the caller assigns the
+    # returned inventory only after the awaited call succeeds.
+    async def _inventory(_server: str, _server_info: MCPServerInfo, _runtime: Any) -> Any:
+        return [new_tool], [], []
 
     monkeypatch.setattr(toolset, "_inventory_mcp_server", _inventory)
 
     await toolset.refresh_mcp_server("alpha", runtime)
 
+    assert info.tools == [new_tool]
     assert toolset.find("OldTool") is None
     assert toolset.find("NewTool") is new_tool
     assert runtime.mcp_tools["mcp__alpha__NewTool"] is new_tool

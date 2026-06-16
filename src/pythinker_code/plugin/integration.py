@@ -134,22 +134,24 @@ def plugin_mcp_servers(policy: PluginPolicy | None = None) -> dict[str, object]:
     """
     servers: dict[str, object] = {}
     for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
-        options = _plugin_options(plugin, policy) if plugin.manifest.user_config else None
+        # Always validate ${user_config.*} references, even when the manifest
+        # declares no userConfig: an unresolved placeholder must fail-soft (skip
+        # the artifact) rather than reach an executable command literally.
+        options = _plugin_options(plugin, policy)
         for key, value in artifacts.mcp_servers(plugin).items():
             expanded = _map_strings(value, partial(_expand_plugin_vars, plugin=plugin))
-            if options is not None:
-                try:
-                    expanded = _map_strings(
-                        expanded, partial(substitute_user_config_vars, values=options)
-                    )
-                except UserConfigError as exc:
-                    logger.warning(
-                        "Skipping MCP server {key} from {plugin}: unconfigured user_config {error}",
-                        key=key,
-                        plugin=plugin.name,
-                        error=exc,
-                    )
-                    continue
+            try:
+                expanded = _map_strings(
+                    expanded, partial(substitute_user_config_vars, values=options)
+                )
+            except UserConfigError as exc:
+                logger.warning(
+                    "Skipping MCP server {key} from {plugin}: unconfigured user_config {error}",
+                    key=key,
+                    plugin=plugin.name,
+                    error=exc,
+                )
+                continue
             servers.setdefault(key, expanded)
     return servers
 
@@ -173,7 +175,7 @@ def _hooks_payload(plugin: LoadedPlugin) -> dict[str, Any] | None:
 
 
 def _translate_hook_defs(
-    plugin: LoadedPlugin, payload: dict[str, Any], options: dict[str, object] | None
+    plugin: LoadedPlugin, payload: dict[str, Any], options: dict[str, object]
 ) -> list[HookDef]:
     """Translate a Claude-style hooks mapping into pythinker ``HookDef`` entries.
 
@@ -206,17 +208,16 @@ def _translate_hook_defs(
                 if entry_d.get("type", "command") != "command" or not isinstance(command, str):
                     continue
                 expanded = _expand_plugin_vars(command, plugin)
-                if options is not None:
-                    try:
-                        expanded = substitute_user_config_vars(expanded, options)
-                    except UserConfigError as exc:
-                        logger.warning(
-                            "Skipping {event} hook in {plugin}: unconfigured user_config {error}",
-                            event=event,
-                            plugin=plugin.name,
-                            error=exc,
-                        )
-                        continue
+                try:
+                    expanded = substitute_user_config_vars(expanded, options)
+                except UserConfigError as exc:
+                    logger.warning(
+                        "Skipping {event} hook in {plugin}: unconfigured user_config {error}",
+                        event=event,
+                        plugin=plugin.name,
+                        error=exc,
+                    )
+                    continue
                 timeout = entry_d.get("timeout")
                 try:
                     defs.append(
@@ -245,6 +246,6 @@ def plugin_hook_defs(policy: PluginPolicy | None = None) -> list[HookDef]:
     for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
         payload = _hooks_payload(plugin)
         if payload is not None:
-            options = _plugin_options(plugin, policy) if plugin.manifest.user_config else None
+            options = _plugin_options(plugin, policy)
             defs.extend(_translate_hook_defs(plugin, payload, options))
     return defs

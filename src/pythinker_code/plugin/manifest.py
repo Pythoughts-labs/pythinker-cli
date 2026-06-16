@@ -82,14 +82,24 @@ def _normalize_dependencies(value: Any) -> list[str]:
     out: list[str] = []
     for entry in cast("list[object]", value):
         if isinstance(entry, str):
-            out.append(_DEP_VERSION_SUFFIX.sub("", entry))
+            # Trim surrounding whitespace: downstream matching is exact-name, so a
+            # stray " lib " would be mismatched and falsely demoted as missing.
+            dep = _DEP_VERSION_SUFFIX.sub("", entry).strip()
+            if dep:
+                out.append(dep)
         elif isinstance(entry, dict):
             entry_d = cast("dict[str, object]", entry)
             name = entry_d.get("name")
             if not isinstance(name, str):
                 continue
+            name = name.strip()
+            if not name:
+                continue
             marketplace = entry_d.get("marketplace")
-            out.append(f"{name}@{marketplace}" if isinstance(marketplace, str) else name)
+            if isinstance(marketplace, str) and marketplace.strip():
+                out.append(f"{name}@{marketplace.strip()}")
+            else:
+                out.append(name)
     return out
 
 

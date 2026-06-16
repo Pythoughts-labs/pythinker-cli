@@ -103,3 +103,9 @@ def test_install_blocks_cross_marketplace_dependency(tmp_path: Path) -> None:
 
     with pytest.raises(MarketplaceError, match="Cross-marketplace"):
         install.install_plugin_from_marketplace("app", "mk")
+
+    # The failed install must roll back: "app" was materialized before its
+    # cross-marketplace dependency was rejected, so it must not be left recorded.
+    from pythinker_code.plugin.installed import load_installed_plugins
+
+    assert "app@mk" not in load_installed_plugins()

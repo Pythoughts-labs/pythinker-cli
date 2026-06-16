@@ -1374,7 +1374,14 @@ class PythinkerToolset:
 
     async def _inventory_mcp_server(
         self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
-    ) -> None:
+    ) -> tuple[list[MCPTool[Any]], list[mcp.Resource], list[mcp.types.Prompt]]:
+        """Discover a server's tools/resources/prompts without mutating it.
+
+        Returns the freshly discovered inventory; the caller assigns it onto
+        ``server_info`` only after the awaited call (and the client context exit)
+        fully succeeds, so a timeout or ``__aexit__`` failure never leaves the
+        published registry inconsistent with the exposed callable tools.
+        """
         async with server_info.client as client:
             skipped: list[str] = []
             local_tools: list[MCPTool[Any]] = []
@@ -1405,21 +1412,21 @@ class PythinkerToolset:
             prompts = await _discover_optional_capability(
                 server_name, "prompts", client.list_prompts
             )
-            # Assign the full inventory atomically once discovery has succeeded, so
-            # a failure mid-discovery never leaves tools replaced while resources/
-            # prompts still reflect the previous connection.
-            server_info.tools = local_tools
-            server_info.resources = resources
-            server_info.prompts = prompts
+            return local_tools, resources, prompts
 
     async def _connect_mcp_server(
         self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
     ) -> tuple[str, Exception | None]:
         try:
-            await asyncio.wait_for(
+            tools, resources, prompts = await asyncio.wait_for(
                 self._inventory_mcp_server(server_name, server_info, runtime),
                 timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
             )
+            # Assign only after the awaited inventory (and client context exit)
+            # succeeded, so a failure never leaves a half-applied inventory.
+            server_info.tools = tools
+            server_info.resources = resources
+            server_info.prompts = prompts
             server_info.status = "connected"
             server_info.error = None
             self._start_mcp_session_holder(server_name, server_info)
@@ -1513,7 +1520,7 @@ class PythinkerToolset:
         # Convert raw timeout/inventory errors to MCPRuntimeError so callers (e.g. the
         # /mcp slash handler) receive a single typed boundary error.
         try:
-            await asyncio.wait_for(
+            tools, resources, prompts = await asyncio.wait_for(
                 self._inventory_mcp_server(server_name, info, runtime),
                 timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
             )
@@ -1521,7 +1528,11 @@ class PythinkerToolset:
             raise MCPRuntimeError(f"Refresh of MCP server '{server_name}' timed out") from exc
         except Exception as exc:
             raise MCPRuntimeError(f"Failed to refresh MCP server '{server_name}': {exc}") from exc
-        # Inventory succeeded; swap the old tool set for the new one atomically.
+        # Inventory succeeded; swap the old inventory for the new one atomically,
+        # then rebuild the published registry from it.
+        info.tools = tools
+        info.resources = resources
+        info.prompts = prompts
         self._rebuild_published_mcp_tools(runtime)
 
     async def reconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:

@@ -33,6 +33,7 @@ from pythinker_code.plugin.installed import (
     load_installed_plugins,
     plugin_identifier,
     record_install,
+    remove_install,
 )
 from pythinker_code.plugin.manifest import (
     MarketplaceEntry,
@@ -280,10 +281,46 @@ def install_plugin_from_marketplace(
 
     manifest, marketplace_root = _load_marketplace(marketplace_name, known[marketplace_name])
     installed: dict[str, InstalledRecord] = {}
-    _install_with_deps(
-        plugin_name, marketplace_name, manifest, marketplace_root, scope, installed, []
-    )
+    # Records materialized so far, oldest first. If dependency resolution fails
+    # partway through (e.g. a cross-marketplace dep), every plugin already written
+    # to disk/registry is rolled back so a failed install never leaves partial state.
+    materialized: list[tuple[str, InstalledRecord]] = []
+    try:
+        _install_with_deps(
+            plugin_name,
+            marketplace_name,
+            manifest,
+            marketplace_root,
+            scope,
+            installed,
+            [],
+            materialized,
+        )
+    except Exception:
+        _rollback_installs(marketplace_name, materialized)
+        raise
     return installed[plugin_name]
+
+
+def _rollback_installs(
+    marketplace_name: str, materialized: list[tuple[str, InstalledRecord]]
+) -> None:
+    """Undo partially completed installs (best-effort), newest first.
+
+    Runs while unwinding a failed install, so a cleanup error must not mask the
+    original failure — each step is logged and continued rather than raised.
+    """
+    for name, record in reversed(materialized):
+        ident = plugin_identifier(name, marketplace_name)
+        try:
+            _remove_path(Path(record.install_path))
+            remove_install(name, marketplace_name, scope=record.scope)
+        except Exception as exc:
+            logger.warning(
+                "Could not fully roll back partial install of {id}: {error}",
+                id=ident,
+                error=exc,
+            )
 
 
 def _materialize_and_record(
@@ -333,6 +370,7 @@ def _install_with_deps(
     scope: str,
     installed: dict[str, InstalledRecord],
     in_progress: list[str],
+    materialized: list[tuple[str, InstalledRecord]],
 ) -> None:
     """Install a plugin and its transitive dependencies from the same marketplace.
 
@@ -352,6 +390,7 @@ def _install_with_deps(
     record = _materialize_and_record(
         plugin_name, marketplace_name, manifest, marketplace_root, scope
     )
+    materialized.append((plugin_name, record))
     for dep in _installed_manifest_deps(Path(record.install_path)):
         dep_name, dep_marketplace = parse_plugin_identifier(dep)
         if dep_marketplace is not None and dep_marketplace != marketplace_name:
@@ -365,7 +404,14 @@ def _install_with_deps(
         ):
             continue
         _install_with_deps(
-            dep_name, marketplace_name, manifest, marketplace_root, scope, installed, in_progress
+            dep_name,
+            marketplace_name,
+            manifest,
+            marketplace_root,
+            scope,
+            installed,
+            in_progress,
+            materialized,
         )
     in_progress.remove(plugin_name)
     installed[plugin_name] = record

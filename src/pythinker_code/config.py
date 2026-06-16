@@ -57,6 +57,9 @@ SCOPE_LOCKED_PATHS: frozenset[tuple[str, ...]] = frozenset(
         ("providers",),  # contains api_key per provider — must stay in user scope
         ("services",),  # contains api_key fields — must stay in user scope
         ("feedback", "api_key"),  # only the key, not the whole feedback section
+        # Substituted into executable plugin artifacts (MCP server configs and hook
+        # commands); a repo-controlled project config must not steer those values.
+        ("plugins", "options"),
         # Auto-executed when the shell starts — a repo-controlled project config
         # must never be able to choose the binary that runs (`command`), nor to
         # trigger or extend its execution (`enabled`/`segments` flip the command

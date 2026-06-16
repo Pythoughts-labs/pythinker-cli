@@ -20,8 +20,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   installed for Claude Code or Codex are auto-detected (no symlink): their safe artifacts
   (skills, commands, agents) activate by default, while executable artifacts (hooks, MCP
   servers) stay opt-in. Config `plugins.discover_external`, `plugins.external_exec`,
-  `plugins.enabled`, and `plugins.disabled` — plus `pythinker plugin enable/disable
-  <name>` — control which installed plugins contribute artifacts. Hook and MCP commands
+  `plugins.enabled`, and `plugins.disabled` — plus `pythinker plugin enable/disable <name>`
+  — control which installed plugins contribute artifacts. Hook and MCP commands
   expand `${CLAUDE_PLUGIN_ROOT}`/`${PYTHINKER_PLUGIN_ROOT}` and
   `${CLAUDE_PLUGIN_DATA}`/`${PYTHINKER_PLUGIN_DATA}`.
 - **Plugin dependencies.** Plugins may declare `dependencies`; installing one pulls its

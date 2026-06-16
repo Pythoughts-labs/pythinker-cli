@@ -40,6 +40,7 @@ def gate_report(report: list[dict[str, object]], cases: list[EvalCase]) -> list[
     """Score report cases that include a matching ``name`` and optional ``metrics`` block."""
     cases_by_name = {case.name: case for case in cases}
     verdicts: list[EvalVerdict] = []
+    unknown_case_names: set[str] = set()
     for entry in report:
         report_cases = entry.get("cases", [])
         if not isinstance(report_cases, list):
@@ -50,6 +51,12 @@ def gate_report(report: list[dict[str, object]], cases: list[EvalCase]) -> list[
             name = str(case.get("name") or "")
             eval_case = cases_by_name.get(name)
             if eval_case is None:
+                # A report case with no matching eval case means the report/case
+                # contracts drifted — surface it instead of silently passing.
+                unknown_case_names.add(name)
                 continue
             verdicts.append(score_eval_case(eval_case, observed_from_report_case(case)))
+    if unknown_case_names:
+        unknown = ", ".join(sorted(n for n in unknown_case_names if n))
+        raise ValueError(f"Unknown eval case name(s) in report: {unknown}")
     return verdicts

@@ -15,6 +15,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from pythinker_code.plugin.directories import installed_plugins_file
+from pythinker_code.utils.io import file_lock
 from pythinker_code.utils.logging import logger
 
 INSTALLED_SCHEMA_VERSION = 2
@@ -90,37 +91,38 @@ def save_installed_plugins(plugins: dict[str, list[InstalledRecord]]) -> None:
 def record_install(name: str, marketplace: str, record: InstalledRecord) -> None:
     """Add or replace an install record for ``name@marketplace`` in its scope.
 
-    ponytail: unlocked read-modify-write. ``save_installed_plugins`` writes
-    atomically, so a single writer never corrupts the file; the residual risk is
-    two concurrent ``pythinker plugin`` processes losing one update — rare for a
-    CLI. Add cross-process file locking here (and in ``marketplace.py``) if
-    concurrent installs become a real workflow.
+    The load → mutate → save runs under a cross-process lock so concurrent
+    ``pythinker plugin`` invocations (or a session overlapping a CLI install)
+    can't drop each other's registry updates.
     """
-    plugins = load_installed_plugins()
-    ident = plugin_identifier(name, marketplace)
-    existing = [r for r in plugins.get(ident, []) if r.scope != record.scope]
-    plugins[ident] = [*existing, record]
-    save_installed_plugins(plugins)
+    with file_lock(installed_plugins_file()):
+        plugins = load_installed_plugins()
+        ident = plugin_identifier(name, marketplace)
+        existing = [r for r in plugins.get(ident, []) if r.scope != record.scope]
+        plugins[ident] = [*existing, record]
+        save_installed_plugins(plugins)
 
 
 def remove_install(name: str, marketplace: str, *, scope: str | None = None) -> bool:
     """Remove install records for a plugin (optionally only one scope).
 
-    Returns True if anything was removed.
+    Returns True if anything was removed. The read-modify-write runs under the
+    same cross-process lock as :func:`record_install`.
     """
-    plugins = load_installed_plugins()
-    ident = plugin_identifier(name, marketplace)
-    if ident not in plugins:
-        return False
-    if scope is None:
-        del plugins[ident]
-    else:
-        kept = [r for r in plugins[ident] if r.scope != scope]
-        if len(kept) == len(plugins[ident]):
+    with file_lock(installed_plugins_file()):
+        plugins = load_installed_plugins()
+        ident = plugin_identifier(name, marketplace)
+        if ident not in plugins:
             return False
-        if kept:
-            plugins[ident] = kept
-        else:
+        if scope is None:
             del plugins[ident]
-    save_installed_plugins(plugins)
-    return True
+        else:
+            kept = [r for r in plugins[ident] if r.scope != scope]
+            if len(kept) == len(plugins[ident]):
+                return False
+            if kept:
+                plugins[ident] = kept
+            else:
+                del plugins[ident]
+        save_installed_plugins(plugins)
+        return True

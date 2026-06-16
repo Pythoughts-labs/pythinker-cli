@@ -27,6 +27,7 @@ from pythinker_code.plugin.manifest import (
     find_marketplace_manifest,
     load_marketplace_manifest,
 )
+from pythinker_code.utils.io import file_lock
 from pythinker_code.utils.logging import logger
 
 MarketplaceSourceKind = Literal["github", "git", "url", "file", "directory", "npm"]
@@ -159,28 +160,33 @@ def save_known_marketplaces(marketplaces: dict[str, KnownMarketplaceEntry]) -> N
 def add_marketplace(name: str, source: MarketplaceSource, *, auto_update: bool = False) -> None:
     """Register (or replace) a marketplace by name.
 
-    ponytail: unlocked read-modify-write like ``installed.record_install``. The
-    save is atomic, so the only race is two concurrent CLI processes losing one
-    update — rare. Add cross-process locking if that becomes a real workflow.
+    The load → mutate → save runs under a cross-process lock so concurrent CLI
+    invocations can't drop each other's registry updates.
     """
-    marketplaces = load_known_marketplaces()
-    install_location = str(marketplaces_cache_dir() / name)
-    marketplaces[name] = KnownMarketplaceEntry(
-        source=source,
-        installLocation=install_location,
-        autoUpdate=auto_update,
-    )
-    save_known_marketplaces(marketplaces)
+    with file_lock(known_marketplaces_file()):
+        marketplaces = load_known_marketplaces()
+        install_location = str(marketplaces_cache_dir() / name)
+        marketplaces[name] = KnownMarketplaceEntry(
+            source=source,
+            installLocation=install_location,
+            autoUpdate=auto_update,
+        )
+        save_known_marketplaces(marketplaces)
 
 
 def remove_marketplace(name: str) -> bool:
-    """Unregister a marketplace. Returns True if it existed."""
-    marketplaces = load_known_marketplaces()
-    if name not in marketplaces:
-        return False
-    del marketplaces[name]
-    save_known_marketplaces(marketplaces)
-    return True
+    """Unregister a marketplace. Returns True if it existed.
+
+    The read-modify-write runs under the same cross-process lock as
+    :func:`add_marketplace`.
+    """
+    with file_lock(known_marketplaces_file()):
+        marketplaces = load_known_marketplaces()
+        if name not in marketplaces:
+            return False
+        del marketplaces[name]
+        save_known_marketplaces(marketplaces)
+        return True
 
 
 def resolve_local_marketplace(source: MarketplaceSource) -> MarketplaceManifest:

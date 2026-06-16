@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests_ai.eval_gate import gate_report, load_eval_cases
 from tests_e2e.eval_schema import ObservedMetrics, score_eval_case
 
@@ -36,6 +38,14 @@ def test_gate_report_scores_optional_metrics() -> None:
     verdicts = gate_report(report, cases)
     assert len(verdicts) == 1
     assert verdicts[0].passed
+
+
+def test_gate_report_raises_on_unknown_case_name() -> None:
+    """A report case with no matching eval case is a contract drift, not a silent skip."""
+    cases = load_eval_cases(Path("tests_ai/eval_cases.example.json"))
+    report = [{"file": "x.md", "cases": [{"name": "does-not-exist", "pass": True}]}]
+    with pytest.raises(ValueError, match="Unknown eval case name"):
+        gate_report(report, cases)
 
 
 def test_score_eval_case_flags_budget_breach() -> None:

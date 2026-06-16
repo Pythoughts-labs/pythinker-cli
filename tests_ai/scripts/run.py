@@ -146,13 +146,14 @@ def main(argv: list[str] | None = None) -> int:
 
         from tests_ai.eval_gate import gate_report, load_eval_cases
 
+        eval_cases_path = Path(args.eval_cases).resolve()
         try:
-            cases = load_eval_cases(Path(args.eval_cases).resolve())
-        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            cases = load_eval_cases(eval_cases_path)
+            budget_failures = [v for v in gate_report(report, cases) if not v.passed]
+        except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
             raise SystemExit(
-                f"ERROR: could not load --eval-cases {args.eval_cases}: {exc}"
+                f"ERROR: could not evaluate --eval-cases {eval_cases_path}: {exc}"
             ) from exc
-        budget_failures = [v for v in gate_report(report, cases) if not v.passed]
         for verdict in budget_failures:
             print(
                 colorize(

@@ -127,11 +127,11 @@ def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
                 continue  # malformed JSON — block found but not parseable
             if not isinstance(parsed, dict):
                 continue  # wrong shape (array / scalar)
-            parsed_valid = True
             data = cast(_ReportBlock, parsed)
             findings = data.get("findings")
             if not isinstance(findings, list):
                 continue  # "findings" missing or not a list — nothing to count
+            parsed_valid = True
             # The declared type promises dict findings, but the payload is
             # untrusted JSON; re-type as object so the runtime guard below is real.
             for finding in cast("list[object]", findings):
@@ -140,9 +140,11 @@ def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
                 sev = str(cast("dict[str, object]", finding).get("severity", "")).lower()
                 if sev in counts:
                     counts[sev] += 1
-        # A report block was present: return its counts. ``parsed_valid`` is False
-        # only when every block was malformed JSON — reported as unparsed, never
-        # as a false "parsed with zero findings", and never re-scanned below.
+        # A report block was present: return its counts. ``parsed_valid`` is True
+        # only when at least one block was a JSON object with a list ``findings``
+        # (possibly empty); a malformed block or a wrong-shaped payload (e.g.
+        # ``{"findings": "high"}``) is reported as unparsed, never as a false
+        # "parsed with zero findings", and never re-scanned below.
         return counts, parsed_valid
 
     # Fallback: line-by-line markdown markers.

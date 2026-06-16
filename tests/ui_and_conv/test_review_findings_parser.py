@@ -300,10 +300,13 @@ def test_report_block_wrong_shape_is_not_parsed():
 
 
 def test_report_block_non_dict_findings_does_not_crash():
-    """Untrusted payloads where 'findings' isn't a list of objects must not raise."""
+    """A payload whose 'findings' isn't a list must not raise and isn't 'parsed'."""
     text = '```report\n{"findings": "high"}\n```\n'
     counts, was_parsed = _parse_reviewer_findings(text)
-    assert was_parsed is True  # valid JSON object => structured, just no countable findings
+    # 'findings' is the wrong shape (str, not list) -> not a usable structured
+    # report, so was_parsed is False (the caller falls back to markdown scanning)
+    # rather than reporting a false "parsed with zero findings".
+    assert was_parsed is False
     assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
 
