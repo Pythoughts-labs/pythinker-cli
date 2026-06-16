@@ -17,6 +17,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.47.0 (2026-06-16)
+
 - **Plugin marketplaces and activation policy.** `pythinker plugin marketplace` can add,
   refresh, install, and uninstall Claude/Codex-compatible marketplace plugins. Plugins
   installed for Claude Code or Codex are auto-detected (no symlink): their safe artifacts
@@ -102,6 +104,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **The Agent tool description now gives clearer prompt-briefing guidance.** Fresh subagents should
   receive the goal, scope, expected output contract, and verification criteria; the Haiku-style
   tool-use summary from the blackbox reference was deliberately not ported.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.47.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.46.0 (2026-06-14)
 
