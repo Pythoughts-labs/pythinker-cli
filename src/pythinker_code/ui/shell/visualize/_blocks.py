@@ -30,13 +30,14 @@ from pythinker_code.ui.shell.components.markdown import (
 )
 from pythinker_code.ui.shell.components.render_utils import render_message_response, sanitize_ansi
 from pythinker_code.ui.shell.components.report import render_agent_body
-from pythinker_code.ui.shell.console import console, current_console_width
+from pythinker_code.ui.shell.console import current_console_width
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER, TRANSCRIPT_STATUS_MARKER
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
 from pythinker_code.ui.shell.motion import (
     ActivitySnapshot,
     activity_status_line,
-    blink_visible,
+    append_streaming_caret,
+    reduced_motion_enabled,
 )
 from pythinker_code.ui.shell.spacing import BLANK_ROW
 from pythinker_code.ui.shell.tips import FEATURE_TIPS
@@ -211,77 +212,12 @@ def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
     return len(text)
 
 
-def _markdown_fence_marker(line: str) -> tuple[str, int] | None:
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3 or not stripped.startswith(("```", "~~~")):
-        return None
-    marker = stripped[0]
-    marker_length = len(stripped) - len(stripped.lstrip(marker))
-    if marker_length < 3:
-        return None
-    return marker, marker_length
-
-
-def _markdown_fence_is_open(text: str) -> bool:
-    active_marker: str | None = None
-    active_length = 0
-    for line in text.splitlines():
-        marker = _markdown_fence_marker(line)
-        if marker is None:
-            continue
-        fence_marker, fence_length = marker
-        if active_marker is None:
-            active_marker = fence_marker
-            active_length = fence_length
-        elif fence_marker == active_marker and fence_length >= active_length:
-            active_marker = None
-            active_length = 0
-    return active_marker is not None
-
-
-def _backtick_run_length(text: str, start: int) -> int:
-    end = start
-    while end < len(text) and text[end] == "`":
-        end += 1
-    return end - start
-
-
-def _inline_markdown_is_closed(text: str) -> bool:
-    inline_code_ticks = 0
-    strong_markers = 0
-    i = 0
-    while i < len(text):
-        char = text[i]
-        if char == "\\":
-            i += 2
-            continue
-        if char == "`":
-            tick_count = _backtick_run_length(text, i)
-            if inline_code_ticks == 0:
-                inline_code_ticks = tick_count
-            elif inline_code_ticks == tick_count:
-                inline_code_ticks = 0
-            i += tick_count
-            continue
-        if inline_code_ticks == 0 and text.startswith(("**", "__"), i):
-            strong_markers += 1
-            i += 2
-            continue
-        i += 1
-    return inline_code_ticks == 0 and strong_markers % 2 == 0
-
-
-def _paced_preview_markdown_is_stable(text: str) -> bool:
-    return not _markdown_fence_is_open(text) and _inline_markdown_is_closed(text)
-
-
 class _ContentBlock:
     """Streaming content block with incremental markdown commitment.
 
-    For **composing** (``is_think=False``), confirmed markdown blocks are flushed
-    to the terminal permanently via ``console.print()`` as they become complete,
-    giving users real-time streaming output.  Only the unconfirmed tail remains
-    in the transient Rich Live area.
+    For **composing** (``is_think=False``), confirmed markdown blocks are staged
+    in the Live compose cache as they become complete. Only the unconfirmed tail
+    remains as a plain-text preview in the transient Rich Live area.
 
     For **thinking** (``is_think=True``), the default behavior is to keep the
     raw reasoning text only for token accounting and never render it.  The
@@ -312,6 +248,8 @@ class _ContentBlock:
         # this equal to len(raw_text); paced blocks advance it via reveal_tick().
         self._revealed_len = 0
         self._has_printed_bullet = False
+        self._committed_renderables: list[RenderableType] = []
+        self._block_width = current_console_width()
         # Sliding window for smooth token-rate display: stores (timestamp, cumulative_tokens)
         # pairs to compute rate over the last ~1.5s. Float cumulative_tokens avoids
         # per-sample truncation.
@@ -353,6 +291,8 @@ class _ContentBlock:
             _STREAM_REVEAL_MIN_CELLS,
             -(-backlog_cells // _STREAM_REVEAL_CATCHUP_TICKS),
         )
+        if reduced_motion_enabled():
+            step_cells = max(step_cells, -(-backlog_cells // 2))
         self._revealed_len = _advance_by_display_cells(
             self.raw_text,
             self._revealed_len,
@@ -411,12 +351,31 @@ class _ContentBlock:
         if not remaining:
             return Text("")
         rendered = self._wrap_bullet(render_agent_body(remaining))
+        if self._committed_renderables:
+            return Group(*self._committed_renderables, BLANK_ROW, rendered)
         if self._has_printed_bullet:
-            # Re-create the one-row gap a single markdown pass puts between
-            # blocks: earlier slices already committed, so the tail needs a
-            # seam to avoid cramming against the previous block.
             return Group(BLANK_ROW, rendered)
         return rendered
+
+    def promote_to_scrollback(self) -> RenderableType | None:
+        """Build the full block renderable for one-shot scrollback promotion."""
+        parts: list[RenderableType] = list(self._committed_renderables)
+        remaining = self._pending_text()
+        if remaining:
+            tail = self._wrap_bullet(render_agent_body(remaining))
+            if parts:
+                parts.extend([BLANK_ROW, tail])
+            else:
+                parts = [tail]
+        if not parts:
+            return None
+        return Group(*parts) if len(parts) > 1 else parts[0]
+
+    def has_active_stream_preview(self) -> bool:
+        """Whether live preview animation (caret / paced drain) should keep ticking."""
+        if self.is_think:
+            return False
+        return bool(self._pending_text()) or self._revealed_len < len(self.raw_text)
 
     def has_pending(self) -> bool:
         """Whether there is uncommitted content to flush."""
@@ -450,11 +409,12 @@ class _ContentBlock:
         """
         if self._has_printed_bullet:
             return BulletColumns(renderable, bullet=Text(" "))
-        visible = blink_visible()
-        glyph = TRANSCRIPT_ASSISTANT_MARKER if visible else " "
         return BulletColumns(
             renderable,
-            bullet=Text(glyph, style=tui_rich_style("muted") + Style(bold=True)),
+            bullet=Text(
+                TRANSCRIPT_ASSISTANT_MARKER,
+                style=tui_rich_style("muted") + Style(bold=True),
+            ),
         )
 
     @property
@@ -463,7 +423,7 @@ class _ContentBlock:
         return self._has_printed_bullet
 
     def _flush_committed(self) -> None:
-        """Commit confirmed markdown blocks to permanent terminal output."""
+        """Stage confirmed markdown blocks for the next Live compose pass."""
         pending = self._pending_text()
         if not pending:
             return
@@ -471,12 +431,9 @@ class _ContentBlock:
         if boundary is None:
             return
         committed_text = pending[:boundary]
-        # A blank seam precedes every committed slice: on the first commit it
-        # separates this step from the previous block; on later commits it
-        # re-creates the one-row gap a single markdown pass puts between blocks
-        # (committing each slice with its own console.print() drops it).
-        console.print()
-        console.print(self._wrap_bullet(render_agent_body(committed_text)))
+        if self._committed_renderables:
+            self._committed_renderables.append(BLANK_ROW)
+        self._committed_renderables.append(self._wrap_bullet(render_agent_body(committed_text)))
         self._committed_len += boundary
 
     def _activity_snapshot(
@@ -519,22 +476,40 @@ class _ContentBlock:
     def _compose_composing(self) -> RenderableType:
         spinner = self._compose_spinner()
         pending = self._pending_text()
+        committed = list(self._committed_renderables)
         if not pending:
+            if committed:
+                return Group(*committed, spinner)
             return spinner
-        preview = self._build_preview(pending, max_lines=_COMPOSING_PREVIEW_LINES)
-        if self._paced and not _paced_preview_markdown_is_stable(preview):
-            # At the fast reveal cadence, half-open inline spans or fences would
-            # render as raw delimiters and then restyle a frame later. Keep only
-            # those unstable previews plain; stable previews still use Markdown.
-            body: RenderableType = Text(sanitize_ansi(preview))
-        else:
-            body = Markdown(preview)
-        return Group(spinner, BLANK_ROW, self._wrap_preview_bullet(body))
+        preview = self._build_preview(
+            pending,
+            max_lines=_COMPOSING_PREVIEW_LINES,
+            reserve_caret=True,
+        )
+        body = self._render_preview_text(preview, caret=True)
+        preview_row = self._wrap_preview_bullet(body)
+        if committed:
+            return Group(*committed, spinner, BLANK_ROW, preview_row)
+        return Group(spinner, BLANK_ROW, preview_row)
+
+    def _render_preview_text(self, preview: str, *, caret: bool) -> Text:
+        """Plain-text preview path shared by live compose and finalize."""
+        if not preview:
+            return Text("")
+        body = Text()
+        lines = preview.split("\n")
+        for index, line in enumerate(lines):
+            if index:
+                body.append("\n")
+            body.append(sanitize_ansi(line))
+        if caret:
+            append_streaming_caret(body)
+        return body
 
     def _compose_spinner(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Composing", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
     def _compose_thinking_stream(self) -> RenderableType:
@@ -557,12 +532,20 @@ class _ContentBlock:
     def _compose_thinking_spinner(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
-    def _build_preview(self, text: str, *, max_lines: int) -> str:
-        """Tail-trim *text* to ``max_lines`` and clamp it to current terminal width."""
-        max_width = current_console_width() - 2
+    def _layout_width(self) -> int:
+        width = current_console_width()
+        if width != self._block_width:
+            self._block_width = width
+        return self._block_width
+
+    def _build_preview(self, text: str, *, max_lines: int, reserve_caret: bool = False) -> str:
+        """Tail-trim *text* to ``max_lines`` and clamp it to terminal width."""
+        max_width = self._layout_width() - 2
+        if reserve_caret:
+            max_width = max(1, max_width - 1)
         tail_text = _tail_lines(text, max_lines)
         lines = tail_text.split("\n")
         return "\n".join(_truncate_to_display_width(line, max_width) for line in lines)
@@ -570,7 +553,7 @@ class _ContentBlock:
     def _compose_thinking(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
 
@@ -1305,7 +1288,7 @@ class _QuestionAnsweredBlock:
             row = Text("· ", style=tui_rich_style("muted"))
             row.append(sanitize_ansi(question), style=tui_rich_style("muted"))
             row.append(" → ", style=tui_rich_style("dim"))
-            row.append(sanitize_ansi(answer), style=tui_rich_style("accent") + Style(bold=True))
+            row.append(sanitize_ansi(answer), style=tui_rich_style("info"))
             rows.append(row)
         return BulletColumns(
             Group(*rows),
@@ -1344,13 +1327,13 @@ class _SuggestionBlock:
     def compose(self) -> RenderableType:
         label = Text(
             f"Suggested: {sanitize_ansi(self.event.label).strip()}",
-            style=tui_rich_style("accent") + Style(bold=True),
+            style=tui_rich_style("info"),
         )
         prefill = sanitize_ansi(self.event.prefill).strip()
         if not prefill:
             return BulletColumns(
                 label,
-                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
+                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("info")),
             )
         hint = Text(
             f"→ {prefill}  (Alt+S to accept)",
@@ -1358,7 +1341,7 @@ class _SuggestionBlock:
         )
         return BulletColumns(
             Group(label, hint),
-            bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
+            bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("info")),
         )
 
 
@@ -1440,7 +1423,7 @@ class _CompactionBlock:
         filled = int(round(progress * self.BAR_WIDTH))
         empty = self.BAR_WIDTH - filled
         pct = int(progress * 100)
-        accent = tui_rich_style("accent")
+        accent = tui_rich_style("info")
         muted = tui_rich_style("muted")
         subtle = tui_rich_style("dim")
         title_style = accent + Style(italic=True)

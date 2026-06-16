@@ -78,7 +78,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", f"/{pattern}/"))
+        summary.append_text(fg("info", f"/{pattern}/"))
 
     path_display = shorten_path(raw_path or ".", cwd=ctx.cwd) if raw_path is not None else None
     summary.append_text(fg("tool_output", " in "))

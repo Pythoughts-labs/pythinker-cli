@@ -610,7 +610,7 @@ def _update_prompt_text(current_version: str, latest_version: str) -> Text:
         update_method = _format_upgrade_command(upgrade_command)
     _t = _get_tui_tokens()
     return Text.assemble(
-        ("\n  ✨ ", f"bold {_t.accent}"),
+        ("\n  ✨ ", _t.accent),
         ("Update available!", "bold"),
         (f" {current_version} -> {latest_version}", _t.muted),
         ("\n  Release notes: ", _t.muted),

@@ -15,6 +15,14 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI theme package.** Centralize dark/light palettes, prompt classes, and Rich/PTK
+  adapters in `ui/theme/` with `/theme current|doctor|tokens` inspection commands.
+- **Slash input UX.** Prefix-highlight skills and plugins while typing; ghost-complete
+  and highlight fixed subcommands such as `/theme current`.
+- **TUI streaming smoothness (Phase 0).** Coalesce Rich Live repaints to a 25 Hz frame budget,
+  render live previews as plain text (no per-token markdown re-parse), stage committed slices
+  inside the Live region until finalize, and use a fixed-width blinking streaming caret that
+  does not reflow wrapped lines.
 - **LSP code intelligence.** Plugin-provided language servers power a new `LSP` agent tool
   (go-to-definition, find-references, hover, symbols, call hierarchy) with session-scoped
   server lifecycle, passive diagnostics injected after file edits, and plugin-based server

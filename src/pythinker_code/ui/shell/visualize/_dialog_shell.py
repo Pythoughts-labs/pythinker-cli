@@ -27,15 +27,9 @@ class DialogOption:
 
 
 def _render_option(option: DialogOption) -> Text:
-    from rich.style import Style as _RStyle
-
     prefix = "→" if option.selected else " "
     key = f"[{option.key}] " if option.key else ""
-    style = (
-        tui_rich_style("accent") + _RStyle(bold=True)
-        if option.selected
-        else tui_rich_style("muted")
-    )
+    style = tui_rich_style("accent") if option.selected else tui_rich_style("muted")
     text = Text(f"{prefix} {key}{option.label}", style=style)
     if option.description:
         text.append(f"  {option.description}", style="dim")

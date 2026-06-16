@@ -235,6 +235,36 @@ def reduced_motion_enabled() -> bool:
 
 
 _BLINK_PERIOD_S = 0.8
+GUTTER_PULSE_INTERVAL_S = _BLINK_PERIOD_S
+STREAM_FPS = 25
+STREAM_FRAME_INTERVAL_S = 1 / STREAM_FPS
+CARET_BLINK_INTERVAL_S = 0.5
+REDUCED_MOTION_REVEAL_HZ = 5
+STREAMING_CARET_GLYPH = "\u258d"  # ▍ left five eighths block
+
+
+def stream_reveal_interval_s() -> float:
+    """Frame interval for paced reveal ticks (slower under reduced motion)."""
+    if reduced_motion_enabled():
+        return 1 / REDUCED_MOTION_REVEAL_HZ
+    return STREAM_FRAME_INTERVAL_S
+
+
+def streaming_caret_visible(now: float | None = None) -> bool:
+    """Return whether the streaming caret is in its visible half-cycle."""
+    if reduced_motion_enabled():
+        return True
+    t = time.monotonic() if now is None else now
+    return int(t / CARET_BLINK_INTERVAL_S) % 2 == 0
+
+
+def append_streaming_caret(text: Text, *, now: float | None = None) -> None:
+    """Append a fixed-width caret slot so blink does not reflow the preview."""
+    if streaming_caret_visible(now):
+        text.append(STREAMING_CARET_GLYPH, style=tui_rich_style("muted"))
+    else:
+        # ponytail: reserve the column; removing the glyph shifts wrapped lines.
+        text.append(" ")
 
 
 def blink_visible(now: float | None = None) -> bool:

@@ -58,7 +58,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", shorten_path(raw_path, cwd=ctx.cwd)))
+        summary.append_text(fg("info", shorten_path(raw_path, cwd=ctx.cwd)))
 
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
     line = tool_call_header(

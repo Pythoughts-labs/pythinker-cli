@@ -17,6 +17,7 @@ Wraps Rich's ``Markdown`` element with three changes:
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER
 from pythinker_code.ui.shell.render_constants import MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES
 from pythinker_code.ui.shell.spacing import CODE_BLOCK_PADDING, blank_row
 from pythinker_code.ui.theme import ThemeName, get_markdown_colors
+from pythinker_code.ui.theme.adapters.markdown import markdown_style_overrides
 from pythinker_code.utils.rich.markdown import CodeBlock, Markdown, TableElement
 
 _MARKDOWN_ICON_REPLACEMENTS: dict[str, str] = {
@@ -478,30 +480,7 @@ class _BorderedCodeBlock(CodeBlock):
 
 def _markdown_style_overrides(theme: ThemeName | None = None) -> dict[str, RichStyle]:
     """Translate the active markdown palette into Rich style names."""
-    colors = get_markdown_colors(theme)
-    return {
-        "markdown.h1": RichStyle(color=colors.heading, bold=True),
-        "markdown.h1.border": RichStyle(color=colors.heading),
-        "markdown.h1.underline": RichStyle(color=colors.heading),
-        "markdown.h2": RichStyle(color=colors.heading, bold=True, underline=True),
-        "markdown.h3": RichStyle(color=colors.heading, bold=True),
-        "markdown.h4": RichStyle(color=colors.heading, bold=True, dim=True),
-        "markdown.strong": RichStyle(color=colors.strong, bold=True),
-        "markdown.em": RichStyle(color=colors.emphasis, italic=True),
-        "markdown.emph": RichStyle(color=colors.emphasis, italic=True),
-        "markdown.code": RichStyle(color=colors.inline_code, bold=True),
-        "markdown.link": RichStyle(color=colors.link, underline=True),
-        # The bracketed URL reads as secondary to the link text.
-        "markdown.link_url": RichStyle(color=colors.link, underline=True, dim=True),
-        "markdown.block_quote": RichStyle(color=colors.quote, italic=True),
-        "markdown.hr": RichStyle(color=colors.code_block_border),
-        "markdown.code_block": RichStyle(color=colors.inline_code),
-        "markdown.code_block.border": RichStyle(color=colors.code_block_border, bold=True),
-        # Ordered markers take the bright-blue accent; unordered bullets stay
-        # muted (structural, not "important words").
-        "markdown.item.bullet": RichStyle(color=colors.unordered_marker, bold=True),
-        "markdown.item.number": RichStyle(color=colors.ordered_marker, bold=True),
-    }
+    return markdown_style_overrides(theme)
 
 
 def _replace_report_icons(text: str) -> str:
@@ -859,13 +838,8 @@ def _get_md_parser() -> MarkdownIt:
     return _md_parser
 
 
-def markdown_commit_boundary(text: str) -> int | None:
-    """Return the offset up to which streamed markdown can be committed.
-
-    The last top-level block is treated as still mutable, so callers only
-    permanently print completed blocks. Nested tokens (list items, blockquote
-    children, table rows) stay with their parent block.
-    """
+@functools.lru_cache(maxsize=64)
+def _markdown_commit_boundary_cached(text: str) -> int | None:
     md = _get_md_parser()
     tokens = md.parse(text)
 
@@ -889,6 +863,18 @@ def markdown_commit_boundary(text: str) -> int | None:
     for _ in range(target_line):
         offset = text.index("\n", offset) + 1
     return offset
+
+
+def markdown_commit_boundary(text: str) -> int | None:
+    """Return the offset up to which streamed markdown can be committed.
+
+    The last top-level block is treated as still mutable, so callers only
+    permanently print completed blocks. Nested tokens (list items, blockquote
+    children, table rows) stay with their parent block.
+    """
+    if not text:
+        return None
+    return _markdown_commit_boundary_cached(text)
 
 
 def _find_stream_safe_boundary(text: str) -> int | None:

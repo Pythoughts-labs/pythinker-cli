@@ -45,6 +45,7 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
 from pythinker_code.ui.shell.motion import (
+    STREAM_FRAME_INTERVAL_S,
     ActivitySnapshot,
     active_marker_frame,
     activity_status_line,
@@ -256,6 +257,8 @@ class _LiveView:
         self._status_block = _StatusBlock(initial_status)
 
         self._need_recompose = False
+        self._dirty = False
+        self._force_refresh = False
         self._external_messages: Queue[WireMessage] = Queue()
 
     def _reset_live_shape(self, live: Live) -> None:
@@ -276,6 +279,37 @@ class _LiveView:
         except (TimeoutError, QueueShutDown):
             return None, external_task
         return msg, asyncio.create_task(self._external_messages.get())
+
+    async def _frame_refresh_loop(self, live: Live) -> None:
+        """Coalesce wire-driven repaints to the streaming frame budget."""
+        try:
+            while True:
+                await asyncio.sleep(STREAM_FRAME_INTERVAL_S)
+                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                    self._dirty = True
+                if not self._dirty and not self._force_refresh:
+                    continue
+                live.update(self.compose(), refresh=self._force_refresh)
+                self._dirty = False
+                self._force_refresh = False
+                self._need_recompose = False
+        except asyncio.CancelledError:
+            pass
+
+    def _streaming_needs_animation_frame(self) -> bool:
+        block = self._current_content_block
+        if block is None:
+            return False
+        return block.has_active_stream_preview()
+
+    def _flush_live_refresh(self, live: Live, *, force: bool = False) -> None:
+        """Paint immediately; use for user-initiated repaints only."""
+        if not force and not self._dirty and not self._force_refresh:
+            return
+        live.update(self.compose(), refresh=True)
+        self._dirty = False
+        self._force_refresh = False
+        self._need_recompose = False
 
     async def visualize_loop(self, wire: WireUISide):
         with Live(
@@ -348,6 +382,7 @@ class _LiveView:
             async with _keyboard_listener(keyboard_handler):
                 wire_task = asyncio.create_task(wire.receive())
                 external_task = asyncio.create_task(self._external_messages.get())
+                frame_task = asyncio.create_task(self._frame_refresh_loop(live))
                 try:
                     while True:
                         try:
@@ -370,34 +405,34 @@ class _LiveView:
                             )
                             if msg is not None:
                                 self.dispatch_wire_message(msg)
-                                if self._need_recompose:
-                                    live.update(self.compose(), refresh=True)
-                                    self._need_recompose = False
                                 continue
                             self.cleanup(is_interrupt=False)
-                            live.update(self.compose(), refresh=True)
+                            self._flush_live_refresh(live, force=True)
                             break
 
                         if isinstance(msg, StepInterrupted):
                             self.cleanup(is_interrupt=True)
-                            live.update(self.compose(), refresh=True)
+                            self._flush_live_refresh(live, force=True)
                             break
 
                         self.dispatch_wire_message(msg)
-                        if self._need_recompose:
-                            live.update(self.compose(), refresh=True)
-                            self._need_recompose = False
                 finally:
+                    frame_task.cancel()
                     wire_task.cancel()
                     external_task.cancel()
                     self._external_messages.shutdown(immediate=True)
+                    with suppress(asyncio.CancelledError, QueueShutDown):
+                        await frame_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
                         await wire_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
                         await external_task
 
-    def refresh_soon(self) -> None:
+    def refresh_soon(self, force: bool = False) -> None:
+        self._dirty = True
         self._need_recompose = True
+        if force:
+            self._force_refresh = True
 
     def advance_stream_reveal(self) -> bool:
         """Advance paced reveal of the active composing block by one tick.
@@ -1208,17 +1243,23 @@ class _LiveView:
     def flush_content(self) -> None:
         """Flush the current content block."""
         if self._current_content_block is not None:
+            block = self._current_content_block
             # Finalize must show everything: reveal any still-buffered paced text
             # so the committed block is complete (no text stranded behind the
             # reveal cursor).
-            self._current_content_block.reveal_all()
-            if self._current_content_block.has_pending():
-                # One blank row before the block (matching tool cards) so steps
-                # are separated — unless this block already streamed earlier
-                # paragraphs, in which case this is its continuation.
-                if not self._current_content_block.has_emitted_to_scrollback:
-                    console.print()
-                console.print(self._current_content_block.compose_final())
+            block.reveal_all()
+            block._flush_committed()
+            if block.is_think:
+                if block.has_pending():
+                    if not block.has_emitted_to_scrollback:
+                        console.print()
+                    console.print(block.compose_final())
+            else:
+                renderable = block.promote_to_scrollback()
+                if renderable is not None:
+                    if not block.has_emitted_to_scrollback:
+                        console.print()
+                    console.print(renderable)
             self._current_content_block = None
             self.refresh_soon()
 

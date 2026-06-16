@@ -60,7 +60,7 @@ def _render_fetch_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", _shorten_url(url)))
+        summary.append_text(fg("info", _shorten_url(url)))
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
     line = tool_call_header("Fetch", summary, style_token=style_token)
     return running_spinner(line, execution_started=ctx.execution_started, has_result=ctx.has_result)
@@ -147,7 +147,7 @@ def _render_search_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", f'"{query}"'))
+        summary.append_text(fg("info", f'"{query}"'))
     extras: list[str] = []
     if isinstance(limit, int) and limit != 5:
         extras.append(f"limit {limit}")

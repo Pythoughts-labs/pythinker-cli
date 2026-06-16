@@ -74,7 +74,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", shorten_path(raw_path, cwd=ctx.cwd)))
+        summary.append_text(fg("info", shorten_path(raw_path, cwd=ctx.cwd)))
 
     range_text = _format_line_range(args)
     if range_text is not None:

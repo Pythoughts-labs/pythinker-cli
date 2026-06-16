@@ -22,6 +22,7 @@ from pythinker_code.ui.shell.prompt import (
     _find_prompt_float_container,
     _wrap_to_width,
 )
+from pythinker_code.ui.shell.slash import slash_command_arg_suggestions
 from pythinker_code.utils.slashcmd import SlashCommand
 
 
@@ -50,6 +51,13 @@ def _completions(completer: SlashCommandCompleter, text: str):
     document = Document(text=text, cursor_position=len(text))
     event = CompleteEvent(completion_requested=True)
     return list(completer.get_completions(document, event))
+
+
+def _theme_completer() -> SlashCommandCompleter:
+    return SlashCommandCompleter(
+        [_make_command("theme", aliases=["color"]), _make_command("help")],
+        arg_suggestions=slash_command_arg_suggestions,
+    )
 
 
 def test_exact_command_match_keeps_completions_visible():
@@ -144,8 +152,22 @@ def test_should_complete_only_for_root_slash_token():
     assert not SlashCommandCompleter.should_complete(Document(text="/he next", cursor_position=8))
 
 
+def test_completion_active_for_theme_subcommand():
+    completer = _theme_completer()
+    assert completer.completion_active(Document(text="/theme ", cursor_position=len("/theme ")))
+    assert completer.completion_active(
+        Document(text="/theme cur", cursor_position=len("/theme cur"))
+    )
+    assert not completer.completion_active(
+        Document(text="/help foo", cursor_position=len("/help foo"))
+    )
+
+
 def _suggestion_text(names: frozenset[str], text: str) -> str | None:
-    suggest = SlashCommandAutoSuggest(lambda: names)
+    suggest = SlashCommandAutoSuggest(
+        lambda: names,
+        arg_suggestions=slash_command_arg_suggestions,
+    )
     document = Document(text=text, cursor_position=len(text))
     suggestion = suggest.get_suggestion(Buffer(), document)
     return suggestion.text if suggestion else None
@@ -201,6 +223,32 @@ def test_auto_suggest_exact_recap_toggle_hint():
 def test_auto_suggest_is_case_insensitive_on_typed_prefix():
     names = frozenset({"help"})
     assert _suggestion_text(names, "/He") == "lp"
+
+
+def test_auto_suggest_theme_subcommand_after_space():
+    names = frozenset({"theme", "color"})
+    assert _suggestion_text(names, "/theme ") == "current"
+
+
+def test_auto_suggest_theme_subcommand_prefix():
+    names = frozenset({"theme"})
+    assert _suggestion_text(names, "/theme cur") == "rent"
+    assert _suggestion_text(names, "/theme doc") == "tor"
+
+
+def test_theme_subcommand_completions():
+    completer = _theme_completer()
+    texts = _completion_texts(completer, "/theme ")
+    assert "current" in texts
+    assert "doctor" in texts
+    assert "tokens" in texts
+
+
+def test_theme_subcommand_prefix_completions():
+    completer = _theme_completer()
+    completions = _completions(completer, "/theme cur")
+    assert len(completions) == 1
+    assert completions[0].text == "rent"
 
 
 def test_file_mention_should_complete_for_active_at_fragment():

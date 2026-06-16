@@ -772,7 +772,9 @@ def test_render_diff_signs_match_body_foreground():
         if isinstance(style, str):
             continue
         if style.color in accent_fgs:
-            pytest.fail(f"diff sign/body used accent fg {style.color!r} on {text.plain[span.start:span.end]!r}")
+            pytest.fail(
+                f"diff sign/body used accent fg {style.color!r} on {text.plain[span.start : span.end]!r}"
+            )
 
     tinted = [
         text.plain[span.start : span.end]

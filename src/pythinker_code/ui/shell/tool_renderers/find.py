@@ -56,7 +56,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("accent", pattern))
+        summary.append_text(fg("info", pattern))
 
     summary.append_text(fg("tool_output", " in "))
     if "directory" in args and raw_dir is None:

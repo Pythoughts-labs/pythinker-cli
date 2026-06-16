@@ -82,7 +82,7 @@ def _render_exit_call(ctx: ToolRenderContext) -> RenderableType:
     children: list[RenderableType] = [line]
     for opt in opts[:3]:
         label = as_str(opt.get("label")) or "?"
-        children.append(fg("accent", f"  • {label}"))
+        children.append(fg("info", f"  • {label}"))
     rendered = Group(*children)
     return running_spinner(
         rendered, execution_started=ctx.execution_started, has_result=ctx.has_result

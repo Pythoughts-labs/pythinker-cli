@@ -19,13 +19,13 @@ def test_shell_welcome_uses_pythinker_code_copy(monkeypatch):
     assert "think first" in output
 
 
-def test_directory_label_uses_accent_token():
+def test_directory_label_uses_info_token():
     from pythinker_code.ui.shell import WelcomeInfoItem, _value_style_for_label
     from pythinker_code.ui.theme import get_tui_tokens, set_active_theme
 
     set_active_theme("dark")
     style = _value_style_for_label("Directory", WelcomeInfoItem.Level.INFO)
-    assert get_tui_tokens("dark").accent in style  # "#B3B9F4" periwinkle
+    assert get_tui_tokens("dark").info in style
 
 
 def test_welcome_banner_chip_shown_in_output(monkeypatch):

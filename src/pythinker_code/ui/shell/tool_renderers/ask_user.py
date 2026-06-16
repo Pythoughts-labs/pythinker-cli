@@ -83,7 +83,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
             children.append(blank_row())
         question_text = as_str(q.get("question")) or ""
         if question_text:
-            children.append(fg("accent", f"{QUESTION_MARKER} {question_text}"))
+            children.append(fg("info", f"{QUESTION_MARKER} {question_text}"))
         opts = q.get("options")
         if isinstance(opts, list):
             opts_list = cast("list[Any]", opts)

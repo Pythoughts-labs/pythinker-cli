@@ -91,10 +91,10 @@ def _render_call_with_id(
         # id as a dim suffix for traceability.
         task_label = _resolve_task_label(ctx, task_id)
         if task_label:
-            summary.append_text(fg("accent", task_label))
+            summary.append_text(fg("info", task_label))
             summary.append_text(fg("muted", f" · {task_id}"))
         else:
-            summary.append_text(fg("accent", task_id))
+            summary.append_text(fg("info", task_id))
     for extra in extras:
         summary.append_text(fg("muted", f" · {extra}"))
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"

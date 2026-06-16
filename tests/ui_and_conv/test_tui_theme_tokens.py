@@ -40,12 +40,12 @@ def _restore_active_theme():
 def test_dark_tokens_have_brand_values():
     set_active_theme("dark")
     t = get_tui_tokens()
-    assert t.accent == "#B3B9F4"  # periwinkle brand accent (≈ Catppuccin Mocha lavender)
+    assert t.accent == "#AEB7FF"
     assert t.border_accent == "#7C88DE"  # accent-family chrome (active borders)
     assert t.border == "#8a8d91"  # mid grey
-    assert t.info == "#AFE3F1"  # cyan (unchanged; markdown code/links use ANSI cyan)
-    assert t.success == "#7BC97F"
-    assert t.error == "#EF5E62"
+    assert t.info == "#8FDDEA"
+    assert t.success == "#7CCF8A"
+    assert t.error == "#F87171"
     assert t.thinking_text == "#D4D4D4"  # light neutral grey, not purple-tinted muted
     assert t.thinking_text != t.muted
     assert t.activity_verb == "#C68D7E"  # muted clay-coral resting
@@ -92,7 +92,7 @@ def test_selected_bg_reharmonized_and_drives_prompt_selection():
     source for the completion/dialog selection rows (no parallel literals)."""
     from pythinker_code.ui.theme import _PROMPT_STYLE_DARK, _PROMPT_STYLE_LIGHT
 
-    assert get_tui_tokens("dark").selected_bg == "#21243B"
+    assert get_tui_tokens("dark").selected_bg == "#252944"
     assert get_tui_tokens("light").selected_bg == "#E7E9F9"
     assert _PROMPT_STYLE_DARK["slash-completion-menu.row.current"] == (
         f"bg:{get_tui_tokens('dark').selected_bg}"
@@ -160,12 +160,12 @@ def test_dark_markdown_uses_professional_report_roles():
     colors = get_markdown_colors("dark")
     assert colors.heading == "#F4F4F5"  # primary white, not coral/orange
     assert colors.strong == "#F4F4F5"
-    assert colors.emphasis == "#6F6F6F"  # neutral UI grey
-    assert colors.inline_code == "#B3B9F4"  # periwinkle accent
+    assert colors.emphasis == "#8A8A8A"  # neutral UI grey (refined muted contrast)
+    assert colors.inline_code == "#8FDDEA"
     assert colors.link == "cyan"
-    assert colors.spinner_active == "#AFE3F1"  # spinners still use the info token
-    assert colors.spinner_done == "#7BC97F"
-    assert colors.spinner_failed == "#EF5E62"
+    assert colors.spinner_active == "#8FDDEA"
+    assert colors.spinner_done == "#7CCF8A"
+    assert colors.spinner_failed == "#F87171"
     assert markdown_rich_style("link", theme="dark").color is not None
 
 
@@ -174,25 +174,25 @@ def test_light_markdown_uses_professional_report_roles():
     assert colors.heading == "#213853"
     assert colors.strong == "#213853"
     assert colors.emphasis == "#666666"
-    assert colors.inline_code == "#0B114E"  # periwinkle accent (light)
+    assert colors.inline_code == "#176B7E"  # info token (light)
     assert colors.spinner_active == "#176B7E"  # spinners still use the info token
 
 
 def test_markdown_ansi_styles_resolve_to_terminal_colors():
     """Link, quote, and ordered_marker use ANSI terminal colors; inline_code
-    now uses the themed accent hex so it matches the skill/branch highlight color."""
+    uses the themed info token so inline highlights stay out of the accent family."""
     for mode in ("dark", "light"):
         assert _color_name(markdown_rich_style("link", theme=mode)) == "cyan"
         assert _color_name(markdown_rich_style("quote", theme=mode)) == "green"
         assert _color_name(markdown_rich_style("ordered_marker", theme=mode)) == "bright_blue"
-        # inline_code is now a themed hex (periwinkle accent), not ANSI cyan.
+        # inline_code uses the info token, not periwinkle accent or ANSI cyan/green.
         assert _color_name(markdown_rich_style("inline_code", theme=mode)) not in ("cyan", "green")
         # Unordered bullets stay muted (a hex), not an ANSI accent.
         assert _color_name(markdown_rich_style("unordered_marker", theme=mode)) != "green"
 
 
 def test_info_token_exists_and_is_cyan():
-    assert get_tui_tokens("dark").info == "#AFE3F1"
+    assert get_tui_tokens("dark").info == "#8FDDEA"
     assert get_tui_tokens("light").info == "#176B7E"
     # resolver works for the new token
     set_active_theme("dark")
@@ -216,7 +216,7 @@ def test_activity_tokens_in_token_names():
 
 
 def test_code_block_bg_dark_value():
-    assert get_tui_tokens("dark").code_block_bg == "#1f2030"
+    assert get_tui_tokens("dark").code_block_bg == "#1B1D2B"
 
 
 def test_code_block_bg_light_value():
@@ -243,9 +243,8 @@ def test_markdown_colors_derived_from_tokens_dark():
     assert c.heading == t.tool_title
     assert c.strong == t.tool_title
     assert c.emphasis == t.muted
-    # inline_code now uses the accent token (periwinkle) for visual consistency
-    # with skill/branch highlights; link/quote/ordered_marker remain ANSI.
-    assert c.inline_code == t.accent
+    # inline_code uses the info token for inline highlights; link/quote/ordered_marker remain ANSI.
+    assert c.inline_code == t.info
     assert c.link == "cyan"
     assert c.quote == "green"
     assert c.ordered_marker == "bright_blue"
@@ -264,8 +263,8 @@ def test_markdown_colors_derived_from_tokens_light():
     assert c.heading == t.tool_title
     assert c.strong == t.tool_title
     assert c.emphasis == t.muted
-    # inline_code uses the accent token (periwinkle); link remains ANSI cyan.
-    assert c.inline_code == t.accent
+    # inline_code uses the info token; link remains ANSI cyan.
+    assert c.inline_code == t.info
     assert c.link == "cyan"
     assert c.quote == "green"
     assert c.ordered_marker == "bright_blue"

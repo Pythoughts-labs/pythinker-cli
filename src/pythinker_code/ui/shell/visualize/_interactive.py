@@ -30,7 +30,11 @@ from pythinker_code.ui.shell.console import (
 )
 from pythinker_code.ui.shell.echo import render_user_echo_text
 from pythinker_code.ui.shell.keyboard import KeyEvent
-from pythinker_code.ui.shell.motion import reduced_motion_enabled
+from pythinker_code.ui.shell.motion import (
+    STREAM_FRAME_INTERVAL_S,
+    reduced_motion_enabled,
+    stream_reveal_interval_s,
+)
 from pythinker_code.ui.shell.prompt import (
     CustomPromptSession,
     UserInput,
@@ -76,7 +80,7 @@ _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
 # Fast tick while paced streamed text is actively revealing (~25 fps) so the
 # reveal animates smoothly; falls back to the status cadence when idle.
-_STREAM_REVEAL_INTERVAL_S = 0.04
+_STREAM_REVEAL_INTERVAL_S = STREAM_FRAME_INTERVAL_S
 
 
 class _PromptLiveView(_LiveView):
@@ -222,9 +226,14 @@ class _PromptLiveView(_LiveView):
                 # commits. advance_stream_reveal() is a no-op unless a paced block
                 # has backlog, so reduced-motion / unpaced turns fall straight
                 # through to the calm status cadence below.
-                if self.advance_stream_reveal():
+                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                    self._dirty = True
+                if self._dirty or self._force_refresh:
                     self._prompt_session.invalidate()
-                    await asyncio.sleep(_STREAM_REVEAL_INTERVAL_S)
+                    self._dirty = False
+                    self._force_refresh = False
+                    self._need_recompose = False
+                    await asyncio.sleep(stream_reveal_interval_s())
                     continue
                 interval = (
                     _STATUS_REFRESH_REDUCED_INTERVAL_S
@@ -299,11 +308,13 @@ class _PromptLiveView(_LiveView):
                         self._flush_prompt_refresh()
                         continue
                     self.cleanup(is_interrupt=False)
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, StepInterrupted):
                     self.cleanup(is_interrupt=True)
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
@@ -313,6 +324,7 @@ class _PromptLiveView(_LiveView):
                     if self._turn_ended:
                         self._turn_start_time = None
                         self._pending_turn_recap = True
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     continue
 
@@ -625,6 +637,7 @@ class _PromptLiveView(_LiveView):
             ):
                 event.app.create_background_task(self._show_panel_in_pager())
             elif self._toggle_latest_tool_card():
+                self._force_refresh = True
                 self._flush_prompt_refresh()
             return
 
@@ -641,6 +654,7 @@ class _PromptLiveView(_LiveView):
 
         if key == "c-t":
             self.toggle_pinned_todos()
+            self._force_refresh = True
             self._flush_prompt_refresh()
             return
 
@@ -696,9 +710,15 @@ class _PromptLiveView(_LiveView):
             buffer.document = Document(text="", cursor_position=0)
 
     def _flush_prompt_refresh(self) -> None:
-        if self._need_recompose:
-            self._prompt_session.invalidate()
+        if self._force_refresh:
+            if self._dirty or self._need_recompose:
+                self._prompt_session.invalidate()
+            self._dirty = False
+            self._force_refresh = False
             self._need_recompose = False
+            return
+        if self._need_recompose:
+            self._dirty = True
 
     def cleanup(self, is_interrupt: bool) -> None:
         super().cleanup(is_interrupt)

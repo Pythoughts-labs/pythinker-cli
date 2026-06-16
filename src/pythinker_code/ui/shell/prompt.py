@@ -163,12 +163,40 @@ class CwdLostError(OSError):
 
 
 def _command_name_set(commands: Sequence[SlashCommand[Any]]) -> frozenset[str]:
-    """Lowercased names and aliases for exact-match slash highlighting."""
+    """Lowercased names and aliases for slash highlighting and completion."""
     names: set[str] = set()
     for cmd in commands:
         names.add(cmd.name.lower())
         names.update(alias.lower() for alias in cmd.aliases)
     return frozenset(names)
+
+
+def _is_known_slash_command_prefix(name: str, known: frozenset[str]) -> bool:
+    """True when ``name`` is a registered command or a prefix of one (e.g. ``/skill:py``)."""
+    lower = name.lower()
+    if lower in known:
+        return True
+    return any(command_name.startswith(lower) for command_name in known)
+
+
+def _slash_first_arg_context(
+    document: Document,
+    known_names: frozenset[str],
+    arg_suggestions: dict[str, tuple[str, ...]],
+) -> tuple[str, str] | None:
+    """When the cursor trails the first argument of a known slash command, return (cmd, partial)."""
+    if document.text_after_cursor.strip():
+        return None
+    line = document.current_line_before_cursor
+    if not line.startswith("/"):
+        return None
+    match = re.match(r"^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\s+(\S*))?$", line)
+    if match is None:
+        return None
+    command = match.group(1).lower()
+    if command not in known_names or command not in arg_suggestions:
+        return None
+    return command, match.group(2) or ""
 
 
 def _slash_command_token_before_cursor(document: Document) -> str | None:
@@ -243,9 +271,12 @@ class InputHighlightLexer(Lexer):
 
     Three token kinds are styled, composing on the same line:
 
-    - **Slash commands** (``class:slash-command``) -- only exact matches against
-      the registered command names/aliases, anywhere on the line. Partial or
-      made-up tokens render as plain text.
+    - **Slash commands** (``class:slash-command``) -- registered command names,
+      aliases, and in-progress prefixes (``/cle``, ``/skill:py``), anywhere on
+      the line.
+    - **Slash arguments** (``class:slash-arg``) -- the first token after a
+      command that declares fixed subcommands (e.g. ``current`` in
+      ``/theme current``).
     - **``@file`` mentions** (``class:file-mention``) -- agent mode only, styled
       syntactically at a word boundary. The lexer runs on every keystroke and
       cannot touch the filesystem, so mentions are not resolution-checked.
@@ -259,13 +290,16 @@ class InputHighlightLexer(Lexer):
         known_names: Callable[[], frozenset[str]],
         *,
         agent_mode: Callable[[], bool],
+        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self._known_names = known_names
         self._agent_mode = agent_mode
+        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
 
     @override
     def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
         known = self._known_names()
+        arg_suggestions = self._arg_suggestions()
         agent_mode = self._agent_mode()
         lines = document.lines
 
@@ -274,14 +308,25 @@ class InputHighlightLexer(Lexer):
             # Leading "!" bash prefix: first line, agent mode, command after it.
             if agent_mode and lineno == 0 and line.startswith("!") and line[1:].strip():
                 out.append((0, 1, "class:bash-prefix"))
-            # Slash commands anywhere on the line (exact registered matches only).
+            # Slash commands anywhere on the line (registered names and prefixes).
             for match in _SLASH_TOKEN_RE.finditer(line):
-                if match.group(1).lower() not in known:
+                name = match.group(1)
+                if not _is_known_slash_command_prefix(name, known):
                     continue
                 # Path-like tokens ("/clear/subdir") are not commands.
                 if match.end() < len(line) and line[match.end()] == "/":
                     continue
                 out.append((match.start(), match.end(), "class:slash-command"))
+            # First argument after a line-start slash command with known subcommands.
+            if line.startswith("/"):
+                arg_match = re.match(r"^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\s+(\S+))", line)
+                if arg_match is not None:
+                    command = arg_match.group(1).lower()
+                    partial = arg_match.group(2)
+                    options = arg_suggestions.get(command)
+                    if options and any(option.startswith(partial.lower()) for option in options):
+                        arg_start = arg_match.start(2)
+                        out.append((arg_start, arg_match.end(2), "class:slash-arg"))
             # "@path" file mentions at a word boundary (agent mode only).
             if agent_mode:
                 for match in _MENTION_TOKEN_RE.finditer(line):
@@ -319,16 +364,22 @@ def _no_exact_suggestions() -> dict[str, str]:
     return {}
 
 
+def _no_arg_suggestions() -> dict[str, tuple[str, ...]]:
+    return {}
+
+
 class SlashCommandAutoSuggest(AutoSuggest):
     """Inline ghost-text completion for a partially typed slash command.
 
     While the user types a ``/name`` token -- at the start of the line *or*
     mid-sentence (e.g. ``use /desi``) -- the remainder of the best (alphabetically
     first) matching command renders as dim ghost text after the cursor; Tab
-    accepts it word-for-word. The dropdown menu stays line-start-only, so
-    mid-sentence typing never pops a completion list. Rendering and the standard
-    accept bindings (right-arrow / ctrl-e) come from prompt_toolkit's auto-suggest
-    plumbing; the Tab binding is added in CustomPromptSession.
+    accepts it word-for-word. After a command that declares fixed subcommands
+    (e.g. ``/theme cur``), the first argument is ghost-completed too. The dropdown
+    menu stays line-start-only, so mid-sentence typing never pops a completion
+    list. Rendering and the standard accept bindings (right-arrow / ctrl-e) come
+    from prompt_toolkit's auto-suggest plumbing; the Tab binding is added in
+    CustomPromptSession.
     """
 
     def __init__(
@@ -336,12 +387,30 @@ class SlashCommandAutoSuggest(AutoSuggest):
         known_names: Callable[[], frozenset[str]],
         *,
         exact_suggestions: Callable[[], dict[str, str]] | None = None,
+        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
     ) -> None:
         self._known_names = known_names
         self._exact_suggestions = exact_suggestions or _no_exact_suggestions
+        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
 
     @override
     def get_suggestion(self, buffer: Buffer, document: Document) -> Suggestion | None:
+        arg_ctx = _slash_first_arg_context(document, self._known_names(), self._arg_suggestions())
+        if arg_ctx is not None:
+            command, partial = arg_ctx
+            options = self._arg_suggestions()[command]
+            partial_lower = partial.lower()
+            if not partial:
+                return Suggestion(options[0])
+            matches = [
+                option
+                for option in options
+                if option.startswith(partial_lower) and len(option) > len(partial)
+            ]
+            if matches:
+                return Suggestion(matches[0][len(partial) :])
+            return None
+
         token = _slash_suggest_token_before_cursor(document)
         if token is None or len(token) < 2:
             return None
@@ -375,12 +444,24 @@ class SlashCommandCompleter(Completer):
         annotate_meta: bool = False,
         command_scope: str = "command",
         is_task_running: Callable[[], bool] | None = None,
+        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
     ) -> None:
         super().__init__()
         self._available_commands = sorted(available_commands, key=lambda c: c.name)
+        self._command_names = _command_name_set(available_commands)
         self._annotate_meta = annotate_meta
         self._command_scope = command_scope
         self._is_task_running = is_task_running
+        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
+
+    def completion_active(self, document: Document) -> bool:
+        """Return whether slash command or subcommand completion should be active."""
+        if _slash_command_token_before_cursor(document) is not None:
+            return True
+        return (
+            _slash_first_arg_context(document, self._command_names, self._arg_suggestions())
+            is not None
+        )
 
     @staticmethod
     def should_complete(document: Document) -> bool:
@@ -391,8 +472,23 @@ class SlashCommandCompleter(Completer):
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
     ) -> Iterable[Completion]:
-        if not self.should_complete(document):
+        if not self.completion_active(document):
             return
+
+        arg_ctx = _slash_first_arg_context(document, self._command_names, self._arg_suggestions())
+        if arg_ctx is not None:
+            _, partial = arg_ctx
+            partial_lower = partial.lower()
+            for option in self._arg_suggestions()[arg_ctx[0]]:
+                if partial and not option.startswith(partial_lower):
+                    continue
+                yield Completion(
+                    text=option[len(partial) :] if partial else option,
+                    start_position=-len(partial),
+                    display=option,
+                )
+            return
+
         token = _slash_command_token_before_cursor(document)
         if token is None:
             return
@@ -2217,25 +2313,33 @@ class CustomPromptSession:
             # for consecutive deduplication
             self._last_history_content = history_entries[-1].content
 
+        from pythinker_code.ui.shell.slash import slash_command_arg_suggestions
+
+        self._slash_arg_suggestions = slash_command_arg_suggestions
+
         # Build completers
+        self._agent_slash_completer = SlashCommandCompleter(
+            agent_mode_slash_commands,
+            annotate_meta=True,
+            command_scope="command",
+            is_task_running=lambda: self._running_prompt_delegate is not None,
+            arg_suggestions=self._slash_arg_suggestions,
+        )
         self._agent_mode_completer = merge_completers(
             [
-                SlashCommandCompleter(
-                    agent_mode_slash_commands,
-                    annotate_meta=True,
-                    command_scope="command",
-                    is_task_running=lambda: self._running_prompt_delegate is not None,
-                ),
+                self._agent_slash_completer,
                 # TODO(host): we need an async HostFileMentionCompleter
                 LocalFileMentionCompleter(HostPath.cwd().unsafe_to_local_path()),
             ],
             deduplicate=True,
         )
-        self._shell_mode_completer = SlashCommandCompleter(
+        self._shell_slash_completer = SlashCommandCompleter(
             shell_mode_slash_commands,
             annotate_meta=True,
             command_scope="shell",
+            arg_suggestions=self._slash_arg_suggestions,
         )
+        self._shell_mode_completer = self._shell_slash_completer
         self._agent_command_names = _command_name_set(agent_mode_slash_commands)
         self._shell_command_names = _command_name_set(shell_mode_slash_commands)
         self._input_highlight_lexer = InputHighlightLexer(
@@ -2245,6 +2349,7 @@ class CustomPromptSession:
                 else self._agent_command_names
             ),
             agent_mode=lambda: self._mode == PromptMode.AGENT,
+            arg_suggestions=self._slash_arg_suggestions,
         )
         self._slash_auto_suggest = SlashCommandAutoSuggest(
             lambda: (
@@ -2253,6 +2358,7 @@ class CustomPromptSession:
                 else self._agent_command_names
             ),
             exact_suggestions=self._exact_slash_suggestions,
+            arg_suggestions=self._slash_arg_suggestions,
         )
 
         # Build key bindings
@@ -2280,7 +2386,7 @@ class CustomPromptSession:
             return bool(
                 buff.complete_state
                 and buff.complete_state.completions
-                and SlashCommandCompleter.should_complete(buff.document)
+                and self._slash_completion_active(buff.document)
             )
 
         _slash_completion_filter = has_completions & Condition(_is_slash_completion)
@@ -2662,7 +2768,7 @@ class CustomPromptSession:
             if state.complete_index is not None:
                 return
             if not (
-                SlashCommandCompleter.should_complete(buffer.document)
+                self._slash_completion_active(buffer.document)
                 or LocalFileMentionCompleter.should_complete(buffer.document)
             ):
                 return
@@ -2775,9 +2881,17 @@ class CustomPromptSession:
             ]
         self._prompt_buffer_container = buffer_container
 
+    def _active_slash_completer(self) -> SlashCommandCompleter:
+        if self._mode == PromptMode.SHELL:
+            return self._shell_slash_completer
+        return self._agent_slash_completer
+
+    def _slash_completion_active(self, document: Document) -> bool:
+        return self._active_slash_completer().completion_active(document)
+
     def _should_show_slash_completion_menu(self) -> bool:
         document = self._session.default_buffer.document
-        return SlashCommandCompleter.should_complete(document)
+        return self._slash_completion_active(document)
 
     def _slash_menu_left_padding(self) -> int:
         side_padding = _card_side_padding()

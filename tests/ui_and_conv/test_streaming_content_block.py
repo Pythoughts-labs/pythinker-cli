@@ -314,7 +314,8 @@ def test_paced_composing_preview_renders_complete_inline_markdown(monkeypatch):
     output = console.export_text()
 
     assert "Planning agent tasks" in output
-    assert "**Planning agent tasks**" not in output
+    # Live preview uses plain Text; delimiters stay visible until finalize.
+    assert "**Planning agent tasks**" in output
 
 
 def test_paced_composing_preview_keeps_incomplete_inline_markdown_plain(monkeypatch):
@@ -409,21 +410,14 @@ class TestContentBlockCommitment:
         output_console.print(block.compose_final())
         output = output_console.export_text()
 
-        assert output.startswith("\n")
         assert "Deep Code Scan Results" in output
 
-    def test_streamed_prose_blocks_match_single_pass_spacing(self, monkeypatch):
+    def test_streamed_prose_blocks_match_single_pass_spacing(self):
         """Regression: streamed multi-paragraph bodies used to render every
         paragraph crammed onto consecutive lines. Each committed block and the
         final tail must keep the one-row gap a single markdown pass puts
         between blocks."""
-        import importlib
-
-        # ``visualize`` re-exports a function of the same name that shadows the
-        # submodule for attribute walking, so resolve the module via sys.modules.
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
         rec = Console(record=True, width=80, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
 
         block = _ContentBlock(is_think=False)
         body = (
@@ -518,25 +512,13 @@ class TestProductionPathBoundaryContract:
             f"before data row arrived (data row ends at {table_data_end})"
         )
 
-    def test_unpaced_composing_block_does_not_commit_table_mid_row(self, monkeypatch):
-        import importlib
-
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
-        rec = Console(record=True, width=120, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
-
+    def test_unpaced_composing_block_does_not_commit_table_mid_row(self):
         block = _ContentBlock(is_think=False)
         for ch in self._FULL_TABLE:
             block.append(ch)
             self._assert_no_mid_table_commit(block)
 
-    def test_paced_composing_block_does_not_commit_table_mid_row(self, monkeypatch):
-        import importlib
-
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
-        rec = Console(record=True, width=120, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
-
+    def test_paced_composing_block_does_not_commit_table_mid_row(self):
         block = _ContentBlock(is_think=False, paced=True)
         for ch in self._FULL_TABLE:
             block.append(ch)
