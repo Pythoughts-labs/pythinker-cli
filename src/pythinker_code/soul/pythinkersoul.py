@@ -2101,9 +2101,9 @@ class PythinkerSoul:
                     role="user",
                     content=[
                         system_reminder(
-                            "Your previous response was cut off by the output token limit. "
-                            "Continue directly from where you stopped — no apology, no recap — "
-                            "and break the remaining work into smaller pieces."
+                            "Output token limit hit. Resume directly — no apology, no recap of "
+                            "what you were doing. Pick up mid-thought if that is where the cut "
+                            "happened. Break remaining work into smaller pieces."
                         )
                     ],
                 )
