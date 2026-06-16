@@ -7,12 +7,15 @@ import queue
 import socket
 import threading
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import urljoin, urlparse
 
 import typer
 
 from pythinker_code.plugin import PluginError
+
+if TYPE_CHECKING:
+    from pythinker_code.config import Config
 
 cli = typer.Typer(help="Manage plugins.")
 
@@ -476,6 +479,65 @@ def info_cmd(
         typer.echo(f"Runtime:     host={spec.runtime.host}, version={spec.runtime.host_version}")
     else:
         typer.echo("Runtime:     (not installed via host)")
+
+
+def _config_for_toggle() -> Config:
+    """Load config for enable/disable, requiring the default config location.
+
+    enable/disable persist to the user ``config.toml``; refuse when the session
+    runs from an explicit ``--config``/``--config-file`` so we never rewrite a
+    file the user pointed us at ad hoc (mirrors the auth-login guard).
+    """
+    from pythinker_code.config import load_config
+
+    config = load_config()
+    if not config.is_from_default_location:
+        typer.echo(
+            "Error: enable/disable requires the default config file; "
+            "restart without --config/--config-file.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return config
+
+
+@cli.command("disable")
+def disable_cmd(
+    name: Annotated[str, typer.Argument(help="Plugin name to disable")],
+) -> None:
+    """Turn off a plugin (native or auto-detected) without uninstalling it."""
+    from pythinker_code.config import save_config
+
+    config = _config_for_toggle()
+    if name in config.plugins.disabled:
+        typer.echo(f"Plugin '{name}' is already disabled.")
+        return
+    config.plugins.disabled.append(name)
+    save_config(config)
+    typer.echo(f"Disabled plugin '{name}'.")
+
+
+@cli.command("enable")
+def enable_cmd(
+    name: Annotated[str, typer.Argument(help="Plugin name to enable")],
+) -> None:
+    """Re-enable a previously disabled plugin."""
+    from pythinker_code.config import save_config
+
+    config = _config_for_toggle()
+    changed = False
+    if name in config.plugins.disabled:
+        config.plugins.disabled.remove(name)
+        changed = True
+    # If a non-empty allowlist is in force, ensure the plugin is part of it.
+    if config.plugins.enabled and name not in config.plugins.enabled:
+        config.plugins.enabled.append(name)
+        changed = True
+    if not changed:
+        typer.echo(f"Plugin '{name}' is already enabled.")
+        return
+    save_config(config)
+    typer.echo(f"Enabled plugin '{name}'.")
 
 
 def _default_marketplace_name(source: Any) -> str:

@@ -43,6 +43,13 @@ def test_policy_from_config_blank_entries_mean_enable_all() -> None:
     assert enabled_for(["", " a "]) == frozenset({"a"})  # blanks dropped, real names survive
 
 
+def test_policy_from_config_disabled_drops_blanks() -> None:
+    pol = policy_from_config(
+        discover_external=True, external_exec=False, enabled=[], disabled=["", " x "]
+    )
+    assert pol.disabled == frozenset({"x"})
+
+
 def test_default_policy_auto_detects_external_safe_only() -> None:
     # The shipped default: external skills/commands/agents auto-detect; exec off.
     default = PluginPolicy()
@@ -96,6 +103,16 @@ def test_enable_filter_excludes_external(_external_ponytail) -> None:
     token = set_plugin_policy(
         policy_from_config(discover_external=True, external_exec=False, enabled=["other"])
     )
+    try:
+        assert integration.plugin_skill_dirs() == []
+    finally:
+        reset_plugin_policy(token)
+
+
+def test_disabled_excludes_plugin(_external_ponytail) -> None:
+    # ponytail auto-detects by default; disabling it by name turns it off.
+    assert integration.plugin_skill_dirs()
+    token = set_plugin_policy(PluginPolicy(disabled=frozenset({"ponytail"})))
     try:
         assert integration.plugin_skill_dirs() == []
     finally:

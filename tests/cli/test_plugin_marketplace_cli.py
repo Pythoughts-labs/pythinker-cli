@@ -83,3 +83,20 @@ def test_marketplace_add_derives_name_from_github(tmp_path: Path) -> None:
     result = runner.invoke(cli, ["marketplace", "add", "anthropics/claude-plugins-official"])
     assert result.exit_code == 0, result.output
     assert "claude-plugins-official" in runner.invoke(cli, ["marketplace", "list"]).output
+
+
+def test_plugin_disable_then_enable_roundtrip(tmp_path: Path) -> None:
+    from pythinker_code.config import load_config
+
+    result = runner.invoke(cli, ["disable", "ponytail"])
+    assert result.exit_code == 0, result.output
+    assert "Disabled plugin 'ponytail'" in result.output
+    assert "ponytail" in load_config().plugins.disabled
+
+    # Idempotent: disabling again is a no-op.
+    assert "already disabled" in runner.invoke(cli, ["disable", "ponytail"]).output
+
+    result = runner.invoke(cli, ["enable", "ponytail"])
+    assert result.exit_code == 0, result.output
+    assert "Enabled plugin 'ponytail'" in result.output
+    assert "ponytail" not in load_config().plugins.disabled

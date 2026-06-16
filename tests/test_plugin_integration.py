@@ -156,6 +156,57 @@ def test_plugin_mcp_servers_collects_from_manifest(
     assert integration.plugin_mcp_servers(PluginPolicy(enabled=frozenset())) == {}
 
 
+def test_plugin_mcp_servers_expands_plugin_root(tmp_path: Path, monkeypatch, _no_external) -> None:
+    from typing import Any, cast
+
+    cache = tmp_path / "cache"
+    root = cache / "db" / "db" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": "db",
+                "version": "1.0.0",
+                "mcpServers": {"pg": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/srv.js"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    pg = cast("dict[str, Any]", integration.plugin_mcp_servers()["pg"])
+    assert pg["args"] == [f"{root}/srv.js"]  # ${CLAUDE_PLUGIN_ROOT} expanded to the plugin root
+
+
+def test_plugin_hook_defs_expands_plugin_data(tmp_path: Path, monkeypatch, _no_external) -> None:
+    from pythinker_code.plugin.directories import plugin_data_dir
+
+    cache = tmp_path / "cache"
+    root = cache / "sp" / "sp" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"name": "sp", "version": "1.0.0"}), encoding="utf-8")
+    hooks = root / "hooks" / "hooks.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"hooks": [{"type": "command", "command": "${PYTHINKER_PLUGIN_DATA}/r.sh"}]}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    defs = integration.plugin_hook_defs()
+    assert defs[0].command == f"{plugin_data_dir('sp')}/r.sh"
+
+
 def test_plugin_hook_defs_translates_claude_hooks(
     tmp_path: Path, monkeypatch, _no_external
 ) -> None:

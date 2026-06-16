@@ -376,4 +376,19 @@ external_exec = false
 # Empty enables all discovered plugins; a non-empty list enables only those named
 # (by "name" or "name@marketplace").
 enabled = []
+# Plugins to turn off by name. Excluded even when `enabled` would allow them —
+# this is how `pythinker plugin disable <name>` works under the all-on default.
+disabled = []
 ```
+
+Toggle plugins without editing the file or uninstalling them:
+
+```bash
+pythinker plugin disable ponytail   # adds to [plugins].disabled
+pythinker plugin enable ponytail    # removes it again
+```
+
+Plugin-contributed hook and MCP commands may reference the plugin's own
+directories via `${CLAUDE_PLUGIN_ROOT}` / `${PYTHINKER_PLUGIN_ROOT}` (the
+versioned install dir) and `${CLAUDE_PLUGIN_DATA}` / `${PYTHINKER_PLUGIN_DATA}`
+(a persistent per-plugin data dir); both are expanded on load.

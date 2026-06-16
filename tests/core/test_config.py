@@ -106,7 +106,12 @@ def test_default_config_dump():
             },
             "hooks": [],
             "merge_all_available_skills": True,
-            "plugins": {"discover_external": True, "external_exec": False, "enabled": []},
+            "plugins": {
+                "discover_external": True,
+                "external_exec": False,
+                "enabled": [],
+                "disabled": [],
+            },
             "extra_skill_dirs": [],
             "telemetry": True,
             "session_retention_days": 30,
@@ -243,6 +248,16 @@ def test_load_config_text_invalid():
 def test_load_config_invalid_ralph_iterations():
     with pytest.raises(ConfigError, match="max_ralph_iterations"):
         load_config_from_string('{"loop_control": {"max_ralph_iterations": -2}}')
+
+
+def test_load_config_max_compaction_failures_too_low():
+    with pytest.raises(ConfigError, match="max_compaction_failures"):
+        load_config_from_string('{"loop_control": {"max_compaction_failures": 0}}')
+
+
+def test_load_config_git_status_injection_false():
+    config = load_config_from_string('{"git_status_injection": false}')
+    assert config.git_status_injection is False
 
 
 def test_load_config_reserved_context_size():

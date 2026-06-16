@@ -1053,6 +1053,13 @@ class PluginsConfig(BaseModel):
             "plugins; a non-empty list enables only those named."
         ),
     )
+    disabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plugin names to turn off. Excluded even when enabled would allow them — this "
+            "is how `pythinker plugin disable <name>` works under the all-on default."
+        ),
+    )
 
 
 class Config(BaseModel):

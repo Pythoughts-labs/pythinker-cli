@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from pythinker_code.hooks.config import HOOK_EVENT_TYPES, HookDef
 from pythinker_code.plugin import artifacts
+from pythinker_code.plugin.directories import plugin_data_dir
 from pythinker_code.plugin.loader import LoadedPlugin, discover_plugins
 from pythinker_code.plugin.policy import PluginPolicy, current_plugin_policy
 from pythinker_code.utils.logging import logger
@@ -36,7 +37,10 @@ def _enabled_plugins(policy: PluginPolicy | None, *, include_external: bool) -> 
     """Discover the plugins this session activates under *policy* (or the active one)."""
     pol = policy if policy is not None else current_plugin_policy()
     enabled_set = set(pol.enabled) if pol.enabled is not None else None
-    return discover_plugins(include_external=include_external, is_enabled=enabled_set).enabled
+    plugins = discover_plugins(include_external=include_external, is_enabled=enabled_set).enabled
+    if pol.disabled:
+        plugins = [plugin for plugin in plugins if plugin.name not in pol.disabled]
+    return plugins
 
 
 def _safe_external(policy: PluginPolicy | None) -> bool:
@@ -76,15 +80,53 @@ def plugin_command_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     return _safe_artifact_dirs(policy, artifacts.command_dirs)
 
 
+def _expand_plugin_vars(text: str, plugin: LoadedPlugin) -> str:
+    """Expand ``${...PLUGIN_ROOT}`` / ``${...PLUGIN_DATA}`` to this plugin's dirs.
+
+    Both the Claude (``CLAUDE_*``) and pythinker (``PYTHINKER_*``) spellings are
+    accepted for cross-ecosystem compatibility.
+
+    Trust boundary: the paths are interpolated unquoted, mirroring the reference
+    (which runs hooks via a shell too). Safe because native plugin roots are
+    sanitized at install (``_SAFE_NAME``) so they cannot hold shell metacharacters,
+    and external (Claude/Codex) hooks/MCP only run when ``external_exec`` is opted
+    in. Do not add shlex.quote here: it would diverge and break ``${ROOT}/x --flag``.
+    """
+    root = str(plugin.root)
+    data = str(plugin_data_dir(plugin.name))
+    return (
+        text.replace("${CLAUDE_PLUGIN_ROOT}", root)
+        .replace("${PYTHINKER_PLUGIN_ROOT}", root)
+        .replace("${CLAUDE_PLUGIN_DATA}", data)
+        .replace("${PYTHINKER_PLUGIN_DATA}", data)
+    )
+
+
+def _expand_in_config(value: object, plugin: LoadedPlugin) -> object:
+    """Recursively expand plugin vars in an MCP-server config value."""
+    if isinstance(value, str):
+        return _expand_plugin_vars(value, plugin)
+    if isinstance(value, list):
+        return [_expand_in_config(item, plugin) for item in cast("list[object]", value)]
+    if isinstance(value, dict):
+        return {
+            key: _expand_in_config(val, plugin)
+            for key, val in cast("dict[str, object]", value).items()
+        }
+    return value
+
+
 def plugin_mcp_servers(policy: PluginPolicy | None = None) -> dict[str, object]:
     """MCP server configs contributed by enabled plugins (earlier plugins win).
 
     Executable artifact: external plugins contribute only when ``external_exec``.
+    ``${...PLUGIN_ROOT}``/``${...PLUGIN_DATA}`` in the config are expanded so a
+    plugin can point at its own bundled server.
     """
     servers: dict[str, object] = {}
     for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
         for key, value in artifacts.mcp_servers(plugin).items():
-            servers.setdefault(key, value)
+            servers.setdefault(key, _expand_in_config(value, plugin))
     return servers
 
 
@@ -117,7 +159,6 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
     raw = payload.get("hooks", payload)
     if not isinstance(raw, dict):
         return []
-    root = str(plugin.root)
     defs: list[HookDef] = []
     for event, groups in cast("dict[str, Any]", raw).items():
         if event not in HOOK_EVENT_TYPES or not isinstance(groups, list):
@@ -137,15 +178,7 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
                 command = entry_d.get("command")
                 if entry_d.get("type", "command") != "command" or not isinstance(command, str):
                     continue
-                # Trust boundary: the root is interpolated unquoted, mirroring the
-                # reference (it runs hooks via a shell too). Safe because native
-                # plugin roots are sanitized at install (``_SAFE_NAME``) so they
-                # cannot hold shell metacharacters, and external (Claude/Codex)
-                # hooks only run when ``external_exec`` is opted in. Do not add
-                # shlex.quote here: it would diverge and break ``${ROOT}/x --flag``.
-                expanded = command.replace("${CLAUDE_PLUGIN_ROOT}", root).replace(
-                    "${PYTHINKER_PLUGIN_ROOT}", root
-                )
+                expanded = _expand_plugin_vars(command, plugin)
                 timeout = entry_d.get("timeout")
                 try:
                     defs.append(

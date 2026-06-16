@@ -27,6 +27,9 @@ class PluginPolicy:
     external_exec: bool = False
     # None enables all discovered plugins; a frozenset enables only those named.
     enabled: frozenset[str] | None = None
+    # Names explicitly turned off; excluded even when ``enabled`` would allow them.
+    # This is how "disable" works under auto-detect (all-on) defaults.
+    disabled: frozenset[str] = frozenset()
 
 
 _DEFAULT_POLICY = PluginPolicy()
@@ -49,17 +52,22 @@ def reset_plugin_policy(token: Token[PluginPolicy]) -> None:
 
 
 def policy_from_config(
-    discover_external: bool, external_exec: bool, enabled: list[str]
+    discover_external: bool,
+    external_exec: bool,
+    enabled: list[str],
+    disabled: list[str] | None = None,
 ) -> PluginPolicy:
     """Build a :class:`PluginPolicy` from config values.
 
     Blank/whitespace ``enabled`` entries are dropped so a stray ``[""]`` cannot
     silently disable every plugin: an empty or all-blank list means "enable all"
-    (``None``), never "enable none".
+    (``None``), never "enable none". Blanks in ``disabled`` are dropped too.
     """
     names = frozenset(name.strip() for name in enabled if name.strip())
+    off = frozenset(name.strip() for name in (disabled or []) if name.strip())
     return PluginPolicy(
         discover_external=discover_external,
         external_exec=external_exec,
         enabled=names or None,
+        disabled=off,
     )
