@@ -15,6 +15,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **LSP code intelligence.** Plugin-provided language servers power a new `LSP` agent tool
+  (go-to-definition, find-references, hover, symbols, call hierarchy) with session-scoped
+  server lifecycle, passive diagnostics injected after file edits, and plugin-based server
+  discovery/recommendation — no bundled language-server binaries.
+
 ## 0.47.0 (2026-06-16)
 
 - **Plugin marketplaces and activation policy.** `pythinker plugin marketplace` can add,

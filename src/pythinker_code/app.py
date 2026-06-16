@@ -541,6 +541,12 @@ class PythinkerCLI:
             except Exception:
                 logger.exception("Failed to cleanup MCP toolset during reload")
 
+        if self._runtime.lsp is not None:
+            try:
+                await self._runtime.lsp.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown LSP service during reload")
+
     async def shutdown_background_tasks(self) -> None:
         """Kill active background tasks on exit, unless keep_alive_on_exit is configured.
 

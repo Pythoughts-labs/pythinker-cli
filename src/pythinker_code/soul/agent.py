@@ -21,6 +21,7 @@ from pythinker_code.background import BackgroundTaskManager
 from pythinker_code.config import Config
 from pythinker_code.exception import MCPConfigError, SystemPromptTemplateError
 from pythinker_code.llm import LLM
+from pythinker_code.lsp.service import LspService
 from pythinker_code.notifications import NotificationManager
 from pythinker_code.prompt_templates import PromptTemplate, discover_prompt_templates
 from pythinker_code.scratchpad import DEFAULT_SCRATCHPAD_SECTION
@@ -254,6 +255,8 @@ class Runtime:
     """HookEngine instance, set by PythinkerCLI after soul creation."""
     rearm_injection: Callable[[str], None] | None = None
     """Callback set by PythinkerSoul so tools can refresh dynamic injections."""
+    lsp: LspService | None = None
+    """Session-scoped LSP service; shared with subagents."""
     work_dir_override: HostPath | None = None
     """Operational working directory override (e.g. a per-child git worktree).
 
@@ -388,7 +391,7 @@ class Runtime:
             config.notifications,
         )
 
-        return Runtime(
+        runtime = Runtime(
             config=config,
             oauth=oauth,
             llm=llm,
@@ -428,6 +431,11 @@ class Runtime:
             root_wire_hub=RootWireHub(),
             role="root",
         )
+        if config.lsp.enabled:
+            from pythinker_code.lsp.plugin_servers import plugin_lsp_servers
+
+            runtime.lsp = LspService.create(runtime, servers=plugin_lsp_servers())
+        return runtime
 
     def copy_for_subagent(
         self,
@@ -488,6 +496,7 @@ class Runtime:
             subagent_type=subagent_type,
             role="subagent",
             work_dir_override=work_dir_override or self.work_dir_override,
+            lsp=self.lsp,
         )
 
 

@@ -238,6 +238,18 @@ class WriteFile(CallableTool2[Params]):
                 stat_after = await p.stat()
                 file_size = stat_after.st_size
                 self._runtime.file_read_cache.record(real_p, stat_after.st_mtime, file_size)
+            if self._runtime.lsp and self._runtime.rearm_injection:
+                file_uri = Path(str(p)).resolve().as_uri()
+                self._runtime.lsp.diagnostics.clear_for_file(file_uri)
+                try:
+                    await self._runtime.lsp.change_file(str(p), new_text)
+                    await self._runtime.lsp.save_file(str(p))
+                    self._runtime.rearm_injection("lsp_diagnostics")
+                except Exception:
+                    logger.warning(
+                        "LSP notification failed for {path}; skipping diagnostic rearm",
+                        path=p,
+                    )
             action = "overwritten" if params.mode == "overwrite" else "appended to"
             size_note = f" Current size: {file_size} bytes." if file_size is not None else ""
             return ToolReturnValue(

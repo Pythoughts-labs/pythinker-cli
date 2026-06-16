@@ -100,7 +100,7 @@ canonical list lives in `src/pythinker_code/wire/types.py` (`Event` union): `Ste
 | `src/pythinker_code/soul/context.py` | Conversation history, checkpoints, JSONL persistence. | `Context` |
 | `src/pythinker_code/soul/toolset.py` | Loads built-in + MCP tools, injects deps, executes calls. | `PythinkerToolset` |
 | `src/pythinker_code/soul/slash.py` | Slash-command registry and dispatch. | `registry` |
-| `src/pythinker_code/soul/dynamic_injection.py` (+ `dynamic_injections/`) | Injects budgeted `<system-reminder>` content per step: plan-mode, auto-mode, model-defense. | `DynamicInjectionProvider` |
+| `src/pythinker_code/soul/dynamic_injection.py` (+ `dynamic_injections/`) | Injects budgeted `<system-reminder>` content per step: plan-mode, auto-mode, model-defense, LSP diagnostics. | `DynamicInjectionProvider` |
 | `src/pythinker_code/soul/permission.py` | Per-step permission profiles (`read_only`/`plan`/`ask`/`implement`/`review`/`verify`) and destructiveness classification. | `tool_destructive_reason`, `shell_command_signature` |
 | `src/pythinker_code/soul/denwarenji.py` | D-Mail checkpoint rewind (`BackToTheFuture`). | — |
 | `src/pythinker_code/soul/flow_runner.py` | Ralph Loop driver for `/flow` and iterative commands. | — |
@@ -142,6 +142,7 @@ wrapped with `UntrustedData`.
 | `src/pythinker_code/tools/file/` | `ReadFile`, `WriteFile`, `StrReplaceFile`, `Glob`, `Grep`, `ReadMediaFile` |
 | `src/pythinker_code/tools/shell/` | `Shell` |
 | `src/pythinker_code/tools/web/` | `SearchWeb`, `FetchURL` (conditional on deps) |
+| `src/pythinker_code/tools/lsp/` | `Lsp` (model name `LSP`; plugin-backed language servers) |
 | `src/pythinker_code/tools/agent/` | `Agent`, `RunAgents` |
 | `src/pythinker_code/tools/background/` | `TaskOutput`, `TaskList`, `TaskInput`, `TaskStop`, `TaskHandoff` |
 | `src/pythinker_code/tools/` (other) | `AskUserQuestion`, `EnterPlanMode`/`ExitPlanMode`, `Think`, `SetTodoList`, `Memory`, `Recall`, `Scratchpad`, `Suggest`, `Progress`, `ReadSkill`, `SendDMail`, `ListMcpResources`/`ReadMcpResource` |
@@ -201,7 +202,19 @@ Full session lifecycle: `initialize`, `new_session`, `load_session`, `resume_ses
 | --- | --- | --- |
 | `src/pythinker_code/skill/`, `src/pythinker_code/skills/` | Skill discovery/loading across scopes (project > user > extra > built-in), local specialization, flow skills; injected via `PYTHINKER_SKILLS`. Bundled skills live in `skills/`. | `Skill`, `discover_skills_from_roots`, `index_skills`, `format_skills_for_prompt`, `Flow`, `SkillLockFile` |
 | `src/pythinker_code/hooks/` | Lifecycle hook engine: 13 events, server-side shell commands and client-side Wire subscriptions; fail-open (block only on explicit exit code 2 / structured deny). | `HookEngine`, `HookDef`, `HookEventType`, `HOOK_EVENT_TYPES`, `run_hook`, `events` |
-| `src/pythinker_code/plugin/` | Plugin discovery, install (local/git/zip with SSRF + traversal guards, staged atomic install), and subprocess tool execution with fresh credential injection. | `parse_plugin_json`, `PluginSpec`, `install_plugin`, `list_plugins`, `load_plugin_tools`, `PluginTool` |
+| `src/pythinker_code/plugin/` | Plugin discovery, install (local/git/zip with SSRF + traversal guards, staged atomic install), subprocess tool execution, MCP and LSP server configs (`plugin_lsp_servers`). | `parse_plugin_json`, `PluginSpec`, `install_plugin`, `list_plugins`, `load_plugin_tools`, `PluginTool`, `plugin_mcp_servers`, `plugin_lsp_servers` |
+
+## LSP subsystem
+
+Session-scoped language-server processes over `Host.exec` stdio (JSON-RPC Content-Length framing).
+Servers are plugin-only; one `LspService` per `Runtime`, shared by subagents, torn down in
+`cleanup_runtime_resources()`.
+
+| Path | Purpose | Key entry points |
+| --- | --- | --- |
+| `src/pythinker_code/lsp/` | Client, server lifecycle, routing, diagnostics registry, plugin loader, recommendation. | `LspService`, `LspServerManager`, `LspClient`, `DiagnosticRegistry`, `plugin_lsp_servers` |
+
+Trust boundary: LSP subprocesses run with agent privileges; output is untrusted project content.
 
 ## Memory, background, and notifications
 
