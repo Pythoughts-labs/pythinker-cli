@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from pythinker_code.plugin.directories import known_marketplaces_file, marketplaces_cache_dir
 from pythinker_code.plugin.manifest import (
@@ -79,13 +79,17 @@ def parse_marketplace_input(raw: str) -> MarketplaceSource:
     if ssh:
         return MarketplaceSource(source="git", url=ssh.group(1), ref=ssh.group(3))
 
-    if trimmed.startswith(("http://", "https://")):
+    if trimmed.startswith("http://"):
+        # Plaintext HTTP is tamperable in transit and can steer plugin
+        # install/update decisions; require HTTPS for remote marketplaces.
+        raise MarketplaceError(f"Insecure http:// marketplace source; use https://: {trimmed}")
+    if trimmed.startswith("https://"):
         frag = re.match(r"^([^#]+)(#(.+))?$", trimmed)
         url = frag.group(1) if frag else trimmed
         ref = frag.group(3) if frag else None
         if url.endswith(".git") or "/_git/" in url:
             return MarketplaceSource(source="git", url=url, ref=ref)
-        if re.match(r"^https?://(www\.)?github\.com/[^/]+/[^/]+", url):
+        if re.match(r"^https://(www\.)?github\.com/[^/]+/[^/]+", url):
             git_url = url if url.endswith(".git") else f"{url}.git"
             return MarketplaceSource(source="git", url=git_url, ref=ref)
         return MarketplaceSource(source="url", url=url, ref=ref)
@@ -138,7 +142,7 @@ def load_known_marketplaces() -> dict[str, KnownMarketplaceEntry]:
     for name, entry in cast("dict[str, Any]", raw).items():
         try:
             result[name] = KnownMarketplaceEntry.model_validate(entry)
-        except Exception as exc:
+        except ValidationError as exc:
             logger.warning("Skipping invalid marketplace '{name}': {error}", name=name, error=exc)
     return result
 
@@ -153,7 +157,12 @@ def save_known_marketplaces(marketplaces: dict[str, KnownMarketplaceEntry]) -> N
 
 
 def add_marketplace(name: str, source: MarketplaceSource, *, auto_update: bool = False) -> None:
-    """Register (or replace) a marketplace by name."""
+    """Register (or replace) a marketplace by name.
+
+    ponytail: unlocked read-modify-write like ``installed.record_install``. The
+    save is atomic, so the only race is two concurrent CLI processes losing one
+    update — rare. Add cross-process locking if that becomes a real workflow.
+    """
     marketplaces = load_known_marketplaces()
     install_location = str(marketplaces_cache_dir() / name)
     marketplaces[name] = KnownMarketplaceEntry(

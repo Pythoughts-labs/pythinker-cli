@@ -88,7 +88,14 @@ def save_installed_plugins(plugins: dict[str, list[InstalledRecord]]) -> None:
 
 
 def record_install(name: str, marketplace: str, record: InstalledRecord) -> None:
-    """Add or replace an install record for ``name@marketplace`` in its scope."""
+    """Add or replace an install record for ``name@marketplace`` in its scope.
+
+    ponytail: unlocked read-modify-write. ``save_installed_plugins`` writes
+    atomically, so a single writer never corrupts the file; the residual risk is
+    two concurrent ``pythinker plugin`` processes losing one update — rare for a
+    CLI. Add cross-process file locking here (and in ``marketplace.py``) if
+    concurrent installs become a real workflow.
+    """
     plugins = load_installed_plugins()
     ident = plugin_identifier(name, marketplace)
     existing = [r for r in plugins.get(ident, []) if r.scope != record.scope]

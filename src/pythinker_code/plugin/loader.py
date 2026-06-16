@@ -85,7 +85,12 @@ def _iter_plugin_roots(base: Path, *, max_depth: int = _MAX_DISCOVERY_DEPTH) -> 
         if depth >= max_depth:
             continue
         try:
-            children = [c for c in current.iterdir() if c.is_dir() and not c.name.startswith(".")]
+            # Sort for deterministic discovery: filesystem iteration order is
+            # unspecified, and first-wins dedupe downstream must not depend on it
+            # (C11 — no non-determinism in execution-critical paths).
+            children = sorted(
+                c for c in current.iterdir() if c.is_dir() and not c.name.startswith(".")
+            )
         except OSError:
             continue
         for child in children:

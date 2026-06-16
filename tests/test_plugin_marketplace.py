@@ -73,8 +73,13 @@ def test_parse_missing_path_raises(tmp_path: Path) -> None:
 def test_parse_non_json_file_raises(tmp_path: Path) -> None:
     f = tmp_path / "m.txt"
     f.write_text("x", encoding="utf-8")
-    with pytest.raises(MarketplaceError, match="must be .json"):
+    with pytest.raises(MarketplaceError, match=r"must be \.json"):
         parse_marketplace_input(str(f))
+
+
+def test_parse_rejects_plaintext_http() -> None:
+    with pytest.raises(MarketplaceError, match="https"):
+        parse_marketplace_input("http://example.test/marketplace.json")
 
 
 def test_parse_unrecognized_raises() -> None:

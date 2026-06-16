@@ -56,9 +56,11 @@ from pythinker_code.utils.logging import logger
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 _GIT_TIMEOUT_S = 120
 # Allowed git transports. Excludes exec-capable transports (``ext::``, ``fd::``)
-# and anything not a recognized scheme, so a marketplace-controlled URL cannot
-# smuggle a command. ``file://`` is permitted for local/offline clones.
-_SAFE_GIT_URL = re.compile(r"^(https://|http://|git://|ssh://|git@|file://)")
+# so a marketplace-controlled URL cannot smuggle a command, and excludes the
+# plaintext ``http://``/``git://`` transports (unauthenticated, tamperable in
+# transit — a supply-chain risk for executable plugin content). ``file://`` is
+# permitted for local/offline clones.
+_SAFE_GIT_URL = re.compile(r"^(https://|ssh://|git@|file://)")
 
 
 def _safe_name(name: str, kind: str) -> str:
@@ -97,6 +99,22 @@ def _git_clone(url: str, ref: str | None, dest: Path) -> None:
         raise MarketplaceError(f"git clone failed for {url}: {exc}") from exc
     if result.returncode != 0:
         raise MarketplaceError(f"git clone failed for {url}: {result.stderr.strip()}")
+
+
+def _remove_path(path: Path) -> None:
+    """Remove a file, symlink, or directory, surfacing failures.
+
+    ``shutil.rmtree`` refuses symlinks, so a leftover symlink at a cache dest
+    would survive an ``ignore_errors`` cleanup and then break the next clone/copy.
+    Handle symlinks explicitly and raise (don't silently ignore) on failure.
+    """
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+    except OSError as exc:
+        raise MarketplaceError(f"Could not remove existing path {path}: {exc}") from exc
 
 
 def _symlink(dest: Path, target: Path) -> None:
@@ -157,8 +175,7 @@ def _load_marketplace(name: str, entry: KnownMarketplaceEntry) -> tuple[Marketpl
         if external:
             _symlink(dest, external[0])
         else:
-            if dest.exists():
-                shutil.rmtree(dest, ignore_errors=True)
+            _remove_path(dest)
             _git_clone(_marketplace_repo_url(source), source.ref, dest)
         manifest_path = find_marketplace_manifest(dest)
         if manifest_path is None:
@@ -281,8 +298,7 @@ def _materialize_and_record(
     version = _safe_name(entry.version or "unknown", "version")
 
     dest = plugin_cache_dir() / marketplace_name / plugin_name / version
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
+    _remove_path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     try:

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from pythinker_code.plugin.loader import LoadedPlugin
+from pythinker_code.utils.logging import logger
 
 # Convention directories/files relative to a plugin root.
 _SKILLS_DIR = "skills"
@@ -84,7 +85,12 @@ def mcp_servers(plugin: LoadedPlugin) -> dict[str, object]:
     if mcp_path.is_file():
         try:
             raw = json.loads(mcp_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            # Degraded behavior must be visible: a broken .mcp.json silently
+            # dropping the plugin's MCP servers would hide capability loss.
+            logger.warning(
+                "Ignoring unreadable plugin .mcp.json {path}: {error}", path=mcp_path, error=exc
+            )
             raw = None
         if isinstance(raw, dict):
             data = cast("dict[str, object]", raw)

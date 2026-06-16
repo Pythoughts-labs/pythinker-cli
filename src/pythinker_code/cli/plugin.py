@@ -665,9 +665,17 @@ def marketplace_uninstall_cmd(
     if not remove_install(plugin, marketplace):
         typer.echo(f"'{plugin}@{marketplace}' is not installed", err=True)
         raise typer.Exit(1)
-    # Remove the on-disk install (unlink symlinks; rmtree real dirs).
+    # Remove the on-disk install (unlink symlinks; rmtree real dirs). Constrain
+    # deletions to the plugin cache root so corrupted metadata (an install_path
+    # pointing elsewhere) cannot remove arbitrary user files. Symlinks are only
+    # unlinked, never followed, so an external reuse target is left untouched.
+    cache_root = plugin_cache_dir().resolve()
     for record in records:
         path = Path(record.install_path)
+        parent = path.parent.resolve()
+        if parent != cache_root and cache_root not in parent.parents:
+            typer.echo(f"Warning: skipping unsafe uninstall path outside cache: {path}", err=True)
+            continue
         if path.is_symlink():
             path.unlink(missing_ok=True)
         elif path.is_dir():

@@ -647,7 +647,10 @@ async def load_agent(
                 plugin_raw: dict[str, Any] = {"mcpServers": plugin_mcp}
                 prepare_mcp_config_dict(plugin_raw)
                 validated_mcp_configs.append(MCPConfig.model_validate(plugin_raw))
-            except pydantic.ValidationError as e:
+            except (pydantic.ValidationError, ValueError, TypeError, KeyError, AttributeError) as e:
+                # Fail soft: normalization (prepare_mcp_config_dict) can raise
+                # shape errors beyond ValidationError; a malformed plugin MCP
+                # block is skipped with a warning, never aborts agent load.
                 logger.warning("Skipping invalid plugin MCP servers: {error}", error=e)
         if validated_mcp_configs:
             if start_mcp_loading:

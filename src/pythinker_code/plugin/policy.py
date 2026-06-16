@@ -44,7 +44,12 @@ _current_policy: ContextVar[PluginPolicy] = ContextVar("plugin_policy", default=
 
 
 def current_plugin_policy() -> PluginPolicy:
-    """The active plugin policy (defaults to pythinker-only, all enabled)."""
+    """The active plugin policy.
+
+    Defaults to auto-detecting external plugins' safe artifacts
+    (``discover_external=True``), executable artifacts opt-in
+    (``external_exec=False``), and all discovered plugins enabled.
+    """
     return _current_policy.get()
 
 
