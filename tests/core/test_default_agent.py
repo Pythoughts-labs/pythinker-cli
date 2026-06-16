@@ -302,6 +302,7 @@ async def test_default_agent_background_bash_guardrails(runtime: Runtime):
     assert "The only task-management slash command for users is `/task`" in agent.system_prompt
     assert "never invent subcommands like `/task list` or `/tasks`" in agent.system_prompt
 
+    # ToolSearch is absent because the `llm` fixture has no provider_config → supports_deferred_tool_search() → False.
     tool_names = [tool.name for tool in agent.toolset.tools]
     assert tool_names == snapshot(
         [

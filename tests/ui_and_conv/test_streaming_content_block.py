@@ -12,8 +12,10 @@ from pythinker_code.ui.shell.visualize import (
     _ContentBlock,
     _estimate_tokens,
     _find_committed_boundary,
+    _normalize_streaming_preview_text,
     _tail_lines,
     _truncate_to_display_width,
+    _wrap_preview_line,
 )
 from pythinker_code.ui.theme import tui_rich_style
 
@@ -688,3 +690,88 @@ class TestShowThinkingStream:
             block.append("hello\n\nworld")
         # Both should commit identically
         assert block_off._committed_len == block_on._committed_len
+
+
+# ---------------------------------------------------------------------------
+# Space-aligned report preview wrapping
+# ---------------------------------------------------------------------------
+
+_FINDINGS_PREVIEW_SAMPLE = (
+    "Findings\n\n"
+    "• 1\n"
+    "    Severity  medium\n"
+    "    Location  llm.py:58-60\n"
+    "    What      Host allowlist is a single-member frozenset; safe-by-default but "
+    "invisible on new genuine-Anthropic hosts (tool silently absent). Consider a "
+    "config-level list or docs pointer.\n\n"
+    "• 2\n"
+    "    Severity  medium\n"
+    "    Location  test_default_agent.py:312-341\n"
+    "    What      Root-tool snapshot omits ToolSearch — correctly, because the llm "
+    "fixture has provider_config=None (verified via conftest.py:94-101). But the "
+    "coupling is implicit.\n"
+)
+
+
+def _preview_orphan_lines(output: str) -> list[str]:
+    """Lines that look like wrap fragments stranded at column 0."""
+    orphans: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped or line.startswith((" ", "•", "⏺", "├", "└", "│", "-")):
+            continue
+        if stripped.split()[0].lower() in {
+            "but",
+            "llm",
+            "arrowly",
+            "cycle.",
+            "invisible",
+            "fixture",
+        }:
+            orphans.append(line)
+    return orphans
+
+
+class TestSpaceAlignedPreviewWrapping:
+    def test_normalize_preview_converts_space_columns_to_list_fields(self):
+        normalized = _normalize_streaming_preview_text(_FINDINGS_PREVIEW_SAMPLE)
+        assert "- Severity: medium" in normalized
+        assert "Severity  medium" not in normalized
+
+    def test_wrap_preview_line_hangs_continuation_indent(self):
+        line = (
+            "    What      Host allowlist is a single-member frozenset; safe-by-default but "
+            "invisible on new genuine-Anthropic hosts."
+        )
+        wrapped = _wrap_preview_line(line, 72)
+        assert wrapped.startswith("    What")
+        assert "\nbut invisible" not in wrapped
+        assert "\n    invisible" in wrapped or "\n    but invisible" in wrapped
+
+    def test_composing_preview_has_no_orphan_wrap_fragments(self, monkeypatch):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
+        block = _ContentBlock(is_think=False)
+        block.append(_FINDINGS_PREVIEW_SAMPLE)
+        console = Console(record=True, width=72, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+        assert _preview_orphan_lines(output) == []
+
+    def test_finalize_scrollback_uses_normalized_render_not_raw_columns(self, monkeypatch):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
+        block = _ContentBlock(is_think=False)
+        block.append(_FINDINGS_PREVIEW_SAMPLE)
+        block.reveal_all()
+        block._flush_committed()
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=72, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "Severity: medium" in output
+        assert "Severity  medium" not in output
+        assert _preview_orphan_lines(output) == []

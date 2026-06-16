@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import time
 from collections import Counter, deque
 from typing import Any, NamedTuple, cast
@@ -156,6 +157,112 @@ def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
         values = _parse_tool_result_top_fields(result_text)
         return values.get("mode") == "background" and values.get("tool_status") == "launched"
     return False
+
+
+_PREVIEW_FIELD_LINE_RE = re.compile(r"^(\s*)-\s+([^:]+):\s*(.*)$")
+
+
+def _normalize_streaming_preview_text(text: str) -> str:
+    """Lightweight preview normalization: ANSI sanitize + space-aligned report rows.
+
+    Matches the space-column repair used by final ``render_agent_body`` output
+    without running the full markdown-it pipeline on every streaming tick.
+    """
+    from pythinker_code.ui.shell.markdown.normalizers import normalize_space_aligned_report_blocks
+
+    cleaned = sanitize_ansi(text)
+    return normalize_space_aligned_report_blocks(cleaned)
+
+
+def _preview_wrap_parts(line: str) -> tuple[str, str, str]:
+    """Return ``(first_prefix, hang_indent, content)`` for preview line wrapping."""
+    stripped = line.rstrip("\r\n")
+    match = _PREVIEW_FIELD_LINE_RE.match(stripped)
+    if match is not None:
+        leading, label, value = match.group(1), match.group(2), match.group(3)
+        return f"{leading}- {label}: ", f"{leading}  ", value
+    leading_match = re.match(r"^(\s*)(.*)$", stripped)
+    if leading_match is not None:
+        leading, content = leading_match.group(1), leading_match.group(2)
+        return leading, leading, content
+    return "", "", stripped
+
+
+def _wrap_preview_line(line: str, max_width: int) -> str:
+    """Wrap one preview line with a hanging continuation indent.
+
+    Prevents long space-aligned ``What`` rows from word-wrapping back to column 0
+    during the transient composing preview.
+    """
+    from rich.cells import cell_len
+
+    if not line:
+        return line
+    stripped = line.rstrip("\r\n")
+    if cell_len(stripped) <= max_width:
+        return stripped
+
+    first_prefix, hang_indent, content = _preview_wrap_parts(stripped)
+    words = content.split()
+    if not words:
+        return _truncate_to_display_width(stripped, max_width)
+
+    lines: list[str] = []
+    current_prefix = first_prefix
+    budget = max(1, max_width - cell_len(current_prefix))
+    current_words: list[str] = []
+    current_width = 0
+
+    def flush_current() -> None:
+        nonlocal current_prefix, budget, current_words, current_width
+        if not current_words:
+            return
+        lines.append(current_prefix + " ".join(current_words))
+        current_prefix = hang_indent
+        budget = max(1, max_width - cell_len(hang_indent))
+        current_words = []
+        current_width = 0
+
+    for word in words:
+        word_width = cell_len(word)
+        sep_width = 1 if current_words else 0
+        if current_words and current_width + sep_width + word_width <= budget:
+            current_width += sep_width + word_width
+            current_words.append(word)
+            continue
+        if not current_words:
+            if word_width <= budget:
+                current_words = [word]
+                current_width = word_width
+                continue
+            # Single overlong token: hard-split at display-cell boundary.
+            start = 0
+            while start < len(word):
+                chunk_end = _advance_by_display_cells(word, start, budget)
+                if chunk_end <= start:
+                    chunk_end = min(start + 1, len(word))
+                lines.append(current_prefix + word[start:chunk_end])
+                current_prefix = hang_indent
+                budget = max(1, max_width - cell_len(hang_indent))
+                start = chunk_end
+            continue
+        flush_current()
+        if word_width <= budget:
+            current_words = [word]
+            current_width = word_width
+        else:
+            start = 0
+            while start < len(word):
+                chunk_end = _advance_by_display_cells(word, start, budget)
+                if chunk_end <= start:
+                    chunk_end = min(start + 1, len(word))
+                lines.append(current_prefix + word[start:chunk_end])
+                current_prefix = hang_indent
+                budget = max(1, max_width - cell_len(hang_indent))
+                start = chunk_end
+
+    flush_current()
+    return "\n".join(lines)
 
 
 def _truncate_to_display_width(line: str, max_width: int) -> str:
@@ -617,13 +724,18 @@ class _ContentBlock:
         return self._block_width
 
     def _build_preview(self, text: str, *, max_lines: int, reserve_caret: bool = False) -> str:
-        """Tail-trim *text* to ``max_lines`` and clamp it to terminal width."""
+        """Tail-trim *text*, normalize report prose, and wrap with hang indents."""
         max_width = self._layout_width() - 2
         if reserve_caret:
             max_width = max(1, max_width - 1)
-        tail_text = _tail_lines(text, max_lines)
+        normalized = _normalize_streaming_preview_text(text)
+        tail_text = _tail_lines(normalized, max_lines)
         lines = tail_text.split("\n")
-        return "\n".join(_truncate_to_display_width(line, max_width) for line in lines)
+        wrapped: list[str] = []
+        for line in lines:
+            wrapped_line = _wrap_preview_line(line, max_width)
+            wrapped.extend(wrapped_line.split("\n"))
+        return "\n".join(wrapped)
 
     def _compose_thinking(self) -> Text:
         return activity_status_line(
