@@ -8,7 +8,7 @@ under every permission profile.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
 from pythinker_core.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -119,3 +119,80 @@ class ReadMcpResource(CallableTool2[ReadParams]):
         # treats it as data, never instructions.
         builder.mark_untrusted()
         return builder.ok(f"Read resource {params.uri} from {params.server}.")
+
+
+class PromptParams(BaseModel):
+    server: str = Field(description="The connected MCP server that publishes the prompt.")
+    name: str = Field(description="The prompt name from ListMcpResources.")
+    arguments: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured prompt arguments to pass to the MCP server.",
+    )
+
+
+def _render_prompt_messages(messages: object) -> str:
+    if not isinstance(messages, list):
+        return ""
+    lines: list[str] = []
+    for message_obj in cast(list[object], messages):
+        role = str(getattr(message_obj, "role", "unknown"))
+        content: object = getattr(message_obj, "content", "")
+        if isinstance(content, str):
+            rendered = content
+        else:
+            text = getattr(content, "text", None)
+            if isinstance(text, str):
+                rendered = text
+            else:
+                # Non-text content: emit a bounded placeholder rather than
+                # stringifying a possibly large/opaque object into model context
+                # (same safe handling as ReadMcpResource above).
+                blob: Any = getattr(content, "blob", None)
+                mime = getattr(content, "mimeType", None) or "application/octet-stream"
+                size = f"{len(blob)} bytes" if isinstance(blob, (bytes, str)) else "size unknown"
+                rendered = f"[binary content omitted: {mime}, {size}]"
+        lines.append(f"role: {role}\ncontent:\n{rendered}")
+    return "\n\n".join(lines).strip()
+
+
+class InvokeMcpPrompt(CallableTool2[PromptParams]):
+    name: str = "InvokeMcpPrompt"
+    supports_parallel: bool = True
+    params: type[PromptParams] = PromptParams
+
+    def __init__(self, toolset: PythinkerToolset) -> None:
+        super().__init__(description=load_desc(Path(__file__).parent / "prompt_description.md"))
+        self._toolset = toolset
+
+    async def __call__(self, params: PromptParams) -> ToolReturnValue:
+        info = self._toolset.mcp_servers.get(params.server)
+        if info is None:
+            available = ", ".join(sorted(self._toolset.mcp_servers)) or "(none connected)"
+            return ToolError(
+                message=f"Unknown MCP server: {params.server}. Connected servers: {available}",
+                brief="Unknown MCP server",
+            )
+        prompt_names = {prompt.name for prompt in info.prompts}
+        if params.name not in prompt_names:
+            available = ", ".join(sorted(prompt_names)) or "(none published)"
+            return ToolError(
+                message=(
+                    f"Unknown MCP prompt: {params.name} on {params.server}. "
+                    f"Published prompts: {available}"
+                ),
+                brief="Unknown MCP prompt",
+            )
+        try:
+            async with info.client as client:
+                prompt_result = await client.get_prompt(params.name, params.arguments)
+        except Exception as exc:
+            return ToolError(
+                message=f"Failed to invoke prompt {params.name} from {params.server}: {exc}",
+                brief="Prompt invocation failed",
+            )
+
+        rendered = _render_prompt_messages(getattr(prompt_result, "messages", []))
+        builder = ToolResultBuilder()
+        builder.write(rendered or "(prompt returned no messages)")
+        builder.mark_untrusted()
+        return builder.ok(f"Invoked prompt {params.name} from {params.server}.")

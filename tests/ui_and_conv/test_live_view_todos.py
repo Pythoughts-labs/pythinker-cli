@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import importlib
 
+import pytest
 from pythinker_core.message import ToolCall
 from pythinker_core.tooling import ToolResult, ToolReturnValue
 from rich.color import Color
 from rich.console import Console, Group
 from rich.style import Style
 
+from pythinker_code.soul.live_tokens import add_total_output_tokens, reset_for_tests
 from pythinker_code.tools.display import DiffDisplayBlock, TodoDisplayBlock, TodoDisplayItem
 from pythinker_code.ui.shell.motion import (
     _SHIMMER_BASE,
@@ -19,6 +21,15 @@ from pythinker_code.ui.theme import set_active_theme, tui_rich_style
 from pythinker_code.wire.types import StatusUpdate, TurnBegin
 
 _live_view_module = importlib.import_module("pythinker_code.ui.shell.visualize._live_view")
+
+
+@pytest.fixture(autouse=True)
+def _reset_live_tokens():
+    """Isolate the session-wide live token accumulator between tests."""
+    reset_for_tests()
+    yield
+    reset_for_tests()
+
 
 _SHIMMER_HEXES = {_SHIMMER_BASE.lower(), _SHIMMER_MID.lower(), _SHIMMER_HIGHLIGHT.lower()}
 
@@ -95,8 +106,9 @@ def test_todo_update_pins_current_task_under_activity_line(monkeypatch) -> None:
     # Pin the animated braille marker to its static dot for a deterministic
     # assertion on the activity-line content.
     monkeypatch.setenv("PYTHINKER_REDUCED_MOTION", "1")
-    view = _LiveView(StatusUpdate(context_tokens=10_000))
+    view = _LiveView(StatusUpdate())
     view.dispatch_wire_message(TurnBegin(user_input="work"))
+    add_total_output_tokens(10_000)  # output produced this turn (main + subagents)
     view.dispatch_wire_message(_todo_call())
     view.dispatch_wire_message(_todo_result())
 
@@ -117,8 +129,9 @@ def test_active_todo_activity_line_does_not_alternate_with_spinner_verb(monkeypa
     now = 1000.0
     monkeypatch.setattr(_live_view_module.time, "monotonic", lambda: now)
     monkeypatch.setenv("PYTHINKER_REDUCED_MOTION", "1")
-    view = _LiveView(StatusUpdate(context_tokens=10_000))
+    view = _LiveView(StatusUpdate())
     view.dispatch_wire_message(TurnBegin(user_input="work"))
+    add_total_output_tokens(10_000)  # output produced this turn (main + subagents)
     view.dispatch_wire_message(_todo_call())
     view.dispatch_wire_message(_todo_result())
 
@@ -135,8 +148,9 @@ def test_spinner_verb_shows_until_next_todo_becomes_active(monkeypatch) -> None:
     now = 1000.0
     monkeypatch.setattr(_live_view_module.time, "monotonic", lambda: now)
     monkeypatch.setenv("PYTHINKER_REDUCED_MOTION", "1")
-    view = _LiveView(StatusUpdate(context_tokens=10_000))
+    view = _LiveView(StatusUpdate())
     view.dispatch_wire_message(TurnBegin(user_input="work"))
+    add_total_output_tokens(10_000)  # output produced this turn (main + subagents)
     view._latest_todos = (
         TodoDisplayItem(title="Finished task", status="done"),
         TodoDisplayItem(title="Next task", status="pending"),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from inline_snapshot import snapshot
 from pythinker_core.chat_provider import TokenUsage
-from pythinker_core.message import AudioURLPart, ImageURLPart, Message, VideoURLPart
+from pythinker_core.message import AudioURLPart, ImageURLPart, Message, ToolCall, VideoURLPart
 
 import pythinker_code.prompts as prompts
 from pythinker_code.soul.compaction import CompactionResult, SimpleCompaction, should_auto_compact
@@ -75,6 +75,34 @@ def test_prepare_builds_compact_message_and_preserves_tail():
             Message(role="assistant", content=[TextPart(text="Latest answer")]),
         ]
     )
+
+
+def test_prepare_preserves_tool_call_rounds_without_orphaning_results():
+    first_call = ToolCall(
+        id="call_1",
+        function=ToolCall.FunctionBody(name="ReadFile", arguments='{"path":"a.py"}'),
+    )
+    second_call = ToolCall(
+        id="call_2",
+        function=ToolCall.FunctionBody(name="ReadFile", arguments='{"path":"b.py"}'),
+    )
+    messages = [
+        Message(role="user", content=[TextPart(text="Inspect files")]),
+        Message(role="assistant", content=[TextPart(text="Reading A")], tool_calls=[first_call]),
+        Message(role="tool", content=[TextPart(text="A")], tool_call_id="call_1"),
+        Message(role="assistant", content=[TextPart(text="Reading B")], tool_calls=[second_call]),
+        Message(role="tool", content=[TextPart(text="B")], tool_call_id="call_2"),
+        Message(role="assistant", content=[TextPart(text="Done")]),
+    ]
+
+    result = SimpleCompaction(max_preserved_messages=2).prepare(messages)
+
+    assert [message.role for message in result.to_preserve] == ["assistant", "tool", "assistant"]
+    assert result.to_preserve[0].tool_calls == [second_call]
+    assert result.to_preserve[1].tool_call_id == "call_2"
+    assert [message.role for message in result.to_compact] == ["user", "assistant", "tool"]
+    assert result.to_compact[1].tool_calls == [first_call]
+    assert result.to_compact[2].tool_call_id == "call_1"
 
 
 # --- CompactionResult.estimated_token_count tests ---

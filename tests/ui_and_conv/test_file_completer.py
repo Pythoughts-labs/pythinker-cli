@@ -148,6 +148,20 @@ def test_basename_prefix_is_ranked_first(tmp_path: Path):
     )
 
 
+def test_test_paths_are_ranked_after_source_matches(tmp_path: Path):
+    """Prefer source files over equally relevant test paths."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "zzz_src").mkdir()
+    (tmp_path / "tests" / "foo.py").write_text("# test\n")
+    (tmp_path / "zzz_src" / "foo.py").write_text("# source\n")
+
+    completer = LocalFileMentionCompleter(tmp_path)
+
+    texts = _completion_texts(completer, "@foo")
+
+    assert texts[:2] == ["zzz_src/foo.py", "tests/foo.py"]
+
+
 def _init_git_repo(work_dir: Path) -> None:
     """Initialise a git repo, stage all files, and commit."""
     for cmd in (

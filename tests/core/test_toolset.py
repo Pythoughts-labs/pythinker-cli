@@ -11,10 +11,15 @@ from typing import Any, ClassVar, cast
 
 import mcp
 from pydantic import BaseModel
-from pythinker_core.tooling import CallableTool2, ToolOk, ToolReturnValue
+from pythinker_core.tooling import CallableTool, CallableTool2, ToolOk, ToolReturnValue
 from pythinker_core.tooling.error import ToolNotFoundError as PythinkerCoreToolNotFoundError
 
-from pythinker_code.soul.toolset import MCPTool, PythinkerToolset, _configure_mcp_client_stderr_log
+from pythinker_code.soul.toolset import (
+    MCPServerInfo,
+    MCPTool,
+    PythinkerToolset,
+    _configure_mcp_client_stderr_log,
+)
 from pythinker_code.wire.types import ToolCall, ToolResult, ToolUseSkipped
 
 
@@ -49,6 +54,20 @@ class DummyToolB(CallableTool2[DummyParams]):
         return ToolOk(output="b")
 
 
+class MutatesNestedInputTool(CallableTool):
+    name: str = "MutatesNestedInput"
+    description: str = "Mutates nested input"
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {"payload": {"type": "object"}},
+        "required": ["payload"],
+    }
+
+    async def __call__(self, payload: dict[str, str]) -> ToolReturnValue:
+        payload["value"] = "mutated"
+        return ToolOk(output="mutated")
+
+
 def _make_toolset() -> PythinkerToolset:
     ts = PythinkerToolset()
     ts.add(DummyToolA())
@@ -58,6 +77,20 @@ def _make_toolset() -> PythinkerToolset:
 
 def _tool_names(ts: PythinkerToolset) -> set[str]:
     return {t.name for t in ts.tools}
+
+
+def _fake_mcp_tool(server: str, name: str) -> MCPTool[Any]:
+    mcp_tool = cast(Any, SimpleNamespace(name=name, description="", inputSchema={}))
+    client = cast(Any, SimpleNamespace())
+    runtime = cast(
+        Any,
+        SimpleNamespace(
+            config=SimpleNamespace(
+                mcp=SimpleNamespace(client=SimpleNamespace(tool_call_timeout_ms=1000))
+            )
+        ),
+    )
+    return MCPTool(server, mcp_tool, client, runtime=runtime)
 
 
 # --- hide() ---
@@ -79,6 +112,37 @@ def test_hide_returns_true_for_existing_tool():
 def test_hide_returns_false_for_nonexistent_tool():
     ts = _make_toolset()
     assert ts.hide("NoSuchTool") is False
+
+
+def test_mcp_duplicate_tool_publish_order_follows_server_order():
+    ts = PythinkerToolset()
+    runtime = cast(Any, SimpleNamespace(mcp_tools={}))
+    alpha_tool = _fake_mcp_tool("alpha", "SharedTool")
+    beta_tool = _fake_mcp_tool("beta", "SharedTool")
+    ts._mcp_servers = {  # pyright: ignore[reportPrivateUsage]
+        "alpha": MCPServerInfo(
+            status="connected",
+            client=cast(Any, SimpleNamespace()),
+            tools=[alpha_tool],
+            resources=[],
+            prompts=[],
+        ),
+        "beta": MCPServerInfo(
+            status="connected",
+            client=cast(Any, SimpleNamespace()),
+            tools=[beta_tool],
+            resources=[],
+            prompts=[],
+        ),
+    }
+
+    ts._publish_connected_mcp_tools(runtime)  # pyright: ignore[reportPrivateUsage]
+
+    published = ts.find("SharedTool")
+    assert isinstance(published, MCPTool)
+    assert published.mcp_server_name == "beta"
+    assert runtime.mcp_tools["mcp__alpha__SharedTool"] is alpha_tool
+    assert runtime.mcp_tools["mcp__beta__SharedTool"] is beta_tool
 
 
 def test_hide_is_idempotent():
@@ -213,6 +277,41 @@ async def test_cleanup_suppresses_cancelled_mcp_loading_task():
     await ts.cleanup()
 
     assert task.cancelled()
+
+
+async def test_tool_execution_mutation_does_not_rewrite_hook_input() -> None:
+    ts = PythinkerToolset()
+    ts.add(MutatesNestedInputTool())
+    post_inputs: list[dict[str, Any]] = []
+
+    async def trigger(*args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    def fire_and_forget_trigger(*args: Any, **kwargs: Any) -> None:
+        if args[0] == "PostToolUse":
+            post_inputs.append(kwargs["input_data"]["tool_input"])
+
+    ts._hook_engine = cast(  # pyright: ignore[reportPrivateUsage]
+        Any,
+        SimpleNamespace(
+            trigger=trigger,
+            fire_and_forget_trigger=fire_and_forget_trigger,
+        ),
+    )
+
+    result = ts.handle(
+        ToolCall(
+            id="mutating-call",
+            function=ToolCall.FunctionBody(
+                name="MutatesNestedInput",
+                arguments='{"payload":{"value":"original"}}',
+            ),
+        )
+    )
+    assert isinstance(result, asyncio.Task)
+    _ = await result  # drive the task to completion; the awaited value is unused
+
+    assert post_inputs == [{"payload": {"value": "original"}}]
 
 
 # --- hide/unhide cycle ---

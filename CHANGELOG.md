@@ -15,6 +15,46 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Plugin marketplaces and activation policy.** `pythinker plugin marketplace` can add,
+  refresh, install, and uninstall Claude/Codex-compatible marketplace plugins. Plugins
+  installed for Claude Code or Codex are auto-detected (no symlink): their safe artifacts
+  (skills, commands, agents) activate by default, while executable artifacts (hooks, MCP
+  servers) stay opt-in. Config `plugins.discover_external`, `plugins.external_exec`,
+  `plugins.enabled`, and `plugins.disabled` — plus `pythinker plugin enable/disable <name>`
+  — control which installed plugins contribute artifacts. Hook and MCP commands
+  expand `${CLAUDE_PLUGIN_ROOT}`/`${PYTHINKER_PLUGIN_ROOT}` and
+  `${CLAUDE_PLUGIN_DATA}`/`${PYTHINKER_PLUGIN_DATA}`.
+- **Plugin dependencies.** Plugins may declare `dependencies`; installing one pulls its
+  transitive dependencies from the same marketplace (cross-marketplace deps are blocked),
+  and a plugin whose dependencies aren't present+enabled is disabled at load instead of
+  half-activating.
+- **Plugin options (`userConfig`).** `${user_config.KEY}` in a plugin's MCP server configs
+  and hook commands is filled from `[plugins.options.<plugin>]` config; an artifact that
+  references an unconfigured option is skipped rather than run blank. (Content substitution,
+  `PYTHINKER_PLUGIN_OPTION_*` hook env vars, and keychain-backed sensitive storage are not
+  yet implemented.)
+- **MCP tool lists refresh automatically when servers change.** Connected MCP
+  sessions stay open for `tools/list_changed` (and resources/prompts) notifications;
+  inventory is re-published without a manual `/mcp refresh`.
+- **Shell live token readouts track output throughput.** The spinner and background
+  status line show session-wide output tokens produced during the current turn or
+  background stretch instead of the context-size snapshot.
+- **MCP servers can be managed without a full reload.** `/mcp disconnect`, `/mcp reconnect`, and
+  `/mcp refresh` (or `retry`) update the live toolset for one server; disconnect unregisters its
+  tools and marks the server failed until reconnect.
+- **Recall search matches session ids and plan slugs.** Prior-session keyword search now indexes
+  `session_id` and `plan_slug` in addition to titles so agents can find plan-linked sessions by slug.
+- **Wire and ACP surfaces now get max-steps handoff summaries.** When a turn hits the step ceiling,
+  wire clients receive a streamed handoff event plus a `handoff` field on the `max_steps_reached`
+  result; ACP sessions emit the same summary text before returning `max_turn_requests`.
+- **MCP CLI commands resolve normalized server names.** `mcp remove`, `mcp auth`, `mcp test`, and
+  `reset-auth` accept display names with spaces or slashes and map them to stored config keys; config
+  load applies the same normalization as add.
+- **Compaction failure circuit breaker respects thresholds above one.** A proactive compaction
+  failure below `max_compaction_failures` no longer aborts the turn; the handoff fires only after
+  the configured number of consecutive failures.
+- **AI eval gate schema is self-contained under `tests_ai/`.** Shared eval-case types live in
+  `tests_ai/eval_schema.py` so isolated `tests_ai` runs do not import from `tests_e2e`.
 - **Softer TUI chrome in the dark theme.** Panel borders (welcome banner, menus) and the input-area
   rules now render in a mid grey (`#8a8d91`) instead of near-white, for a less glaring look.
 - **Stop-time memory extraction can now be enabled explicitly.** Added an opt-in
@@ -25,6 +65,28 @@ GitHub Releases page; `0.8.0` is the new starting line.
   `ToolSearch` plus root-session `EnterWorktree` and `ExitWorktree` tools so agents can find
   currently available capabilities by keyword and isolate a session's operational working directory
   in a git worktree without deleting user work on exit.
+- **Root sessions now get a bounded git snapshot in the prompt.** When `git_status_injection` is
+  enabled (default), the agent receives branch, dirty-file summary, and recent commits as an
+  explicitly stale point-in-time reminder; disable via config or set `git_status_injection = false`.
+- **Context compaction and MCP tool registration now fail more predictably.** Proactive compaction
+  failures hand back with an explicit `compaction_failed` stop instead of bubbling an unstructured
+  loop error, and MCP duplicate tool-name resolution now follows configured server order instead of
+  connection completion order. Tool hooks also retain the original model input even if a tool
+  mutates a nested argument object during execution.
+- **Recall can now read bounded transcript windows.** `Recall(mode="read")` accepts
+  `message_offset` and `max_messages` so agents can inspect a precise, sanitized slice of a prior
+  workspace session without pulling the whole transcript into context.
+- **MCP prompt templates can now be invoked from connected servers.** `InvokeMcpPrompt` renders a
+  server-published prompt with structured arguments and wraps the returned messages as untrusted
+  input for the model.
+- **Telemetry, MCP config, and shell UX hardening.** Tool spans and metrics sanitize MCP/plugin
+  names; `mcp.json` load paths inject docker `--rm` and normalize server keys with collision
+  errors; shell suggestions accept via Alt+S into the prompt; markdown agent frontmatter maps
+  `max_turns`/`disallowed_tools`; `ReadMediaFile` enforces per-kind byte/pixel caps; written plans
+  without a Verification section get a soft warning; AI eval budgets can gate `tests_ai` reports.
+- **Plan-mode exit guidance now requires verification.** The `ExitPlanMode` tool now tells agents
+  that written plans must include a Verification section with the smallest command, test, or check
+  for each meaningful change.
 - **Agent-loop observability now emits explicit Wire events for key runtime state.** Added
   `TodoListUpdated`, `SubagentToolFallback`, `AgentListDelta`, `ToolUseSkipped`, and
   `ContextOverflowRecovered` events, with todo updates, subagent launch fallbacks, same-step tool

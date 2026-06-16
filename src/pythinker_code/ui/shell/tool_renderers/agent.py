@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from typing import cast
+from typing import TypedDict, cast
 
 from rich import box as rich_box
 from rich.console import Group, RenderableType
@@ -60,6 +61,17 @@ _RE_HEADER = re.compile(r"^#{1,4}\s+(.*)")
 _RE_SEVERITY_IN_HEADER = re.compile(r"\b(critical|high|medium|low)\b(?!-)", re.IGNORECASE)
 # Markdown table row starting with a severity cell: `| HIGH | description |`
 _RE_TABLE_SEVERITY_ROW = re.compile(r"^\|\s*(critical|high|medium|low)\s*\|", re.IGNORECASE)
+# Primary machine-readable format: ```report\n{"findings":[{"severity":"high",...}]}\n```
+# ponytail: no line-start anchor — tolerates LLM fencing drift; tighten if reviewers stabilize
+_RE_REPORT_BLOCK = re.compile(r"```report\s*\n(.*?)```", re.DOTALL)
+
+
+class _ReportFinding(TypedDict, total=False):
+    severity: str
+
+
+class _ReportBlock(TypedDict, total=False):
+    findings: list[_ReportFinding]
 
 
 @dataclass
@@ -88,10 +100,55 @@ def _is_review_run(agents: list[dict[str, str]]) -> bool:
 def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
     """Parse severity counts from structured markers only (never mid-sentence prose).
 
-    Returns (severity_counts, was_parsed). was_parsed is True when at least one
-    structured marker was found; False means the whole report is unreadable prose.
+    Returns (severity_counts, was_parsed). was_parsed is True when a structured
+    report was found — including a valid ```report block with zero findings.
+    False means the whole report is unreadable prose with no structured markers.
+
+    Primary: ```report JSON block ({"findings": [{"severity": "high", ...}, ...]}).
+    Any ```report block (even one with empty findings or malformed JSON) means this
+    is a structured report, so the markdown fallback is skipped entirely.
+
+    Fallback: line-by-line markdown markers for prose-formatted reports.
+    The fallback only runs when no ```report block is present, so it never
+    re-scans JSON block content and cannot miscount severity words inside JSON.
     """
     counts: dict[str, int] = {sev: 0 for sev in _SEVERITY_LABELS}
+
+    # Primary: machine-readable ```report JSON block. Only a well-formed JSON
+    # object counts as "parsed" — a malformed block must not report success with
+    # zero findings; it falls through to the markdown fallback instead.
+    json_blocks = list(_RE_REPORT_BLOCK.finditer(result_text))
+    if json_blocks:
+        parsed_valid = False
+        for block_match in json_blocks:
+            try:
+                parsed = json.loads(block_match.group(1))
+            except json.JSONDecodeError:
+                continue  # malformed JSON — block found but not parseable
+            if not isinstance(parsed, dict):
+                continue  # wrong shape (array / scalar)
+            data = cast(_ReportBlock, parsed)
+            findings = data.get("findings")
+            if not isinstance(findings, list):
+                continue  # "findings" missing or not a list — nothing to count
+            parsed_valid = True
+            # The declared type promises dict findings, but the payload is
+            # untrusted JSON; re-type as object so the runtime guard below is real.
+            for finding in cast("list[object]", findings):
+                if not isinstance(finding, dict):
+                    continue  # skip non-object finding entries
+                sev = str(cast("dict[str, object]", finding).get("severity", "")).lower()
+                if sev in counts:
+                    counts[sev] += 1
+        # A report block was present: return its counts. ``parsed_valid`` is True
+        # only when at least one block was a JSON object with a list ``findings``
+        # (possibly empty); a malformed block or a wrong-shaped payload (e.g.
+        # ``{"findings": "high"}``) is reported as unparsed, never as a false
+        # "parsed with zero findings", and never re-scanned below.
+        return counts, parsed_valid
+
+    # Fallback: line-by-line markdown markers.
+    # Only reached when no ```report block exists — result_text is JSON-free.
     found_any = False
     section_severity: str | None = None  # set when inside e.g. "### High Severity"
 
@@ -212,6 +269,13 @@ def _render_findings_table(summary: ReviewFindingsSummary) -> RenderableType:
         "low": "info",
     }
 
+    def _reported_by(names: list[str]) -> Text:
+        if not names:
+            return Text("—", style=tui_rich_style("dim"))
+        t = Text("— ", style=tui_rich_style("warning"))
+        t.append(", ".join(names))
+        return t
+
     for sev in _SEVERITY_LABELS:
         count = getattr(summary, sev)
         by = summary.reporters.get(sev, [])
@@ -219,7 +283,7 @@ def _render_findings_table(summary: ReviewFindingsSummary) -> RenderableType:
         table.add_row(
             Text(sev.capitalize(), style=style),
             Text(str(count), style=style),
-            Text(", ".join(by) if by else "—", style=tui_rich_style("dim")),
+            _reported_by(by),
         )
 
     if summary.unparsed_reports > 0:
@@ -227,7 +291,7 @@ def _render_findings_table(summary: ReviewFindingsSummary) -> RenderableType:
         table.add_row(
             Text("Unknown", style=tui_rich_style("muted")),
             Text(str(summary.unparsed_reports), style=tui_rich_style("muted")),
-            Text(", ".join(by) if by else "—", style=tui_rich_style("dim")),
+            _reported_by(by),
         )
 
     n, total = summary.parsed_reports, summary.total_reports

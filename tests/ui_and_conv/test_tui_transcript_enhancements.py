@@ -28,6 +28,15 @@ _live_view_mod = importlib.import_module("pythinker_code.ui.shell.visualize._liv
 
 
 @pytest.fixture(autouse=True)
+def _reset_live_tokens():
+    from pythinker_code.soul.live_tokens import reset_for_tests
+
+    reset_for_tests()
+    yield
+    reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _builtin_renderers():
     clear_tool_renderers()
     register_builtin_renderers()
@@ -117,12 +126,21 @@ def test_progress_note_block_strips_ansi_from_title() -> None:
     assert "Checkpoint" in rendered
 
 
-def test_working_indicator_includes_context_token_count(monkeypatch) -> None:
-    monkeypatch.setattr(_live_view_mod.time, "monotonic", lambda: 10.0)
-    view = _LiveView(StatusUpdate(context_tokens=110_800))
-    view.dispatch_wire_message(TurnBegin(user_input="work"))
+def test_working_indicator_includes_turn_output_tokens(monkeypatch) -> None:
+    from pythinker_code.soul.live_tokens import add_total_output_tokens, reset_for_tests
 
-    rendered = render_plain(view._working_indicator(), width=100)
+    reset_for_tests()
+    try:
+        monkeypatch.setattr(_live_view_mod.time, "monotonic", lambda: 10.0)
+        view = _LiveView(StatusUpdate())
+        view.dispatch_wire_message(TurnBegin(user_input="work"))
+        # Output produced this turn (main agent + any subagents) — the live
+        # readout tracks throughput, not the static context-window size.
+        add_total_output_tokens(110_800)
 
-    assert "110.8k" in rendered
-    assert "tokens" in rendered
+        rendered = render_plain(view._working_indicator(), width=100)
+
+        assert "110.8k" in rendered
+        assert "tokens" in rendered
+    finally:
+        reset_for_tests()

@@ -55,6 +55,7 @@ from pythinker_code.wire.types import (
     StatusUpdate,
     SteerInput,
     StepInterrupted,
+    Suggestion,
     TurnEnd,
     WireMessage,
 )
@@ -514,6 +515,13 @@ class _PromptLiveView(_LiveView):
             return
         super().dispatch_wire_message(msg)
 
+    def display_suggestion(self, event: Suggestion) -> None:
+        super().display_suggestion(event)
+        # Stage unconditionally: an empty prefill clears any prior staged value
+        # (stage_suggestion_prefill stores ``None`` for blank input), so a later
+        # suggestion without a prefill cannot leave stale Esc+s text behind.
+        self._prompt_session.stage_suggestion_prefill(event.prefill)
+
     # -- Running prompt rendering --------------------------------------------
 
     def _record_todo_display(self, result: ToolReturnValue) -> None:
@@ -592,12 +600,12 @@ class _PromptLiveView(_LiveView):
     def should_handle_running_prompt_key(self, key: str) -> bool:
         if key in {"c-o", "c-e"}:
             return self.has_expandable_panel()
+        if key == "escape":
+            return self._cancel_event is not None
         if self._current_approval_request_panel is not None:
             return key in {"up", "down", "enter", "1", "2", "3", "4"}
         if self._turn_ended:
             return False
-        if key == "escape":
-            return self._cancel_event is not None
         if key == "c-t":
             return bool(getattr(self, "_latest_todos", ()))
         # ↑ on empty buffer: recall last queued message.

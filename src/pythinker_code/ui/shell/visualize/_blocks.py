@@ -1352,7 +1352,10 @@ class _SuggestionBlock:
                 label,
                 bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
             )
-        hint = Text(f"→ {prefill}", style=tui_rich_style("muted"))
+        hint = Text(
+            f"→ {prefill}  (Alt+S to accept)",
+            style=tui_rich_style("muted"),
+        )
         return BulletColumns(
             Group(label, hint),
             bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
@@ -1412,10 +1415,16 @@ class _CompactionBlock:
 
     TIPS: tuple[str, ...] = FEATURE_TIPS
 
-    def __init__(self, *, context_tokens: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        context_tokens: int | None = None,
+        todos_renderable: RenderableType | None = None,
+    ) -> None:
         self._start = time.monotonic()
         self._tip = random.choice(self.TIPS)
         self._context_tokens = context_tokens
+        self._todos_renderable = todos_renderable
 
     def update_context_tokens(self, context_tokens: int | None) -> None:
         """Refresh the token count shown in the compacting title."""
@@ -1449,7 +1458,9 @@ class _CompactionBlock:
         bar.append("▱" * empty, style=muted)
         bar.append(f" {pct}%", style=muted)
 
+        if self._todos_renderable is not None:
+            return Group(title, bar, self._todos_renderable)
+
         tip = Text("  ⎿  ", style=muted)
         tip.append(f"Tip: {self._tip}", style=subtle)
-
         return Group(title, bar, tip)

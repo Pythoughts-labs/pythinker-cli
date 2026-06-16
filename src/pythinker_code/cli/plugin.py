@@ -7,14 +7,21 @@ import queue
 import socket
 import threading
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import urljoin, urlparse
 
 import typer
 
 from pythinker_code.plugin import PluginError
 
+if TYPE_CHECKING:
+    from pythinker_code.config import Config
+
 cli = typer.Typer(help="Manage plugins.")
+
+# Marketplace-based plugins (Claude/Codex compatible). Kept as a subgroup so the
+# legacy subprocess-tool plugin commands above stay unchanged.
+marketplace_cli = typer.Typer(help="Manage plugin marketplaces and marketplace plugins.")
 
 
 def _parse_git_url(target: str) -> tuple[str, str | None, str | None]:
@@ -472,3 +479,225 @@ def info_cmd(
         typer.echo(f"Runtime:     host={spec.runtime.host}, version={spec.runtime.host_version}")
     else:
         typer.echo("Runtime:     (not installed via host)")
+
+
+def _config_for_toggle() -> Config:
+    """Load config for enable/disable, requiring the default config location.
+
+    enable/disable persist to the user ``config.toml``; refuse when the session
+    runs from an explicit ``--config``/``--config-file`` so we never rewrite a
+    file the user pointed us at ad hoc (mirrors the auth-login guard).
+    """
+    from pythinker_code.config import load_config
+
+    config = load_config()
+    if not config.is_from_default_location:
+        typer.echo(
+            "Error: enable/disable requires the default config file; "
+            "restart without --config/--config-file.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return config
+
+
+@cli.command("disable")
+def disable_cmd(
+    name: Annotated[str, typer.Argument(help="Plugin name to disable")],
+) -> None:
+    """Turn off a plugin (native or auto-detected) without uninstalling it."""
+    from pythinker_code.config import save_config
+
+    config = _config_for_toggle()
+    if name in config.plugins.disabled:
+        typer.echo(f"Plugin '{name}' is already disabled.")
+        return
+    config.plugins.disabled.append(name)
+    save_config(config)
+    typer.echo(f"Disabled plugin '{name}'.")
+
+
+@cli.command("enable")
+def enable_cmd(
+    name: Annotated[str, typer.Argument(help="Plugin name to enable")],
+) -> None:
+    """Re-enable a previously disabled plugin."""
+    from pythinker_code.config import save_config
+
+    config = _config_for_toggle()
+    changed = False
+    if name in config.plugins.disabled:
+        config.plugins.disabled.remove(name)
+        changed = True
+    # If a non-empty allowlist is in force, ensure the plugin is part of it.
+    if config.plugins.enabled and name not in config.plugins.enabled:
+        config.plugins.enabled.append(name)
+        changed = True
+    if not changed:
+        typer.echo(f"Plugin '{name}' is already enabled.")
+        return
+    save_config(config)
+    typer.echo(f"Enabled plugin '{name}'.")
+
+
+def _default_marketplace_name(source: Any) -> str:
+    """Derive a marketplace name from its source when none is given."""
+    if source.source == "github" and source.repo:
+        return source.repo.rstrip("/").split("/")[-1]
+    if source.url:
+        tail = source.url.rstrip("/").split("/")[-1]
+        return tail[:-4] if tail.endswith(".git") else tail
+    if source.path:
+        path = Path(source.path)
+        return path.stem if source.source == "file" else path.name
+    return "marketplace"
+
+
+@marketplace_cli.command("add")
+def marketplace_add_cmd(
+    source: Annotated[str, typer.Argument(help="github owner/repo, git/URL, or local path")],
+    name: Annotated[str | None, typer.Option("--name", help="Marketplace name")] = None,
+) -> None:
+    """Register a plugin marketplace."""
+    from pythinker_code.plugin.marketplace import (
+        MarketplaceError,
+        add_marketplace,
+        parse_marketplace_input,
+    )
+
+    try:
+        parsed = parse_marketplace_input(source)
+        resolved_name = name or _default_marketplace_name(parsed)
+        add_marketplace(resolved_name, parsed)
+    except MarketplaceError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Added marketplace '{resolved_name}' ({parsed.source})")
+
+
+@marketplace_cli.command("remove")
+def marketplace_remove_cmd(
+    name: Annotated[str, typer.Argument(help="Marketplace name")],
+) -> None:
+    """Unregister a marketplace."""
+    from pythinker_code.plugin.marketplace import remove_marketplace
+
+    if remove_marketplace(name):
+        typer.echo(f"Removed marketplace '{name}'")
+    else:
+        typer.echo(f"Marketplace '{name}' not found", err=True)
+        raise typer.Exit(1)
+
+
+@marketplace_cli.command("list")
+def marketplace_list_cmd() -> None:
+    """List configured marketplaces."""
+    from pythinker_code.plugin.marketplace import load_known_marketplaces
+
+    marketplaces = load_known_marketplaces()
+    if not marketplaces:
+        typer.echo("No marketplaces configured.")
+        return
+    for name, entry in sorted(marketplaces.items()):
+        src = entry.source
+        where = src.repo or src.url or src.path or src.source
+        typer.echo(f"  {name}  ({src.source}: {where})")
+
+
+@marketplace_cli.command("refresh")
+def marketplace_refresh_cmd(
+    name: Annotated[str, typer.Argument(help="Marketplace name to refresh")],
+) -> None:
+    """Re-resolve a marketplace's catalog (re-clones git sources)."""
+    from pythinker_code.plugin.install import refresh_marketplace
+    from pythinker_code.plugin.marketplace import MarketplaceError
+
+    try:
+        count = refresh_marketplace(name)
+    except MarketplaceError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Refreshed '{name}' — {count} plugin(s) available")
+
+
+@marketplace_cli.command("install")
+def marketplace_install_cmd(
+    plugin: Annotated[str, typer.Argument(help="Plugin name, or name@marketplace")],
+    marketplace: Annotated[
+        str | None, typer.Argument(help="Marketplace name (omit if using name@marketplace)")
+    ] = None,
+) -> None:
+    """Install a plugin from a configured marketplace."""
+    from pythinker_code.plugin.install import install_plugin_from_marketplace
+    from pythinker_code.plugin.marketplace import MarketplaceError
+
+    if marketplace is None:
+        if "@" not in plugin:
+            typer.echo("Error: specify <plugin> <marketplace> or name@marketplace", err=True)
+            raise typer.Exit(1)
+        plugin, marketplace = plugin.rsplit("@", 1)
+    try:
+        record = install_plugin_from_marketplace(plugin, marketplace)
+    except MarketplaceError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Installed '{plugin}@{marketplace}' v{record.version} -> {record.install_path}")
+
+
+@marketplace_cli.command("uninstall")
+def marketplace_uninstall_cmd(
+    plugin: Annotated[str, typer.Argument(help="Plugin name, or name@marketplace")],
+    marketplace: Annotated[str | None, typer.Argument(help="Marketplace name")] = None,
+) -> None:
+    """Uninstall a marketplace plugin (removes records and cached/symlinked files)."""
+    import shutil
+
+    from pythinker_code.plugin.directories import plugin_cache_dir
+    from pythinker_code.plugin.installed import load_installed_plugins, remove_install
+
+    if marketplace is None:
+        if "@" not in plugin:
+            typer.echo("Error: specify <plugin> <marketplace> or name@marketplace", err=True)
+            raise typer.Exit(1)
+        plugin, marketplace = plugin.rsplit("@", 1)
+
+    records = load_installed_plugins().get(f"{plugin}@{marketplace}", [])
+    if not remove_install(plugin, marketplace):
+        typer.echo(f"'{plugin}@{marketplace}' is not installed", err=True)
+        raise typer.Exit(1)
+    # Remove the on-disk install (unlink symlinks; rmtree real dirs). Constrain
+    # deletions to the plugin cache root so corrupted metadata (an install_path
+    # pointing elsewhere) cannot remove arbitrary user files. Symlinks are only
+    # unlinked, never followed, so an external reuse target is left untouched.
+    cache_root = plugin_cache_dir().resolve()
+    for record in records:
+        path = Path(record.install_path)
+        parent = path.parent.resolve()
+        if parent != cache_root and cache_root not in parent.parents:
+            typer.echo(f"Warning: skipping unsafe uninstall path outside cache: {path}", err=True)
+            continue
+        if path.is_symlink():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    plugin_dir = plugin_cache_dir() / marketplace / plugin
+    if plugin_dir.is_dir() and not any(plugin_dir.iterdir()):
+        plugin_dir.rmdir()
+    typer.echo(f"Uninstalled '{plugin}@{marketplace}'")
+
+
+@marketplace_cli.command("installed")
+def marketplace_installed_cmd() -> None:
+    """List installed marketplace plugins."""
+    from pythinker_code.plugin.installed import load_installed_plugins
+
+    plugins = load_installed_plugins()
+    if not plugins:
+        typer.echo("No marketplace plugins installed.")
+        return
+    for ident, records in sorted(plugins.items()):
+        versions = ", ".join(sorted({r.version for r in records}))
+        typer.echo(f"  {ident}  (v{versions})")
+
+
+cli.add_typer(marketplace_cli, name="marketplace")

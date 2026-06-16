@@ -1589,8 +1589,9 @@ class LocalFileMentionCompleter(Completer):
                     cat = 1
                 else:
                     cat = 2
+                test_penalty = int(any("test" in segment.lower() for segment in path.split("/")))
                 # preserve original FuzzyCompleter's order in the same category
-                return (cat,)
+                return (cat, test_penalty)
 
             candidates.sort(key=_rank)
             yield from candidates
@@ -2398,6 +2399,18 @@ class CustomPromptSession:
 
             track("shortcut_editor")
             self._open_in_external_editor(event)
+
+        def _has_staged_suggestion_prefill() -> bool:
+            return bool(getattr(self, "_staged_suggestion_prefill", None))
+
+        @_kb.add("escape", "s", eager=True, filter=Condition(_has_staged_suggestion_prefill))
+        def _(event: KeyPressEvent) -> None:
+            """Accept the latest agent suggestion into the prompt buffer."""
+            if self.accept_staged_suggestion_prefill():
+                from pythinker_code.telemetry import track
+
+                track("suggestion_accepted")
+            event.app.invalidate()
 
         @_kb.add(
             "up",
@@ -3331,6 +3344,7 @@ class CustomPromptSession:
         if total <= 0:
             # Background work drained — reset the elapsed/rate trackers.
             self._bg_status_started_at = None
+            self._bg_status_start_tokens = None
             samples = getattr(self, "_bg_token_samples", None)
             if samples is not None:
                 samples.clear()
@@ -3338,8 +3352,11 @@ class CustomPromptSession:
         now = time.monotonic()
         started_at = getattr(self, "_bg_status_started_at", None)
         if started_at is None:
+            from pythinker_code.soul.live_tokens import get_total_output_tokens
+
             started_at = now
             self._bg_status_started_at = now
+            self._bg_status_start_tokens = get_total_output_tokens()
         elapsed = max(0.0, now - started_at)
         frame = active_marker_frame(elapsed)
         tokens = _get_tui_tokens()
@@ -3372,27 +3389,30 @@ class CustomPromptSession:
         """Compact ``(elapsed, ↓ Nk tokens, N t/s)`` suffix for the line above.
 
         Same visual language as the live view's working/todo headers. Elapsed
-        counts from when background work first appeared; the rate is a short
-        sliding window over the status snapshot's context tokens (mirroring
-        ``_ContentBlock._record_token_rate_sample``).
+        counts from when background work first appeared; the token readout is the
+        session-wide output tokens produced since this stretch began (detached
+        background souls feed the same counter), and the rate is a short sliding
+        window over it (mirroring ``_ContentBlock._record_token_rate_sample``).
         """
         from pythinker_code.soul import format_token_count
+        from pythinker_code.soul.live_tokens import get_total_output_tokens
         from pythinker_code.utils.datetime import format_elapsed
 
         parts: list[str] = []
         started = getattr(self, "_bg_status_started_at", None)
         if started is not None:
             parts.append(format_elapsed(max(0.0, now - started)))
-        provider = getattr(self, "_status_provider", None)
-        status = provider() if provider is not None else None
-        context_tokens = getattr(status, "context_tokens", None) or 0
-        if context_tokens:
-            parts.append(f"↓ {format_token_count(context_tokens)} tokens")
+        start_tokens = getattr(self, "_bg_status_start_tokens", None)
+        bg_tokens = (
+            max(0, get_total_output_tokens() - start_tokens) if start_tokens is not None else 0
+        )
+        if bg_tokens:
+            parts.append(f"↓ {format_token_count(bg_tokens)} tokens")
             samples: deque[tuple[float, int]] | None = getattr(self, "_bg_token_samples", None)
             if samples is None:
                 samples = deque()
                 self._bg_token_samples = samples
-            samples.append((now, context_tokens))
+            samples.append((now, bg_tokens))
             # 1.5s window, ≥3 samples — the live view's tracker parameters.
             while len(samples) > 1 and now - samples[0][0] > 1.5:
                 samples.popleft()
@@ -3563,6 +3583,23 @@ class CustomPromptSession:
         """
         self._prefill_text = text
 
+    def stage_suggestion_prefill(self, prefill: str) -> None:
+        """Remember a non-blocking Suggestion prefill until the user accepts it."""
+        text = prefill.strip()
+        self._staged_suggestion_prefill = text or None
+
+    def accept_staged_suggestion_prefill(self) -> bool:
+        """Insert a staged suggestion prefill into the prompt buffer."""
+        text = getattr(self, "_staged_suggestion_prefill", None)
+        if not text:
+            return False
+        self._staged_suggestion_prefill = None
+        buffer = self._session.default_buffer
+        if buffer.text and not buffer.text.endswith((" ", "\n")):
+            buffer.insert_text(" ")
+        buffer.insert_text(text)
+        return True
+
     async def prompt_next(self) -> UserInput:
         return await self._prompt_once(append_history=None)
 
@@ -3642,6 +3679,7 @@ class CustomPromptSession:
         # Consume one-shot prefill text if set
         default = getattr(self, "_prefill_text", None) or ""
         self._prefill_text = None
+        self._staged_suggestion_prefill = None
         with patch_stdout(raw=True):
             command = str(
                 await self._session.prompt_async(placeholder=placeholder, default=default)

@@ -39,26 +39,52 @@ class Params(BaseModel):
     )
     query: str | None = Field(
         default=None,
-        description="Keywords to match against prior session titles (mode=search). "
-        "Omit to list recent sessions.",
+        description=(
+            "Keywords to match against prior session titles, session_ids, and plan slugs "
+            "(mode=search). Omit to list recent sessions."
+        ),
     )
     session_id: str | None = Field(
         default=None,
         description="The session_id to read, from a prior Recall search (mode=read).",
     )
+    message_offset: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "For mode=read, skip this many rendered non-internal transcript messages before "
+            "returning content."
+        ),
+    )
+    max_messages: int | None = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="For mode=read, return at most this many rendered transcript messages.",
+    )
+
+
+def _session_search_blob(session: Session) -> str:
+    """Lexical search text for a session (title, id, plan slug)."""
+    title = (session.state.custom_title or session.title or "").strip()
+    parts = [title, session.id]
+    plan_slug = session.state.plan_slug
+    if plan_slug:
+        parts.append(plan_slug)
+    return " ".join(parts).lower()
 
 
 def _rank_sessions(
     sessions: list[Session], *, query: str, current_id: str, limit: int
 ) -> list[Session]:
-    """Rank prior sessions by title keyword overlap then recency (pure)."""
+    """Rank prior sessions by keyword overlap then recency (pure)."""
     terms = query.lower().split()
     scored: list[tuple[int, float, Session]] = []
     for session in sessions:
         if session.id == current_id:
             continue
-        title = (session.state.custom_title or session.title or "").strip()
-        score = sum(1 for term in terms if term in title.lower())
+        blob = _session_search_blob(session)
+        score = sum(1 for term in terms if term in blob)
         if terms and score == 0:
             continue
         scored.append((score, session.updated_at, session))
@@ -66,15 +92,31 @@ def _rank_sessions(
     return [session for _score, _ts, session in scored[:limit]]
 
 
-def _render_transcript(context_file: Path, budget: int) -> str:
+def _render_transcript(
+    context_file: Path,
+    budget: int,
+    *,
+    message_offset: int = 0,
+    max_messages: int | None = None,
+) -> str:
     """Render a session's message log into a budgeted, sanitized transcript.
 
     Internal (``_``-prefixed) roles are skipped. Each message's text is sanitized;
     a block that trips the secret/injection scanner becomes ``[redacted]`` rather
-    than leaking or silently vanishing. Stops once the char budget is reached.
+    than leaking or silently vanishing.
+
+    Windowing operates on the renderable (post-filter) message stream — i.e. after
+    internal-role and empty-segment messages are dropped:
+
+    - ``message_offset``: skip this many renderable messages before emitting any.
+    - ``max_messages``: emit at most this many renderable messages (``None`` = no limit).
+
+    Stops once the char budget or ``max_messages`` is reached.
     """
     out: list[str] = []
     used = 0
+    seen_messages = 0
+    included_messages = 0
     try:
         # Stream line-by-line (not read_text) so a huge transcript cannot blow up
         # memory; errors="replace" tolerates a corrupt/binary line without crashing.
@@ -97,12 +139,19 @@ def _render_transcript(context_file: Path, budget: int) -> str:
                     segment = f"{segment} [tool calls: {', '.join(tool_names)}]".strip()
                 if not segment:
                     continue
+                if seen_messages < message_offset:
+                    seen_messages += 1
+                    continue
+                if max_messages is not None and included_messages >= max_messages:
+                    break
                 clean = sanitize_candidate_block(segment)
                 entry = f"[{role}] {clean if clean is not None else '[redacted]'}"
                 if used + len(entry) + 1 > budget:
                     out.append("… (transcript truncated to fit the recall budget)")
                     break
                 out.append(entry)
+                seen_messages += 1
+                included_messages += 1
                 used += len(entry) + 1
     except OSError:
         return ""
@@ -134,7 +183,11 @@ class Recall(CallableTool2[Params]):
                 message=f"Invalid session_id: {session_id!r}.",
                 brief="Invalid session_id",
             )
-        return await self._read(session_id)
+        return await self._read(
+            session_id,
+            message_offset=params.message_offset,
+            max_messages=params.max_messages,
+        )
 
     async def _search(self, query: str) -> ToolReturnValue:
         work_dir = self._runtime.work_dir
@@ -159,11 +212,15 @@ class Recall(CallableTool2[Params]):
             title = session.state.custom_title or session.title or "(untitled)"
             lines.append(f"- session_id: {session.id}")
             lines.append(f"  title: {title}")
+            if session.state.plan_slug:
+                lines.append(f"  plan_slug: {session.state.plan_slug}")
         lines.append("")
         lines.append('Read one with Recall(mode="read", session_id="...").')
         return ToolOk(output="\n".join(lines), message=f"Found {len(top)} prior session(s).")
 
-    async def _read(self, session_id: str) -> ToolReturnValue:
+    async def _read(
+        self, session_id: str, *, message_offset: int, max_messages: int | None
+    ) -> ToolReturnValue:
         if session_id == self._runtime.session.id:
             return ToolError(message="Cannot recall the current session.", brief="Current session")
         work_dir = self._runtime.work_dir
@@ -181,7 +238,11 @@ class Recall(CallableTool2[Params]):
             )
 
         rendered = await asyncio.to_thread(
-            _render_transcript, session.context_file, _READ_BUDGET_CHARS
+            _render_transcript,
+            session.context_file,
+            _READ_BUDGET_CHARS,
+            message_offset=message_offset,
+            max_messages=max_messages,
         )
         if not rendered:
             return ToolOk(

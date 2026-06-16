@@ -5,10 +5,13 @@ commands, and file paths from an earlier session when you need to repeat or exte
 prior work.
 
 Two modes:
-- `mode="search"` — find prior sessions by keyword over their titles. Pass `query`
-  (omit to list recent sessions). Returns session_ids + titles.
+- `mode="search"` — find prior sessions by keyword over their titles, session_ids,
+  and plan slugs. Pass `query` (omit to list recent sessions). Returns
+  session_ids, titles, and plan slugs when present.
 - `mode="read"` — read a chosen session's transcript. Pass `session_id` (from a
-  prior search). Returns a budgeted, sanitized transcript.
+  prior search). Optionally pass `message_offset` and `max_messages` to read a
+  bounded window of rendered non-internal transcript messages. Returns a budgeted,
+  sanitized transcript.
 
 When to use:
 - The user references earlier work ("continue what we did on the auth migration").

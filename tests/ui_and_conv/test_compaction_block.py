@@ -1,3 +1,5 @@
+from rich.text import Text
+
 from pythinker_code.ui.shell.components import render_plain
 from pythinker_code.ui.shell.visualize._blocks import _CompactionBlock
 
@@ -21,3 +23,14 @@ def test_compaction_block_context_tokens_can_update():
     rendered = render_plain(block._render(), width=100)
 
     assert "↑ 12.3k tokens" in rendered
+
+
+def test_compaction_block_shows_todos_when_provided():
+    todos_text = Text("  ⎿  ■ Refactor auth\n     ✓ Write tests")
+    block = _CompactionBlock(context_tokens=None, todos_renderable=todos_text)
+
+    rendered = render_plain(block._render(), width=100)
+
+    assert "Refactor auth" in rendered
+    assert "Write tests" in rendered
+    assert "Tip:" not in rendered

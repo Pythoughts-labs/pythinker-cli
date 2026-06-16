@@ -2,7 +2,7 @@ import contextlib
 import json
 import os
 from pathlib import Path, PurePath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import typer
 
@@ -27,6 +27,35 @@ def ensure_docker_rm(command: str, args: list[str]) -> list[str]:
     return [args[0], "--rm", *args[1:]]
 
 
+def apply_docker_rm_to_mcp_config_dict(config: dict[str, Any]) -> dict[str, Any]:
+    """Inject ``--rm`` into stdio docker/podman servers when loading mcp.json (mcpext-3)."""
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return config
+    typed_servers = cast(dict[str, Any], servers)
+    for raw_server in typed_servers.values():
+        if not isinstance(raw_server, dict):
+            continue
+        server = cast(dict[str, Any], raw_server)
+        command = server.get("command")
+        if not isinstance(command, str):
+            continue
+        raw_args = server.get("args")
+        args: list[str] = []
+        if isinstance(raw_args, list):
+            args = [str(item) for item in cast(list[object], raw_args)]
+        server["args"] = ensure_docker_rm(command, args)
+    return config
+
+
+def prepare_mcp_config_dict(config: dict[str, Any]) -> dict[str, Any]:
+    """Apply portable MCP config fixes before validation (docker ``--rm``, name normalization)."""
+    from pythinker_code.utils.mcp_names import normalize_mcp_servers_in_config
+
+    config = apply_docker_rm_to_mcp_config_dict(config)
+    return normalize_mcp_servers_in_config(config)
+
+
 def get_global_mcp_config_file() -> Path:
     """Get the global MCP config file path."""
     from pythinker_code.share import get_share_dir
@@ -38,6 +67,8 @@ def _load_mcp_config() -> dict[str, Any]:
     """Load MCP config from global mcp config file."""
     from fastmcp.mcp_config import MCPConfig
     from pydantic import ValidationError
+
+    from pythinker_code.exception import MCPConfigError
 
     mcp_file = get_global_mcp_config_file()
     if not mcp_file.exists():
@@ -52,7 +83,30 @@ def _load_mcp_config() -> dict[str, Any]:
     except ValidationError as e:
         raise typer.BadParameter(f"Invalid MCP config in '{mcp_file}': {e}") from e
 
-    return config
+    try:
+        return prepare_mcp_config_dict(config)
+    except MCPConfigError as e:
+        raise typer.BadParameter(str(e)) from e
+
+
+def _resolve_mcp_server_key(name: str, servers: dict[str, Any]) -> str:
+    """Resolve a user-supplied MCP server name to the stored config key."""
+    from pythinker_code.exception import MCPConfigError
+    from pythinker_code.utils.mcp_names import normalize_mcp_server_name
+
+    if name in servers:
+        return name
+    try:
+        normalized = normalize_mcp_server_name(name)
+    except MCPConfigError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if normalized in servers:
+        if normalized != name:
+            typer.echo(f"Resolved MCP server '{name}' to '{normalized}'.")
+        return normalized
+    typer.echo(f"MCP server '{name}' not found.", err=True)
+    raise typer.Exit(code=1)
 
 
 def _save_mcp_config(config: dict[str, Any]) -> None:
@@ -71,18 +125,23 @@ def _save_mcp_config(config: dict[str, Any]) -> None:
         fh.write(payload)
 
 
-def _get_mcp_server(name: str, *, require_remote: bool = False) -> dict[str, Any]:
-    """Get MCP server config by name."""
+def _mcp_servers_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw_servers = config.get("mcpServers", {})
+    if isinstance(raw_servers, dict):
+        return cast(dict[str, Any], raw_servers)
+    return {}
+
+
+def _get_mcp_server(name: str, *, require_remote: bool = False) -> tuple[str, dict[str, Any]]:
+    """Get MCP server config by name (accepts raw or normalized keys)."""
     config = _load_mcp_config()
-    servers = config.get("mcpServers", {})
-    if name not in servers:
-        typer.echo(f"MCP server '{name}' not found.", err=True)
-        raise typer.Exit(code=1)
-    server = servers[name]
+    servers = _mcp_servers_from_config(config)
+    stored_name = _resolve_mcp_server_key(name, servers)
+    server = cast(dict[str, Any], servers[stored_name])
     if require_remote and "url" not in server:
-        typer.echo(f"MCP server '{name}' is not a remote server.", err=True)
+        typer.echo(f"MCP server '{stored_name}' is not a remote server.", err=True)
         raise typer.Exit(code=1)
-    return server
+    return stored_name, server
 
 
 def _parse_key_value_pairs(
@@ -171,8 +230,18 @@ def mcp_add(
     ] = None,
 ):
     """Add an MCP server."""
+    from pythinker_code.exception import MCPConfigError
+    from pythinker_code.utils.mcp_names import normalize_mcp_server_name
+
     config = _load_mcp_config()
     server_args = server_args or []
+    try:
+        stored_name = normalize_mcp_server_name(name)
+    except MCPConfigError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    if stored_name != name:
+        typer.echo(f"Normalized MCP server name '{name}' to '{stored_name}'.")
 
     if transport not in {"stdio", "http"}:
         typer.echo(f"Unsupported transport: {transport}.", err=True)
@@ -221,9 +290,12 @@ def mcp_add(
 
     if "mcpServers" not in config:
         config["mcpServers"] = {}
-    config["mcpServers"][name] = server_config
+    if stored_name in config["mcpServers"]:
+        typer.echo(f"MCP server '{stored_name}' already exists.", err=True)
+        raise typer.Exit(code=1)
+    config["mcpServers"][stored_name] = server_config
     _save_mcp_config(config)
-    typer.echo(f"Added MCP server '{name}' to {get_global_mcp_config_file()}.")
+    typer.echo(f"Added MCP server '{stored_name}' to {get_global_mcp_config_file()}.")
 
 
 @cli.command("remove")
@@ -234,11 +306,12 @@ def mcp_remove(
     ],
 ):
     """Remove an MCP server."""
-    _get_mcp_server(name)
     config = _load_mcp_config()
-    del config["mcpServers"][name]
+    servers = _mcp_servers_from_config(config)
+    stored_name = _resolve_mcp_server_key(name, servers)
+    del config["mcpServers"][stored_name]
     _save_mcp_config(config)
-    typer.echo(f"Removed MCP server '{name}' from {get_global_mcp_config_file()}.")
+    typer.echo(f"Removed MCP server '{stored_name}' from {get_global_mcp_config_file()}.")
 
 
 def _oauth_token_storage(server_url: str) -> Any:
@@ -306,21 +379,25 @@ def mcp_auth(
     import asyncio
 
     server = _get_mcp_server(name, require_remote=True)
-    if server.get("auth") != "oauth":
-        typer.echo(f"MCP server '{name}' does not use OAuth. Add with --auth oauth.", err=True)
+    stored_name, server_config = server
+    if server_config.get("auth") != "oauth":
+        typer.echo(
+            f"MCP server '{stored_name}' does not use OAuth. Add with --auth oauth.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     async def _auth() -> None:
         import fastmcp
 
-        typer.echo(f"Authorizing with '{name}'...")
+        typer.echo(f"Authorizing with '{stored_name}'...")
         typer.echo("A browser window will open for authorization.")
 
-        client = fastmcp.Client({"mcpServers": {name: server}})
+        client = fastmcp.Client({"mcpServers": {stored_name: server_config}})
         try:
             async with client:
                 tools = await client.list_tools()
-                typer.echo(f"Successfully authorized with '{name}'.")
+                typer.echo(f"Successfully authorized with '{stored_name}'.")
                 typer.echo(f"Available tools: {len(tools)}")
         except Exception as e:
             typer.echo(f"Authorization failed: {type(e).__name__}: {e}", err=True)
@@ -337,7 +414,7 @@ def mcp_reset_auth(
     ],
 ):
     """Reset OAuth authorization for an MCP server (clear cached tokens)."""
-    server = _get_mcp_server(name, require_remote=True)
+    stored_name, server = _get_mcp_server(name, require_remote=True)
 
     try:
         import asyncio
@@ -349,7 +426,7 @@ def mcp_reset_auth(
                 await result
 
         asyncio.run(_clear())
-        typer.echo(f"OAuth tokens cleared for '{name}'.")
+        typer.echo(f"OAuth tokens cleared for '{stored_name}'.")
     except ImportError:
         typer.echo("OAuth support not available.", err=True)
         raise typer.Exit(code=1) from None
@@ -368,18 +445,18 @@ def mcp_test(
     """Test connection to an MCP server and list available tools."""
     import asyncio
 
-    server = _get_mcp_server(name)
+    stored_name, server = _get_mcp_server(name)
 
     async def _test() -> None:
         import fastmcp
 
-        typer.echo(f"Testing connection to '{name}'...")
-        client = fastmcp.Client({"mcpServers": {name: server}})
+        typer.echo(f"Testing connection to '{stored_name}'...")
+        client = fastmcp.Client({"mcpServers": {stored_name: server}})
 
         try:
             async with client:
                 tools = await client.list_tools()
-                typer.echo(f"✓ Connected to '{name}'")
+                typer.echo(f"✓ Connected to '{stored_name}'")
                 typer.echo(f"  Available tools: {len(tools)}")
                 if tools:
                     typer.echo("  Tools:")

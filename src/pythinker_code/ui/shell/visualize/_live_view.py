@@ -28,6 +28,10 @@ from rich.text import Text
 
 from pythinker_code.session_recap import build_turn_recap_line
 from pythinker_code.soul import format_token_count
+from pythinker_code.soul.live_tokens import (
+    get_turn_output_tokens,
+    snapshot_output_tokens_for_turn,
+)
 from pythinker_code.tools.display import DiffDisplayBlock, TodoDisplayBlock, TodoDisplayItem
 from pythinker_code.ui.shell.components.render_utils import (
     cell_width,
@@ -644,7 +648,7 @@ class _LiveView:
             ActivitySnapshot(
                 label=spinner_message(now),
                 elapsed_s=elapsed,
-                tokens=getattr(self, "_latest_context_tokens", None) or 0,
+                tokens=get_turn_output_tokens(),
                 token_rate=self._turn_token_rate(now),
             ),
             width=width,
@@ -659,11 +663,11 @@ class _LiveView:
     def _turn_token_rate(self, now: float) -> int | None:
         """Stable recent tokens/sec for the running turn, or None until known.
 
-        Samples the cumulative context token counter at refresh cadence and
+        Samples the session-wide output-token counter at refresh cadence and
         derives the rate over a short sliding window, so the readout tracks
         live throughput instead of a whole-turn average.
         """
-        tokens = getattr(self, "_latest_context_tokens", None) or 0
+        tokens = get_turn_output_tokens()
         # Lazy init: subclasses used in tests don't always run __init__.
         samples = getattr(self, "_turn_token_samples", None)
         if samples is None:
@@ -687,8 +691,9 @@ class _LiveView:
     ) -> Text:
         label = _todo_activity_label(label)
         parts = [format_elapsed(elapsed_s)]
-        if self._latest_context_tokens:
-            parts.append(f"↓ {format_token_count(self._latest_context_tokens)} tokens")
+        turn_tokens = get_turn_output_tokens()
+        if turn_tokens:
+            parts.append(f"↓ {format_token_count(turn_tokens)} tokens")
         rate = self._turn_token_rate(time.monotonic())
         if rate:
             parts.append(f"{rate} t/s")
@@ -850,6 +855,12 @@ class _LiveView:
             blocks.append(self._status_block.render())
         return Group(*blocks)
 
+    def _begin_turn_token_window(self) -> None:
+        """Start a fresh per-turn token-rate window: reset the baseline snapshot
+        and drop prior-turn samples so the t/s rate can't be skewed by stale data."""
+        snapshot_output_tokens_for_turn()
+        self._turn_token_samples.clear()
+
     def dispatch_wire_message(self, msg: WireMessage) -> None:
         """Dispatch the Wire message to UI components."""
         assert not isinstance(msg, StepInterrupted)  # handled in visualize_loop
@@ -862,6 +873,7 @@ class _LiveView:
             if self._active_turn_depth == 0:
                 self._active_turn_depth = 1
                 self._turn_start_time = time.monotonic()
+                self._begin_turn_token_window()
             self.refresh_soon()
             return
         if isinstance(msg, StepRetry):
@@ -873,6 +885,7 @@ class _LiveView:
             case TurnBegin(user_input=user_input):
                 if self._active_turn_depth == 0:
                     self._turn_start_time = time.monotonic()
+                    self._begin_turn_token_window()
                     self._recap_user_input = (
                         user_input
                         if isinstance(user_input, str)
@@ -901,6 +914,9 @@ class _LiveView:
             case CompactionBegin():
                 self._compaction_block = _CompactionBlock(
                     context_tokens=self._latest_context_tokens,
+                    todos_renderable=self._pinned_todo_block(
+                        width=current_console_width(), hide_active=False, elapsed_s=0.0
+                    ),
                 )
                 self.refresh_soon()
             case CompactionEnd():

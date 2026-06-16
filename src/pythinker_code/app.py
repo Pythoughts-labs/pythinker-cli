@@ -254,6 +254,21 @@ class PythinkerCLI:
             config.loop_control.max_ralph_iterations = max_ralph_iterations
         logger.info("Loaded config: {config}", config=config)
 
+        # Install the plugin activation policy for this session so artifact
+        # collectors (skills/agents/commands/hooks/mcp) honor config-configured
+        # enable-state and the external (Claude/Codex) opt-in.
+        from pythinker_code.plugin.policy import policy_from_config, set_plugin_policy
+
+        set_plugin_policy(
+            policy_from_config(
+                config.plugins.discover_external,
+                config.plugins.external_exec,
+                config.plugins.enabled,
+                config.plugins.disabled,
+                config.plugins.options,
+            )
+        )
+
         _phase_t = time.monotonic()
         oauth = OAuthManager(config)
 
@@ -392,10 +407,12 @@ class PythinkerCLI:
             # Already in plan mode from restored session, trigger activation reminder
             soul.schedule_plan_activation_reminder()
 
-        # Create and inject hook engine
+        # Create and inject hook engine. Enabled plugins contribute lifecycle
+        # hooks; config hooks come first so a project hook is never shadowed.
         from pythinker_code.hooks.engine import HookEngine
+        from pythinker_code.plugin.integration import plugin_hook_defs
 
-        hook_engine = HookEngine(config.hooks, cwd=str(session.work_dir))
+        hook_engine = HookEngine([*config.hooks, *plugin_hook_defs()], cwd=str(session.work_dir))
         if config.disabled_project_hooks:
             # The load-time logger.warning only reaches shell users; publish a
             # notification so web/ACP frontends also learn why their project

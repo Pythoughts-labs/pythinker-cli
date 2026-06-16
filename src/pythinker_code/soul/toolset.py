@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import difflib
 import hashlib
 import importlib
@@ -37,6 +38,7 @@ from pythinker_host.path import HostPath
 
 from pythinker_code.exception import InvalidToolError, MCPRuntimeError
 from pythinker_code.hooks.engine import HookEngine
+from pythinker_code.telemetry.names import sanitize_telemetry_tool_name
 from pythinker_code.tools import SkipThisTool
 from pythinker_code.utils.logging import logger
 from pythinker_code.wire.types import (
@@ -234,6 +236,78 @@ def _configure_mcp_client_stderr_log(client: Any, runtime: Runtime, server_name:
             _set_transport_log_file(child)
 
     _set_transport_log_file(getattr(client, "transport", None))
+
+
+def _make_mcp_live_refresh_handler(
+    client: Any,
+    toolset: PythinkerToolset,
+    runtime: Runtime,
+    server_name: str,
+) -> Any:
+    """Message handler that refreshes inventory on MCP list_changed notifications."""
+    from fastmcp.client.tasks import TaskNotificationHandler
+
+    class _McpLiveRefreshHandler(TaskNotificationHandler):
+        async def on_tool_list_changed(
+            self, message: mcp.types.ToolListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("tools")
+
+        async def on_resource_list_changed(
+            self, message: mcp.types.ResourceListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("resources")
+
+        async def on_prompt_list_changed(
+            self, message: mcp.types.PromptListChangedNotification
+        ) -> None:
+            await self._refresh_inventory("prompts")
+
+        async def _refresh_inventory(self, capability: str) -> None:
+            info = toolset.mcp_servers.get(server_name)
+            if info is None or info.status != "connected":
+                return
+            try:
+                await toolset.refresh_mcp_server(server_name, runtime)
+            except Exception as exc:
+                logger.warning(
+                    "MCP server {server_name} live {capability} refresh failed: {error}",
+                    server_name=server_name,
+                    capability=capability,
+                    error=exc,
+                )
+
+    return _McpLiveRefreshHandler(client)
+
+
+def _configure_mcp_client_handlers(
+    client: Any,
+    toolset: PythinkerToolset,
+    runtime: Runtime,
+    server_name: str,
+) -> None:
+    _configure_mcp_client_stderr_log(client, runtime, server_name)
+    client._session_kwargs["message_handler"] = _make_mcp_live_refresh_handler(
+        client, toolset, runtime, server_name
+    )
+
+
+async def _hold_mcp_session(server_name: str, info: MCPServerInfo) -> None:
+    """Keep one MCP client session open so list_changed notifications can arrive."""
+    stop = asyncio.Event()
+    info.session_stop = stop
+    try:
+        async with info.client:
+            await stop.wait()
+    except Exception as exc:
+        logger.debug(
+            "MCP session holder exited for {server_name}: {error}",
+            server_name=server_name,
+            error=exc,
+        )
+    finally:
+        info.session_stop = None
+        info.session_holder_task = None
 
 
 def _classify_mcp_connect_error(error: BaseException, server_name: str) -> str:
@@ -534,6 +608,39 @@ class PythinkerToolset:
                 )
             self.add(tool)
 
+    def _publish_connected_mcp_tools(self, runtime: Runtime) -> None:
+        """Publish connected MCP tools in configured server order.
+
+        Servers connect concurrently, so registering inside each connection task
+        makes duplicate tool-name resolution depend on task completion order.
+        Publishing after the gather keeps the collision policy deterministic.
+        """
+        for server_name, server_info in self._mcp_servers.items():
+            if server_info.status != "connected":
+                continue
+            self._register_mcp_tools(server_name, server_info.tools)
+            for tool in server_info.tools:
+                from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
+
+                runtime.mcp_tools[mcp_tool_runtime_key(server_name, tool.name)] = tool
+
+    def _rebuild_published_mcp_tools(self, runtime: Runtime) -> None:
+        """Atomically rebuild the published MCP tool registry from connected servers.
+
+        Drop every currently-published MCP tool (non-MCP tools are preserved), then
+        republish all *connected* servers in configured order via
+        :meth:`_publish_connected_mcp_tools`. This keeps last-wins collision order
+        deterministic and lets a disconnect/refresh re-claim a tool name another
+        still-connected server provides, instead of orphaning it. The method runs
+        synchronously (no ``await`` between the drop and the republish), so the two
+        registries are never observed half-rebuilt.
+        """
+        stale = [name for name, tool in self._tool_dict.items() if isinstance(tool, MCPTool)]
+        for name in stale:
+            del self._tool_dict[name]
+        runtime.mcp_tools.clear()
+        self._publish_connected_mcp_tools(runtime)
+
     def hide(self, tool_name: str) -> bool:
         """Hide a tool from the LLM tool list. Returns True if the tool exists."""
         if tool_name in self._tool_dict:
@@ -800,7 +907,7 @@ class PythinkerToolset:
                     _current_tool_execution_started_ids.reset(started_ids_token)
 
             async def _call_with_lifecycle():
-                tool_input_dict = arguments if isinstance(arguments, dict) else {}
+                tool_input_dict = copy.deepcopy(arguments) if isinstance(arguments, dict) else {}
 
                 if self._runtime is not None:
                     from pythinker_code.soul.permission import check_tool_call_allowed
@@ -829,7 +936,7 @@ class PythinkerToolset:
                         session_id=_get_session_id(),
                         cwd=str(Path.cwd()),
                         tool_name=tool_call.function.name,
-                        tool_input=tool_input_dict,
+                        tool_input=copy.deepcopy(tool_input_dict),
                         tool_call_id=tool_call.id,
                     ),
                 )
@@ -857,19 +964,20 @@ class PythinkerToolset:
                     emit_current_tool_execution_started()
 
                 t0 = time.monotonic()
+                telemetry_tool_name = sanitize_telemetry_tool_name(tool_call.function.name)
                 _tool_span_cm = _otel.start_span(
                     "pythinker.tool",
                     {
-                        "tool.name": tool_call.function.name,
+                        "tool.name": telemetry_tool_name,
                         "tool.call_id": tool_call.id,
                         # GenAI semconv so GenAI-aware backends recognize the tool layer.
                         "gen_ai.operation.name": "execute_tool",
-                        "gen_ai.tool.name": tool_call.function.name,
+                        "gen_ai.tool.name": telemetry_tool_name,
                     },
                 )
                 _tool_span = _tool_span_cm.__enter__()
                 try:
-                    ret = await self._gated_call(tool, arguments)
+                    ret = await self._gated_call(tool, copy.deepcopy(arguments))
                 except Exception as e:
                     tool_elapsed = time.monotonic() - t0
                     _tool_span.set_attribute("tool.success", False)
@@ -877,7 +985,7 @@ class PythinkerToolset:
                     _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
                     _tool_span_cm.__exit__(type(e), e, e.__traceback__)
                     _m.record_tool_call(
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         duration_seconds=tool_elapsed,
                         success=False,
                         error_type=type(e).__name__,
@@ -896,7 +1004,7 @@ class PythinkerToolset:
                             session_id=_get_session_id(),
                             cwd=str(Path.cwd()),
                             tool_name=tool_call.function.name,
-                            tool_input=tool_input_dict,
+                            tool_input=copy.deepcopy(tool_input_dict),
                             error=str(e),
                             tool_call_id=tool_call.id,
                         ),
@@ -906,12 +1014,12 @@ class PythinkerToolset:
                     _error_type = type(e).__name__
                     track(
                         "tool_error",
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         error_type=_error_type,
                     )
                     track(
                         "tool_call",
-                        tool_name=tool_call.function.name,
+                        tool_name=telemetry_tool_name,
                         success=False,
                         duration_ms=int(tool_elapsed * 1000),
                         error_type=_error_type,
@@ -936,7 +1044,7 @@ class PythinkerToolset:
                 _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
                 _tool_span_cm.__exit__(None, None, None)
                 _m.record_tool_call(
-                    tool_name=tool_call.function.name,
+                    tool_name=telemetry_tool_name,
                     duration_seconds=tool_elapsed,
                     success=_tool_succeeded,
                 )
@@ -950,7 +1058,7 @@ class PythinkerToolset:
 
                 _track_tool_call(
                     "tool_call",
-                    tool_name=tool_call.function.name,
+                    tool_name=telemetry_tool_name,
                     success=not isinstance(ret, ToolError),
                     duration_ms=int(tool_elapsed * 1000),
                     dup_type="cross_step" if is_cross_step_dup else "normal",
@@ -964,7 +1072,7 @@ class PythinkerToolset:
                         session_id=_get_session_id(),
                         cwd=str(Path.cwd()),
                         tool_name=tool_call.function.name,
-                        tool_input=tool_input_dict,
+                        tool_input=copy.deepcopy(tool_input_dict),
                         tool_output=str(ret)[:2000],
                         tool_call_id=tool_call.id,
                     ),
@@ -1182,78 +1290,8 @@ class PythinkerToolset:
         ) -> tuple[str, Exception | None]:
             if server_info.status != "pending":
                 return server_name, None
-
             server_info.status = "connecting"
-
-            async def _open_and_inventory() -> None:
-                async with server_info.client as client:
-                    skipped: list[str] = []
-                    local_tools: list[MCPTool[Any]] = []
-                    for tool in await client.list_tools():
-                        if server_info.tool_filter and not server_info.tool_filter.allows(
-                            tool.name
-                        ):
-                            skipped.append(tool.name)
-                            continue
-                        local_tools.append(
-                            MCPTool(
-                                server_name,
-                                tool,
-                                client,
-                                runtime=runtime,
-                                tool_filter=server_info.tool_filter,
-                            )
-                        )
-                    if skipped:
-                        logger.info(
-                            "MCP server {server_name}: {n} tools filtered out by "
-                            "mcp.json enabledTools/disabledTools: {names}",
-                            server_name=server_name,
-                            n=len(skipped),
-                            names=", ".join(sorted(skipped)),
-                        )
-                    # Resources/prompts are optional MCP capabilities; a server
-                    # that exposes none (or does not support the request) must
-                    # still connect, so capture them best-effort (mcpext-1). A
-                    # METHOD_NOT_FOUND means the capability is genuinely absent; any
-                    # other error is surfaced (WARNING) rather than masked as "none".
-                    local_resources = await _discover_optional_capability(
-                        server_name, "resources", client.list_resources
-                    )
-                    local_prompts = await _discover_optional_capability(
-                        server_name, "prompts", client.list_prompts
-                    )
-                    server_info.tools = local_tools
-                    server_info.resources = local_resources
-                    server_info.prompts = local_prompts
-
-            try:
-                # Bound connect+inventory: a hung server would otherwise block
-                # every agent turn (the loop awaits MCP loading).
-                await asyncio.wait_for(
-                    _open_and_inventory(),
-                    timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
-                )
-
-                self._register_mcp_tools(server_name, server_info.tools)
-                for tool in server_info.tools:
-                    runtime.mcp_tools[f"mcp__{server_name}__{tool.name}"] = tool
-
-                server_info.status = "connected"
-                logger.info("Connected MCP server: {server_name}", server_name=server_name)
-                return server_name, None
-            except Exception as e:
-                from pythinker_code.telemetry.errors import report_handled_error
-
-                report_handled_error(e, site="soul.toolset.mcp.connect")
-                logger.error(
-                    "Failed to connect MCP server: {server_name}, error: {error}",
-                    server_name=server_name,
-                    error=e,
-                )
-                server_info.status = "failed"
-                server_info.error = _classify_mcp_connect_error(e, server_name)
-                return server_name, e
+            return await self._connect_mcp_server(server_name, server_info, runtime)
 
         async def _connect():
             _toast_mcp("connecting to mcp servers...")
@@ -1279,6 +1317,9 @@ class PythinkerToolset:
             results = await asyncio.gather(*tasks) if tasks else []
             failed_servers = {name: error for name, error in results if error is not None}
 
+            # Publish before raising so servers that DID connect become callable in
+            # this session even when another server fails the aggregate connect.
+            self._publish_connected_mcp_tools(runtime)
             if failed_servers:
                 _toast_mcp("mcp connection failed")
                 raise MCPRuntimeError(f"Failed to connect MCP servers: {failed_servers}")
@@ -1297,7 +1338,7 @@ class PythinkerToolset:
                     oauth_servers[server_name] = server_config.url
 
                 client = fastmcp.Client(MCPConfig(mcpServers={server_name: server_config}))
-                _configure_mcp_client_stderr_log(client, runtime, server_name)
+                _configure_mcp_client_handlers(client, self, runtime, server_name)
                 self._mcp_servers[server_name] = MCPServerInfo(
                     status="pending",
                     client=client,
@@ -1305,6 +1346,7 @@ class PythinkerToolset:
                     resources=[],
                     prompts=[],
                     tool_filter=McpToolFilter.from_server_config(server_config),
+                    server_config=server_config,
                 )
 
         if not any(server_info.status == "pending" for server_info in self._mcp_servers.values()):
@@ -1330,6 +1372,192 @@ class PythinkerToolset:
             if self._mcp_loading_task is task and task.done():
                 self._mcp_loading_task = None
 
+    async def _inventory_mcp_server(
+        self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
+    ) -> tuple[list[MCPTool[Any]], list[mcp.Resource], list[mcp.types.Prompt]]:
+        """Discover a server's tools/resources/prompts without mutating it.
+
+        Returns the freshly discovered inventory; the caller assigns it onto
+        ``server_info`` only after the awaited call (and the client context exit)
+        fully succeeds, so a timeout or ``__aexit__`` failure never leaves the
+        published registry inconsistent with the exposed callable tools.
+        """
+        async with server_info.client as client:
+            skipped: list[str] = []
+            local_tools: list[MCPTool[Any]] = []
+            for tool in await client.list_tools():
+                if server_info.tool_filter and not server_info.tool_filter.allows(tool.name):
+                    skipped.append(tool.name)
+                    continue
+                local_tools.append(
+                    MCPTool(
+                        server_name,
+                        tool,
+                        client,
+                        runtime=runtime,
+                        tool_filter=server_info.tool_filter,
+                    )
+                )
+            if skipped:
+                logger.info(
+                    "MCP server {server_name}: {n} tools filtered out by "
+                    "mcp.json enabledTools/disabledTools: {names}",
+                    server_name=server_name,
+                    n=len(skipped),
+                    names=", ".join(sorted(skipped)),
+                )
+            resources = await _discover_optional_capability(
+                server_name, "resources", client.list_resources
+            )
+            prompts = await _discover_optional_capability(
+                server_name, "prompts", client.list_prompts
+            )
+            return local_tools, resources, prompts
+
+    async def _connect_mcp_server(
+        self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
+    ) -> tuple[str, Exception | None]:
+        try:
+            tools, resources, prompts = await asyncio.wait_for(
+                self._inventory_mcp_server(server_name, server_info, runtime),
+                timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
+            )
+            # Assign only after the awaited inventory (and client context exit)
+            # succeeded, so a failure never leaves a half-applied inventory.
+            server_info.tools = tools
+            server_info.resources = resources
+            server_info.prompts = prompts
+            server_info.status = "connected"
+            server_info.error = None
+            self._start_mcp_session_holder(server_name, server_info)
+            logger.info("Connected MCP server: {server_name}", server_name=server_name)
+            return server_name, None
+        except Exception as e:
+            from pythinker_code.telemetry.errors import report_handled_error
+
+            report_handled_error(e, site="soul.toolset.mcp.connect")
+            logger.error(
+                "Failed to connect MCP server: {server_name}, error: {error}",
+                server_name=server_name,
+                error=e,
+            )
+            server_info.status = "failed"
+            server_info.error = _classify_mcp_connect_error(e, server_name)
+            return server_name, e
+
+    def _ensure_mcp_idle(self) -> None:
+        if self._mcp_loading_task is not None and not self._mcp_loading_task.done():
+            raise MCPRuntimeError("MCP servers are still loading")
+
+    def _start_mcp_session_holder(self, server_name: str, info: MCPServerInfo) -> None:
+        task = info.session_holder_task
+        if task is not None and not task.done():
+            return
+        info.session_holder_task = asyncio.create_task(_hold_mcp_session(server_name, info))
+
+    async def _stop_mcp_session_holder(self, info: MCPServerInfo) -> None:
+        if info.session_stop is not None:
+            info.session_stop.set()
+        task = info.session_holder_task
+        if task is None:
+            return
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def disconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Disconnect one MCP server and unregister its tools."""
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        await self._stop_mcp_session_holder(info)
+        # Drop this server's inventory, then rebuild the published registry so any
+        # tool name it was shadowing falls back to another still-connected server.
+        info.tools = []
+        self._rebuild_published_mcp_tools(runtime)
+        prior_error = info.error
+        close_error: str | None = None
+        try:
+            await asyncio.wait_for(info.client.close(), timeout=_MCP_CLOSE_TIMEOUT_S)
+        except TimeoutError as exc:
+            logger.warning(
+                "MCP disconnect close timed out for {server_name}: {error}",
+                server_name=server_name,
+                error=exc,
+            )
+            close_error = "disconnect timed out while closing the MCP session"
+        except Exception as exc:
+            logger.warning(
+                "MCP disconnect close failed for {server_name}: {error}",
+                server_name=server_name,
+                error=exc,
+            )
+            close_error = f"disconnect failed while closing the MCP session: {exc}"
+        info.status = "failed"
+        if close_error is not None:
+            if prior_error is None:
+                info.error = close_error
+        else:
+            info.error = "disconnected"
+        info.resources = []
+        info.prompts = []
+
+    def connected_mcp_server_names(self) -> tuple[str, ...]:
+        return tuple(name for name, info in self._mcp_servers.items() if info.status == "connected")
+
+    async def refresh_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Re-list tools/resources/prompts for a connected MCP server."""
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        if info.status != "connected":
+            raise MCPRuntimeError(
+                f"MCP server '{server_name}' is not connected (status={info.status})"
+            )
+        # Inventory first: on failure ``info.tools`` keeps its last-known-good value
+        # and the live registry is untouched, so a failed refresh never drops tools.
+        # Convert raw timeout/inventory errors to MCPRuntimeError so callers (e.g. the
+        # /mcp slash handler) receive a single typed boundary error.
+        try:
+            tools, resources, prompts = await asyncio.wait_for(
+                self._inventory_mcp_server(server_name, info, runtime),
+                timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
+            )
+        except TimeoutError as exc:
+            raise MCPRuntimeError(f"Refresh of MCP server '{server_name}' timed out") from exc
+        except Exception as exc:
+            raise MCPRuntimeError(f"Failed to refresh MCP server '{server_name}': {exc}") from exc
+        # Inventory succeeded; swap the old inventory for the new one atomically,
+        # then rebuild the published registry from it.
+        info.tools = tools
+        info.resources = resources
+        info.prompts = prompts
+        self._rebuild_published_mcp_tools(runtime)
+
+    async def reconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
+        """Close and reconnect one MCP server from its stored config."""
+        import fastmcp
+        from fastmcp.mcp_config import MCPConfig
+
+        self._ensure_mcp_idle()
+        info = self._mcp_servers.get(server_name)
+        if info is None:
+            raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
+        if info.server_config is None:
+            raise MCPRuntimeError(f"MCP server '{server_name}' has no stored config to reconnect")
+        await self.disconnect_mcp_server(server_name, runtime)
+        info.client = fastmcp.Client(MCPConfig(mcpServers={server_name: info.server_config}))
+        _configure_mcp_client_handlers(info.client, self, runtime, server_name)
+        info.status = "pending"
+        info.error = None
+        _server_name, error = await self._connect_mcp_server(server_name, info, runtime)
+        if error is not None:
+            raise MCPRuntimeError(
+                info.error or f"Failed to reconnect MCP server '{server_name}': {error}"
+            )
+        self._rebuild_published_mcp_tools(runtime)
+
     async def cleanup(self) -> None:
         """Cleanup any resources held by the toolset."""
         self._deferred_mcp_load = None
@@ -1341,6 +1569,7 @@ class PythinkerToolset:
         # Close every MCP client concurrently with a per-server timeout, so one
         # hung or slow client cannot block teardown of the rest (mcpext-3).
         async def _close(info: MCPServerInfo) -> None:
+            await self._stop_mcp_session_holder(info)
             try:
                 await asyncio.wait_for(info.client.close(), timeout=_MCP_CLOSE_TIMEOUT_S)
             except Exception as exc:
@@ -1362,6 +1591,11 @@ class MCPServerInfo:
     error: str | None = None
     # Optional mcp.json enabledTools/disabledTools scoping for this server.
     tool_filter: McpToolFilter | None = None
+    # Original server config for per-server reconnect (mcpext-2).
+    server_config: Any = None
+    # Background task holding the client session open for list_changed notifications.
+    session_stop: asyncio.Event | None = None
+    session_holder_task: asyncio.Task[None] | None = None
 
 
 class MCPTool[T: ClientTransport](CallableTool):
@@ -1447,7 +1681,10 @@ class MCPTool[T: ClientTransport](CallableTool):
             return result.rejection_error()
 
         from pythinker_code.telemetry import otel as _otel
+        from pythinker_code.telemetry.names import sanitize_telemetry_tool_name
 
+        telemetry_server = sanitize_telemetry_tool_name(self._mcp_server_name)
+        telemetry_tool = sanitize_telemetry_tool_name(self._mcp_tool.name)
         # `start_span` returns a sync context manager (the OTel SDK uses
         # `_AgnosticContextManager`, which intentionally has no __aenter__).
         # Keep it as a sync `with` and use `async with` only on the fastmcp
@@ -1456,11 +1693,11 @@ class MCPTool[T: ClientTransport](CallableTool):
             with _otel.start_span(
                 "pythinker.mcp.call",
                 {
-                    "mcp.server": self._mcp_server_name,
-                    "mcp.tool": self._mcp_tool.name,
+                    "mcp.server": telemetry_server,
+                    "mcp.tool": telemetry_tool,
                     "mcp.timeout_ms": int(self._timeout.total_seconds() * 1000),
                     "gen_ai.operation.name": "execute_tool",
-                    "gen_ai.tool.name": self._mcp_tool.name,
+                    "gen_ai.tool.name": telemetry_tool,
                 },
             ) as span:
                 async with self._client as client:

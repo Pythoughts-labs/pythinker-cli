@@ -1614,27 +1614,34 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     """The line above the input carries (elapsed, ↓ tokens, t/s) — the same
     metadata design as the live view's working indicator."""
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.soul import StatusSnapshot
+    from pythinker_code.soul import live_tokens
 
+    live_tokens.reset_for_tests()
     session = object.__new__(CustomPromptSession)
     session._background_task_count_provider = lambda: BgTaskCounts(agent=2)
     session._latest_todos = ()
-    state = {"now": 100.0, "tokens": 40_000}
-    session._status_provider = lambda: StatusSnapshot(
-        context_usage=0.0, context_tokens=state["tokens"]
-    )
+    state = {"now": 100.0, "output_tokens": 0}
     monkeypatch.setattr(prompt_module.time, "monotonic", lambda: state["now"])
+    monkeypatch.setattr(
+        live_tokens,
+        "get_total_output_tokens",
+        lambda: state["output_tokens"],
+    )
 
     def render() -> str:
         rendered = CustomPromptSession._render_background_working_status(session, 120)
         return "".join(item[1] for item in rendered)
 
     first = render()
-    assert "(<1s, ↓ 40k tokens)" in first  # no rate until the window fills
+    assert "(<1s" in first  # stretch just started — no output delta yet
 
-    state["now"], state["tokens"] = 100.4, 40_400
+    state["now"], state["output_tokens"] = 100.0, 40_000
+    second = render()
+    assert "(<1s, ↓ 40k tokens)" in second  # no rate until the window fills
+
+    state["now"], state["output_tokens"] = 100.4, 40_400
     render()
-    state["now"], state["tokens"] = 100.8, 40_800
+    state["now"], state["output_tokens"] = 100.8, 40_800
     third = render()
     assert "(<1s, ↓ 40.8k tokens, 1000 t/s)" in third
 
@@ -1642,6 +1649,7 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     session._background_task_count_provider = lambda: BgTaskCounts()
     assert render() == ""
     assert session._bg_status_started_at is None
+    assert session._bg_status_start_tokens is None
 
 
 # ---------------------------------------------------------------------------

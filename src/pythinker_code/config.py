@@ -57,6 +57,9 @@ SCOPE_LOCKED_PATHS: frozenset[tuple[str, ...]] = frozenset(
         ("providers",),  # contains api_key per provider — must stay in user scope
         ("services",),  # contains api_key fields — must stay in user scope
         ("feedback", "api_key"),  # only the key, not the whole feedback section
+        # Substituted into executable plugin artifacts (MCP server configs and hook
+        # commands); a repo-controlled project config must not steer those values.
+        ("plugins", "options"),
         # Auto-executed when the shell starts — a repo-controlled project config
         # must never be able to choose the binary that runs (`command`), nor to
         # trigger or extend its execution (`enabled`/`segments` flip the command
@@ -586,6 +589,9 @@ class LoopControl(BaseModel):
     """When a model response is cut off by the output-token limit and makes no tool call,
     nudge the model to continue at most this many times per turn before surfacing the
     truncated answer. ``0`` disables truncation recovery. Default: 3."""
+    max_compaction_failures: int = Field(default=1, ge=1)
+    """Yield to the user after this many consecutive proactive compaction failures
+    instead of repeatedly attempting compaction. Default: 1."""
     max_session_cost_usd: float | None = Field(default=None, gt=0)
     """Optional per-session spend ceiling in USD. When set, the turn stops with a
     ``budget_exhausted`` outcome once the session's accumulated estimated cost reaches
@@ -1019,6 +1025,54 @@ class MCPConfig(BaseModel):
     )
 
 
+class PluginsConfig(BaseModel):
+    """Plugin/marketplace activation policy.
+
+    Controls which installed plugins contribute artifacts (skills, agents,
+    commands, hooks, MCP servers) to a session.
+    """
+
+    discover_external: bool = Field(
+        default=True,
+        description=(
+            "Auto-detect plugins installed for Claude Code (~/.claude/plugins) and Codex "
+            "(~/.codex/plugins) and activate their safe artifacts (skills, commands, "
+            "agents). On by default — these are model-invoked, never auto-run. Set false "
+            "to ignore external plugins entirely."
+        ),
+    )
+    external_exec: bool = Field(
+        default=False,
+        description=(
+            "Also run external plugins' executable artifacts (hooks and MCP servers). Off "
+            "by default — these auto-execute, so they are opt-in even when discover_external "
+            "is on."
+        ),
+    )
+    enabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plugin names (or name@marketplace) to enable. Empty enables all discovered "
+            "plugins; a non-empty list enables only those named."
+        ),
+    )
+    disabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plugin names to turn off. Excluded even when enabled would allow them — this "
+            "is how `pythinker plugin disable <name>` works under the all-on default."
+        ),
+    )
+    options: dict[str, dict[str, object]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-plugin user-config values, keyed by plugin name: "
+            "{plugin: {option_key: value}}. Substituted into ${user_config.KEY} "
+            "references in the plugin's MCP server configs and hook commands."
+        ),
+    )
+
+
 class Config(BaseModel):
     """Main configuration structure."""
 
@@ -1088,6 +1142,13 @@ class Config(BaseModel):
         description=(
             "If true, suppress the auto-mode system reminder. "
             "Yolo mode does not inject a system reminder."
+        ),
+    )
+    git_status_injection: bool = Field(
+        default=True,
+        description=(
+            "When true, inject a bounded, explicitly stale git working-tree snapshot "
+            "(branch, dirty summary, recent commits) into the root agent prompt at turn start."
         ),
     )
     default_plan_mode: bool = Field(default=False, description="Default plan mode for new sessions")
@@ -1162,6 +1223,9 @@ class Config(BaseModel):
         description="User-submitted feedback endpoint configuration",
     )
     mcp: MCPConfig = Field(default_factory=MCPConfig, description="MCP configuration")
+    plugins: PluginsConfig = Field(
+        default_factory=PluginsConfig, description="Plugin/marketplace activation policy"
+    )
     tui: TUIConfig = Field(default_factory=TUIConfig, description="TUI rendering configuration")
     hooks: list[HookDef] = Field(default_factory=list, description="Hook definitions")  # pyright: ignore[reportUnknownVariableType]
     disabled_project_hooks: list[str] = Field(

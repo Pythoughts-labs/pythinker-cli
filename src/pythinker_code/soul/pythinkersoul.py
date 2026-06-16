@@ -89,6 +89,7 @@ from pythinker_code.soul.dynamic_injection import (
 )
 from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
 from pythinker_code.soul.dynamic_injections.auto_mode import AutoModeInjectionProvider
+from pythinker_code.soul.dynamic_injections.git_status import GitStatusInjectionProvider
 from pythinker_code.soul.dynamic_injections.goal_mode import GoalModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.inline_commands import InlineCommandReminderProvider
 from pythinker_code.soul.dynamic_injections.model_defense import ModelDefenseInjectionProvider
@@ -96,6 +97,7 @@ from pythinker_code.soul.dynamic_injections.orchestration import OrchestrationIn
 from pythinker_code.soul.dynamic_injections.permissions_state import PermissionsInjectionProvider
 from pythinker_code.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from pythinker_code.soul.flow_runner import FLOW_COMMAND_PREFIX, FlowRunner
+from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.soul.message import (
     check_message,
     system,
@@ -198,7 +200,9 @@ def _is_hard_usage_limit(exception: BaseException) -> bool:
     return "usage_limit_reached" in text or "usage limit" in text
 
 
-type StepStopReason = Literal["no_tool_calls", "tool_rejected", "stuck", "budget_exhausted"]
+type StepStopReason = Literal[
+    "no_tool_calls", "tool_rejected", "stuck", "budget_exhausted", "compaction_failed"
+]
 
 
 _MISSING_REQUIRED_FIELD_RE = re.compile(
@@ -283,6 +287,16 @@ def _budget_exhausted_message(session_cost_usd: float, ceiling: float) -> Messag
         f"Stopping: this session has reached its configured spend ceiling "
         f"(estimated ${session_cost_usd:.2f} of ${ceiling:.2f}). Raise "
         f"`loop_control.max_session_cost_usd` in config, or start a new session, to continue."
+    )
+    return Message(role="assistant", content=[TextPart(text=text)])
+
+
+def _compaction_failed_message(failures: int, threshold: int) -> Message:
+    """Handoff message when proactive compaction cannot make progress."""
+    text = (
+        "Stopping: proactive context compaction failed "
+        f"{failures} consecutive time(s), reaching the configured threshold "
+        f"of {threshold}. I am handing back instead of retrying compaction blindly."
     )
     return Message(role="assistant", content=[TextPart(text=text)])
 
@@ -499,6 +513,7 @@ class PythinkerSoul:
             )
         self._current_step_no = 0
         self._consecutive_failures = 0
+        self._compaction_failures = 0
         self._truncation_recoveries = 0
         # Cumulative LLM token usage for this soul instance (one run), so a subagent
         # can report its spend back to the orchestrating parent (subagent-2). A
@@ -550,6 +565,8 @@ class PythinkerSoul:
             # Self-filtering: root-only; posture-fingerprinted so it re-emits
             # exactly when yolo/auto/safe-mode/profile/session-approvals change.
             PermissionsInjectionProvider(),
+            # Self-filtering: root-only; bounded git snapshot for working-tree orientation.
+            GitStatusInjectionProvider(),
             # Self-filtering: root-only; keeps the model's subagent list current
             # without tying it to the static tool description cache.
             AgentListInjectionProvider(),
@@ -1018,6 +1035,33 @@ class PythinkerSoul:
         if not isinstance(self._agent.toolset, PythinkerToolset):
             return
         await self._agent.toolset.wait_for_mcp_tools()
+
+    async def disconnect_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.disconnect_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def refresh_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.refresh_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def reconnect_mcp_server(self, server_name: str) -> None:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return
+        await self._agent.toolset.reconnect_mcp_server(server_name, self._runtime)
+        wire_send(StatusUpdate(mcp_status=self._mcp_status_snapshot()))
+
+    async def refresh_mcp_inventory(self, server_name: str | None = None) -> list[str]:
+        if not isinstance(self._agent.toolset, PythinkerToolset):
+            return []
+        toolset = self._agent.toolset
+        targets = [server_name] if server_name else list(toolset.connected_mcp_server_names())
+        for name in targets:
+            await self.refresh_mcp_server(name)
+        return targets
 
     async def _checkpoint(self):
         await self._context.checkpoint(self._checkpoint_with_user_message)
@@ -1611,9 +1655,11 @@ class PythinkerSoul:
                     logger.info("Context too long, compacting...")
                     try:
                         await self.compact_context()
+                        self._compaction_failures = 0
                     except Exception as compact_err:
                         from pythinker_code.telemetry.errors import report_handled_error
 
+                        self._compaction_failures += 1
                         report_handled_error(compact_err, site="soul.context.compact")
                         logger.error(
                             "Context compaction failed at step {step_no}: {error_type}: {error}",
@@ -1621,7 +1667,19 @@ class PythinkerSoul:
                             error_type=type(compact_err).__name__,
                             error=compact_err,
                         )
-                        raise
+                        threshold = self._loop_control.max_compaction_failures
+                        if self._compaction_failures >= threshold:
+                            message = _compaction_failed_message(
+                                self._compaction_failures, threshold
+                            )
+                            await self._context.append_message(message)
+                            wire_send(TextPart(text=message.extract_text(" ")))
+                            return TurnOutcome(
+                                stop_reason="compaction_failed",
+                                final_message=message,
+                                step_count=step_no - 1,
+                            )
+                        # Below threshold: skip compaction this step and continue the turn.
 
                     # Compaction makes a billable LLM call that folds into
                     # self._session_cost_usd. Re-check the ceiling here so a session
@@ -1637,6 +1695,8 @@ class PythinkerSoul:
                             final_message=message,
                             step_count=step_no - 1,  # this step's _step() never ran
                         )
+                else:
+                    self._compaction_failures = 0
 
                 logger.debug("Beginning step {step_no}", step_no=step_no)
                 await self._checkpoint()
@@ -1873,6 +1933,10 @@ class PythinkerSoul:
                 if u is not None:
                     self._cumulative_usage = accumulate_usage(self._cumulative_usage, u)
                     self._session_cost_usd += estimate_cost_usd(u, self.model_name)
+                    # Feed the session-wide live counter so the spinner's "↓ tokens"
+                    # readout reflects this step's output — including subagent and
+                    # background souls, which all funnel through this one point.
+                    add_total_output_tokens(u.output)
 
                 def _opt_int(attr: str) -> int | None:
                     """Read an optional usage counter as int — None when usage or the

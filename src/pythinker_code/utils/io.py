@@ -4,8 +4,39 @@ import contextlib
 import json
 import os
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
+
+
+@contextlib.contextmanager
+def file_lock(path: Path) -> Generator[None]:
+    """Cross-process exclusive lock for read-modify-write cycles on *path*.
+
+    ``atomic_json_write`` prevents torn files but not lost updates: two processes
+    that both load before either saves drop each other's changes. Wrap the whole
+    load → mutate → save in this lock to serialize concurrent writers. The lock
+    file (``<path>.lock``) is kept on disk — unlinking would split the lock across
+    inodes. On platforms without ``fcntl`` (Windows), this is a no-op. Blocking
+    (flock + small JSON I/O) — call via ``asyncio.to_thread`` from event-loop code.
+    """
+    lock_file = path.with_name(path.name + ".lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    fh = lock_file.open("a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+        except ImportError:
+            yield
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
 
 
 def ends_with_newline(path: Path) -> bool:

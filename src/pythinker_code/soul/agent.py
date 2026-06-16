@@ -614,24 +614,49 @@ async def load_agent(
             continue
         toolset.add(plugin_tool)
 
-    if mcp_configs:
-        validated_mcp_configs: list[MCPConfig] = []
-        if mcp_configs:
-            from fastmcp.mcp_config import MCPConfig
+    # Plugin-contributed MCP servers spawn processes, so load them only for the
+    # root agent (subagent_id is None) — never once per subagent.
+    plugin_mcp: dict[str, object] = {}
+    if runtime.subagent_id is None:
+        from pythinker_code.plugin.integration import plugin_mcp_servers
 
-            for mcp_config in mcp_configs:
-                try:
-                    validated_mcp_configs.append(
-                        mcp_config
-                        if isinstance(mcp_config, MCPConfig)
-                        else MCPConfig.model_validate(mcp_config)
-                    )
-                except pydantic.ValidationError as e:
-                    raise MCPConfigError(f"Invalid MCP config: {e}") from e
-        if start_mcp_loading:
-            await toolset.load_mcp_tools(validated_mcp_configs, runtime, in_background=True)
-        else:
-            toolset.defer_mcp_tool_loading(validated_mcp_configs, runtime)
+        plugin_mcp = plugin_mcp_servers()
+
+    if mcp_configs or plugin_mcp:
+        from fastmcp.mcp_config import MCPConfig
+
+        from pythinker_code.cli.mcp import prepare_mcp_config_dict
+
+        validated_mcp_configs: list[MCPConfig] = []
+        for mcp_config in mcp_configs:
+            try:
+                raw_config = (
+                    mcp_config
+                    if isinstance(mcp_config, dict)
+                    else mcp_config.model_dump(mode="json")
+                )
+                prepare_mcp_config_dict(raw_config)
+                validated_mcp_configs.append(MCPConfig.model_validate(raw_config))
+            except pydantic.ValidationError as e:
+                # User-provided config: fail loud so the mistake is visible.
+                raise MCPConfigError(f"Invalid MCP config: {e}") from e
+        if plugin_mcp:
+            # Plugin config: fail soft — a malformed plugin MCP block is skipped
+            # with a warning rather than aborting the whole agent load.
+            try:
+                plugin_raw: dict[str, Any] = {"mcpServers": plugin_mcp}
+                prepare_mcp_config_dict(plugin_raw)
+                validated_mcp_configs.append(MCPConfig.model_validate(plugin_raw))
+            except (pydantic.ValidationError, ValueError, TypeError, KeyError, AttributeError) as e:
+                # Fail soft: normalization (prepare_mcp_config_dict) can raise
+                # shape errors beyond ValidationError; a malformed plugin MCP
+                # block is skipped with a warning, never aborts agent load.
+                logger.warning("Skipping invalid plugin MCP servers: {error}", error=e)
+        if validated_mcp_configs:
+            if start_mcp_loading:
+                await toolset.load_mcp_tools(validated_mcp_configs, runtime, in_background=True)
+            else:
+                toolset.defer_mcp_tool_loading(validated_mcp_configs, runtime)
 
     return Agent(
         name=agent_spec.name,

@@ -251,3 +251,82 @@ def test_aggregate_empty_result_text_is_unparsed():
     assert summary.unparsed_reports == 1
     assert summary.parsed_reports == 0
     assert "empty_scan" in summary.reporters["unknown"]
+
+
+# ---------------------------------------------------------------------------
+# _parse_reviewer_findings — ```report JSON block (primary machine-readable format)
+# ---------------------------------------------------------------------------
+
+
+def test_report_block_counts_findings():
+    text = (
+        "Some analysis.\n"
+        "```report\n"
+        '{"findings": [\n'
+        '  {"title": "Bug A", "severity": "high"},\n'
+        '  {"title": "Bug B", "severity": "medium"},\n'
+        '  {"title": "Bug C", "severity": "high"}\n'
+        "]}\n"
+        "```\n"
+    )
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is True
+    assert counts == {"critical": 0, "high": 2, "medium": 1, "low": 0}
+
+
+def test_report_block_empty_findings_is_parsed():
+    """{"findings": []} is a valid structured report — was_parsed must be True."""
+    text = '```report\n{"findings": []}\n```\n'
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is True
+    assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+
+def test_report_block_malformed_json_is_not_parsed():
+    """A malformed ```report block must NOT report success — it is unparsed, so the
+    caller treats it as an unparsed reviewer result rather than 'parsed, 0 findings'."""
+    text = "```report\nnot valid json\n```\n"
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is False
+    assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+
+def test_report_block_wrong_shape_is_not_parsed():
+    """A ```report block holding a JSON array (not an object) is not a valid report."""
+    text = '```report\n[{"severity": "high"}]\n```\n'
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is False
+    assert counts["high"] == 0
+
+
+def test_report_block_non_dict_findings_does_not_crash():
+    """A payload whose 'findings' isn't a list must not raise and isn't 'parsed'."""
+    text = '```report\n{"findings": "high"}\n```\n'
+    counts, was_parsed = _parse_reviewer_findings(text)
+    # 'findings' is the wrong shape (str, not list) -> not a usable structured
+    # report, so was_parsed is False (the caller falls back to markdown scanning)
+    # rather than reporting a false "parsed with zero findings".
+    assert was_parsed is False
+    assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+
+
+def test_report_block_multiple_blocks_aggregate():
+    block1 = '```report\n{"findings": [{"severity": "critical"}]}\n```\n'
+    block2 = '```report\n{"findings": [{"severity": "low"}, {"severity": "low"}]}\n```\n'
+    counts, was_parsed = _parse_reviewer_findings(block1 + block2)
+    assert was_parsed is True
+    assert counts == {"critical": 1, "high": 0, "medium": 0, "low": 2}
+
+
+def test_report_block_with_markdown_markers_uses_json_only():
+    """JSON block takes priority — markdown markers inside JSON must not be double-counted."""
+    text = (
+        '```report\n{"findings": [{"severity": "high", "description": "- [HIGH] inside JSON"}]}\n```\n'
+        "- [HIGH] outside block\n"
+    )
+    # Only the JSON findings count; the markdown marker outside the block is not scanned
+    # because the report block path returns early without running the markdown fallback.
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is True
+    # JSON block found: 1 high from JSON. Markdown fallback is skipped entirely.
+    assert counts["high"] == 1

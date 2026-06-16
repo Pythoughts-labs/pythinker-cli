@@ -37,6 +37,7 @@ from pythinker_code.wire.types import (
     QuestionResponse,
     Request,
     StatusUpdate,
+    TextPart,
     ToolCallRequest,
     is_event,
     is_request,
@@ -741,9 +742,31 @@ class WireServer:
                 error=JSONRPCErrorObject(code=ErrorCodes.CHAT_PROVIDER_ERROR, message=str(e)),
             )
         except MaxStepsReached as e:
+            handoff: str | None = None
+            if isinstance(self._soul, PythinkerSoul):
+                from pythinker_code.soul.btw import generate_max_steps_handoff
+
+                try:
+                    handoff = await generate_max_steps_handoff(self._soul)
+                except Exception:
+                    logger.warning("Max-steps handoff failed", exc_info=True)
+                    handoff = None
+                if handoff:
+                    await self._send_msg(
+                        JSONRPCEventMessage(
+                            method="event",
+                            params=TextPart(text=f"\n── handoff ──\n{handoff}"),
+                        )
+                    )
+            result: dict[str, JsonType] = {
+                "status": Statuses.MAX_STEPS_REACHED,
+                "steps": e.n_steps,
+            }
+            if handoff:
+                result["handoff"] = handoff
             return JSONRPCSuccessResponse(
                 id=msg.id,
-                result={"status": Statuses.MAX_STEPS_REACHED, "steps": e.n_steps},
+                result=result,
             )
         except RunCancelled:
             return JSONRPCSuccessResponse(

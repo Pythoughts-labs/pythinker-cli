@@ -31,6 +31,7 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.style import Style as RichStyle
+from rich.table import Table
 from rich.text import Text
 
 from pythinker_code.ui.shell.components.markdown import PythinkerMarkdown, pythinker_markdown
@@ -302,9 +303,18 @@ def _summary_line(counts: dict[Severity, int], theme: ThemeName | None) -> Text:
 def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> RenderableType:
     rows: list[RenderableType] = []
 
-    title = Text()
-    title.append(f"{_DOT} ", style=_severity_style(finding.severity, theme))
-    title.append(finding.title, style=tui_rich_style("border", theme=theme) + RichStyle(bold=True))
+    # Hang-indent the title: the ● marker sits alone in a 2-wide gutter and the
+    # title text (and its wrapped lines) align at column 2 — the same column as
+    # the finding's location/body below. A flat ``Text`` wraps back under the
+    # marker, which flattened the hierarchy and made a wrapped title read like a
+    # new finding.
+    title = Table.grid(padding=0)
+    title.add_column(width=2, no_wrap=True)
+    title.add_column(overflow="fold")
+    title.add_row(
+        Text(_DOT, style=_severity_style(finding.severity, theme)),
+        Text(finding.title, style=tui_rich_style("border", theme=theme) + RichStyle(bold=True)),
+    )
     rows.append(title)
 
     if finding.location:

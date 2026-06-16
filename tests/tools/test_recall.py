@@ -19,13 +19,29 @@ def _session(sid: str, *, title: str = "", custom_title: str = "", updated_at: f
         id=sid,
         title=title,
         updated_at=updated_at,
-        state=SimpleNamespace(custom_title=custom_title),
+        state=SimpleNamespace(custom_title=custom_title, plan_slug=None),
     )
 
 
 def _ranked_ids(sessions: list[Any], *, query: str, current_id: str) -> list[str]:
     ranked = _rank_sessions(cast(Any, sessions), query=query, current_id=current_id, limit=10)
     return [s.id for s in ranked]
+
+
+def test_rank_matches_session_id_and_plan_slug() -> None:
+    sessions = [
+        _session("sess-auth-1", custom_title="misc", updated_at=1.0),
+        _session(
+            "other",
+            custom_title="plan work",
+            updated_at=2.0,
+        ),
+    ]
+    sessions[1].state.plan_slug = "auth-migration"
+    ids = _ranked_ids(sessions, query="auth-migration", current_id="cur")
+    assert ids == ["other"]
+    ids_by_id = _ranked_ids(sessions, query="sess-auth", current_id="cur")
+    assert ids_by_id == ["sess-auth-1"]
 
 
 def test_rank_excludes_current_and_filters_non_matches() -> None:
@@ -118,6 +134,28 @@ def test_render_transcript_budget_truncates(tmp_path: Path) -> None:
     assert len(rendered) < 700
 
 
+def test_render_transcript_supports_message_window(tmp_path: Path) -> None:
+    log = tmp_path / "context.jsonl"
+    log.write_text(
+        "\n".join(
+            [
+                '{"role": "_checkpoint", "content": [{"type": "text", "text": "internal"}]}',
+                Message(role="user", content=[TextPart(text="first")]).model_dump_json(),
+                Message(role="assistant", content=[TextPart(text="second")]).model_dump_json(),
+                Message(role="user", content=[TextPart(text="third")]).model_dump_json(),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _render_transcript(log, budget=10_000, message_offset=1, max_messages=1)
+
+    assert "[assistant] second" in rendered
+    assert "first" not in rendered
+    assert "third" not in rendered
+    assert "internal" not in rendered
+
+
 async def test_recall_search_lists_matching_sessions(
     runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -134,6 +172,22 @@ async def test_recall_search_lists_matching_sessions(
     assert isinstance(result.output, str)
     assert "s1" in result.output
     assert "s2" not in result.output
+
+
+async def test_recall_search_includes_plan_slug_when_present(
+    runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_list(work_dir: Any) -> list[Any]:
+        session = _session("s1", custom_title="plan work", updated_at=2.0)
+        session.state.plan_slug = "auth-migration"
+        return [session]
+
+    monkeypatch.setattr(Session, "list", staticmethod(fake_list))
+    result = await Recall(runtime)(Recall.params(mode="search", query="auth-migration"))
+
+    assert not result.is_error
+    assert isinstance(result.output, str)
+    assert "plan_slug: auth-migration" in result.output
 
 
 async def test_recall_read_returns_untrusted_transcript(
@@ -153,6 +207,33 @@ async def test_recall_read_returns_untrusted_transcript(
     assert isinstance(result.output, str)
     assert "prior decision: use JWT" in result.output
     assert "untrusted_data" in result.output
+
+
+async def test_recall_read_passes_message_window(
+    runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "context.jsonl"
+    _write_log(
+        log,
+        [
+            Message(role="user", content=[TextPart(text="first")]),
+            Message(role="assistant", content=[TextPart(text="second")]),
+        ],
+    )
+    fake = SimpleNamespace(id="s1", context_file=log)
+
+    async def fake_find(work_dir: Any, session_id: str) -> Any:
+        return fake if session_id == "s1" else None
+
+    monkeypatch.setattr(Session, "find", staticmethod(fake_find))
+    result = await Recall(runtime)(
+        Recall.params(mode="read", session_id="s1", message_offset=1, max_messages=1)
+    )
+
+    assert not result.is_error
+    assert isinstance(result.output, str)
+    assert "second" in result.output
+    assert "first" not in result.output
 
 
 async def test_recall_read_unknown_session_errors(runtime, monkeypatch: pytest.MonkeyPatch) -> None:

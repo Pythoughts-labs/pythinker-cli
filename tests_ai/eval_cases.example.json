@@ -1,0 +1,11 @@
+[
+  {
+    "name": "encoding smoke",
+    "query": "verify utf-8 handling",
+    "expected_tools": [],
+    "budget": {
+      "max_tool_calls": 20,
+      "max_total_tokens": 50000
+    }
+  }
+]

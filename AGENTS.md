@@ -17,6 +17,24 @@ Pythinker CLI is a Python CLI agent for software engineering workflows. It suppo
 interactive shell UI, ACP server mode for IDE integrations, MCP tool loading, background work,
 subagents, skills, web/visualization UIs, and multi-provider LLM authentication.
 
+## Feature Development Standard
+
+Build every feature as production code, not a happy-path demo. **Before implementing**, answer:
+what the feature does, who or what calls it, its inputs, its outputs and side effects, how it can
+fail, what happens on failure, which edge cases apply, and what test proves it works. If
+requirements are ambiguous, make the safest reasonable assumption and document it — only block when
+the missing detail would change the implementation.
+
+**Handle the failure and edge cases**, not just the happy path: missing / empty / invalid /
+malformed input, unauthorized access, expired tokens, timeouts and network errors, partial success,
+concurrent or duplicate requests, rate limits, large payloads, stale cache, missing records, retry
+exhaustion, cancellation, and rollback/cleanup failure. Never silently ignore an unexpected state.
+
+**Make errors explicit**: typed or categorized, logged with actionable context, recoverable where
+possible, and safe to surface — never leaking secrets, tokens, or stack traces. No bare
+`except`/catch that swallows the error. For feature work this restates the Failure truthfulness
+contract and C01–C15 tripwires below; ship the matching tests and verification with the feature.
+
 ## Non-negotiable rules
 
 - **Use `uv` for Python commands.** Prefer `make ...` targets; if running tools directly, use

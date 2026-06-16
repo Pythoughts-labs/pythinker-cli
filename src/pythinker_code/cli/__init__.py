@@ -270,9 +270,13 @@ def _load_mcp_configs_from_cli_inputs(
             file_configs.append(project_mcp_file)
 
     configs: list[Any] = []
+    from pythinker_code.exception import MCPConfigError
+
+    from .mcp import prepare_mcp_config_dict
+
     for conf in file_configs:
         try:
-            configs.append(json.loads(conf.read_text(encoding="utf-8")))
+            configs.append(prepare_mcp_config_dict(json.loads(conf.read_text(encoding="utf-8"))))
         except json.JSONDecodeError as e:
             raise typer.BadParameter(
                 f"Invalid JSON in MCP config file {conf}: {e}",
@@ -283,12 +287,19 @@ def _load_mcp_configs_from_cli_inputs(
                 f"Cannot read MCP config file {conf}: {e}",
                 param_hint="--mcp-config-file",
             ) from e
+        except MCPConfigError as e:
+            raise typer.BadParameter(
+                f"Invalid MCP config in file {conf}: {e}",
+                param_hint="--mcp-config-file",
+            ) from e
 
     for conf in raw_mcp_config:
         try:
-            configs.append(json.loads(conf))
+            configs.append(prepare_mcp_config_dict(json.loads(conf)))
         except json.JSONDecodeError as e:
             raise typer.BadParameter(f"Invalid JSON: {e}", param_hint="--mcp-config") from e
+        except MCPConfigError as e:
+            raise typer.BadParameter(f"Invalid MCP config: {e}", param_hint="--mcp-config") from e
 
     for path in _yaml_files_with_misplaced_mcp_servers():
         from pythinker_code.utils.logging import logger
