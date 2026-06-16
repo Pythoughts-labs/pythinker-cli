@@ -51,6 +51,23 @@ class TestParamsJsonStringCoercion:
         assert params.todos is not None
         assert params.todos[0].status == "done"
 
+    def test_content_alias_normalizes_to_title(self):
+        """Cursor/Claude TodoWrite uses ``content``; SetTodoList expects ``title``."""
+        params = Params(
+            todos=[{"id": "1", "content": "Map agent output handling", "status": "in_progress"}]  # type: ignore[list-item]
+        )
+        assert params.todos is not None
+        assert params.todos[0].title == "Map agent output handling"
+        assert params.todos[0].status == "in_progress"
+
+    def test_todo_write_merge_field_is_ignored(self):
+        params = Params(
+            merge=True,  # type: ignore[call-arg]
+            todos=[{"content": "Task A", "status": "pending"}],  # type: ignore[list-item]
+        )
+        assert params.todos is not None
+        assert params.todos[0].title == "Task A"
+
     def test_todos_none_still_works(self):
         params = Params(todos=None)
         assert params.todos is None

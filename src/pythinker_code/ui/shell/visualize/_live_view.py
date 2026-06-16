@@ -241,6 +241,7 @@ class _LiveView:
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
         self._last_tool_call_block: _ToolCallBlock | None = None
+        self._held_tool_search_block: _ToolCallBlock | None = None
         self._completed_expandable_tool_blocks = deque[_ToolCallBlock](maxlen=20)
         self._completed_expandable_content_blocks = deque[_ContentBlock](maxlen=20)
         self._current_step_retry: StepRetry | None = None
@@ -1245,6 +1246,7 @@ class _LiveView:
                 )
         self._last_tool_call_block = None
         self.flush_finished_tool_calls()
+        self._flush_held_tool_search()
         # Drain background-pending blocks skipped above.  They must be printed
         # to scrollback here; the transient Live area is about to be erased.
         for tool_call_id in list(self._tool_call_blocks.keys()):
@@ -1288,6 +1290,7 @@ class _LiveView:
         self._current_content_block = None
         self._tool_call_blocks.clear()
         self._last_tool_call_block = None
+        self._held_tool_search_block = None
         self._current_step_retry = retry
 
     def flush_content(self) -> None:
@@ -1299,6 +1302,8 @@ class _LiveView:
             # reveal cursor).
             block.reveal_all()
             block._flush_committed()
+            # A held ToolSearch must appear before the text that follows it.
+            self._flush_held_tool_search()
             if block.is_think:
                 if block.has_pending():
                     emit_scrollback_block(console, block.compose_final())
@@ -1311,6 +1316,13 @@ class _LiveView:
             self._current_content_block = None
             self.refresh_soon()
 
+    def _flush_held_tool_search(self) -> None:
+        if self._held_tool_search_block is not None:
+            block = self._held_tool_search_block
+            self._held_tool_search_block = None
+            _print_action_block(block.compose())
+            self.refresh_soon()
+
     def flush_finished_tool_calls(self) -> None:
         """Flush all leading finished tool call blocks.
 
@@ -1318,6 +1330,11 @@ class _LiveView:
         skipped with ``continue`` instead of stopping the flush — they stay in
         the Live area so their spinner keeps animating.  Subsequent finished
         blocks can still flush past them because background agents are async.
+
+        ToolSearch blocks are absorbed silently — only the last one in a
+        consecutive run is shown, mirroring the blackbox ``isAbsorbedSilently``
+        contract.  A non-ToolSearch block triggers the held ToolSearch to flush
+        first so ordering is preserved.
         """
         tool_call_ids = list(self._tool_call_blocks.keys())
         for tool_call_id in tool_call_ids:
@@ -1329,9 +1346,14 @@ class _LiveView:
 
             self._archive_completed_tool_card(block)
             self._tool_call_blocks.pop(tool_call_id)
-            _print_action_block(block.compose())
             if self._last_tool_call_block == block:
                 self._last_tool_call_block = None
+            if block.is_tool_search:
+                # Discard the previously held probe and hold this one instead.
+                self._held_tool_search_block = block
+            else:
+                self._flush_held_tool_search()
+                _print_action_block(block.compose())
             self.refresh_soon()
 
     def flush_notifications(self) -> None:

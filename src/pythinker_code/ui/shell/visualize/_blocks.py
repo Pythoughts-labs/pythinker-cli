@@ -117,6 +117,7 @@ _MAX_SUBAGENT_CHANGED_FILES = 5
 # status must stay in the Live area so their spinner keeps animating.
 _AGENT_ACTIVE_STATUSES = frozenset({"created", "starting", "running", "awaiting_approval"})
 _TODO_TOOL_NAMES = frozenset({"SetTodoList", "TodoWrite"})
+_TOOL_SEARCH_NAME = "ToolSearch"
 _MUTATING_TOOL_NAMES = frozenset(
     {
         "applypatch",
@@ -697,6 +698,10 @@ class _ToolCallBlock:
     @property
     def is_todo_list(self) -> bool:
         return self._tool_name in _TODO_TOOL_NAMES
+
+    @property
+    def is_tool_search(self) -> bool:
+        return self._tool_name == _TOOL_SEARCH_NAME
 
     @property
     def finished(self) -> bool:

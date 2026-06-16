@@ -127,6 +127,35 @@ def test_exact_alias_match_surfaces_matched_alias():
     assert _completion_texts(completer, "/reset") == ["/reset"]
 
 
+def test_namespaced_command_matches_bare_segment_inserts_canonical():
+    """Typing the bare segment of a `skill:`/`flow:` command surfaces it and
+    inserts the canonical name, so `/designer` -> `/skill:designer-skill`."""
+    completer = SlashCommandCompleter(
+        [_make_command("skill:designer-skill"), _make_command("help")]
+    )
+
+    # Exact-segment, prefix-segment, and the namespaced prefix all resolve to
+    # the canonical command name (never the bare segment).
+    assert _completion_texts(completer, "/designer-skill") == ["/skill:designer-skill"]
+    assert _completion_texts(completer, "/designer") == ["/skill:designer-skill"]
+    assert _completion_texts(completer, "/design") == ["/skill:designer-skill"]
+    assert _completion_texts(completer, "/skill:design") == ["/skill:designer-skill"]
+
+
+def test_name_prefix_outranks_namespaced_segment_match():
+    """A direct name-prefix match ranks above a namespaced segment match."""
+    completer = SlashCommandCompleter(
+        [_make_command("skill:design-system"), _make_command("design")]
+    )
+
+    # `/design` prefix-matches the plain `design` command (tier 1) above the
+    # `skill:design-system` segment match (tier 5).
+    assert _completion_texts(completer, "/design") == [
+        "/design",
+        "/skill:design-system",
+    ]
+
+
 def test_shorter_command_name_prefix_ranks_first():
     """Within the same match tier the closest (shortest) command name wins."""
     completer = SlashCommandCompleter(

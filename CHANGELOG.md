@@ -15,6 +15,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **`SetTodoList` accepts Cursor-style todo payloads.** Todo items sent with `content` instead of `title` (the shape models learn from Cursor/Claude `TodoWrite`) now validate and persist correctly instead of failing with missing-`title` errors.
+- **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
+- **Bare skill/flow slash names.** The slash menu now matches `skill:`/`flow:`
+  commands on their bare segment, so typing `/designer` (or `/design`) surfaces
+  `/skill:designer-skill`; accepting inserts the canonical command name.
 - **TUI composing preview gap.** Removed the visible double-blank row between
   `Composing…` and the in-progress preview (leading newline from commit
   boundaries no longer leaks through the plain-text preview path), and aligned

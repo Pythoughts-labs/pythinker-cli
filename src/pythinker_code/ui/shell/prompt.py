@@ -533,7 +533,20 @@ class SlashCommandCompleter(Completer):
                     return (2, alias)
                 if alias_prefix is None and alias_lower.startswith(typed_lower):
                     alias_prefix = alias
-            return (3, alias_prefix) if alias_prefix is not None else None
+            if alias_prefix is not None:
+                return (3, alias_prefix)
+            # Namespaced commands ("skill:designer-skill", "flow:build-api") also
+            # match on their bare segment after the prefix, so `/designer` or
+            # `/build` surfaces them. The label stays the canonical name so the
+            # accepted completion inserts "/skill:designer-skill", not the bare
+            # term -- one execution path, no duplicate command.
+            if ":" in name_lower:
+                segment = name_lower.split(":", 1)[1]
+                if segment == typed_lower:
+                    return (4, cmd.name)
+                if segment.startswith(typed_lower):
+                    return (5, cmd.name)
+            return None
 
         # Rank by (match tier, command-name length, name): the closest, shortest
         # command name surfaces first within each tier.

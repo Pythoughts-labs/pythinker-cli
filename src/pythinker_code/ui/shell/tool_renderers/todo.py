@@ -58,7 +58,7 @@ def _icon_token(status: str) -> str:
 
 def _todo_level_and_title(item: dict[str, Any]) -> tuple[int, str]:
     """Return display nesting level and a cleaned title."""
-    raw_title = as_str(item.get("title")) or ""
+    raw_title = as_str(item.get("title")) or as_str(item.get("content")) or ""
     explicit = item.get("level", item.get("depth", item.get("indent")))
     if isinstance(explicit, int):
         return max(0, min(explicit, 6)), raw_title.strip()

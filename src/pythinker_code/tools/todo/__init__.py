@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, cast, override
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pythinker_core.tooling import CallableTool2, ToolReturnValue
 
 from pythinker_code.session_state import TodoItemState
@@ -24,6 +24,17 @@ _STATUS_ALIASES: dict[str, TodoStatus] = {
 class Todo(BaseModel):
     title: str = Field(description="The title of the todo", min_length=1)
     status: TodoStatus = Field(description="The status of the todo")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_todo_write_shape(cls, data: Any) -> Any:
+        """Accept Cursor/Claude TodoWrite shapes that use ``content`` instead of ``title``."""
+        if not isinstance(data, dict):
+            return data
+        values = dict(cast(dict[str, Any], data))
+        if "title" not in values and "content" in values:
+            values["title"] = values["content"]
+        return values
 
     @field_validator("status", mode="before")
     @classmethod
