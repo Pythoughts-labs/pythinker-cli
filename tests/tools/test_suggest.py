@@ -45,11 +45,14 @@ async def test_suggest_defaults_blank_prefill_and_category(monkeypatch) -> None:
 
 
 def test_suggestion_block_renders_label_and_prefill() -> None:
+    from pythinker_code.ui.shell.components import render_plain
     from pythinker_code.ui.shell.visualize._blocks import _SuggestionBlock
 
     block = _SuggestionBlock(Suggestion(label="Review my changes", prefill="/review"))
-    rendered = block.compose()
-    assert rendered is not None
+    rendered = render_plain(block.compose(), width=100)
+    assert "Review my changes" in rendered
+    assert "/review" in rendered
+    assert "Alt+S to accept" in rendered
 
 
 def test_accept_staged_suggestion_prefill_inserts_text() -> None:

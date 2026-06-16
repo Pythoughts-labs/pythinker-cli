@@ -36,7 +36,11 @@ def mcp_tool_runtime_key(server_name: str, tool_name: str) -> str:
 
 
 def normalize_mcp_servers_in_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Re-key ``mcpServers`` entries to normalized names; fail on collisions."""
+    """Re-key ``mcpServers`` entries to normalized names; fail on collisions.
+
+    Mutates ``config`` in place (reassigns ``config["mcpServers"]``) and returns
+    the same dict for chaining.
+    """
     servers = config.get("mcpServers")
     if not isinstance(servers, dict):
         return config

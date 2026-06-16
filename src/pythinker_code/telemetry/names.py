@@ -37,5 +37,7 @@ def _bounded_mcp_label(server: str, tool: str) -> str:
     if len(label) <= _TELEMETRY_TOOL_NAME_MAX:
         return label
     digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:8]
+    # Slice budget: "mcp__" (5) + server[:16] + "__" (2) + tool[:24] = 47, then
+    # head[:55] + "_" + 8-char digest = 56 — always within _TELEMETRY_TOOL_NAME_MAX (64).
     head = f"mcp__{safe_server[:16]}__{safe_tool[:24]}"
     return f"{head[: _TELEMETRY_TOOL_NAME_MAX - 9]}_{digest}"

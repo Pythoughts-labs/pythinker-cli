@@ -103,7 +103,15 @@ def _render_transcript(
 
     Internal (``_``-prefixed) roles are skipped. Each message's text is sanitized;
     a block that trips the secret/injection scanner becomes ``[redacted]`` rather
-    than leaking or silently vanishing. Stops once the char budget is reached.
+    than leaking or silently vanishing.
+
+    Windowing operates on the renderable (post-filter) message stream — i.e. after
+    internal-role and empty-segment messages are dropped:
+
+    - ``message_offset``: skip this many renderable messages before emitting any.
+    - ``max_messages``: emit at most this many renderable messages (``None`` = no limit).
+
+    Stops once the char budget or ``max_messages`` is reached.
     """
     out: list[str] = []
     used = 0

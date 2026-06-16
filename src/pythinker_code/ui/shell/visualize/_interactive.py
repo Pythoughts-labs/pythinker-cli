@@ -517,8 +517,10 @@ class _PromptLiveView(_LiveView):
 
     def display_suggestion(self, event: Suggestion) -> None:
         super().display_suggestion(event)
-        if event.prefill.strip():
-            self._prompt_session.stage_suggestion_prefill(event.prefill)
+        # Stage unconditionally: an empty prefill clears any prior staged value
+        # (stage_suggestion_prefill stores ``None`` for blank input), so a later
+        # suggestion without a prefill cannot leave stale Esc+s text behind.
+        self._prompt_session.stage_suggestion_prefill(event.prefill)
 
     # -- Running prompt rendering --------------------------------------------
 

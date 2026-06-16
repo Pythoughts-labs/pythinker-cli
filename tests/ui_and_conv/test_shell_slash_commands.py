@@ -253,7 +253,7 @@ async def test_mcp_slash_persists_only_final_snapshot(
 
     output = sanitize_ansi(capsys.readouterr().out)
     assert live_transient_values == [True]
-    assert "MCP Tools" in output
+    assert "🔌  MCP Tools" in output
     assert "context7" in output
     assert "Status: connected" in output
     assert "query-docs" in output

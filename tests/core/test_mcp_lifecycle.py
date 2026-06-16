@@ -201,3 +201,106 @@ async def test_reconnect_raises_classified_error(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(MCPRuntimeError, match="command not found"):
         await toolset.reconnect_mcp_server("alpha", runtime)
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_preserves_live_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed refresh must not drop the server's still-working tools."""
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    live_tool = _fake_mcp_tool("alpha", "LiveTool")
+    info = MCPServerInfo(
+        status="connected",
+        client=cast(Any, SimpleNamespace()),
+        tools=[live_tool],
+        resources=[],
+        prompts=[],
+    )
+    toolset._mcp_servers["alpha"] = info
+    toolset.add(live_tool)
+    runtime.mcp_tools["mcp__alpha__LiveTool"] = live_tool
+
+    async def _failing_inventory(_server: str, _info: MCPServerInfo, _runtime: Any) -> None:
+        raise RuntimeError("list_tools blew up")
+
+    monkeypatch.setattr(toolset, "_inventory_mcp_server", _failing_inventory)
+
+    with pytest.raises(MCPRuntimeError, match="Failed to refresh"):
+        await toolset.refresh_mcp_server("alpha", runtime)
+
+    assert toolset.find("LiveTool") is live_tool
+    assert runtime.mcp_tools["mcp__alpha__LiveTool"] is live_tool
+    assert info.tools == [live_tool]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_reclaims_shadowed_tool_from_other_server() -> None:
+    """Disconnecting the winning server must fall the tool name back, not orphan it."""
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    shared_alpha = _fake_mcp_tool("alpha", "Shared")
+    shared_beta = _fake_mcp_tool("beta", "Shared")
+    toolset._mcp_servers["alpha"] = MCPServerInfo(
+        status="connected",
+        client=cast(Any, SimpleNamespace(close=AsyncMock())),
+        tools=[shared_alpha],
+        resources=[],
+        prompts=[],
+        server_config={"command": "echo"},
+    )
+    toolset._mcp_servers["beta"] = MCPServerInfo(
+        status="connected",
+        client=cast(Any, SimpleNamespace(close=AsyncMock())),
+        tools=[shared_beta],
+        resources=[],
+        prompts=[],
+        server_config={"command": "echo"},
+    )
+    # Configured order publishes beta last, so it wins the shared name.
+    toolset._publish_connected_mcp_tools(runtime)
+    assert toolset.find("Shared") is shared_beta
+
+    await toolset.disconnect_mcp_server("beta", runtime)
+
+    assert toolset.find("Shared") is shared_alpha
+    assert runtime.mcp_tools["mcp__alpha__Shared"] is shared_alpha
+    assert "mcp__beta__Shared" not in runtime.mcp_tools
+    assert toolset._mcp_servers["beta"].status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_partial_connect_publishes_connected_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server that connects must be published even when a sibling fails the aggregate."""
+    from fastmcp.mcp_config import MCPConfig
+
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    good_tool = _fake_mcp_tool("good", "GoodTool")
+
+    async def _connect(
+        server_name: str, server_info: MCPServerInfo, _runtime: Any
+    ) -> tuple[str, Exception | None]:
+        if server_name == "good":
+            server_info.status = "connected"
+            server_info.tools = [good_tool]
+            return server_name, None
+        server_info.status = "failed"
+        server_info.error = "boom"
+        return server_name, RuntimeError("boom")
+
+    monkeypatch.setattr(toolset, "_connect_mcp_server", _connect)
+    monkeypatch.setattr(
+        "pythinker_code.soul.toolset._configure_mcp_client_handlers",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr("fastmcp.Client", lambda *args, **kwargs: SimpleNamespace())
+
+    config = MCPConfig.model_validate(
+        {"mcpServers": {"good": {"command": "echo"}, "bad": {"command": "echo"}}}
+    )
+
+    with pytest.raises(MCPRuntimeError, match="Failed to connect"):
+        await toolset.load_mcp_tools([config], runtime, in_background=False)
+
+    assert toolset.find("GoodTool") is good_tool
+    assert runtime.mcp_tools["mcp__good__GoodTool"] is good_tool

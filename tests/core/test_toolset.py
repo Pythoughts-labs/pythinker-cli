@@ -309,7 +309,7 @@ async def test_tool_execution_mutation_does_not_rewrite_hook_input() -> None:
         )
     )
     assert isinstance(result, asyncio.Task)
-    await result
+    _ = await result  # drive the task to completion; the awaited value is unused
 
     assert post_inputs == [{"payload": {"value": "original"}}]
 

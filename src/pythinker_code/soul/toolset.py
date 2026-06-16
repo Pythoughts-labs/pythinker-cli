@@ -624,6 +624,23 @@ class PythinkerToolset:
 
                 runtime.mcp_tools[mcp_tool_runtime_key(server_name, tool.name)] = tool
 
+    def _rebuild_published_mcp_tools(self, runtime: Runtime) -> None:
+        """Atomically rebuild the published MCP tool registry from connected servers.
+
+        Drop every currently-published MCP tool (non-MCP tools are preserved), then
+        republish all *connected* servers in configured order via
+        :meth:`_publish_connected_mcp_tools`. This keeps last-wins collision order
+        deterministic and lets a disconnect/refresh re-claim a tool name another
+        still-connected server provides, instead of orphaning it. The method runs
+        synchronously (no ``await`` between the drop and the republish), so the two
+        registries are never observed half-rebuilt.
+        """
+        stale = [name for name, tool in self._tool_dict.items() if isinstance(tool, MCPTool)]
+        for name in stale:
+            del self._tool_dict[name]
+        runtime.mcp_tools.clear()
+        self._publish_connected_mcp_tools(runtime)
+
     def hide(self, tool_name: str) -> bool:
         """Hide a tool from the LLM tool list. Returns True if the tool exists."""
         if tool_name in self._tool_dict:
@@ -1300,10 +1317,12 @@ class PythinkerToolset:
             results = await asyncio.gather(*tasks) if tasks else []
             failed_servers = {name: error for name, error in results if error is not None}
 
+            # Publish before raising so servers that DID connect become callable in
+            # this session even when another server fails the aggregate connect.
+            self._publish_connected_mcp_tools(runtime)
             if failed_servers:
                 _toast_mcp("mcp connection failed")
                 raise MCPRuntimeError(f"Failed to connect MCP servers: {failed_servers}")
-            self._publish_connected_mcp_tools(runtime)
             if unauthorized_servers:
                 _toast_mcp("mcp authorization needed")
             else:
@@ -1352,19 +1371,6 @@ class PythinkerToolset:
         finally:
             if self._mcp_loading_task is task and task.done():
                 self._mcp_loading_task = None
-
-    def _unregister_mcp_server_tools(self, server_name: str, runtime: Runtime) -> None:
-        info = self._mcp_servers.get(server_name)
-        if info is None:
-            return
-        from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
-
-        for tool in info.tools:
-            registered = self._tool_dict.get(tool.name)
-            if registered is tool:
-                del self._tool_dict[tool.name]
-            runtime.mcp_tools.pop(mcp_tool_runtime_key(server_name, tool.name), None)
-        info.tools = []
 
     async def _inventory_mcp_server(
         self, server_name: str, server_info: MCPServerInfo, runtime: Runtime
@@ -1427,16 +1433,6 @@ class PythinkerToolset:
             server_info.error = _classify_mcp_connect_error(e, server_name)
             return server_name, e
 
-    def _publish_mcp_server_tools(self, server_name: str, runtime: Runtime) -> None:
-        info = self._mcp_servers.get(server_name)
-        if info is None:
-            return
-        self._register_mcp_tools(server_name, info.tools)
-        from pythinker_code.utils.mcp_names import mcp_tool_runtime_key
-
-        for tool in info.tools:
-            runtime.mcp_tools[mcp_tool_runtime_key(server_name, tool.name)] = tool
-
     def _ensure_mcp_idle(self) -> None:
         if self._mcp_loading_task is not None and not self._mcp_loading_task.done():
             raise MCPRuntimeError("MCP servers are still loading")
@@ -1463,7 +1459,10 @@ class PythinkerToolset:
         if info is None:
             raise MCPRuntimeError(f"Unknown MCP server: {server_name}")
         await self._stop_mcp_session_holder(info)
-        self._unregister_mcp_server_tools(server_name, runtime)
+        # Drop this server's inventory, then rebuild the published registry so any
+        # tool name it was shadowing falls back to another still-connected server.
+        info.tools = []
+        self._rebuild_published_mcp_tools(runtime)
         prior_error = info.error
         close_error: str | None = None
         try:
@@ -1504,12 +1503,21 @@ class PythinkerToolset:
             raise MCPRuntimeError(
                 f"MCP server '{server_name}' is not connected (status={info.status})"
             )
-        self._unregister_mcp_server_tools(server_name, runtime)
-        await asyncio.wait_for(
-            self._inventory_mcp_server(server_name, info, runtime),
-            timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
-        )
-        self._publish_mcp_server_tools(server_name, runtime)
+        # Inventory first: on failure ``info.tools`` keeps its last-known-good value
+        # and the live registry is untouched, so a failed refresh never drops tools.
+        # Convert raw timeout/inventory errors to MCPRuntimeError so callers (e.g. the
+        # /mcp slash handler) receive a single typed boundary error.
+        try:
+            await asyncio.wait_for(
+                self._inventory_mcp_server(server_name, info, runtime),
+                timeout=runtime.config.mcp.client.startup_timeout_ms / 1000,
+            )
+        except TimeoutError as exc:
+            raise MCPRuntimeError(f"Refresh of MCP server '{server_name}' timed out") from exc
+        except Exception as exc:
+            raise MCPRuntimeError(f"Failed to refresh MCP server '{server_name}': {exc}") from exc
+        # Inventory succeeded; swap the old tool set for the new one atomically.
+        self._rebuild_published_mcp_tools(runtime)
 
     async def reconnect_mcp_server(self, server_name: str, runtime: Runtime) -> None:
         """Close and reconnect one MCP server from its stored config."""
@@ -1532,7 +1540,7 @@ class PythinkerToolset:
             raise MCPRuntimeError(
                 info.error or f"Failed to reconnect MCP server '{server_name}': {error}"
             )
-        self._publish_mcp_server_tools(server_name, runtime)
+        self._rebuild_published_mcp_tools(runtime)
 
     async def cleanup(self) -> None:
         """Cleanup any resources held by the toolset."""

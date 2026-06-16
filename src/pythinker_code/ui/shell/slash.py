@@ -2258,6 +2258,13 @@ async def mcp(app: Shell, args: str):
             if soul is None:
                 return
             server_name = parts[1] if len(parts) > 1 else None
+            # Reject extra operands instead of silently using only the first.
+            if verb in {"reconnect", "disconnect", "retry"} and len(parts) != 2:
+                console.print(f"[{_get_tok_mcp().warning}]Usage: /mcp {verb} <server>[/]")
+                return
+            if verb == "refresh" and len(parts) > 2:
+                console.print(f"[{_get_tok_mcp().warning}]Usage: /mcp refresh [server][/]")
+                return
             if verb == "retry":
                 verb = "reconnect"
             try:
