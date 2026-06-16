@@ -48,6 +48,7 @@ from pythinker_code.config import Config, PythinkerAISearchConfig, get_default_c
 from pythinker_code.llm import ALL_MODEL_CAPABILITIES, LLM
 from pythinker_code.metadata import WorkDirMeta
 from pythinker_code.notifications import NotificationManager
+from pythinker_code.plugin import loader as plugin_loader
 from pythinker_code.session import Session
 from pythinker_code.session_state import SessionState
 from pythinker_code.soul.agent import BuiltinSystemPromptArgs, LaborMarket, Runtime
@@ -134,6 +135,22 @@ def _isolate_share_dir(
     that set ``PYTHINKER_SHARE_DIR`` themselves still override it within their own scope.
     """
     monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path_factory.mktemp("share")))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_external_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize Claude/Codex plugin discovery so the suite never reads the
+    developer's real ``~/.claude``/``~/.codex`` plugins.
+
+    External plugin auto-detection (``plugins.discover_external`` defaults on)
+    makes agent/skill/command discovery scan those roots. Left unpatched,
+    discovery results would depend on whatever plugins a given machine has
+    installed, making tests non-deterministic across dev boxes and CI. Tests
+    that exercise external discovery monkeypatch these roots to their own temp
+    dirs, which overrides this default within their own scope.
+    """
+    monkeypatch.setattr(plugin_loader, "claude_plugin_roots", lambda: [])
+    monkeypatch.setattr(plugin_loader, "codex_plugin_roots", lambda: [])
 
 
 @pytest.fixture

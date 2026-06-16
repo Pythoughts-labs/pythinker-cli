@@ -15,9 +15,16 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PluginPolicy:
-    """Which plugins a session activates."""
+    """Which plugins a session activates.
 
-    include_external: bool = False
+    External (Claude/Codex) plugins are auto-detected by default for their *safe*
+    artifacts — skills, commands, agents — which are model-invoked, never
+    auto-run. Their *executable* artifacts — hooks and MCP servers — auto-run, so
+    they stay opt-in behind ``external_exec``.
+    """
+
+    discover_external: bool = True
+    external_exec: bool = False
     # None enables all discovered plugins; a frozenset enables only those named.
     enabled: frozenset[str] | None = None
 
@@ -41,9 +48,18 @@ def reset_plugin_policy(token: Token[PluginPolicy]) -> None:
     _current_policy.reset(token)
 
 
-def policy_from_config(include_external: bool, enabled: list[str]) -> PluginPolicy:
-    """Build a :class:`PluginPolicy` from config values."""
+def policy_from_config(
+    discover_external: bool, external_exec: bool, enabled: list[str]
+) -> PluginPolicy:
+    """Build a :class:`PluginPolicy` from config values.
+
+    Blank/whitespace ``enabled`` entries are dropped so a stray ``[""]`` cannot
+    silently disable every plugin: an empty or all-blank list means "enable all"
+    (``None``), never "enable none".
+    """
+    names = frozenset(name.strip() for name in enabled if name.strip())
     return PluginPolicy(
-        include_external=include_external,
-        enabled=frozenset(enabled) if enabled else None,
+        discover_external=discover_external,
+        external_exec=external_exec,
+        enabled=names or None,
     )

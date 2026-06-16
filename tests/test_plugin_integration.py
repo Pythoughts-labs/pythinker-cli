@@ -234,14 +234,14 @@ def test_plugin_hook_defs_inline_manifest_and_malformed_skip(
     assert [d.command for d in defs] == ["ok"]  # non-command + malformed dropped
 
 
-def test_external_plugins_are_opt_in(tmp_path: Path, monkeypatch) -> None:
-    # A plugin only in the Claude root is ignored by default, included on opt-in.
+def test_external_skills_auto_detected_but_disablable(tmp_path: Path, monkeypatch) -> None:
+    # A plugin only in the Claude root: its skills auto-detect by default (no
+    # symlink, no config), and discover_external=False turns it off.
     claude = tmp_path / "claude"
     _install_plugin_with_skill(claude, "ponytail", "ponytail")
     monkeypatch.setattr(loader, "plugin_cache_dir", lambda: tmp_path / "empty")
     monkeypatch.setattr(loader, "claude_plugin_roots", lambda: [claude])
     monkeypatch.setattr(loader, "codex_plugin_roots", lambda: [])
 
-    assert integration.plugin_skill_dirs() == []  # default policy: external off
-    # Opt-in policy finds it.
-    assert integration.plugin_skill_dirs(PluginPolicy(include_external=True))
+    assert integration.plugin_skill_dirs()  # default: auto-detected
+    assert integration.plugin_skill_dirs(PluginPolicy(discover_external=False)) == []

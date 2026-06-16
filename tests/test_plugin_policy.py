@@ -17,22 +17,44 @@ from pythinker_code.plugin.policy import (
 )
 
 
-def test_policy_from_config_empty_enables_all() -> None:
-    pol = policy_from_config(include_external=True, enabled=[])
-    assert pol.include_external is True
+def test_policy_from_config_defaults() -> None:
+    pol = policy_from_config(discover_external=True, external_exec=False, enabled=[])
+    assert pol.discover_external is True
+    assert pol.external_exec is False
     assert pol.enabled is None  # empty list -> all enabled
 
 
 def test_policy_from_config_named_enable_set() -> None:
-    pol = policy_from_config(include_external=False, enabled=["a", "b"])
+    pol = policy_from_config(discover_external=True, external_exec=True, enabled=["a", "b"])
     assert pol.enabled == frozenset({"a", "b"})
+    assert pol.external_exec is True
+
+
+def test_policy_from_config_blank_entries_mean_enable_all() -> None:
+    # A stray [""] / whitespace-only entry must not silently disable every plugin:
+    # blanks are dropped and an all-blank list collapses to None (enable all).
+    def enabled_for(entries: list[str]) -> frozenset[str] | None:
+        return policy_from_config(
+            discover_external=True, external_exec=False, enabled=entries
+        ).enabled
+
+    assert enabled_for([""]) is None
+    assert enabled_for(["  "]) is None
+    assert enabled_for(["", " a "]) == frozenset({"a"})  # blanks dropped, real names survive
+
+
+def test_default_policy_auto_detects_external_safe_only() -> None:
+    # The shipped default: external skills/commands/agents auto-detect; exec off.
+    default = PluginPolicy()
+    assert default.discover_external is True
+    assert default.external_exec is False
 
 
 def test_set_and_reset_policy() -> None:
     assert current_plugin_policy() == PluginPolicy()  # default
-    token = set_plugin_policy(PluginPolicy(include_external=True))
+    token = set_plugin_policy(PluginPolicy(external_exec=True))
     try:
-        assert current_plugin_policy().include_external is True
+        assert current_plugin_policy().external_exec is True
     finally:
         reset_plugin_policy(token)
     assert current_plugin_policy() == PluginPolicy()
@@ -48,41 +70,66 @@ def _install_external_skill_plugin(claude_root: Path, name: str) -> None:
     skill.write_text(f"---\nname: {name}\ndescription: d\n---\n# {name}", encoding="utf-8")
 
 
-def test_collector_honors_contextvar_policy(tmp_path: Path, monkeypatch) -> None:
+@pytest.fixture
+def _external_ponytail(tmp_path: Path, monkeypatch):
     claude = tmp_path / "claude"
     _install_external_skill_plugin(claude, "ponytail")
     monkeypatch.setattr(loader, "plugin_cache_dir", lambda: tmp_path / "empty")
     monkeypatch.setattr(loader, "claude_plugin_roots", lambda: [claude])
     monkeypatch.setattr(loader, "codex_plugin_roots", lambda: [])
 
-    # Default policy: external off -> nothing.
-    assert integration.plugin_skill_dirs() == []
 
-    # Config enables external -> the collector (no explicit arg) honors it.
-    token = set_plugin_policy(policy_from_config(include_external=True, enabled=[]))
-    try:
-        assert integration.plugin_skill_dirs()  # finds the external plugin's skills
-    finally:
-        reset_plugin_policy(token)
+def test_external_skills_auto_detected_by_default(_external_ponytail) -> None:
+    # No config, no symlink: an external Claude plugin's skills are found.
+    assert integration.plugin_skill_dirs()
 
 
-def test_contextvar_enable_filter(tmp_path: Path, monkeypatch) -> None:
-    claude = tmp_path / "claude"
-    _install_external_skill_plugin(claude, "ponytail")
-    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: tmp_path / "empty")
-    monkeypatch.setattr(loader, "claude_plugin_roots", lambda: [claude])
-    monkeypatch.setattr(loader, "codex_plugin_roots", lambda: [])
-
-    # External on, but enable-set excludes ponytail -> nothing.
-    token = set_plugin_policy(policy_from_config(include_external=True, enabled=["something-else"]))
+def test_discover_external_false_ignores_external(_external_ponytail) -> None:
+    token = set_plugin_policy(PluginPolicy(discover_external=False))
     try:
         assert integration.plugin_skill_dirs() == []
     finally:
         reset_plugin_policy(token)
 
 
+def test_enable_filter_excludes_external(_external_ponytail) -> None:
+    token = set_plugin_policy(
+        policy_from_config(discover_external=True, external_exec=False, enabled=["other"])
+    )
+    try:
+        assert integration.plugin_skill_dirs() == []
+    finally:
+        reset_plugin_policy(token)
+
+
+def _install_external_mcp_plugin(claude_root: Path, name: str) -> None:
+    root = claude_root / name / name / "1.0.0"
+    pm = root / ".claude-plugin" / "plugin.json"
+    pm.parent.mkdir(parents=True)
+    pm.write_text(
+        json.dumps({"name": name, "version": "1.0.0", "mcpServers": {"db": {"command": "x"}}}),
+        encoding="utf-8",
+    )
+
+
+def test_external_mcp_is_opt_in(tmp_path: Path, monkeypatch) -> None:
+    claude = tmp_path / "claude"
+    _install_external_mcp_plugin(claude, "dbplug")
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: tmp_path / "empty")
+    monkeypatch.setattr(loader, "claude_plugin_roots", lambda: [claude])
+    monkeypatch.setattr(loader, "codex_plugin_roots", lambda: [])
+
+    # Default: external exec artifacts (MCP) are NOT activated.
+    assert integration.plugin_mcp_servers() == {}
+    # Opt-in via external_exec.
+    token = set_plugin_policy(PluginPolicy(external_exec=True))
+    try:
+        assert integration.plugin_mcp_servers() == {"db": {"command": "x"}}
+    finally:
+        reset_plugin_policy(token)
+
+
 @pytest.fixture(autouse=True)
 def _reset_policy():
-    # Guard against a leaked policy from a failed test.
     yield
     set_plugin_policy(PluginPolicy())

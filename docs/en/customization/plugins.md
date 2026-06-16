@@ -314,3 +314,66 @@ Plugins and MCP servers are complementary extension mechanisms:
 - **MCP**: Suitable for services that need to run continuously, complex tool orchestration, or cross-process communication
 - **Plugins**: Suitable for simple script wrappers, project-specific tools, or rapid prototyping
 :::
+
+## Marketplace plugins (Claude/Codex compatible)
+
+In addition to the script-tool plugins above, Pythinker can install and activate
+**artifact plugins** from *marketplaces* — the same plugin format used by Claude
+Code (`.claude-plugin/plugin.json`) and Codex. An artifact plugin contributes
+skills, subagents, slash commands, hooks, and MCP servers to a session.
+
+### Marketplaces
+
+A marketplace is a catalog (`marketplace.json`) listing plugins and their
+sources. Manage marketplaces with `pythinker plugin marketplace`:
+
+```bash
+# Add a marketplace (GitHub owner/repo, git/URL, or a local path)
+pythinker plugin marketplace add anthropics/claude-plugins-official
+pythinker plugin marketplace add /path/to/local/marketplace --name local
+
+# List, refresh, or remove
+pythinker plugin marketplace list
+pythinker plugin marketplace refresh claude-plugins-official
+pythinker plugin marketplace remove local
+```
+
+### Installing marketplace plugins
+
+```bash
+# Install a plugin from a configured marketplace
+pythinker plugin marketplace install ponytail@claude-plugins-official
+# (equivalent positional form)
+pythinker plugin marketplace install ponytail claude-plugins-official
+
+pythinker plugin marketplace installed       # list installed marketplace plugins
+pythinker plugin marketplace uninstall ponytail@claude-plugins-official
+```
+
+Plugins install into `~/.pythinker/plugins/cache/<marketplace>/<plugin>/<version>/`.
+If the same plugin or marketplace is already present in a Claude Code
+(`~/.claude/plugins`) or Codex (`~/.codex/plugins`) install, Pythinker
+**symlinks to it instead of copying** — no redundant downloads.
+
+### Activation policy
+
+Pythinker **auto-detects** plugins installed for Claude Code (`~/.claude/plugins`)
+and Codex (`~/.codex/plugins`) — no symlink or manual copy needed. Their *safe*
+artifacts (skills, commands, agents) activate automatically because they are
+model-invoked, never auto-run; their *executable* artifacts (hooks, MCP servers)
+auto-execute, so they stay opt-in. Detection reads the plugins in place (no
+copy/symlink) and de-duplicates by name, so there is no redundancy.
+
+Tune this via `[plugins]` in `~/.pythinker/config.toml`:
+
+```toml
+[plugins]
+# Auto-detect Claude/Codex plugins' skills, commands, and agents. On by default.
+# Set false to ignore external plugins entirely.
+discover_external = true
+# Also run external plugins' hooks and MCP servers (they auto-execute). Opt-in.
+external_exec = false
+# Empty enables all discovered plugins; a non-empty list enables only those named
+# (by "name" or "name@marketplace").
+enabled = []
+```

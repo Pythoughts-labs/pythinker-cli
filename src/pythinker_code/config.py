@@ -1029,12 +1029,21 @@ class PluginsConfig(BaseModel):
     commands, hooks, MCP servers) to a session.
     """
 
-    include_external: bool = Field(
+    discover_external: bool = Field(
+        default=True,
+        description=(
+            "Auto-detect plugins installed for Claude Code (~/.claude/plugins) and Codex "
+            "(~/.codex/plugins) and activate their safe artifacts (skills, commands, "
+            "agents). On by default — these are model-invoked, never auto-run. Set false "
+            "to ignore external plugins entirely."
+        ),
+    )
+    external_exec: bool = Field(
         default=False,
         description=(
-            "Also activate plugins installed for Claude Code (~/.claude/plugins) and "
-            "Codex (~/.codex/plugins). Off by default — external plugins run executable "
-            "agents/hooks/MCP, so they are opt-in."
+            "Also run external plugins' executable artifacts (hooks and MCP servers). Off "
+            "by default — these auto-execute, so they are opt-in even when discover_external "
+            "is on."
         ),
     )
     enabled: list[str] = Field(

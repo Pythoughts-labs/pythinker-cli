@@ -19,8 +19,11 @@ cache only if startup profiling shows it matters.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import ValidationError
 
 from pythinker_code.hooks.config import HOOK_EVENT_TYPES, HookDef
 from pythinker_code.plugin import artifacts
@@ -29,41 +32,57 @@ from pythinker_code.plugin.policy import PluginPolicy, current_plugin_policy
 from pythinker_code.utils.logging import logger
 
 
-def _enabled_plugins(policy: PluginPolicy | None) -> list[LoadedPlugin]:
+def _enabled_plugins(policy: PluginPolicy | None, *, include_external: bool) -> list[LoadedPlugin]:
     """Discover the plugins this session activates under *policy* (or the active one)."""
     pol = policy if policy is not None else current_plugin_policy()
     enabled_set = set(pol.enabled) if pol.enabled is not None else None
-    return discover_plugins(include_external=pol.include_external, is_enabled=enabled_set).enabled
+    return discover_plugins(include_external=include_external, is_enabled=enabled_set).enabled
+
+
+def _safe_external(policy: PluginPolicy | None) -> bool:
+    """Whether safe (model-invoked) artifacts may come from external plugins."""
+    pol = policy if policy is not None else current_plugin_policy()
+    return pol.discover_external
+
+
+def _exec_external(policy: PluginPolicy | None) -> bool:
+    """Whether executable (auto-running) artifacts may come from external plugins."""
+    pol = policy if policy is not None else current_plugin_policy()
+    return pol.discover_external and pol.external_exec
+
+
+def _safe_artifact_dirs(
+    policy: PluginPolicy | None, extract: Callable[[LoadedPlugin], list[Path]]
+) -> list[Path]:
+    """Collect a safe (model-invoked) artifact's dirs across enabled plugins."""
+    dirs: list[Path] = []
+    for plugin in _enabled_plugins(policy, include_external=_safe_external(policy)):
+        dirs.extend(extract(plugin))
+    return dirs
 
 
 def plugin_skill_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Skill roots contributed by enabled plugins (each a ``skills/``-style dir)."""
-    dirs: list[Path] = []
-    for plugin in _enabled_plugins(policy):
-        dirs.extend(artifacts.skill_dirs(plugin))
-    return dirs
+    return _safe_artifact_dirs(policy, artifacts.skill_dirs)
 
 
 def plugin_agent_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Subagent-definition roots contributed by enabled plugins (``agents/`` dirs)."""
-    dirs: list[Path] = []
-    for plugin in _enabled_plugins(policy):
-        dirs.extend(artifacts.agent_dirs(plugin))
-    return dirs
+    return _safe_artifact_dirs(policy, artifacts.agent_dirs)
 
 
 def plugin_command_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Slash-command prompt-template roots contributed by enabled plugins."""
-    dirs: list[Path] = []
-    for plugin in _enabled_plugins(policy):
-        dirs.extend(artifacts.command_dirs(plugin))
-    return dirs
+    return _safe_artifact_dirs(policy, artifacts.command_dirs)
 
 
 def plugin_mcp_servers(policy: PluginPolicy | None = None) -> dict[str, object]:
-    """MCP server configs contributed by enabled plugins (earlier plugins win)."""
+    """MCP server configs contributed by enabled plugins (earlier plugins win).
+
+    Executable artifact: external plugins contribute only when ``external_exec``.
+    """
     servers: dict[str, object] = {}
-    for plugin in _enabled_plugins(policy):
+    for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
         for key, value in artifacts.mcp_servers(plugin).items():
             servers.setdefault(key, value)
     return servers
@@ -118,6 +137,12 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
                 command = entry_d.get("command")
                 if entry_d.get("type", "command") != "command" or not isinstance(command, str):
                     continue
+                # Trust boundary: the root is interpolated unquoted, mirroring the
+                # reference (it runs hooks via a shell too). Safe because native
+                # plugin roots are sanitized at install (``_SAFE_NAME``) so they
+                # cannot hold shell metacharacters, and external (Claude/Codex)
+                # hooks only run when ``external_exec`` is opted in. Do not add
+                # shlex.quote here: it would diverge and break ``${ROOT}/x --flag``.
                 expanded = command.replace("${CLAUDE_PLUGIN_ROOT}", root).replace(
                     "${PYTHINKER_PLUGIN_ROOT}", root
                 )
@@ -131,7 +156,7 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
                             **({"timeout": timeout} if isinstance(timeout, int) else {}),
                         )
                     )
-                except Exception as exc:  # pydantic validation of an odd entry
+                except ValidationError as exc:
                     logger.warning(
                         "Skipping invalid plugin hook in {plugin}: {error}",
                         plugin=plugin.name,
@@ -141,9 +166,12 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
 
 
 def plugin_hook_defs(policy: PluginPolicy | None = None) -> list[HookDef]:
-    """Lifecycle hooks contributed by enabled plugins, as pythinker ``HookDef``s."""
+    """Lifecycle hooks contributed by enabled plugins, as pythinker ``HookDef``s.
+
+    Executable artifact: external plugins contribute only when ``external_exec``.
+    """
     defs: list[HookDef] = []
-    for plugin in _enabled_plugins(policy):
+    for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
         payload = _hooks_payload(plugin)
         if payload is not None:
             defs.extend(_translate_hook_defs(plugin, payload))

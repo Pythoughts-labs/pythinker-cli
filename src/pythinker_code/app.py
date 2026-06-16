@@ -260,7 +260,11 @@ class PythinkerCLI:
         from pythinker_code.plugin.policy import policy_from_config, set_plugin_policy
 
         set_plugin_policy(
-            policy_from_config(config.plugins.include_external, config.plugins.enabled)
+            policy_from_config(
+                config.plugins.discover_external,
+                config.plugins.external_exec,
+                config.plugins.enabled,
+            )
         )
 
         _phase_t = time.monotonic()
