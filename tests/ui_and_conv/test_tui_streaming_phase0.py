@@ -139,7 +139,7 @@ def test_long_code_block_does_not_reparse_per_tick() -> None:
     fence = "```python\n" + "\n".join(f"x = {i}" for i in range(120)) + "\n```\n\nAfter.\n"
     text = "Intro.\n\n" + fence
     first = markdown_commit_boundary(text)
-    with patch("pythinker_code.ui.shell.components.markdown._get_md_parser") as parser_factory:
+    with patch("pythinker_code.ui.shell.markdown.streaming._get_md_parser") as parser_factory:
         parser_factory.side_effect = AssertionError("parse should be cached")
         second = markdown_commit_boundary(text)
     assert first == second

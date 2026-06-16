@@ -34,12 +34,27 @@ from rich.style import Style as RichStyle
 from rich.table import Table
 from rich.text import Text
 
-from pythinker_code.ui.shell.components.markdown import pythinker_markdown, pythinker_report_markdown
 from pythinker_code.ui.shell.glyphs import REPORT_FILE_MARKER
+from pythinker_code.ui.shell.markdown.audit import detect_audit_report
+from pythinker_code.ui.shell.markdown.normalizers import (
+    parse_aligned_field_line as _parse_aligned_field_line,
+)
+from pythinker_code.ui.shell.markdown.renderer import (
+    pythinker_markdown,
+    pythinker_report_markdown,
+)
 from pythinker_code.ui.shell.spacing import REPORT_PANEL_PADDING
 from pythinker_code.ui.theme import ThemeName, get_tui_tokens, tui_rich_style
 
 _log = logging.getLogger(__name__)
+
+
+def _agent_markdown(text: str) -> RenderableType:
+    """Render assistant markdown, using audit profile for dense parity reports."""
+    if detect_audit_report(text):
+        return pythinker_report_markdown(text, report_kind="audit")
+    return pythinker_markdown(text)
+
 
 __all__ = [
     "Report",
@@ -166,6 +181,10 @@ def _clean_report_label(line: str) -> tuple[str, str] | None:
     if not stripped or stripped.startswith(("- ", "* ", "+ ", ">", "|")):
         return None
     if _FENCE_LINE_RE.match(stripped):
+        return None
+    # Space-column parity/inventory rows (`Reference line      path:1-2`) are not
+    # top-level report section labels; their path colons must not split prose.
+    if line != line.lstrip() or _parse_aligned_field_line(line) is not None:
         return None
 
     match = _REPORT_LABEL_RE.match(line)
@@ -497,7 +516,7 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
             continue  # malformed — leave it for the markdown renderer
         before = "\n".join(lines[cursor:start]).strip("\n")
         if before:
-            segments.append(pythinker_markdown(before))
+            segments.append(_agent_markdown(before))
         segments.append(render_report(report, theme=theme))
         cursor = end
 
@@ -505,11 +524,11 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
         report_prose = _render_report_prose(text, theme=theme)
         if report_prose is not None:
             return report_prose
-        return pythinker_markdown(text)
+        return _agent_markdown(text)
 
     rest = "\n".join(lines[cursor:]).strip("\n")
     if rest:
-        segments.append(pythinker_markdown(rest))
+        segments.append(_agent_markdown(rest))
 
     spaced: list[RenderableType] = []
     for i, segment in enumerate(segments):

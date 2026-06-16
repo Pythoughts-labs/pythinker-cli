@@ -217,9 +217,10 @@ def test_card_style_finished_subagent_shows_compact_result(_force_card_style, mo
 def test_card_style_completed_subagent_has_blank_before_tools_rollup(_force_card_style):
     import json
 
+    from pythinker_core.tooling import ToolOk
+
     from pythinker_code.ui.shell.tool_renderers import register_builtin_renderers
     from pythinker_code.wire.types import ToolResult
-    from pythinker_core.tooling import ToolOk
 
     register_builtin_renderers()
     block = _ToolCallBlock(

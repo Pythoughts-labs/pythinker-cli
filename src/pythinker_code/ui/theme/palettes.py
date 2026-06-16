@@ -107,15 +107,18 @@ _PROMPT_HEX_DARK: dict[PromptToken, str] = {
     PromptToken.BASH_PREFIX: "#E5C07B",
     PromptToken.GHOST_TEXT: "#6B7280",
     PromptToken.PROMPT_GLYPH: "#F1F3F5",
-    PromptToken.FRAME: "#8a8d91",
+    # Border-family prompt tokens track the canonical core tokens so the
+    # prompt_toolkit and Rich layers render identical border hues (enforced by
+    # test_dark_theme_ptk_border_tracks_token).
+    PromptToken.FRAME: "#9AA3AD",  # == _CORE_DARK["border"]
     PromptToken.EFFORT: "#A3A3A3",
     PromptToken.PLACEHOLDER: "#A3A3A3",
-    PromptToken.SEPARATOR: "#b8bcc0",
+    PromptToken.SEPARATOR: "#5D6570",  # == _CORE_DARK["border_muted"]
     PromptToken.MENU_MATCH: "#8FDDEA",
     PromptToken.MENU_TEXT: "#F4F4F5",
     PromptToken.MENU_META: "#A3A3A3",
     PromptToken.DIALOG_TEXT: "#F4F4F5",
-    PromptToken.DIALOG_BORDER: "#b8bcc0",
+    PromptToken.DIALOG_BORDER: "#5D6570",  # == _CORE_DARK["border_muted"]
     PromptToken.FOOTER_KEY: "#8FDDEA",
     PromptToken.FOOTER_META: "#A3A3A3",
 }
