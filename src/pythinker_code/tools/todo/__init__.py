@@ -21,20 +21,46 @@ _STATUS_ALIASES: dict[str, TodoStatus] = {
 }
 
 
+def normalize_set_todo_list_args(args: dict[str, Any]) -> dict[str, Any]:
+    """Accept Cursor/Claude TodoWrite shape while keeping internal state canonical.
+
+    Supported external aliases:
+    - ``content`` -> ``title``, only when ``title`` is missing
+
+    Deliberately does not:
+    - invent titles
+    - coerce invalid status values
+    - accept random aliases like text/name/label
+    - mutate the input dict
+    """
+    todos = args.get("todos")
+    if not isinstance(todos, list):
+        return args
+
+    normalized: list[Any] = []
+
+    for raw in cast("list[Any]", todos):
+        if not isinstance(raw, dict):
+            normalized.append(raw)
+            continue
+
+        item = dict(cast(dict[str, Any], raw))
+
+        title = item.get("title")
+        content = item.get("content")
+
+        if title is None and content is not None:
+            item["title"] = content
+
+        item.pop("content", None)
+        normalized.append(item)
+
+    return {**args, "todos": normalized}
+
+
 class Todo(BaseModel):
     title: str = Field(description="The title of the todo", min_length=1)
     status: TodoStatus = Field(description="The status of the todo")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_todo_write_shape(cls, data: Any) -> Any:
-        """Accept Cursor/Claude TodoWrite shapes that use ``content`` instead of ``title``."""
-        if not isinstance(data, dict):
-            return data
-        values = dict(cast(dict[str, Any], data))
-        if "title" not in values and "content" in values:
-            values["title"] = values["content"]
-        return values
 
     @field_validator("status", mode="before")
     @classmethod
@@ -53,6 +79,13 @@ class Params(BaseModel):
             "If not provided, returns the current todo list without making changes."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_todo_write_args(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return normalize_set_todo_list_args(cast(dict[str, Any], data))
 
     @field_validator("todos", mode="before")
     @classmethod

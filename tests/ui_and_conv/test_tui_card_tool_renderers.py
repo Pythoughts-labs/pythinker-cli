@@ -20,6 +20,7 @@ from pythinker_code.ui.shell.components import (
 )
 from pythinker_code.ui.shell.glyphs import QUESTION_MARKER
 from pythinker_code.ui.shell.tool_renderers import (
+    ToolRenderContext,
     ToolResultPayload,
     clear_tool_renderers,
     get_tool_renderer,
@@ -28,6 +29,11 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._file_diff import preview_from_diff_blocks
 from pythinker_code.ui.shell.tool_renderers._render_utils import loading_marker
 from pythinker_code.ui.shell.tool_renderers.generic import generic_renderer
+from pythinker_code.ui.shell.tool_renderers.todo import (
+    TODO_RENDERER,
+    _summarize_todo_validation_error,
+    _todo_level_and_title,
+)
 from pythinker_code.ui.theme import tui_rich_style
 
 
@@ -1048,6 +1054,150 @@ def test_todo_infers_nested_items_from_leading_spaces():
     assert "├─" in rendered
     assert "  └─" in rendered
     assert "Child" in rendered
+
+
+def test_todo_content_field_renders_labels_during_streaming():
+    """Cursor-style payloads use ``content``; preview must still show labels."""
+    rendered = _render_running(
+        "SetTodoList",
+        {
+            "todos": [
+                {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+                {"id": "2", "content": "Create component", "status": "pending"},
+            ]
+        },
+    )
+    assert "Install framer-motion" in rendered
+    assert "Create component" in rendered
+    assert "├─" in rendered
+
+
+def test_failed_cursor_todowrite_shape_renders_error_badge_not_tree():
+    """``render_call`` must skip the plan tree when ``ctx.is_error`` is true."""
+    ctx = ToolRenderContext(
+        args={
+            "todos": [
+                {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+                {"id": "2", "content": "Create background paths", "status": "pending"},
+            ]
+        },
+        tool_call_id="tc-1",
+        is_error=True,
+        has_result=True,
+        args_complete=True,
+        expanded=False,
+        execution_started=True,
+    )
+    assert TODO_RENDERER.render_call is not None
+    rendered = render_plain(TODO_RENDERER.render_call(ctx), width=100)
+    assert "update failed · 2 items" in rendered
+    assert "Install framer-motion" not in rendered
+    assert "Create background paths" not in rendered
+    assert "├─" not in rendered
+
+
+def test_todo_validation_error_renders_compact_card_without_broken_tree():
+    todos = [
+        {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+        {"id": "2", "content": "Create component", "status": "pending"},
+    ]
+    rendered = _render(
+        "SetTodoList",
+        {"todos": todos},
+        output=(
+            "Error validating JSON arguments: 2 validation errors for Params\n"
+            "todos.0.title\n  Field required [type=missing, input_value={'id': '1', "
+            "'content': 'Install framer-motion', 'status': 'in_progress'}, "
+            "input_type=dict]\n"
+            "todos.1.title\n  Field required [type=missing, input_value={'id': '2', "
+            "'content': 'Create component', 'status': 'pending'}, input_type=dict]"
+        ),
+        is_error=True,
+    )
+    assert "✘ todos" in rendered
+    assert "update failed · 2 items" in rendered
+    assert "Todo update failed: each item needs `title`" in rendered
+    assert "received `content` without `title`" in rendered
+    assert "⎿" in rendered
+    assert "├─" not in rendered
+    assert "0/2 done" not in rendered
+    assert "Install framer-motion" not in rendered
+    assert "Field required" not in rendered
+
+
+def test_todo_validation_error_five_items_no_fake_tree():
+    """Regression: GLM run showed icons-only tree for five failed content-only items."""
+    todos = [
+        {"id": str(i), "content": f"Step {i}", "status": "in_progress" if i == 1 else "pending"}
+        for i in range(1, 6)
+    ]
+    rendered = _render(
+        "SetTodoList",
+        {"todos": todos},
+        output=(
+            "Error validating JSON arguments: 5 validation errors for Params\n"
+            + "\n".join(f"todos.{i}.title\n  Field required" for i in range(5))
+        ),
+        is_error=True,
+    )
+    assert "update failed · 5 items" in rendered
+    assert "├─" not in rendered
+    assert "Step 1" not in rendered
+
+
+def test_todo_malformed_item_renders_untitled_label():
+    rendered = _render_running(
+        "SetTodoList",
+        {"todos": [{"status": "pending"}]},
+    )
+    assert "Untitled todo" in rendered
+
+
+def test_renderer_uses_content_fallback_for_title():
+    _level, title = _todo_level_and_title(
+        {"content": "Install framer-motion", "status": "in_progress"}
+    )
+    assert title == "Install framer-motion"
+
+
+def test_renderer_uses_untitled_fallback():
+    _level, title = _todo_level_and_title({"status": "pending"})
+    assert title == "Untitled todo"
+
+
+def test_renderer_cleans_multiline_title():
+    _level, title = _todo_level_and_title({"title": "line one\nline two", "status": "pending"})
+    assert title == "line one line two"
+
+
+def test_validation_summary_detects_cursor_shape():
+    args = {"todos": [{"id": "1", "content": "Install framer-motion", "status": "pending"}]}
+    text = (
+        "Error validating JSON arguments: 1 validation error for Params\n"
+        "todos.0.title\n  Field required"
+    )
+    assert _summarize_todo_validation_error(text, args) == (
+        "Todo update failed: each item needs `title` (received `content` without `title`)."
+    )
+
+
+def test_todo_validation_error_shows_full_detail_when_expanded():
+    todos = [{"content": "Task A", "status": "pending"}]
+    pydantic_text = (
+        "Error validating JSON arguments: 1 validation error for Params\n"
+        "todos.0.title\n  Field required"
+    )
+    defn = get_tool_renderer("SetTodoList")
+    assert defn is not None
+    comp = ToolExecutionComponent("SetTodoList", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"todos": todos})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text=pydantic_text, is_error=True))
+    comp.set_expanded(True)
+    rendered = render_plain(comp.render(), width=100)
+    assert "Todo update failed: each item needs `title`" in rendered
+    assert "Field required" in rendered
 
 
 # ---------------------------------------------------------------------------

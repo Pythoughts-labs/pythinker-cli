@@ -10,12 +10,14 @@ Renders the todo list with aligned status icons:
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from pythinker_code.ui.shell.components import sanitize_ansi
 from pythinker_code.ui.shell.spacing import blank_row
 from pythinker_code.ui.shell.tool_renderers import (
     ToolRenderContext,
@@ -45,6 +47,42 @@ _ICONS = {
 _TREE_BRANCH = "├─"
 _TREE_LAST = "└─"
 
+_MISSING_TITLE_RE = re.compile(r"todos\.\d+\.title", re.MULTILINE)
+_UNTITLED_TODO = "Untitled todo"
+
+
+def _has_cursor_todowrite_shape(args: dict[str, Any]) -> bool:
+    """True when args look like Cursor/Claude TodoWrite ({content} without {title})."""
+    todos = args.get("todos")
+    if not isinstance(todos, list):
+        return False
+    for raw in cast("list[Any]", todos):
+        if not isinstance(raw, dict):
+            continue
+        item = cast(dict[str, Any], raw)
+        if "content" in item and "title" not in item:
+            return True
+    return False
+
+
+def _failed_todo_badge(todos: list[Any]) -> str:
+    count = len(todos)
+    noun = "item" if count == 1 else "items"
+    return f"update failed · {count} {noun}"
+
+
+def _summarize_todo_validation_error(text: str, args: dict[str, Any]) -> str:
+    """Return a short, actionable summary for SetTodoList validation failures."""
+    if "Error validating JSON arguments:" not in text:
+        return "Todo update failed: invalid arguments."
+    if _MISSING_TITLE_RE.search(text):
+        if _has_cursor_todowrite_shape(args):
+            return (
+                "Todo update failed: each item needs `title` (received `content` without `title`)."
+            )
+        return "Todo update failed: each item needs a `title` field."
+    return "Todo update failed: invalid todo arguments."
+
 
 def _icon_token(status: str) -> str:
     if status == "done":
@@ -56,16 +94,23 @@ def _icon_token(status: str) -> str:
     return "muted"
 
 
+def _clean_todo_title(raw_title: str) -> str:
+    cleaned = " ".join(sanitize_ansi(raw_title).split()).strip()
+    return cleaned or _UNTITLED_TODO
+
+
 def _todo_level_and_title(item: dict[str, Any]) -> tuple[int, str]:
     """Return display nesting level and a cleaned title."""
     raw_title = as_str(item.get("title")) or as_str(item.get("content")) or ""
     explicit = item.get("level", item.get("depth", item.get("indent")))
+    cleaned = _clean_todo_title(raw_title)
+
     if isinstance(explicit, int):
-        return max(0, min(explicit, 6)), raw_title.strip()
+        return max(0, min(explicit, 6)), cleaned
 
     leading_spaces = len(raw_title) - len(raw_title.lstrip(" "))
     level = max(0, min(leading_spaces // 2, 6))
-    return level, raw_title.strip()
+    return level, cleaned
 
 
 def _status_title(status: str, title: str) -> Text:
@@ -82,10 +127,24 @@ def _status_title(status: str, title: str) -> Text:
     return fg("tool_output", title)
 
 
-def _render_call(ctx: ToolRenderContext) -> RenderableType:
+def _render_error_call(ctx: ToolRenderContext) -> RenderableType:
     args = ctx.args or {}
     todos = args.get("todos")
-    style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
+    badge = "update failed"
+    if isinstance(todos, list):
+        badge = _failed_todo_badge(cast("list[Any]", todos))
+    header = tool_call_header("todos", fg("error", badge), style_token="error")
+    return running_spinner(
+        header, execution_started=ctx.execution_started, has_result=ctx.has_result
+    )
+
+
+def _render_call(ctx: ToolRenderContext) -> RenderableType:
+    args = ctx.args or {}
+    if ctx.is_error:
+        return _render_error_call(ctx)
+    todos = args.get("todos")
+    style_token = "success" if ctx.has_result else "muted"
 
     if todos is None:
         header = tool_call_header("todos", fg("muted", "read"), style_token=style_token)
@@ -163,6 +222,9 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
 def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> RenderableType | None:
     if not result.text or not result.is_error:
         return None
+    summary = fg("error", _summarize_todo_validation_error(result.text, ctx.args or {}))
+    if not ctx.expanded:
+        return summary
     body, _ = format_lines_block(
         result.text,
         expanded=True,
@@ -170,8 +232,8 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
         style_token="error",
     )
     if not body.plain:
-        return None
-    return body
+        return summary
+    return Group(summary, body)
 
 
 TODO_RENDERER = ToolRenderDefinition(

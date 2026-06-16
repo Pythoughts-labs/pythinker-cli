@@ -8,7 +8,7 @@ import pytest
 
 from pythinker_code.scratchpad import session_scratch_path
 from pythinker_code.soul.agent import Runtime
-from pythinker_code.tools.todo import Params, SetTodoList, Todo
+from pythinker_code.tools.todo import Params, SetTodoList, Todo, normalize_set_todo_list_args
 from pythinker_code.wire.types import TodoListUpdated
 
 
@@ -25,6 +25,76 @@ class _RecordingWire:
 def set_todo_list_tool(runtime: Runtime) -> SetTodoList:
     """Create a SetTodoList tool instance with runtime."""
     return SetTodoList(runtime)
+
+
+class TestNormalizeSetTodoListArgs:
+    """Boundary normalization: one compatibility alias (content → title), strict elsewhere."""
+
+    def test_normalizes_cursor_todowrite_content_to_title(self):
+        args = {
+            "todos": [{"id": "1", "content": "Install framer-motion", "status": "in_progress"}]
+        }
+        out = normalize_set_todo_list_args(args)
+        assert out["todos"][0]["title"] == "Install framer-motion"
+        assert "content" not in out["todos"][0]
+
+    def test_title_wins_over_content(self):
+        args = {
+            "todos": [
+                {
+                    "title": "Canonical",
+                    "content": "Alias",
+                    "status": "pending",
+                }
+            ]
+        }
+        out = normalize_set_todo_list_args(args)
+        assert out["todos"][0]["title"] == "Canonical"
+        assert "content" not in out["todos"][0]
+
+    def test_normalizer_does_not_mutate_input(self):
+        args = {
+            "todos": [{"content": "Install framer-motion", "status": "pending"}]
+        }
+        original = {
+            "todos": [{"content": "Install framer-motion", "status": "pending"}]
+        }
+        normalize_set_todo_list_args(args)
+        assert args == original
+
+    def test_missing_title_still_fails_after_normalization(self):
+        args = {"todos": [{"id": "1", "status": "pending"}]}
+        out = normalize_set_todo_list_args(args)
+        assert "title" not in out["todos"][0]
+
+    def test_invalid_status_is_not_repaired(self):
+        args = {"todos": [{"content": "Install framer-motion", "status": "started"}]}
+        out = normalize_set_todo_list_args(args)
+        assert out["todos"][0]["title"] == "Install framer-motion"
+        assert out["todos"][0]["status"] == "started"
+
+    def test_non_list_todos_passthrough(self):
+        args = {"todos": {"title": "bad"}}
+        assert normalize_set_todo_list_args(args) == args
+
+    def test_params_title_wins_over_content(self):
+        params = Params(
+            todos=[{"title": "Use this", "content": "Do not use this", "status": "pending"}]  # type: ignore[list-item]
+        )
+        assert params.todos is not None
+        assert params.todos[0].title == "Use this"
+
+    def test_params_empty_title_fails_validation(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(todos=[{"title": "", "status": "pending"}])  # type: ignore[list-item]
+
+    def test_params_invalid_status_fails_validation(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(todos=[{"content": "Install framer-motion", "status": "started"}])  # type: ignore[list-item]
 
 
 class TestParamsJsonStringCoercion:
@@ -67,6 +137,53 @@ class TestParamsJsonStringCoercion:
         )
         assert params.todos is not None
         assert params.todos[0].title == "Task A"
+
+    async def test_cursor_todowrite_shape_persists_normalized_title(
+        self, set_todo_list_tool: SetTodoList, runtime: Runtime
+    ):
+        """Cursor/Claude payloads must normalize ``content`` → ``title`` and persist."""
+        from pythinker_code.session_state import load_session_state
+
+        params = Params(
+            todos=[{"id": "1", "content": "Install framer-motion", "status": "in_progress"}]  # type: ignore[list-item]
+        )
+        result = await set_todo_list_tool(params)
+
+        assert not result.is_error
+        state = load_session_state(runtime.session.dir)
+        assert len(state.todos) == 1
+        assert state.todos[0].title == "Install framer-motion"
+        assert state.todos[0].status == "in_progress"
+
+    async def test_callable_tool_call_accepts_content_shape(
+        self, set_todo_list_tool: SetTodoList
+    ):
+        """``CallableTool2.call`` must accept raw JSON with ``content`` items."""
+        result = await set_todo_list_tool.call(
+            {
+                "todos": [
+                    {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+                ]
+            }
+        )
+        assert not result.is_error
+        assert "Todo list updated" in result.output
+
+    async def test_validation_failure_does_not_mutate_session(
+        self, set_todo_list_tool: SetTodoList, runtime: Runtime
+    ):
+        """Failed SetTodoList must not change persisted todo state."""
+        from pythinker_code.session_state import load_session_state
+
+        await set_todo_list_tool(Params(todos=[Todo(title="Existing", status="pending")]))
+        result = await set_todo_list_tool.call(
+            {"todos": [{"content": "Replacement", "status": "started"}]}
+        )
+        assert result.is_error
+        state = load_session_state(runtime.session.dir)
+        assert len(state.todos) == 1
+        assert state.todos[0].title == "Existing"
+        assert state.todos[0].status == "pending"
 
     def test_todos_none_still_works(self):
         params = Params(todos=None)
