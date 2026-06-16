@@ -142,6 +142,29 @@ def test_namespaced_command_matches_bare_segment_inserts_canonical():
     assert _completion_texts(completer, "/skill:design") == ["/skill:designer-skill"]
 
 
+def test_namespaced_command_fuzzy_matches_distinctive_word():
+    """Skills sharing a prefix (`pythinker-`) are disambiguated by their suffix
+    word, even misspelled: `/guard` (substring) and `/gurd` (subsequence) both
+    surface `/skill:pythinker-guard` and insert the canonical name."""
+    completer = SlashCommandCompleter(
+        [
+            _make_command("skill:pythinker-guard"),
+            _make_command("skill:pythinker-code-help"),
+        ]
+    )
+
+    assert _completion_texts(completer, "/guard") == ["/skill:pythinker-guard"]
+    assert _completion_texts(completer, "/gurd") == ["/skill:pythinker-guard"]
+
+
+def test_single_char_does_not_trigger_fuzzy_match():
+    """A lone keystroke must not fuzzy-match arbitrary commands (too noisy)."""
+    completer = SlashCommandCompleter([_make_command("skill:pythinker-guard")])
+
+    # 'd' is a subsequence of the segment but below the 2-char fuzzy gate.
+    assert _completion_texts(completer, "/d") == []
+
+
 def test_name_prefix_outranks_namespaced_segment_match():
     """A direct name-prefix match ranks above a namespaced segment match."""
     completer = SlashCommandCompleter(

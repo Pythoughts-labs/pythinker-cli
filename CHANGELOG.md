@@ -19,7 +19,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
 - **Bare skill/flow slash names.** The slash menu now matches `skill:`/`flow:`
   commands on their bare segment, so typing `/designer` (or `/design`) surfaces
-  `/skill:designer-skill`; accepting inserts the canonical command name.
+  `/skill:designer-skill`; accepting inserts the canonical command name. When no
+  prefix matches, a fuzzy fallback surfaces the distinctive word even when
+  misspelled (`/gurd` → `/skill:pythinker-guard`), so skills sharing a common
+  prefix stay reachable.
 - **TUI composing preview gap.** Removed the visible double-blank row between
   `Composing…` and the in-progress preview (leading newline from commit
   boundaries no longer leaks through the plain-text preview path), and aligned

@@ -179,6 +179,22 @@ def _is_known_slash_command_prefix(name: str, known: frozenset[str]) -> bool:
     return any(command_name.startswith(lower) for command_name in known)
 
 
+def _fuzzy_subsequence(needle: str, haystack: str) -> bool:
+    """True when ``needle`` is an (ordered, gap-tolerant) subsequence of ``haystack``.
+
+    Mirrors the selector/settings filters (``selector.py``, ``settings_list.py``);
+    used as the lowest-priority slash match so a misspelled distinctive word like
+    ``gurd`` still surfaces ``/skill:pythinker-guard`` when no prefix matches.
+    """
+    pos = 0
+    for ch in needle:
+        found = haystack.find(ch, pos)
+        if found < 0:
+            return False
+        pos = found + 1
+    return True
+
+
 def _slash_first_arg_context(
     document: Document,
     known_names: frozenset[str],
@@ -540,12 +556,19 @@ class SlashCommandCompleter(Completer):
             # `/build` surfaces them. The label stays the canonical name so the
             # accepted completion inserts "/skill:designer-skill", not the bare
             # term -- one execution path, no duplicate command.
+            segment = name_lower.split(":", 1)[1] if ":" in name_lower else name_lower
             if ":" in name_lower:
-                segment = name_lower.split(":", 1)[1]
                 if segment == typed_lower:
                     return (4, cmd.name)
                 if segment.startswith(typed_lower):
                     return (5, cmd.name)
+            # Last resort: fuzzy subsequence on the bare segment, so the
+            # distinctive word -- even misspelled (``gurd`` -> ``guard``) --
+            # surfaces a command whose shared prefix (``pythinker-``) makes
+            # plain prefix matching useless. Gated at 2+ chars to avoid a
+            # single keystroke matching nearly everything. Label is canonical.
+            if len(typed_lower) >= 2 and _fuzzy_subsequence(typed_lower, segment):
+                return (6, cmd.name)
             return None
 
         # Rank by (match tier, command-name length, name): the closest, shortest
