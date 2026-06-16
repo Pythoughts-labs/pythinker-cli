@@ -113,6 +113,12 @@ def test_default_config_dump():
                 "disabled": [],
                 "options": {},
             },
+            "lsp": {
+                "enabled": True,
+                "recommendation_disabled": False,
+                "recommendation_never": [],
+                "recommendation_ignored_count": 0,
+            },
             "extra_skill_dirs": [],
             "telemetry": True,
             "session_retention_days": 30,

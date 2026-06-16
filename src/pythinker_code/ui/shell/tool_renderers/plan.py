@@ -61,11 +61,19 @@ ENTER_PLAN_RENDERER = ToolRenderDefinition(
 # ---------------------------------------------------------------------------
 
 
+def _exit_plan_phase(ctx: ToolRenderContext) -> str:
+    """Label plan-exit phase for the tool card header."""
+    if ctx.has_result:
+        return "exiting"
+    return "awaiting approval"
+
+
 def _render_exit_call(ctx: ToolRenderContext) -> RenderableType:
     args = ctx.args or {}
     options = args.get("options")
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
-    line = tool_call_header("Plan", fg("muted", "exiting"), style_token=style_token)
+    phase = _exit_plan_phase(ctx)
+    line = tool_call_header("Plan", fg("muted", phase), style_token=style_token)
 
     if not isinstance(options, list) or not options:
         return running_spinner(

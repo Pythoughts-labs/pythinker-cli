@@ -27,12 +27,12 @@ class DialogOption:
 
 
 def _render_option(option: DialogOption) -> Text:
-    prefix = "→" if option.selected else " "
+    prefix = "›" if option.selected else " "
     key = f"[{option.key}] " if option.key else ""
     style = tui_rich_style("accent") if option.selected else tui_rich_style("muted")
     text = Text(f"{prefix} {key}{option.label}", style=style)
     if option.description:
-        text.append(f"  {option.description}", style="dim")
+        text.append(f"  {option.description}", style=tui_rich_style("muted"))
     return text
 
 
@@ -49,6 +49,8 @@ def render_dialog(
     if border_style is None:
         border_style = tui_rich_style("border_muted")
     lines: list[RenderableType] = []
+    if body:
+        lines.append(blank_row())
     lines.extend(body)
     if body and options:
         lines.append(blank_row())

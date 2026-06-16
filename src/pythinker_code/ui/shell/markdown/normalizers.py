@@ -53,7 +53,8 @@ _OL_ITEM_RE = re.compile(r"^\d+\.\s")
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 _DELIM_RUN_RE = re.compile(r"\|(?:\s*:?-{2,}:?\s*\|)+")
 _HEADER_RE = re.compile(r"^(?P<prefix>.*?)(?P<cells>(?:\|[^\n|]*)+\|)\s*$")
-_UNICODE_RULE_LINE_RE = re.compile(r"^[─═━\-]{3,}$")
+UNICODE_RULE_LINE_RE = re.compile(r"^[─═━\-]{3,}$")
+_UNICODE_RULE_LINE_RE = UNICODE_RULE_LINE_RE  # ponytail: compat alias for compat shim
 _CODE_SPAN_RE = re.compile(r"(?P<ticks>`+)(?P<body>.*?)(?P=ticks)")
 
 

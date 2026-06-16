@@ -41,10 +41,7 @@ def get_symbol_context(
     except OSError:
         return None
 
-    try:
-        content = chunk.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
+    content = chunk.decode(encoding="utf-8", errors="replace")
 
     lines = content.splitlines()
     zero_line = line - 1

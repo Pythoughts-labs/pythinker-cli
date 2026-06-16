@@ -143,6 +143,33 @@ def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
     assert view2.render_pinned_status_tail(80).value == ""
 
 
+def test_render_pinned_status_tail_empty_while_question_panel_open() -> None:
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize import QuestionRequestPanel
+    from pythinker_code.wire.types import QuestionItem, QuestionOption, QuestionRequest
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    view._current_approval_request_panel = None
+    view._current_question_panel = QuestionRequestPanel(
+        QuestionRequest(
+            id="qr",
+            tool_call_id="tc",
+            questions=[
+                QuestionItem(
+                    question="Approve this plan?",
+                    options=[QuestionOption(label="Approve", description="")],
+                )
+            ],
+        )
+    )
+
+    assert view.render_pinned_status_tail(80).value == ""
+
+
 def test_pinned_tail_stays_visible_while_foreground_tool_executes() -> None:
     """The shimmer verb spinner stays pinned for the whole active turn — including
     while a foreground tool (e.g. a server started via the shell tool, or a

@@ -1166,7 +1166,7 @@ def test_enter_plan_mode_renders():
 
 
 def test_exit_plan_mode_renders_options():
-    rendered = _render(
+    rendered_running = _render_running(
         "ExitPlanMode",
         {
             "options": [
@@ -1175,9 +1175,21 @@ def test_exit_plan_mode_renders_options():
             ]
         },
     )
-    assert "⏺ Plan(exiting)" in rendered
-    assert "Refactor first" in rendered
-    assert "Add tests first" in rendered
+    assert "⏺ Plan(awaiting approval)" in rendered_running
+    assert "Refactor first" in rendered_running
+    assert "Add tests first" in rendered_running
+
+    rendered_done = _render(
+        "ExitPlanMode",
+        {
+            "options": [
+                {"label": "Refactor first"},
+                {"label": "Add tests first"},
+            ]
+        },
+        output="Plan approved",
+    )
+    assert "⏺ Plan(exiting)" in rendered_done
 
 
 # ---------------------------------------------------------------------------

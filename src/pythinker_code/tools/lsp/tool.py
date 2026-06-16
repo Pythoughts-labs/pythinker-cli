@@ -227,7 +227,7 @@ class Lsp(CallableTool2[Params]):
             builder.mark_untrusted()
             return builder.ok(brief=_brief_for_path(display_path))
 
-        content = await host_path.read_text(errors="replace")
+        content = await host_path.read_text(encoding="utf-8", errors="replace")
         await manager.open_file(absolute_path, content)
         return None
 

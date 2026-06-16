@@ -55,7 +55,7 @@ SECTION_GAP_ROWS: Final = 1
 #: the stream spacer is the only inter-block gap; horizontal gives the tint breathing room.
 CARD_PADDING: Final = (0, 1)
 TINTED_CARD_PADDING: Final = (0, 1)
-DIALOG_PANEL_PADDING: Final = (0, 1)
+DIALOG_PANEL_PADDING: Final = (1, 1)
 WORKLOG_PANEL_PADDING: Final = (0, 1)
 
 #: Long-form report/error cards are standalone reading surfaces. They get internal

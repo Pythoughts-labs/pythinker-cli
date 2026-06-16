@@ -3,6 +3,8 @@
 Prefer importing from :mod:`pythinker_code.ui.shell.markdown` in new code.
 """
 
+# pyright: reportPrivateUsage=false
+# This shim intentionally re-exports private internals for backward compat.
 from __future__ import annotations
 
 from pythinker_code.ui.shell.markdown import (
@@ -18,6 +20,7 @@ from pythinker_code.ui.shell.markdown import (
 )
 from pythinker_code.ui.shell.markdown.elements import _BorderedCodeBlock, _ReportTableElement
 from pythinker_code.ui.shell.markdown.normalizers import (
+    _escape_code_span_pipes,
     _loosen_tight_ordered_lists,
     _normalize_markdown_tables,
     _normalize_space_aligned_report_blocks,
@@ -57,6 +60,7 @@ __all__ = [
 __all__ += [
     "_BorderedCodeBlock",
     "_ReportTableElement",
+    "_escape_code_span_pipes",
     "_get_md_parser",
     "_loosen_tight_ordered_lists",
     "_markdown_commit_boundary_cached",

@@ -237,9 +237,7 @@ def test_card_style_completed_subagent_has_blank_before_tools_rollup(_force_card
             ),
         )
         block.append_sub_tool_call(call)
-        block.finish_sub_tool_call(
-            ToolResult(tool_call_id=call.id, return_value=ToolOk(output=""))
-        )
+        block.finish_sub_tool_call(ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")))
 
     rendered = render_plain(block.compose(), width=120)
     lines = [line.rstrip() for line in rendered.splitlines()]

@@ -384,17 +384,28 @@ class _LiveView:
                 frame_task = asyncio.create_task(self._frame_refresh_loop(live))
                 try:
                     while True:
+                        from_external = False
                         try:
                             done, _ = await asyncio.wait(
-                                [wire_task, external_task],
+                                [wire_task, external_task, frame_task],
                                 return_when=asyncio.FIRST_COMPLETED,
                             )
+                            if frame_task in done:
+                                # The frame loop is expected to run until it is
+                                # cancelled at shutdown. If it finished while the
+                                # main loop is still live it raised — surface that
+                                # instead of silently freezing the live view.
+                                frame_task.result()
+                                raise RuntimeError(
+                                    "live-view frame refresh loop exited unexpectedly"
+                                )
                             if wire_task in done:
                                 msg = wire_task.result()
                                 wire_task = asyncio.create_task(wire.receive())
                             else:
                                 msg = external_task.result()
                                 external_task = asyncio.create_task(self._external_messages.get())
+                                from_external = True
                         except QueueShutDown:
                             (
                                 msg,
@@ -404,6 +415,7 @@ class _LiveView:
                             )
                             if msg is not None:
                                 self.dispatch_wire_message(msg)
+                                self._flush_live_refresh(live, force=True)
                                 continue
                             self.cleanup(is_interrupt=False)
                             self._flush_live_refresh(live, force=True)
@@ -415,6 +427,11 @@ class _LiveView:
                             break
 
                         self.dispatch_wire_message(msg)
+                        if from_external:
+                            # External (out-of-band) messages — approval requests,
+                            # steer input — are interactive and must paint at once
+                            # rather than wait for the streaming frame budget.
+                            self._flush_live_refresh(live, force=True)
                 finally:
                     frame_task.cancel()
                     wire_task.cancel()
@@ -609,7 +626,12 @@ class _LiveView:
                 _append_action_block(blocks, tool_call.compose(), leading=True)
             for hook_block in getattr(self, "_hook_blocks", {}).values():
                 _append_action_block(blocks, hook_block.compose(), leading=True)
-            if include_working_indicator and self._active_turn_depth > 0:
+            if (
+                include_working_indicator
+                and self._active_turn_depth > 0
+                and self._current_question_panel is None
+                and self._current_approval_request_panel is None
+            ):
                 # Keep a stable activity indicator visible for the whole turn —
                 # even while content or tool cards are already on-screen, and even
                 # while a foreground tool runs. The agent is still working the

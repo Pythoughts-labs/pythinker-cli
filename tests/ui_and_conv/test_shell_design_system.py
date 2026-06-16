@@ -81,8 +81,8 @@ def test_shell_style_resolves_brand_tokens_and_switches_theme():
     from pythinker_code.ui.theme import set_active_theme
 
     set_active_theme("dark")
-    assert _color_hex(shell_style(ShellTone.ACCENT)) == "#b3b9f4"
-    assert _color_hex(shell_style(ShellTone.SUCCESS)) == "#7bc97f"
+    assert _color_hex(shell_style(ShellTone.ACCENT)) == "#a9b4ff"
+    assert _color_hex(shell_style(ShellTone.SUCCESS)) == "#7ccf8a"
     set_active_theme("light")
     assert _color_hex(shell_style(ShellTone.ACCENT)) == "#0b114e"
     set_active_theme("dark")

@@ -288,17 +288,26 @@ class _PromptLiveView(_LiveView):
             status_refresh_task = asyncio.create_task(self._status_refresh_loop())
             self._status_refresh_task = status_refresh_task
             while True:
+                from_external = False
                 try:
                     done, _ = await asyncio.wait(
-                        [wire_task, external_task],
+                        [wire_task, external_task, status_refresh_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if status_refresh_task in done:
+                        # The status loop is expected to run until cancelled at
+                        # shutdown. If it finished while the main loop is live it
+                        # raised — surface that instead of silently freezing the
+                        # prompt repaint clock.
+                        status_refresh_task.result()
+                        raise RuntimeError("prompt status refresh loop exited unexpectedly")
                     if wire_task in done:
                         msg = wire_task.result()
                         wire_task = asyncio.create_task(wire.receive())
                     else:
                         msg = external_task.result()
                         external_task = asyncio.create_task(self._external_messages.get())
+                        from_external = True
                 except QueueShutDown:
                     msg, external_task = await self._drain_external_message_after_wire_shutdown(
                         external_task
@@ -329,6 +338,11 @@ class _PromptLiveView(_LiveView):
                     continue
 
                 self.dispatch_wire_message(msg)
+                if from_external:
+                    # External (out-of-band) messages — approval requests, steer
+                    # input — are interactive and must repaint at once rather than
+                    # wait for the status refresh cadence.
+                    self._force_refresh = True
                 self._flush_prompt_refresh()
 
             # NOTE: btw dismiss waiting is handled by the shell layer
@@ -560,7 +574,12 @@ class _PromptLiveView(_LiveView):
     def render_pinned_status_tail(self, columns: int) -> ANSI:
         """Render the trailing verb spinner that the prompt keeps pinned below a
         (possibly clipped) agent stream, so it stays visible above the input."""
-        if self._turn_ended or self._active_turn_depth <= 0:
+        if (
+            self._turn_ended
+            or self._active_turn_depth <= 0
+            or self._current_question_panel is not None
+            or self._current_approval_request_panel is not None
+        ):
             return ANSI("")
         body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
         return ANSI(body if body else "")

@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 
 from pythinker_code.ui.shell.markdown.fences import FENCE_RE, FenceState
 from pythinker_code.ui.shell.markdown.normalizers import (
-    _UNICODE_RULE_LINE_RE,
+    UNICODE_RULE_LINE_RE as _UNICODE_RULE_LINE_RE,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
     parse_aligned_field_line,
 )
 
@@ -88,7 +90,7 @@ _GROUP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 @dataclass(slots=True)
 class _ParityItem:
     title: str
-    fields: dict[str, str] = field(default_factory=dict)
+    fields: dict[str, str] = field(default_factory=lambda: {})
 
     @property
     def status(self) -> str:
