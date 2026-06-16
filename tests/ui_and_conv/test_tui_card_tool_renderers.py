@@ -753,6 +753,36 @@ def test_render_diff_colorizes_added_removed():
     assert "world" in plain
 
 
+def test_render_diff_signs_match_body_foreground():
+    """+/- markers and line numbers use default fg on tinted rows, not green/red."""
+    from pythinker_code.ui.theme import get_diff_colors, set_active_theme, tui_rich_style
+
+    set_active_theme("dark")
+    diff = compute_edit_diff_string("old line\n", "new line\n").diff
+    text = render_diff(diff)
+    accent_fgs = {
+        tui_rich_style("tool_diff_added").color,
+        tui_rich_style("tool_diff_removed").color,
+    }
+    row_bgs = {get_diff_colors().add_bg.bgcolor, get_diff_colors().del_bg.bgcolor}
+    for span in text.spans:
+        if span.end <= span.start:
+            continue
+        style = span.style
+        if isinstance(style, str):
+            continue
+        if style.color in accent_fgs:
+            pytest.fail(f"diff sign/body used accent fg {style.color!r} on {text.plain[span.start:span.end]!r}")
+
+    tinted = [
+        text.plain[span.start : span.end]
+        for span in text.spans
+        if not isinstance(span.style, str) and span.style.bgcolor in row_bgs
+    ]
+    assert any(" -" in chunk or chunk.endswith("-") for chunk in tinted)
+    assert any(" +" in chunk or chunk.endswith("+") for chunk in tinted)
+
+
 # ---------------------------------------------------------------------------
 # Agent (subagent)
 # ---------------------------------------------------------------------------

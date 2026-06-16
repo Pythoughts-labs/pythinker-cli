@@ -246,11 +246,12 @@ def render_diff(diff_text: str) -> Text:
         return Text("")
 
     colors = get_diff_colors()
-    # Signs/line numbers carry the green/red accent; row content stays in the
-    # terminal's default text color over the tinted row background, so diffs
-    # read as white-on-deep-green/red rather than fully recolored text.
-    added_sign = tui_rich_style("tool_diff_added") + colors.add_bg
-    removed_sign = tui_rich_style("tool_diff_removed") + colors.del_bg
+    # Added/removed rows are distinguished by background tint only; line numbers,
+    # +/- markers, and code content all use the terminal's default foreground
+    # so the diff reads as light text on deep green/red rather than recolored
+    # green/red glyphs.
+    added_sign = colors.add_bg
+    removed_sign = colors.del_bg
     added_body = colors.add_bg
     removed_body = colors.del_bg
     context_style = tui_rich_style("tool_diff_context")
