@@ -114,11 +114,12 @@ def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
     """
     counts: dict[str, int] = {sev: 0 for sev in _SEVERITY_LABELS}
 
-    # Primary: machine-readable ```report JSON block.
-    # Presence of any block means this is a structured report regardless of
-    # whether JSON is valid or findings is empty.
+    # Primary: machine-readable ```report JSON block. Only a well-formed JSON
+    # object counts as "parsed" — a malformed block must not report success with
+    # zero findings; it falls through to the markdown fallback instead.
     json_blocks = list(_RE_REPORT_BLOCK.finditer(result_text))
     if json_blocks:
+        parsed_valid = False
         for block_match in json_blocks:
             try:
                 parsed = json.loads(block_match.group(1))
@@ -126,12 +127,23 @@ def _parse_reviewer_findings(result_text: str) -> tuple[dict[str, int], bool]:
                 continue  # malformed JSON — block found but not parseable
             if not isinstance(parsed, dict):
                 continue  # wrong shape (array / scalar)
+            parsed_valid = True
             data = cast(_ReportBlock, parsed)
-            for finding in data.get("findings", ()):
-                sev = str(finding.get("severity", "")).lower()
+            findings = data.get("findings")
+            if not isinstance(findings, list):
+                continue  # "findings" missing or not a list — nothing to count
+            # The declared type promises dict findings, but the payload is
+            # untrusted JSON; re-type as object so the runtime guard below is real.
+            for finding in cast("list[object]", findings):
+                if not isinstance(finding, dict):
+                    continue  # skip non-object finding entries
+                sev = str(cast("dict[str, object]", finding).get("severity", "")).lower()
                 if sev in counts:
                     counts[sev] += 1
-        return counts, True
+        # A report block was present: return its counts. ``parsed_valid`` is False
+        # only when every block was malformed JSON — reported as unparsed, never
+        # as a false "parsed with zero findings", and never re-scanned below.
+        return counts, parsed_valid
 
     # Fallback: line-by-line markdown markers.
     # Only reached when no ```report block exists — result_text is JSON-free.

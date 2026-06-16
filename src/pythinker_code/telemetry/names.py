@@ -31,13 +31,14 @@ def sanitize_telemetry_tool_name(name: str) -> str:
 
 
 def _bounded_mcp_label(server: str, tool: str) -> str:
-    safe_server = _UNSAFE_CHARS.sub("_", server).strip("_") or "server"
+    # The server segment is user-named and can embed a path, account, hostname,
+    # or token-like value, so it is hashed — never exported raw — per the
+    # no-secrets/PII telemetry contract. The tool segment comes from the server's
+    # published tool list (not user input) and stays readable for analytics.
+    server_hash = hashlib.sha256(server.strip().encode("utf-8")).hexdigest()[:8]
     safe_tool = _UNSAFE_CHARS.sub("_", tool).strip("_") or "tool"
-    label = f"mcp__{safe_server}__{safe_tool}"
+    label = f"mcp__{server_hash}__{safe_tool}"
     if len(label) <= _TELEMETRY_TOOL_NAME_MAX:
         return label
     digest = hashlib.sha256(label.encode("utf-8")).hexdigest()[:8]
-    # Slice budget: "mcp__" (5) + server[:16] + "__" (2) + tool[:24] = 47, then
-    # head[:55] + "_" + 8-char digest = 56 — always within _TELEMETRY_TOOL_NAME_MAX (64).
-    head = f"mcp__{safe_server[:16]}__{safe_tool[:24]}"
-    return f"{head[: _TELEMETRY_TOOL_NAME_MAX - 9]}_{digest}"
+    return f"{label[: _TELEMETRY_TOOL_NAME_MAX - 9]}_{digest}"

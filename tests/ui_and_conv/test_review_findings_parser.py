@@ -282,20 +282,29 @@ def test_report_block_empty_findings_is_parsed():
     assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
 
-def test_report_block_malformed_json_is_still_parsed():
-    """A malformed ```report block still marks the report as structured."""
+def test_report_block_malformed_json_is_not_parsed():
+    """A malformed ```report block must NOT report success — it is unparsed, so the
+    caller treats it as an unparsed reviewer result rather than 'parsed, 0 findings'."""
     text = "```report\nnot valid json\n```\n"
     counts, was_parsed = _parse_reviewer_findings(text)
-    assert was_parsed is True
+    assert was_parsed is False
     assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
 
-def test_report_block_wrong_shape_is_still_parsed():
-    """A ```report block with a JSON array (not dict) is structured but yields zero counts."""
+def test_report_block_wrong_shape_is_not_parsed():
+    """A ```report block holding a JSON array (not an object) is not a valid report."""
     text = '```report\n[{"severity": "high"}]\n```\n'
     counts, was_parsed = _parse_reviewer_findings(text)
-    assert was_parsed is True
+    assert was_parsed is False
     assert counts["high"] == 0
+
+
+def test_report_block_non_dict_findings_does_not_crash():
+    """Untrusted payloads where 'findings' isn't a list of objects must not raise."""
+    text = '```report\n{"findings": "high"}\n```\n'
+    counts, was_parsed = _parse_reviewer_findings(text)
+    assert was_parsed is True  # valid JSON object => structured, just no countable findings
+    assert counts == {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
 
 def test_report_block_multiple_blocks_aggregate():

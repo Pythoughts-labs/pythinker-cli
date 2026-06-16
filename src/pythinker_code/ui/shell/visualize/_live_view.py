@@ -855,6 +855,12 @@ class _LiveView:
             blocks.append(self._status_block.render())
         return Group(*blocks)
 
+    def _begin_turn_token_window(self) -> None:
+        """Start a fresh per-turn token-rate window: reset the baseline snapshot
+        and drop prior-turn samples so the t/s rate can't be skewed by stale data."""
+        snapshot_output_tokens_for_turn()
+        self._turn_token_samples.clear()
+
     def dispatch_wire_message(self, msg: WireMessage) -> None:
         """Dispatch the Wire message to UI components."""
         assert not isinstance(msg, StepInterrupted)  # handled in visualize_loop
@@ -867,7 +873,7 @@ class _LiveView:
             if self._active_turn_depth == 0:
                 self._active_turn_depth = 1
                 self._turn_start_time = time.monotonic()
-                snapshot_output_tokens_for_turn()
+                self._begin_turn_token_window()
             self.refresh_soon()
             return
         if isinstance(msg, StepRetry):
@@ -879,7 +885,7 @@ class _LiveView:
             case TurnBegin(user_input=user_input):
                 if self._active_turn_depth == 0:
                     self._turn_start_time = time.monotonic()
-                    snapshot_output_tokens_for_turn()
+                    self._begin_turn_token_window()
                     self._recap_user_input = (
                         user_input
                         if isinstance(user_input, str)
@@ -909,7 +915,7 @@ class _LiveView:
                 self._compaction_block = _CompactionBlock(
                     context_tokens=self._latest_context_tokens,
                     todos_renderable=self._pinned_todo_block(
-                        width=80, hide_active=False, elapsed_s=0.0
+                        width=current_console_width(), hide_active=False, elapsed_s=0.0
                     ),
                 )
                 self.refresh_soon()

@@ -142,9 +142,16 @@ def main(argv: list[str] | None = None) -> int:
     passed, failed = emit_results(report, use_color=use_color)
 
     if args.eval_cases:
+        from pydantic import ValidationError
+
         from tests_ai.eval_gate import gate_report, load_eval_cases
 
-        cases = load_eval_cases(Path(args.eval_cases).resolve())
+        try:
+            cases = load_eval_cases(Path(args.eval_cases).resolve())
+        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+            raise SystemExit(
+                f"ERROR: could not load --eval-cases {args.eval_cases}: {exc}"
+            ) from exc
         budget_failures = [v for v in gate_report(report, cases) if not v.passed]
         for verdict in budget_failures:
             print(

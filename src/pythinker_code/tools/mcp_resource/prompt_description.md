@@ -1,3 +1,5 @@
+# Invoke MCP Prompt
+
 Invoke a prompt template published by a connected MCP server.
 
 First discover the `server` and prompt `name` with ListMcpResources, then pass

@@ -6,24 +6,27 @@ harnesses do not cross-import between sibling test packages.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
-EVAL_CASE_SCHEMA_VERSION = 1
+EVAL_CASE_SCHEMA_VERSION: Literal[1] = 1
 
 
 class EfficiencyBudget(BaseModel):
     """Per-scenario ceilings; ``None`` means "do not gate on this metric"."""
 
-    max_tool_calls: int | None = None
-    max_total_tokens: int | None = None
-    max_tool_errors: int | None = None
-    max_steps: int | None = None
+    max_tool_calls: int | None = Field(default=None, ge=0)
+    max_total_tokens: int | None = Field(default=None, ge=0)
+    max_tool_errors: int | None = Field(default=None, ge=0)
+    max_steps: int | None = Field(default=None, ge=0)
 
 
 class EvalCase(BaseModel):
     """A versioned behavioral eval scenario."""
 
-    schema_version: int = EVAL_CASE_SCHEMA_VERSION
+    # Pinned to the supported version so a mismatched payload fails closed at load.
+    schema_version: Literal[1] = EVAL_CASE_SCHEMA_VERSION
     name: str
     query: str
     expected_tools: tuple[str, ...] = ()
@@ -34,11 +37,11 @@ class EvalCase(BaseModel):
 class ObservedMetrics(BaseModel):
     """The efficiency triple observed for one scenario run."""
 
-    tool_calls: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    tool_errors: int = 0
-    step_count: int = 0
+    tool_calls: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    tool_errors: int = Field(default=0, ge=0)
+    step_count: int = Field(default=0, ge=0)
     tools_used: tuple[str, ...] = ()
 
     @property

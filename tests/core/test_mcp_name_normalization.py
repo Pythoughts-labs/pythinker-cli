@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from pythinker_code.exception import MCPConfigError
@@ -24,7 +26,10 @@ def test_normalize_bounds_overlong_names() -> None:
     long_name = "a" * 100
     normalized = normalize_mcp_server_name(long_name)
     assert len(normalized) <= 64
-    assert normalized.endswith(normalized.split("_")[-1])
+    # Truncated names keep a deterministic 8-char hex hash suffix so distinct
+    # overlong names don't collide (real contract, not a tautology).
+    assert re.search(r"_[0-9a-f]{8}$", normalized)
+    assert normalized != normalize_mcp_server_name("b" * 100)
 
 
 def test_empty_name_raises() -> None:

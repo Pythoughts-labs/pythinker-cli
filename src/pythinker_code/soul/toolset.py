@@ -1399,13 +1399,18 @@ class PythinkerToolset:
                     n=len(skipped),
                     names=", ".join(sorted(skipped)),
                 )
-            server_info.tools = local_tools
-            server_info.resources = await _discover_optional_capability(
+            resources = await _discover_optional_capability(
                 server_name, "resources", client.list_resources
             )
-            server_info.prompts = await _discover_optional_capability(
+            prompts = await _discover_optional_capability(
                 server_name, "prompts", client.list_prompts
             )
+            # Assign the full inventory atomically once discovery has succeeded, so
+            # a failure mid-discovery never leaves tools replaced while resources/
+            # prompts still reflect the previous connection.
+            server_info.tools = local_tools
+            server_info.resources = resources
+            server_info.prompts = prompts
 
     async def _connect_mcp_server(
         self, server_name: str, server_info: MCPServerInfo, runtime: Runtime

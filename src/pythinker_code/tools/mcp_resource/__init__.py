@@ -137,8 +137,21 @@ def _render_prompt_messages(messages: object) -> str:
     for message_obj in cast(list[object], messages):
         role = str(getattr(message_obj, "role", "unknown"))
         content: object = getattr(message_obj, "content", "")
-        text = getattr(content, "text", content)
-        lines.append(f"role: {role}\ncontent:\n{text}")
+        if isinstance(content, str):
+            rendered = content
+        else:
+            text = getattr(content, "text", None)
+            if isinstance(text, str):
+                rendered = text
+            else:
+                # Non-text content: emit a bounded placeholder rather than
+                # stringifying a possibly large/opaque object into model context
+                # (same safe handling as ReadMcpResource above).
+                blob: Any = getattr(content, "blob", None)
+                mime = getattr(content, "mimeType", None) or "application/octet-stream"
+                size = f"{len(blob)} bytes" if isinstance(blob, (bytes, str)) else "size unknown"
+                rendered = f"[binary content omitted: {mime}, {size}]"
+        lines.append(f"role: {role}\ncontent:\n{rendered}")
     return "\n\n".join(lines).strip()
 
 

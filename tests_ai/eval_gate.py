@@ -41,7 +41,10 @@ def gate_report(report: list[dict[str, object]], cases: list[EvalCase]) -> list[
     cases_by_name = {case.name: case for case in cases}
     verdicts: list[EvalVerdict] = []
     for entry in report:
-        for case in entry.get("cases", []):
+        report_cases = entry.get("cases", [])
+        if not isinstance(report_cases, list):
+            continue  # malformed entry: "cases" must be a list — skip it
+        for case in report_cases:
             if not isinstance(case, dict):
                 continue
             name = str(case.get("name") or "")
