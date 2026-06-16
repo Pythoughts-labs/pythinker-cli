@@ -55,6 +55,66 @@ class LLM:
         return self.chat_provider.model_name
 
 
+# Hosts that serve the genuine Anthropic API and therefore accept the
+# `tool_reference` / `defer_loading` beta content blocks that deferred tool
+# search depends on. The Claude API-key path and Anthropic OAuth both route
+# through `api.anthropic.com` (see `auth/anthropic_direct.py:ANTHROPIC_BASE_URL`).
+_GENUINE_ANTHROPIC_HOSTS = frozenset({"api.anthropic.com"})
+
+# Model-name substrings that do NOT support `tool_reference`, mirroring the
+# reference's `DEFAULT_UNSUPPORTED_MODEL_PATTERNS` in
+# `blackbox/pythinker-src/src/utils/toolSearch.ts`. Haiku is the only known one.
+_TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS = ("haiku",)
+
+
+def supports_deferred_tool_search(llm: LLM | None) -> bool:
+    """Whether the active model can use the ToolSearch / deferred-tools workflow.
+
+    WHY THIS GATE EXISTS — DO NOT REMOVE without reading this:
+
+    `ToolSearch` only makes sense when the provider supports Anthropic's
+    `tool_reference` / `defer_loading` beta, the mechanism the reference impl
+    (`blackbox/pythinker-src/src/utils/toolSearch.ts`) uses to hold large MCP
+    tool sets out of context and discover them on demand. Crucially, MANY
+    providers in this CLI declare `type="anthropic"` yet point at their OWN
+    Anthropic-COMPATIBLE proxy that does NOT forward that beta: z.ai/GLM
+    (`api.z.ai/api/anthropic`), Kimi, MiniMax, and opencode_go. On those — and on
+    every non-Anthropic provider — offering `ToolSearch` is pure noise: it just
+    re-lists tools the model can already see, and weaker tool-callers (observed
+    with GLM-5.2) loop on it, "searching" for tools forever instead of calling
+    them. So `_is_tool_visible` hides `ToolSearch` whenever this returns False.
+
+    The gate mirrors the reference's three checks: env override (`getToolSearchMode`),
+    a genuine-first-party-host check (`isFirstPartyPythoughtsBaseUrl`), and a
+    model-capability check (`modelSupportsToolReference`). Keep it derived from the
+    ACTIVE model so a mid-session `/model` switch re-evaluates it.
+
+    `ENABLE_TOOL_SEARCH` is the explicit escape hatch (mirrors the reference): set
+    it truthy to force-enable on a proxy you know forwards the beta, or falsy to
+    kill it entirely.
+    """
+    # Explicit opt-in / kill switch wins over host heuristics, exactly like the
+    # reference's `getToolSearchMode()` env precedence.
+    env = os.getenv("ENABLE_TOOL_SEARCH")
+    if env is not None:
+        return env.strip().lower() not in {"", "0", "false", "no", "off"}
+
+    if llm is None or llm.provider_config is None:
+        return False
+    provider = llm.provider_config
+    if provider.type != "anthropic":
+        return False
+    # type="anthropic" is necessary but NOT sufficient — the compat proxies above
+    # share it. Only the genuine Anthropic host forwards the beta.
+    from urllib.parse import urlparse
+
+    host = (urlparse(provider.base_url).hostname or "").lower()
+    if host not in _GENUINE_ANTHROPIC_HOSTS:
+        return False
+    model = llm.model_name.lower()
+    return not any(pat in model for pat in _TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS)
+
+
 def model_display_name(model_name: str | None, model: LLMModel | None = None) -> str:
     if model is not None and model.display_name:
         return model.display_name

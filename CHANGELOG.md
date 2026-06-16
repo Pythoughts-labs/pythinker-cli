@@ -15,6 +15,13 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **ToolSearch hidden from models that can't use it.** `ToolSearch` is now offered
+  only when the active model genuinely supports the deferred tool-search workflow
+  (Anthropic's `tool_reference`/`defer_loading` beta on `api.anthropic.com`). The
+  `type="anthropic"` compat proxies (z.ai/GLM, Kimi, MiniMax, opencode) and all
+  non-Anthropic providers no longer see it, fixing a loop where weaker tool-callers
+  (e.g. GLM-5.2) repeatedly "searched" for tools instead of calling them. Override
+  with `ENABLE_TOOL_SEARCH=true|false`.
 - **Output-token-limit nudge text aligned with reference.** The system-reminder injected when a response is cut off by the output token limit now matches the reference byte-exactly: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
 - **`SetTodoList` accepts Cursor-style todo payloads.** Todo items sent with `content` instead of `title` (the shape models learn from Cursor/Claude `TodoWrite`) now validate and persist correctly instead of failing with missing-`title` errors.
 - **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
