@@ -106,6 +106,7 @@ def test_default_config_dump():
             },
             "hooks": [],
             "merge_all_available_skills": True,
+            "plugins": {"include_external": False, "enabled": []},
             "extra_skill_dirs": [],
             "telemetry": True,
             "session_retention_days": 30,

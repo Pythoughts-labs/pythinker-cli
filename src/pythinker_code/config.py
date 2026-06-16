@@ -1022,6 +1022,30 @@ class MCPConfig(BaseModel):
     )
 
 
+class PluginsConfig(BaseModel):
+    """Plugin/marketplace activation policy.
+
+    Controls which installed plugins contribute artifacts (skills, agents,
+    commands, hooks, MCP servers) to a session.
+    """
+
+    include_external: bool = Field(
+        default=False,
+        description=(
+            "Also activate plugins installed for Claude Code (~/.claude/plugins) and "
+            "Codex (~/.codex/plugins). Off by default — external plugins run executable "
+            "agents/hooks/MCP, so they are opt-in."
+        ),
+    )
+    enabled: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Plugin names (or name@marketplace) to enable. Empty enables all discovered "
+            "plugins; a non-empty list enables only those named."
+        ),
+    )
+
+
 class Config(BaseModel):
     """Main configuration structure."""
 
@@ -1172,6 +1196,9 @@ class Config(BaseModel):
         description="User-submitted feedback endpoint configuration",
     )
     mcp: MCPConfig = Field(default_factory=MCPConfig, description="MCP configuration")
+    plugins: PluginsConfig = Field(
+        default_factory=PluginsConfig, description="Plugin/marketplace activation policy"
+    )
     tui: TUIConfig = Field(default_factory=TUIConfig, description="TUI rendering configuration")
     hooks: list[HookDef] = Field(default_factory=list, description="Hook definitions")  # pyright: ignore[reportUnknownVariableType]
     disabled_project_hooks: list[str] = Field(

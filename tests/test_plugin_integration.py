@@ -9,6 +9,7 @@ import pytest
 from pythinker_host.path import HostPath
 
 from pythinker_code.plugin import integration, loader
+from pythinker_code.plugin.policy import PluginPolicy
 
 
 def _install_plugin_with_skill(cache: Path, plugin: str, skill: str) -> Path:
@@ -47,7 +48,7 @@ def test_disabled_plugin_contributes_no_skills(tmp_path: Path, monkeypatch, _no_
     monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
 
     # Enable-set excludes the plugin -> no skill dirs.
-    assert integration.plugin_skill_dirs(is_enabled=set()) == []
+    assert integration.plugin_skill_dirs(PluginPolicy(enabled=frozenset())) == []
 
 
 @pytest.mark.asyncio
@@ -136,6 +137,103 @@ async def test_discover_prompt_templates_includes_plugin_commands(
     assert templates["ship"].scope == "plugin"
 
 
+def test_plugin_mcp_servers_collects_from_manifest(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    cache = tmp_path / "cache"
+    root = cache / "db" / "db" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"name": "db", "version": "1.0.0", "mcpServers": {"pg": {"command": "pg-mcp"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    servers = integration.plugin_mcp_servers()
+    assert servers == {"pg": {"command": "pg-mcp"}}
+    # Disabled -> contributes nothing.
+    assert integration.plugin_mcp_servers(PluginPolicy(enabled=frozenset())) == {}
+
+
+def test_plugin_hook_defs_translates_claude_hooks(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    cache = tmp_path / "cache"
+    root = cache / "sp" / "sp" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"name": "sp", "version": "1.0.0"}), encoding="utf-8")
+    hooks = root / "hooks" / "hooks.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "matcher": "startup",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "${CLAUDE_PLUGIN_ROOT}/run.sh start",
+                                    "timeout": 12,
+                                }
+                            ],
+                        }
+                    ],
+                    "BogusEvent": [{"hooks": [{"type": "command", "command": "x"}]}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    defs = integration.plugin_hook_defs()
+    assert len(defs) == 1  # BogusEvent dropped
+    hook = defs[0]
+    assert hook.event == "SessionStart"
+    assert hook.matcher == "startup"
+    assert hook.timeout == 12
+    # ${CLAUDE_PLUGIN_ROOT} expanded to the plugin root.
+    assert str(root) in hook.command
+    assert "${CLAUDE_PLUGIN_ROOT}" not in hook.command
+
+
+def test_plugin_hook_defs_inline_manifest_and_malformed_skip(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    cache = tmp_path / "cache"
+    root = cache / "ip" / "ip" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": "ip",
+                "version": "1.0.0",
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {"type": "command", "command": "ok"},
+                                {"type": "other", "command": "ignored"},
+                                {"command": 123},
+                            ]
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    defs = integration.plugin_hook_defs()
+    assert [d.command for d in defs] == ["ok"]  # non-command + malformed dropped
+
+
 def test_external_plugins_are_opt_in(tmp_path: Path, monkeypatch) -> None:
     # A plugin only in the Claude root is ignored by default, included on opt-in.
     claude = tmp_path / "claude"
@@ -144,5 +242,6 @@ def test_external_plugins_are_opt_in(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(loader, "claude_plugin_roots", lambda: [claude])
     monkeypatch.setattr(loader, "codex_plugin_roots", lambda: [])
 
-    assert integration.plugin_skill_dirs() == []  # default: external off
-    assert integration.plugin_skill_dirs(include_external=True)  # opt-in finds it
+    assert integration.plugin_skill_dirs() == []  # default policy: external off
+    # Opt-in policy finds it.
+    assert integration.plugin_skill_dirs(PluginPolicy(include_external=True))

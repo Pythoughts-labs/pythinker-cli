@@ -18,52 +18,133 @@ cache only if startup profiling shows it matters.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any, cast
 
+from pythinker_code.hooks.config import HOOK_EVENT_TYPES, HookDef
 from pythinker_code.plugin import artifacts
-from pythinker_code.plugin.loader import discover_plugins
+from pythinker_code.plugin.loader import LoadedPlugin, discover_plugins
+from pythinker_code.plugin.policy import PluginPolicy, current_plugin_policy
+from pythinker_code.utils.logging import logger
 
 
-def plugin_skill_dirs(
-    *, include_external: bool = False, is_enabled: set[str] | None = None
-) -> list[Path]:
+def _enabled_plugins(policy: PluginPolicy | None) -> list[LoadedPlugin]:
+    """Discover the plugins this session activates under *policy* (or the active one)."""
+    pol = policy if policy is not None else current_plugin_policy()
+    enabled_set = set(pol.enabled) if pol.enabled is not None else None
+    return discover_plugins(include_external=pol.include_external, is_enabled=enabled_set).enabled
+
+
+def plugin_skill_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Skill roots contributed by enabled plugins (each a ``skills/``-style dir)."""
-    enabled = discover_plugins(include_external=include_external, is_enabled=is_enabled).enabled
     dirs: list[Path] = []
-    for plugin in enabled:
+    for plugin in _enabled_plugins(policy):
         dirs.extend(artifacts.skill_dirs(plugin))
     return dirs
 
 
-def plugin_agent_dirs(
-    *, include_external: bool = False, is_enabled: set[str] | None = None
-) -> list[Path]:
+def plugin_agent_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Subagent-definition roots contributed by enabled plugins (``agents/`` dirs)."""
-    enabled = discover_plugins(include_external=include_external, is_enabled=is_enabled).enabled
     dirs: list[Path] = []
-    for plugin in enabled:
+    for plugin in _enabled_plugins(policy):
         dirs.extend(artifacts.agent_dirs(plugin))
     return dirs
 
 
-def plugin_command_dirs(
-    *, include_external: bool = False, is_enabled: set[str] | None = None
-) -> list[Path]:
+def plugin_command_dirs(policy: PluginPolicy | None = None) -> list[Path]:
     """Slash-command prompt-template roots contributed by enabled plugins."""
-    enabled = discover_plugins(include_external=include_external, is_enabled=is_enabled).enabled
     dirs: list[Path] = []
-    for plugin in enabled:
+    for plugin in _enabled_plugins(policy):
         dirs.extend(artifacts.command_dirs(plugin))
     return dirs
 
 
-def plugin_mcp_servers(
-    *, include_external: bool = False, is_enabled: set[str] | None = None
-) -> dict[str, object]:
+def plugin_mcp_servers(policy: PluginPolicy | None = None) -> dict[str, object]:
     """MCP server configs contributed by enabled plugins (earlier plugins win)."""
-    enabled = discover_plugins(include_external=include_external, is_enabled=is_enabled).enabled
     servers: dict[str, object] = {}
-    for plugin in enabled:
+    for plugin in _enabled_plugins(policy):
         for key, value in artifacts.mcp_servers(plugin).items():
             servers.setdefault(key, value)
     return servers
+
+
+def _hooks_payload(plugin: LoadedPlugin) -> dict[str, Any] | None:
+    """Return a plugin's raw hooks mapping (inline manifest object or hooks.json)."""
+    inline = plugin.manifest.hooks
+    if isinstance(inline, dict):
+        return cast("dict[str, Any]", inline)
+    hooks_path = artifacts.hooks_file(plugin)
+    if hooks_path is None:
+        return None
+    try:
+        data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Skipping unreadable plugin hooks {path}: {error}", path=hooks_path, error=exc
+        )
+        return None
+    return cast("dict[str, Any]", data) if isinstance(data, dict) else None
+
+
+def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[HookDef]:
+    """Translate a Claude-style hooks mapping into pythinker ``HookDef`` entries.
+
+    Shape: ``{event: [{matcher, hooks: [{type: command, command, timeout}]}]}``,
+    optionally wrapped in a top-level ``"hooks"`` key. Only ``command`` hooks are
+    supported; the ``${CLAUDE_PLUGIN_ROOT}`` / ``${PYTHINKER_PLUGIN_ROOT}`` vars
+    expand to the plugin root. Malformed entries are skipped, never fatal.
+    """
+    raw = payload.get("hooks", payload)
+    if not isinstance(raw, dict):
+        return []
+    root = str(plugin.root)
+    defs: list[HookDef] = []
+    for event, groups in cast("dict[str, Any]", raw).items():
+        if event not in HOOK_EVENT_TYPES or not isinstance(groups, list):
+            continue
+        for group in cast("list[Any]", groups):
+            if not isinstance(group, dict):
+                continue
+            group_d = cast("dict[str, Any]", group)
+            matcher = group_d.get("matcher", "")
+            entries = group_d.get("hooks", [])
+            if not isinstance(entries, list):
+                continue
+            for entry in cast("list[Any]", entries):
+                if not isinstance(entry, dict):
+                    continue
+                entry_d = cast("dict[str, Any]", entry)
+                command = entry_d.get("command")
+                if entry_d.get("type", "command") != "command" or not isinstance(command, str):
+                    continue
+                expanded = command.replace("${CLAUDE_PLUGIN_ROOT}", root).replace(
+                    "${PYTHINKER_PLUGIN_ROOT}", root
+                )
+                timeout = entry_d.get("timeout")
+                try:
+                    defs.append(
+                        HookDef(
+                            event=cast("Any", event),
+                            command=expanded,
+                            matcher=matcher if isinstance(matcher, str) else "",
+                            **({"timeout": timeout} if isinstance(timeout, int) else {}),
+                        )
+                    )
+                except Exception as exc:  # pydantic validation of an odd entry
+                    logger.warning(
+                        "Skipping invalid plugin hook in {plugin}: {error}",
+                        plugin=plugin.name,
+                        error=exc,
+                    )
+    return defs
+
+
+def plugin_hook_defs(policy: PluginPolicy | None = None) -> list[HookDef]:
+    """Lifecycle hooks contributed by enabled plugins, as pythinker ``HookDef``s."""
+    defs: list[HookDef] = []
+    for plugin in _enabled_plugins(policy):
+        payload = _hooks_payload(plugin)
+        if payload is not None:
+            defs.extend(_translate_hook_defs(plugin, payload))
+    return defs

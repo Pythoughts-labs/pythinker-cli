@@ -15,6 +15,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Plugin marketplaces and activation policy.** `pythinker plugin marketplace` can add,
+  refresh, install, and uninstall Claude/Codex-compatible marketplace plugins; config
+  `plugins.include_external` and `plugins.enabled` control which installed plugins
+  contribute skills, agents, commands, hooks, and MCP servers to a session.
 - **MCP tool lists refresh automatically when servers change.** Connected MCP
   sessions stay open for `tools/list_changed` (and resources/prompts) notifications;
   inventory is re-published without a manual `/mcp refresh`.

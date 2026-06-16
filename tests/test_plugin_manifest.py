@@ -56,8 +56,9 @@ def test_claude_minimal_manifest_loads_with_convention_fallback(tmp_path: Path) 
 def test_author_accepts_string_or_object(tmp_path: Path) -> None:
     root = tmp_path / "p"
     _write(root / "plugin.json", {"name": "p", "version": "1", "author": "Jane"})
-    assert load_plugin_manifest(root).author is not None
-    assert load_plugin_manifest(root).author.name == "Jane"
+    author = load_plugin_manifest(root).author
+    assert author is not None
+    assert author.name == "Jane"
 
 
 def test_artifact_paths_normalize_string_and_list() -> None:
