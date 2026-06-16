@@ -25,7 +25,7 @@ def normalize_set_todo_list_args(args: dict[str, Any]) -> dict[str, Any]:
     """Accept Cursor/Claude TodoWrite shape while keeping internal state canonical.
 
     Supported external aliases:
-    - ``content`` -> ``title``, only when ``title`` is missing
+    - ``content`` -> ``title``, only when ``title`` is missing or blank
 
     Deliberately does not:
     - invent titles
@@ -48,8 +48,9 @@ def normalize_set_todo_list_args(args: dict[str, Any]) -> dict[str, Any]:
 
         title = item.get("title")
         content = item.get("content")
+        title_missing = title is None or (isinstance(title, str) and not title.strip())
 
-        if title is None and content is not None:
+        if title_missing and content is not None:
             item["title"] = content
 
         item.pop("content", None)

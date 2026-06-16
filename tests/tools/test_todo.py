@@ -62,6 +62,22 @@ class TestNormalizeSetTodoListArgs:
         normalize_set_todo_list_args(args)
         assert args == original
 
+    def test_blank_title_with_content_normalizes_to_title(self):
+        args = {
+            "todos": [{"title": "", "content": "Install framer-motion", "status": "pending"}]
+        }
+        out = normalize_set_todo_list_args(args)
+        assert out["todos"][0]["title"] == "Install framer-motion"
+        assert "content" not in out["todos"][0]
+
+    def test_params_mixed_non_dict_item_fails_validation(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(  # type: ignore[arg-type]
+                todos=[{"title": "ok", "status": "pending"}, "bad"]
+            )
+
     def test_missing_title_still_fails_after_normalization(self):
         args = {"todos": [{"id": "1", "status": "pending"}]}
         out = normalize_set_todo_list_args(args)

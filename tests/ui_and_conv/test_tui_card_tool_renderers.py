@@ -31,6 +31,7 @@ from pythinker_code.ui.shell.tool_renderers._render_utils import loading_marker
 from pythinker_code.ui.shell.tool_renderers.generic import generic_renderer
 from pythinker_code.ui.shell.tool_renderers.todo import (
     TODO_RENDERER,
+    _has_cursor_todowrite_shape,
     _summarize_todo_validation_error,
     _todo_level_and_title,
 )
@@ -1198,6 +1199,43 @@ def test_todo_validation_error_shows_full_detail_when_expanded():
     rendered = render_plain(comp.render(), width=100)
     assert "Todo update failed: each item needs `title`" in rendered
     assert "Field required" in rendered
+
+
+def test_cursor_shape_detects_blank_title_with_content():
+    args = {"todos": [{"title": "", "content": "Install framer-motion", "status": "pending"}]}
+    assert _has_cursor_todowrite_shape(args) is True
+
+
+def test_renderer_blank_title_uses_content_fallback():
+    _level, title = _todo_level_and_title(
+        {"title": "", "content": "Install framer-motion", "status": "pending"}
+    )
+    assert title == "Install framer-motion"
+
+
+def test_renderer_indent_ignores_ansi_before_leading_spaces():
+    raw = "\x1b[31m  \x1b[0mNested task"
+    _level, title = _todo_level_and_title({"title": raw, "status": "pending"})
+    assert _level == 1
+    assert title == "Nested task"
+
+
+def test_malformed_todos_list_renders_invalid_when_args_complete():
+    rendered = _render_running(
+        "SetTodoList",
+        {"todos": ["bad", None, 123, {"title": "ok", "status": "pending"}]},
+    )
+    assert "<invalid>" in rendered
+    assert "ok" not in rendered
+
+
+def test_malformed_todos_streaming_skips_non_dict_items():
+    rendered = _render_streaming(
+        "SetTodoList",
+        {"todos": ["bad", {"title": "Visible", "status": "pending"}]},
+    )
+    assert "<invalid>" not in rendered
+    assert "Visible" in rendered
 
 
 # ---------------------------------------------------------------------------

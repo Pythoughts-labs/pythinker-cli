@@ -52,16 +52,22 @@ _UNTITLED_TODO = "Untitled todo"
 
 
 def _has_cursor_todowrite_shape(args: dict[str, Any]) -> bool:
-    """True when args look like Cursor/Claude TodoWrite ({content} without {title})."""
+    """True when args look like Cursor/Claude TodoWrite ({content} without usable {title})."""
     todos = args.get("todos")
     if not isinstance(todos, list):
         return False
+
     for raw in cast("list[Any]", todos):
         if not isinstance(raw, dict):
             continue
+
         item = cast(dict[str, Any], raw)
-        if "content" in item and "title" not in item:
+        title = (as_str(item.get("title")) or "").strip()
+        content = (as_str(item.get("content")) or "").strip()
+
+        if content and not title:
             return True
+
     return False
 
 
@@ -102,13 +108,15 @@ def _clean_todo_title(raw_title: str) -> str:
 def _todo_level_and_title(item: dict[str, Any]) -> tuple[int, str]:
     """Return display nesting level and a cleaned title."""
     raw_title = as_str(item.get("title")) or as_str(item.get("content")) or ""
+    safe_title = sanitize_ansi(raw_title)
+
     explicit = item.get("level", item.get("depth", item.get("indent")))
-    cleaned = _clean_todo_title(raw_title)
+    cleaned = _clean_todo_title(safe_title)
 
     if isinstance(explicit, int):
         return max(0, min(explicit, 6)), cleaned
 
-    leading_spaces = len(raw_title) - len(raw_title.lstrip(" "))
+    leading_spaces = len(safe_title) - len(safe_title.lstrip(" "))
     level = max(0, min(leading_spaces // 2, 6))
     return level, cleaned
 
@@ -162,6 +170,15 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
         )
 
     todos_list = cast("list[Any]", todos)
+    has_malformed_items = any(not isinstance(t, dict) for t in todos_list)
+    if has_malformed_items and (ctx.args_complete or ctx.has_result):
+        header = tool_call_header("todos", invalid_arg(), style_token=style_token)
+        return running_spinner(
+            header,
+            execution_started=ctx.execution_started,
+            has_result=ctx.has_result,
+        )
+
     items: list[dict[str, Any]] = [
         cast("dict[str, Any]", t) for t in todos_list if isinstance(t, dict)
     ]
