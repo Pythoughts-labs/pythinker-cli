@@ -13,6 +13,7 @@ from rich.text import Text
 
 from pythinker_code.tools.display import DiffDisplayBlock
 from pythinker_code.ui.shell.render_constants import expand_hint
+from pythinker_code.ui.shell.spacing import blank_row
 from pythinker_code.ui.shell.tool_renderers import (
     ToolRenderContext,
     ToolRenderDefinition,
@@ -27,6 +28,7 @@ from pythinker_code.ui.shell.tool_renderers._file_diff import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_lines_block,
     format_numbered_lines_block,
     invalid_arg,
@@ -58,7 +60,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("info", shorten_path(raw_path, cwd=ctx.cwd)))
+        summary.append_text(fg_subject(shorten_path(raw_path, cwd=ctx.cwd)))
 
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
     line = tool_call_header(
@@ -135,6 +137,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
     ):
         return Group(
             change_summary_text(preview.added, preview.removed),
+            blank_row(),
             diff_frame(
                 preview.diff_text,
                 width=ctx.width or 80,

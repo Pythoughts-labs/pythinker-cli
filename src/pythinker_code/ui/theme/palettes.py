@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .pythinker_themes import DIFF_HEX_DARK, DIFF_HEX_LIGHT
 from .spec import (
     BrandToken,
     MarkdownAnsiToken,
@@ -27,25 +28,26 @@ BRAND: dict[BrandToken, str] = {
     BrandToken.IRIS: "#AFE3F1",
 }
 
-# Dark core tokens — refined contrast per design spec §16.
+# Dark core tokens — WCAG AA on #141414 (see design spec §16).
 _CORE_DARK: dict[str, str] = {
-    "accent": "#AEB7FF",
-    "border": "#8a8d91",
+    "accent": "#A9B4FF",
+    "border": "#9AA3AD",
     "border_accent": "#7C88DE",
-    "border_muted": "#b8bcc0",
+    "border_muted": "#5D6570",
     "info": "#8FDDEA",
     "success": "#7CCF8A",
-    "error": "#F87171",
-    "warning": "#EAB85F",
-    "muted": "#8A8A8A",
-    "dim": "#6F6F6F",
-    "text": "",
+    "error": "#FF7A7A",
+    "warning": "#FFD166",
+    "muted": "#8F969E",
+    "dim": "#6F767E",
+    "secondary": "#AAB0B6",
+    "text": "#D7DBDF",
     "thinking_text": "#D4D4D4",
-    "activity_label": "#F4F4F5",
+    "activity_label": "#F1F3F5",
     "activity_verb": "#C68D7E",
     "activity_verb_mid": "#D8AC9E",
     "activity_verb_highlight": "#E9CDC2",
-    "activity_spinner": "#B8C0CC",
+    "activity_spinner": "#A8ADB4",
     "selected_bg": SELECTED_BG_DARK,
     "user_message_bg": "#333333",
     "user_message_text": "",
@@ -54,8 +56,8 @@ _CORE_DARK: dict[str, str] = {
     "custom_message_label": "#8FDDEA",
     "tool_pending_bg": "#1B2230",
     "tool_error_bg": "#2E1D24",
-    "tool_title": "#F4F4F5",
-    "tool_output": "#D7D7DB",
+    "tool_title": "#F1F3F5",
+    "tool_output": "#D7DBDF",
     "tool_diff_added": "#81C784",
     "tool_diff_removed": "#E57373",
     "tool_diff_context": "",
@@ -74,6 +76,7 @@ _CORE_LIGHT: dict[str, str] = {
     "warning": "#9A6B18",
     "muted": "#666666",
     "dim": "#8A93A0",
+    "secondary": "#8A93A0",
     "text": "#213853",
     "thinking_text": "#7A7A7A",
     "activity_label": "#213853",
@@ -103,7 +106,7 @@ _PROMPT_HEX_DARK: dict[PromptToken, str] = {
     PromptToken.MENTION: "#56C7B0",
     PromptToken.BASH_PREFIX: "#E5C07B",
     PromptToken.GHOST_TEXT: "#6B7280",
-    PromptToken.PROMPT_GLYPH: "#F4F4F5",
+    PromptToken.PROMPT_GLYPH: "#F1F3F5",
     PromptToken.FRAME: "#8a8d91",
     PromptToken.EFFORT: "#A3A3A3",
     PromptToken.PLACEHOLDER: "#A3A3A3",
@@ -137,7 +140,7 @@ _PROMPT_HEX_LIGHT: dict[PromptToken, str] = {
 }
 
 _MARKDOWN_ANSI = {
-    MarkdownAnsiToken.LINK: "cyan",
+    MarkdownAnsiToken.LINK: "bright_blue",
     MarkdownAnsiToken.QUOTE: "green",
     MarkdownAnsiToken.ORDERED_MARKER: "bright_blue",
 }
@@ -151,20 +154,6 @@ _THINKING_FRAME_SCALE: dict[str, str] = {
     "high": "#f97316",
     "xhigh": "#b91c1c",
     "max": "#7f1d1d",
-}
-
-_DIFF_HEX_DARK = {
-    "add_bg": "#052e05",
-    "del_bg": "#3a0808",
-    "add_hl": "#0e5a0e",
-    "del_hl": "#6b1414",
-}
-
-_DIFF_HEX_LIGHT = {
-    "add_bg": "#dafbe1",
-    "del_bg": "#ffebe9",
-    "add_hl": "#aff5b4",
-    "del_hl": "#ffc1c0",
 }
 
 
@@ -345,7 +334,7 @@ def build_theme_spec(mode: ThemeMode) -> ThemeSpec:
         mcp=_mcp(mode, tokens),
         brand=dict(BRAND),
         markdown_ansi=dict(_MARKDOWN_ANSI),
-        diff_hex=_DIFF_HEX_DARK if mode is ThemeMode.DARK else _DIFF_HEX_LIGHT,
+        diff_hex=DIFF_HEX_DARK if mode is ThemeMode.DARK else DIFF_HEX_LIGHT,
         thinking_frame=dict(_THINKING_FRAME_SCALE),
     )
 

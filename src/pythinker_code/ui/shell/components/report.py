@@ -34,9 +34,10 @@ from rich.style import Style as RichStyle
 from rich.table import Table
 from rich.text import Text
 
-from pythinker_code.ui.shell.components.markdown import PythinkerMarkdown, pythinker_markdown
+from pythinker_code.ui.shell.components.markdown import pythinker_markdown, pythinker_report_markdown
+from pythinker_code.ui.shell.glyphs import REPORT_FILE_MARKER
 from pythinker_code.ui.shell.spacing import REPORT_PANEL_PADDING
-from pythinker_code.ui.theme import ThemeName, tui_rich_style
+from pythinker_code.ui.theme import ThemeName, get_tui_tokens, tui_rich_style
 
 _log = logging.getLogger(__name__)
 
@@ -56,14 +57,14 @@ Severity = Literal["critical", "high", "medium", "low", "info"]
 _SEVERITY_ORDER: tuple[Severity, ...] = get_args(Severity)
 _SEVERITY_SET = frozenset(_SEVERITY_ORDER)
 
-# severity -> (token name, bold). Muted theme tokens only; critical is the one
-# emphasis (bold) so the eye lands on it without a brighter colour.
+# severity -> (token name, bold). Report panels keep body text regular weight;
+# only the panel title (H1 equivalent) uses bold.
 _SEVERITY_TOKEN: dict[Severity, tuple[str, bool]] = {
-    "critical": ("error", True),
+    "critical": ("error", False),
     "high": ("error", False),
     "medium": ("warning", False),
     "low": ("accent", False),
-    "info": ("muted", False),
+    "info": ("activity_spinner", False),
 }
 
 _DOT = "●"
@@ -251,19 +252,19 @@ def _render_report_prose(text: str, *, theme: ThemeName | None = None) -> Render
 
     rows: list[RenderableType] = []
     if report.preamble.strip():
-        rows.append(pythinker_markdown(report.preamble))
+        rows.append(pythinker_report_markdown(report.preamble))
 
     body_style = tui_rich_style("text", theme=theme)
     for section in report.sections:
         if rows:
             rows.append(Text(""))
-        # Use a lower-level Markdown heading so inline code / links inside labels
-        # keep the standard muted-blue highlight without promoting every report
-        # subsection to the muted-yellow H1 treatment.
-        rows.append(PythinkerMarkdown(f"### {section.title}"))
+        rows.append(pythinker_report_markdown(f"# {section.title}"))
         if section.body.strip():
             rows.append(
-                Padding(PythinkerMarkdown(section.body.strip(), style=body_style), (0, 0, 0, 2))
+                Padding(
+                    pythinker_report_markdown(section.body.strip(), style=body_style),
+                    (0, 0, 0, 2),
+                )
             )
 
     return Group(*rows)
@@ -282,22 +283,48 @@ def _severity_style(severity: Severity, theme: ThemeName | None) -> RichStyle:
     return style + RichStyle(bold=True) if bold else style
 
 
+def _strong_style(theme: ThemeName | None) -> RichStyle:
+    return tui_rich_style("tool_title", theme=theme) + RichStyle(bold=True)
+
+
+def _primary_style(theme: ThemeName | None) -> RichStyle:
+    return tui_rich_style("text", theme=theme)
+
+
+def _secondary_style(theme: ThemeName | None) -> RichStyle:
+    return tui_rich_style("secondary", theme=theme)
+
+
+def _muted_style(theme: ThemeName | None) -> RichStyle:
+    return tui_rich_style("muted", theme=theme)
+
+
 def _summary_line(counts: dict[Severity, int], theme: ThemeName | None) -> Text:
     line = Text()
+    pill_bg = get_tui_tokens(theme).tool_pending_bg
+    bg = RichStyle(bgcolor=pill_bg)
     first = True
     for severity in _SEVERITY_ORDER:
         count = counts[severity]
         if not count:
             continue
         if not first:
-            line.append("   ")
+            line.append("  ")
         first = False
-        line.append(f"{_DOT} ", style=_severity_style(severity, theme))
-        line.append(f"{count} {severity}", style=tui_rich_style("text", theme=theme))
+        line.append(f" {_DOT} ", style=_severity_style(severity, theme) + bg)
+        line.append(f"{count} {severity} ", style=_primary_style(theme) + bg)
     if not counts["critical"] and not counts["high"]:
-        prefix = "   " if not first else ""
-        line.append(f"{prefix}no critical or high", style=tui_rich_style("muted", theme=theme))
+        prefix = "  " if not first else ""
+        line.append(f"{prefix}no critical or high", style=_secondary_style(theme))
     return line
+
+
+def _render_section_header(severity: Severity, theme: ThemeName | None) -> Group:
+    border = tui_rich_style("border", theme=theme)
+    return Group(
+        Text(severity.capitalize(), style=tui_rich_style("tool_title", theme=theme)),
+        Rule(style=border, characters="─"),
+    )
 
 
 def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> RenderableType:
@@ -313,22 +340,29 @@ def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> Renderab
     title.add_column(overflow="fold")
     title.add_row(
         Text(_DOT, style=_severity_style(finding.severity, theme)),
-        Text(finding.title, style=tui_rich_style("border", theme=theme) + RichStyle(bold=True)),
+        Text(finding.title, style=_primary_style(theme)),
     )
     rows.append(title)
 
     if finding.location:
-        # Keep wrapped file paths in the same hanging-indent column. A raw
-        # leading-space Text only indents the first physical line after Rich
-        # wraps, which makes long locations drift left inside wide reports.
-        rows.append(
-            Padding(Text(finding.location, style=tui_rich_style("dim", theme=theme)), (0, 0, 0, 2))
+        rows.append(Text(""))
+        muted = _muted_style(theme)
+        location = Table.grid(padding=0)
+        location.add_column(width=2, no_wrap=True)
+        location.add_column(overflow="fold")
+        location.add_row(
+            Text(REPORT_FILE_MARKER, style=muted),
+            Text(finding.location, style=muted),
         )
+        rows.append(location)
 
     if finding.body.strip():
-        body_style = tui_rich_style("text", theme=theme)
+        body_style = _primary_style(theme)
         rows.append(
-            Padding(PythinkerMarkdown(finding.body.strip(), style=body_style), (0, 0, 0, 2))
+            Padding(
+                pythinker_report_markdown(finding.body.strip(), style=body_style),
+                (0, 0, 0, 2),
+            )
         )
 
     return Group(*rows)
@@ -337,12 +371,12 @@ def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> Renderab
 def render_report(report: Report, *, theme: ThemeName | None = None) -> RenderableType:
     """Render *report* as a padded, syntax-friendly Rich report panel."""
     counts = _counts(report.findings)
-    border = tui_rich_style("border_muted", theme=theme)
+    border = tui_rich_style("border", theme=theme)
     blank = Text("")
 
     rows: list[RenderableType] = []
     if report.scope:
-        rows += [Text(report.scope, style=tui_rich_style("dim", theme=theme)), blank]
+        rows += [Text(report.scope, style=_secondary_style(theme)), blank]
     rows.append(_summary_line(counts, theme))
 
     for severity in _SEVERITY_ORDER:
@@ -350,7 +384,7 @@ def render_report(report: Report, *, theme: ThemeName | None = None) -> Renderab
         if not group:
             continue
         rows.append(blank)
-        rows.append(Rule(f" {severity.capitalize()} ", align="left", style=border, characters="─"))
+        rows.append(_render_section_header(severity, theme))
         for finding in group:
             rows.append(blank)
             rows.append(_render_finding(finding, theme))
@@ -359,10 +393,10 @@ def render_report(report: Report, *, theme: ThemeName | None = None) -> Renderab
         rows += [
             blank,
             Rule(style=border, characters="─"),
-            Text(report.note, style=tui_rich_style("muted", theme=theme)),
+            Text(report.note, style=_secondary_style(theme)),
         ]
 
-    title = Text(report.title, style=tui_rich_style("warning", theme=theme) + RichStyle(bold=True))
+    title = Text(report.title, style=_strong_style(theme))
     return Panel(
         Group(*rows),
         title=title,

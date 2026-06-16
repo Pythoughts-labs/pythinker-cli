@@ -240,7 +240,7 @@ def test_write_existing_file_renders_diff_for_add_only_change():
     )
 
     assert "Added 1 line" in rendered
-    assert " 2 +new section" in rendered
+    assert " 2 + new section" in rendered
     assert "Wrote 2 lines" not in rendered
 
 
@@ -315,8 +315,8 @@ def test_edit_renders_inline_diff():
     assert "Added 1 line" in rendered
     assert "return 1" in rendered
     assert "return 2" in rendered
-    assert " 1 -return 1" in rendered
-    assert " 1 +return 2" in rendered
+    assert " 1 - return 1" in rendered
+    assert " 1 + return 2" in rendered
 
 
 def test_edit_multi_count_in_header():
@@ -360,8 +360,8 @@ def test_edit_prefers_structured_result_diff_blocks():
     rendered = render_plain(comp.render(), width=100)
     assert "removed 1 line" in rendered
     assert "Added 1 line" in rendered
-    assert "41 -old" in rendered
-    assert "41 +new" in rendered
+    assert "41 - old" in rendered
+    assert "41 + new" in rendered
 
 
 def test_summary_diff_blocks_count_each_line():
@@ -751,6 +751,17 @@ def test_render_diff_colorizes_added_removed():
     plain = render_plain(render_diff(diff), width=60)
     assert "hello" in plain
     assert "world" in plain
+
+
+def test_render_diff_spaces_marker_before_at_rule():
+    old = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1); } }\n"
+    new = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }\n"
+    diff = compute_edit_diff_string(old, new).diff
+    plain = render_plain(render_diff(diff), width=120)
+    assert " - @keyframes" in plain
+    assert " + @keyframes" in plain
+    assert "-@" not in plain
+    assert "+@" not in plain
 
 
 def test_render_diff_signs_match_body_foreground():

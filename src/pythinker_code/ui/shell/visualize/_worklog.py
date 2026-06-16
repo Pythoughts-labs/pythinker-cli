@@ -22,6 +22,7 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER
 from pythinker_code.ui.shell.motion import blink_visible
 from pythinker_code.ui.shell.spacing import REPORT_PANEL_PADDING, WORKLOG_PANEL_PADDING
 from pythinker_code.ui.theme import get_tui_tokens, tui_rich_style
+from pythinker_code.ui.theme.spec import TUI_TOKEN_NAMES
 from pythinker_code.utils.rich.columns import BulletColumns
 from pythinker_code.utils.rich.diff_render import (
     collect_diff_hunks,
@@ -46,16 +47,16 @@ class ToolStyle:
 
 
 _TOOL_STYLES: dict[str, ToolStyle] = {
-    "Read": ToolStyle("Read", "->", "info"),
-    "ReadFile": ToolStyle("Read", "->", "info"),
-    "Grep": ToolStyle("Search", "*", "info"),
-    "Glob": ToolStyle("Find", "*", "info"),
-    "Edit": ToolStyle("Edit", "<-", "info"),
-    "Replace": ToolStyle("Edit", "<-", "info"),
-    "StrReplaceFile": ToolStyle("Edit", "<-", "info"),
-    "Write": ToolStyle("Write", "<-", "info"),
-    "WriteFile": ToolStyle("Write", "<-", "info"),
-    "ApplyPatch": ToolStyle("Patch", "◆", "info"),
+    "Read": ToolStyle("Read", "->", "accent"),
+    "ReadFile": ToolStyle("Read", "->", "accent"),
+    "Grep": ToolStyle("Search", "*", "accent"),
+    "Glob": ToolStyle("Find", "*", "accent"),
+    "Edit": ToolStyle("Edit", "<-", "accent"),
+    "Replace": ToolStyle("Edit", "<-", "accent"),
+    "StrReplaceFile": ToolStyle("Edit", "<-", "accent"),
+    "Write": ToolStyle("Write", "<-", "accent"),
+    "WriteFile": ToolStyle("Write", "<-", "accent"),
+    "ApplyPatch": ToolStyle("Patch", "◆", "accent"),
     "Bash": ToolStyle("Shell", "$", "success"),
     "Shell": ToolStyle("Shell", "$", "success"),
     "SetTodoList": ToolStyle("Todo", "☑", "warning"),
@@ -65,15 +66,15 @@ _TOOL_STYLES: dict[str, ToolStyle] = {
     "Task": ToolStyle("Subagent", TRANSCRIPT_ACTIVE_MARKER, "muted"),
     "AskUser": ToolStyle("Ask", "?", "warning"),
     "AskUserQuestion": ToolStyle("Ask", "?", "warning"),
-    "FetchURL": ToolStyle("Fetch", "%", "info"),
-    "WebFetch": ToolStyle("Fetch", "%", "info"),
-    "WebSearch": ToolStyle("Search", "◈", "info"),
-    "SearchWeb": ToolStyle("Search", "◈", "info"),
-    "TaskList": ToolStyle("Tasks", "☷", "info"),
-    "TaskOutput": ToolStyle("TaskOutput", "☷", "info"),
+    "FetchURL": ToolStyle("Fetch", "%", "accent"),
+    "WebFetch": ToolStyle("Fetch", "%", "accent"),
+    "WebSearch": ToolStyle("Search", "◈", "accent"),
+    "SearchWeb": ToolStyle("Search", "◈", "accent"),
+    "TaskList": ToolStyle("Tasks", "☷", "accent"),
+    "TaskOutput": ToolStyle("TaskOutput", "☷", "accent"),
     "TaskStop": ToolStyle("TaskStop", "■", "warning"),
-    "ReadSkill": ToolStyle("Skill", "◇", "info"),
-    "Skill": ToolStyle("Skill", "◇", "info"),
+    "ReadSkill": ToolStyle("Skill", "◇", "accent"),
+    "Skill": ToolStyle("Skill", "◇", "accent"),
 }
 
 
@@ -102,12 +103,14 @@ def _state_icon(state: WorkLogState) -> Text:
 
 
 def _tool_token_style(token_name: str) -> str:
+    if token_name not in TUI_TOKEN_NAMES:
+        raise ValueError(f"Unknown TUI token: {token_name!r}")
     tokens = get_tui_tokens()
-    return getattr(tokens, token_name, tokens.info)
+    return getattr(tokens, token_name)
 
 
 def tool_style(name: str) -> ToolStyle:
-    style = _TOOL_STYLES.get(name, ToolStyle(name, "⚙", "info"))
+    style = _TOOL_STYLES.get(name, ToolStyle(name, "⚙", "accent"))
     return ToolStyle(style.label, style.icon, _tool_token_style(style.style))
 
 
@@ -134,7 +137,7 @@ def render_worklog_entry(
     state: WorkLogState,
     detail: str | None = None,
     icon: str = "•",
-    icon_style: str = "info",
+    icon_style: str = "accent",
     icon_renderable: RenderableType | None = None,
     children: list[RenderableType] | None = None,
 ) -> RenderableType:

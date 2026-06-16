@@ -53,7 +53,7 @@ from pythinker_code.ui.shell.motion import (
     reduced_motion_enabled,
     shimmer_text,
 )
-from pythinker_code.ui.shell.spacing import BLANK_ROW
+from pythinker_code.ui.shell.spacing import BLANK_ROW, emit_scrollback_block
 from pythinker_code.ui.shell.spinner_words import spinner_message
 from pythinker_code.ui.shell.tips import current_tip
 from pythinker_code.ui.shell.visualize._approval_panel import (
@@ -151,9 +151,8 @@ def _append_action_block(
 
 
 def _print_action_block(block: RenderableType) -> None:
-    """Commit a completed action block to scrollback with one leading blank row."""
-    console.print()
-    console.print(block)
+    """Commit a completed action block to scrollback with one trailing blank row."""
+    emit_scrollback_block(console, block)
 
 
 def _format_step_retry(retry: StepRetry) -> Text:
@@ -1251,15 +1250,11 @@ class _LiveView:
             block._flush_committed()
             if block.is_think:
                 if block.has_pending():
-                    if not block.has_emitted_to_scrollback:
-                        console.print()
-                    console.print(block.compose_final())
+                    emit_scrollback_block(console, block.compose_final())
             else:
                 renderable = block.promote_to_scrollback()
                 if renderable is not None:
-                    if not block.has_emitted_to_scrollback:
-                        console.print()
-                    console.print(renderable)
+                    emit_scrollback_block(console, renderable)
             self._current_content_block = None
             self.refresh_soon()
 

@@ -7,6 +7,10 @@ consistent. The governing rule:
     and code renderers own only their *internal* layout. Never let two layers space
     the same seam.
 
+    Scrollback commits (finished tool cards, flushed agent paragraphs, hooks) emit
+    one trailing blank row after each block. The next block starts on the following
+    line — do not also add a leading blank before the next commit.
+
 The canonical blank row is ``Text("")`` (an empty string), not ``Text(" ")`` — an
 empty row never picks up stray background styling. Padding constants are Rich
 ``(vertical, horizontal)`` tuples; the standard keeps vertical padding at 0 on cards
@@ -17,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from rich.console import RenderableType
+from rich.console import Console, RenderableType
 from rich.text import Text
 
 if TYPE_CHECKING:
@@ -35,6 +39,7 @@ __all__ = [
     "CODE_BLOCK_PADDING",
     "blank_row",
     "append_gap",
+    "emit_scrollback_block",
     "ensure_prompt_newline",
 ]
 
@@ -68,6 +73,12 @@ def append_gap(renderables: list[RenderableType], rows: int = STREAM_GAP_ROWS) -
     """Append *rows* blank rows to *renderables* (no-op when ``rows <= 0``)."""
     for _ in range(max(0, rows)):
         renderables.append(blank_row())
+
+
+def emit_scrollback_block(console: Console, block: RenderableType) -> None:
+    """Commit one finished action block to scrollback with a trailing blank row."""
+    console.print(block)
+    console.print()
 
 
 def ensure_prompt_newline(fragments: StyleAndTextTuples) -> None:

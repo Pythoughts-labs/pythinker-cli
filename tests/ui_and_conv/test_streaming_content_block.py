@@ -286,6 +286,22 @@ def test_assert_blank_line_after_activity_reports_missing_following_line() -> No
         _assert_blank_line_after_activity("Composing\n", "Composing")
 
 
+def test_composing_committed_prose_has_gap_before_spinner() -> None:
+    """Staged paragraphs must not run flush into the Composing activity line."""
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph here.\n\nSecond paragraph here.\n\n")
+    block.append("Third still streaming")
+    assert block._committed_renderables
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    lines = [line.rstrip() for line in console.export_text().splitlines()]
+    first_idx = next(i for i, line in enumerate(lines) if "First paragraph" in line)
+    composing_idx = next(i for i, line in enumerate(lines) if "Composing" in line)
+    assert composing_idx > first_idx
+    assert composing_idx - first_idx >= 2
+    assert any(lines[j] == "" for j in range(first_idx + 1, composing_idx))
+
+
 def test_composing_preview_has_standard_gap_after_activity_line(monkeypatch):
     from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 

@@ -28,6 +28,24 @@ def test_directory_label_uses_info_token():
     assert get_tui_tokens("dark").info in style
 
 
+def test_branch_label_uses_light_grey():
+    from pythinker_code.ui.shell import WelcomeInfoItem, _value_style_for_label
+    from pythinker_code.ui.theme import get_tui_tokens, set_active_theme
+
+    set_active_theme("dark")
+    style = _value_style_for_label("Branch", WelcomeInfoItem.Level.INFO)
+    assert style == get_tui_tokens("dark").thinking_text
+
+
+def test_model_label_uses_muted_warning_yellow():
+    from pythinker_code.ui.shell import WelcomeInfoItem, _value_style_for_label
+    from pythinker_code.ui.theme import get_tui_tokens, set_active_theme
+
+    set_active_theme("dark")
+    style = _value_style_for_label("Model", WelcomeInfoItem.Level.INFO)
+    assert style == get_tui_tokens("dark").warning
+
+
 def test_welcome_banner_chip_shown_in_output(monkeypatch):
     console = Console(record=True, width=120, color_system=None)
     monkeypatch.setattr(shell_module, "console", console)

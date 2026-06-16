@@ -19,6 +19,8 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from pythinker_code.ui.shell.components import compute_edit_diff_string
+from pythinker_code.ui.shell.components.render_utils import render_message_response
+from pythinker_code.ui.shell.spacing import blank_row
 from pythinker_code.ui.shell.tool_renderers import (
     ToolRenderContext,
     ToolRenderDefinition,
@@ -32,6 +34,7 @@ from pythinker_code.ui.shell.tool_renderers._file_diff import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     invalid_arg,
     missing_required_arg,
     pending_tool_call_header,
@@ -90,7 +93,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("info", shorten_path(raw_path, cwd=ctx.cwd)))
+        summary.append_text(fg_subject(shorten_path(raw_path, cwd=ctx.cwd)))
 
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
     header = tool_call_header("Update", summary, style_token=style_token)
@@ -115,9 +118,9 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
     if not diff_text:
         return head
     added, removed = _fallback_diff_counts(diff_text)
-    return Group(
-        head,
+    body = Group(
         change_summary_text(added, removed),
+        blank_row(),
         diff_frame(
             diff_text,
             width=ctx.width or 80,
@@ -125,6 +128,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
             state=ctx.state,
         ),
     )
+    return Group(head, render_message_response(body))
 
 
 def _fallback_diff_counts(diff_text: str) -> tuple[int, int]:
@@ -167,6 +171,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
 
     return Group(
         change_summary_text(added, removed),
+        blank_row(),
         diff_frame(
             preview_diff,
             width=ctx.width or 80,

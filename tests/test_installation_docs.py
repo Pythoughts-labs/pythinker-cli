@@ -92,9 +92,12 @@ def test_native_curl_installer_shows_robot_logo() -> None:
 
     assert "print_logo_static()" in installer
     assert "print_logo_animated()" in installer
-    assert "\nprint_logo\n\n# --- detect target" in installer
-    assert "pythinker code" in installer
-    assert "is ready. Run %s%spythinker%s to launch." in installer
+    assert "print_logo_art()" in installer
+    assert "GRID_ORIGIN_ROW=5" in installer
+    assert "PROGRESS_ROW=17" in installer
+    assert "Pythinker Code" in installer
+    assert "Think first. Then code." in installer
+    assert "Ready. Start with:" in installer
 
 
 def test_native_powershell_installer_shows_robot_logo() -> None:

@@ -21,6 +21,7 @@ from pythinker_code.ui.theme import tui_rich_style
 __all__ = [
     "as_str",
     "fg",
+    "fg_subject",
     "format_lines_block",
     "format_numbered_lines_block",
     "invalid_arg",
@@ -61,6 +62,11 @@ def fg(token: str, content: str | Text) -> Text:
         out.stylize(style)
         return out
     return Text(sanitize_ansi(content), style=style)
+
+
+def fg_subject(content: str | Text) -> Text:
+    """Brand periwinkle highlight for tool-call subjects (paths, patterns, URLs)."""
+    return fg("accent", content)
 
 
 def tool_title(label: str) -> Text:

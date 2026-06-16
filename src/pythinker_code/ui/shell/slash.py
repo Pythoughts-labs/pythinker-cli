@@ -64,7 +64,7 @@ def exit(app: Shell, args: str):
 SKILL_COMMAND_PREFIX = "skill:"
 
 # Ordered first-token hints for slash commands with fixed subcommands (ghost text + menu).
-_THEME_ARGS: tuple[str, ...] = ("current", "doctor", "tokens", "dark", "light", "auto")
+_THEME_ARGS: tuple[str, ...] = ("current", "doctor", "tokens", "code", "dark", "light", "auto")
 
 
 def slash_command_arg_suggestions() -> dict[str, tuple[str, ...]]:
@@ -1036,6 +1036,73 @@ async def task(app: Shell, args: str):
     await TaskBrowserApp(soul).run()
 
 
+async def _theme_code_picker(app: Shell, soul: PythinkerSoul, arg: str) -> None:
+    """pythinker-x-style syntax theme picker (live preview + persist)."""
+    from pythinker_code.share import get_share_dir
+    from pythinker_code.ui.shell.selectors.code_theme import run_code_theme_selector
+    from pythinker_code.ui.theme import get_tui_tokens as _get_tok_theme
+    from pythinker_code.utils.rich.syntax import (
+        code_themes_match_for_picker,
+        get_active_code_theme,
+        list_picker_code_themes,
+        set_active_code_theme,
+    )
+
+    _t = _get_tok_theme()
+    configured = soul.runtime.config.tui.code_theme
+    available = list_picker_code_themes(get_share_dir())
+
+    if arg:
+        if arg not in available:
+            console.print(
+                f"[{_t.error}]Unknown code theme: {_rich_escape(arg)}. "
+                f"Use `/theme code` to pick from {len(available)} themes.[/]"
+            )
+            return
+        chosen = arg
+    else:
+        saved = get_active_code_theme()
+
+        def _preview(name: str) -> None:
+            set_active_code_theme(name)
+
+        chosen = await run_code_theme_selector(
+            current_theme=configured,
+            available_themes=available,
+            on_preview=_preview,
+            theme_matches_current=code_themes_match_for_picker,
+        )
+        if chosen is None:
+            set_active_code_theme(saved)
+            return
+        if chosen == configured or code_themes_match_for_picker(chosen, configured):
+            set_active_code_theme(saved)
+            return
+
+    config_file = soul.runtime.config.source_file
+    if config_file is None:
+        set_active_code_theme(chosen)
+        console.print(
+            f"[{_t.warning}]Cannot persist code theme: no config file. "
+            f"Using {_rich_escape(chosen)} for this session only. "
+            f"Restart without --config to save settings.[/]"
+        )
+        return
+
+    try:
+        config_for_save = load_config(config_file)
+        config_for_save.tui.code_theme = chosen
+        save_config(config_for_save, config_file)
+    except (ConfigError, OSError) as exc:
+        console.print(f"[{_t.error}]Failed to save config: {_rich_escape(exc)}[/]")
+        set_active_code_theme(configured)
+        return
+
+    set_active_code_theme(chosen)
+    console.print(f"[{_t.success}]Switched code theme to {_rich_escape(chosen)}. Reloading...[/]")
+    raise Reload(session_id=soul.runtime.session.id)
+
+
 @registry.command(aliases=["color"])
 @shell_mode_registry.command(aliases=["color"])
 async def theme(app: Shell, args: str) -> None:
@@ -1058,11 +1125,16 @@ async def theme(app: Shell, args: str) -> None:
     arg = args.strip().lower()
     sub, _, rest = arg.partition(" ")
 
-    if sub in ("current", "doctor", "tokens"):
+    if sub in ("current", "doctor", "tokens", "code"):
         if sub == "current":
+            from pythinker_code.utils.rich.syntax import get_active_code_theme
+
             console.print(
-                f"[{_t_theme.info}]Active theme:[/] {get_active_theme()}\n"
-                f"[{_t_theme.muted}]Configured:[/] {configured}"
+                f"[{_t_theme.info}]Active UI theme:[/] {get_active_theme()}\n"
+                f"[{_t_theme.muted}]Configured UI theme:[/] {configured}\n"
+                f"[{_t_theme.info}]Active code theme:[/] {get_active_code_theme()}\n"
+                f"[{_t_theme.muted}]Configured code theme:[/] "
+                f"{soul.runtime.config.tui.code_theme}"
             )
             return
         if sub == "doctor":
@@ -1082,6 +1154,9 @@ async def theme(app: Shell, args: str) -> None:
             ]
             console.print("\n".join(lines))
             return
+        if sub == "code":
+            await _theme_code_picker(app, soul, rest.strip())
+            return
 
     if not arg:
         from pythinker_code.ui.shell.selectors.theme import run_theme_selector
@@ -1099,7 +1174,7 @@ async def theme(app: Shell, args: str) -> None:
     if arg not in ("dark", "light", "auto"):
         console.print(
             f"[{_t_theme.error}]Unknown theme: {_rich_escape(arg)}. "
-            f"Use 'dark', 'light', 'auto', 'current', 'doctor', or 'tokens'.[/]"
+            f"Use 'dark', 'light', 'auto', 'code', 'current', 'doctor', or 'tokens'.[/]"
         )
         return
 

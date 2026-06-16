@@ -41,7 +41,7 @@ _FALLBACK_STYLES: Mapping[str, Style] = {
     "markdown.h4": Style(bold=True),
     "markdown.h5": Style(bold=True),
     "markdown.h6": Style(dim=True, italic=True),
-    "markdown.code": Style(color="bright_cyan", bold=True),
+    "markdown.code": Style(color="bright_cyan"),
     "markdown.code_block": Style(color="bright_cyan"),
     "markdown.item": Style(),
     "markdown.item.bullet": Style(),
@@ -641,12 +641,10 @@ class MarkdownContext:
             style = self.console.get_style(style_name, default=fallback)
             style = fallback + style
         style = style.copy()
-        if (
-            isinstance(style_name, str)
-            and style_name in {"markdown.code", "markdown.code_block"}
-            and style._bgcolor is not None
-        ):
-            style._bgcolor = None
+        if isinstance(style_name, str) and style_name in {"markdown.code", "markdown.code_block"}:
+            if style.bgcolor is not None:
+                style = style + Style(bgcolor=None)
+            style = style + Style(bold=False)
         self.style_stack.push(style)
         return self.current_style
 

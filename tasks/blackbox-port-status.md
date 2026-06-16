@@ -42,7 +42,7 @@
 | Constants/schemas | `constants/**`, `schemas/**` | `agents/default/system.md`, `wire/types.py` | adapt | verify-existing | Phase 1.1 |
 | Native TS | `native-ts/file-index/` | `ui/shell/prompt.py` | adapt ideas | done | Phase 7.4 |
 | File/search UX | `tools/GrepTool`, `tools/FileReadTool` | `tools/file/**` | adapt | verify-existing | Phase 1.2 |
-| LSP | `services/lsp/**` | none | future-approved-only | future-approved-only | Too large without approval |
+| LSP | `services/lsp/**` | `src/pythinker_code/lsp/` + `tools/lsp/` | done | done | d936b32; 63 tests pass (PLIP-10) |
 | Sandbox | `utils/sandbox/**` | none | future-approved-only | future-approved-only | Phase 7.8 decision |
 | Computer/voice/buddy | `voice/**`, `buddy/**` | none | skip | skipped | Product-only features |
 | Remote/bridge | `bridge/**`, `remote/**` | `acp/`, `wire/` | native-equivalent IDE | skipped | CCR not a goal |

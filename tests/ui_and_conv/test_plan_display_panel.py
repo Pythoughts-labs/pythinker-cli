@@ -32,9 +32,8 @@ def test_plan_display_uses_worklog_plan_title(monkeypatch):
     assert card_call["title"] == "Plan"
     assert card_call["subtitle"] == "plans/one.md"
     assert card_call["border_style"] == tui_rich_style("border")
-    # _print_action_block emits a leading blank line (zero-arg console.print())
-    # before the panel; only positional args are captured, so printed holds the
-    # panel alone.
+    # _print_action_block commits the panel with a trailing blank row; only the
+    # panel is captured because the zero-arg console.print() calls have no args.
     assert printed == [card_call["panel"]]
 
     console = Console(record=True, width=120, color_system=None)
