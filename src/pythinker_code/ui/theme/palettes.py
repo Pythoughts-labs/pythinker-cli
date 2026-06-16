@@ -137,7 +137,7 @@ _PROMPT_HEX_LIGHT: dict[PromptToken, str] = {
 }
 
 _MARKDOWN_ANSI = {
-    MarkdownAnsiToken.LINK: "cyan",
+    MarkdownAnsiToken.LINK: "bright_blue",
     MarkdownAnsiToken.QUOTE: "green",
     MarkdownAnsiToken.ORDERED_MARKER: "bright_blue",
 }

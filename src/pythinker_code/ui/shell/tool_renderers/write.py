@@ -24,6 +24,7 @@ from pythinker_code.ui.shell.tool_renderers._file_diff import (
     diff_frame,
     preview_from_diff_blocks,
 )
+from pythinker_code.ui.shell.spacing import blank_row
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
@@ -135,6 +136,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
     ):
         return Group(
             change_summary_text(preview.added, preview.removed),
+            blank_row(),
             diff_frame(
                 preview.diff_text,
                 width=ctx.width or 80,

@@ -29,6 +29,8 @@ from pythinker_code.ui.shell.tool_renderers._file_diff import (
     diff_frame,
     preview_from_result,
 )
+from pythinker_code.ui.shell.components.render_utils import render_message_response
+from pythinker_code.ui.shell.spacing import blank_row
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
@@ -115,9 +117,9 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
     if not diff_text:
         return head
     added, removed = _fallback_diff_counts(diff_text)
-    return Group(
-        head,
+    body = Group(
         change_summary_text(added, removed),
+        blank_row(),
         diff_frame(
             diff_text,
             width=ctx.width or 80,
@@ -125,6 +127,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
             state=ctx.state,
         ),
     )
+    return Group(head, render_message_response(body))
 
 
 def _fallback_diff_counts(diff_text: str) -> tuple[int, int]:
@@ -167,6 +170,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
 
     return Group(
         change_summary_text(added, removed),
+        blank_row(),
         diff_frame(
             preview_diff,
             width=ctx.width or 80,

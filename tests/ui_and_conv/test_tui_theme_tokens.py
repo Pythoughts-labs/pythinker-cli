@@ -161,8 +161,8 @@ def test_dark_markdown_uses_professional_report_roles():
     assert colors.heading == "#F4F4F5"  # primary white, not coral/orange
     assert colors.strong == "#F4F4F5"
     assert colors.emphasis == "#8A8A8A"  # neutral UI grey (refined muted contrast)
-    assert colors.inline_code == "#8FDDEA"
-    assert colors.link == "cyan"
+    assert colors.inline_code == "#AEB7FF"
+    assert colors.link == "bright_blue"
     assert colors.spinner_active == "#8FDDEA"
     assert colors.spinner_done == "#7CCF8A"
     assert colors.spinner_failed == "#F87171"
@@ -174,18 +174,18 @@ def test_light_markdown_uses_professional_report_roles():
     assert colors.heading == "#213853"
     assert colors.strong == "#213853"
     assert colors.emphasis == "#666666"
-    assert colors.inline_code == "#176B7E"  # info token (light)
+    assert colors.inline_code == "#0B114E"  # accent token (light)
     assert colors.spinner_active == "#176B7E"  # spinners still use the info token
 
 
 def test_markdown_ansi_styles_resolve_to_terminal_colors():
     """Link, quote, and ordered_marker use ANSI terminal colors; inline_code
-    uses the themed info token so inline highlights stay out of the accent family."""
+    uses the themed accent token so inline highlights match brand periwinkle."""
     for mode in ("dark", "light"):
-        assert _color_name(markdown_rich_style("link", theme=mode)) == "cyan"
+        assert _color_name(markdown_rich_style("link", theme=mode)) == "bright_blue"
         assert _color_name(markdown_rich_style("quote", theme=mode)) == "green"
         assert _color_name(markdown_rich_style("ordered_marker", theme=mode)) == "bright_blue"
-        # inline_code uses the info token, not periwinkle accent or ANSI cyan/green.
+        # inline_code uses the accent token, not info cyan/green.
         assert _color_name(markdown_rich_style("inline_code", theme=mode)) not in ("cyan", "green")
         # Unordered bullets stay muted (a hex), not an ANSI accent.
         assert _color_name(markdown_rich_style("unordered_marker", theme=mode)) != "green"
@@ -243,9 +243,9 @@ def test_markdown_colors_derived_from_tokens_dark():
     assert c.heading == t.tool_title
     assert c.strong == t.tool_title
     assert c.emphasis == t.muted
-    # inline_code uses the info token for inline highlights; link/quote/ordered_marker remain ANSI.
-    assert c.inline_code == t.info
-    assert c.link == "cyan"
+    # inline_code uses the accent token for inline highlights; link/quote/ordered_marker remain ANSI.
+    assert c.inline_code == t.accent
+    assert c.link == "bright_blue"
     assert c.quote == "green"
     assert c.ordered_marker == "bright_blue"
     assert c.unordered_marker == t.muted  # unordered bullets stay muted
@@ -263,9 +263,9 @@ def test_markdown_colors_derived_from_tokens_light():
     assert c.heading == t.tool_title
     assert c.strong == t.tool_title
     assert c.emphasis == t.muted
-    # inline_code uses the info token; link remains ANSI cyan.
-    assert c.inline_code == t.info
-    assert c.link == "cyan"
+    # inline_code uses the accent token; link remains ANSI bright_blue.
+    assert c.inline_code == t.accent
+    assert c.link == "bright_blue"
     assert c.quote == "green"
     assert c.ordered_marker == "bright_blue"
     assert c.unordered_marker == t.muted

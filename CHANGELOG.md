@@ -15,7 +15,13 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
-- **TUI theme package.** Centralize dark/light palettes, prompt classes, and Rich/PTK
+- **TUI inline code color.** Inline `` `code` `` highlights and the `pythinker-ansi`
+  syntax theme now use brand periwinkle/accent and blue ANSI roles instead of cyan.
+- **TUI transcript spacing.** User prompts leave one blank row before the agent stream
+  starts; finished tool cards and flushed agent paragraphs leave a trailing blank row
+  before the next block (Bash/Read output → next ⏺ paragraph, etc.).
+- **Welcome banner branch color.** Branch name on the startup panel uses the muted
+  yellow warning token instead of the status-line teal.
   adapters in `ui/theme/` with `/theme current|doctor|tokens` inspection commands.
 - **Slash input UX.** Prefix-highlight skills and plugins while typing; ghost-complete
   and highlight fixed subcommands such as `/theme current`.
@@ -27,6 +33,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
   (go-to-definition, find-references, hover, symbols, call hierarchy) with session-scoped
   server lifecycle, passive diagnostics injected after file edits, and plugin-based server
   discovery/recommendation — no bundled language-server binaries.
+- **Token activity card.** `/usage daily|weekly|cumulative` (and the bare `/usage` default
+  when no provider adapter is configured) now render a Codex-style 52-week × 7-day heatmap of
+  total tokens consumed each day, with a `Lifetime · Peak · Streak · Longest task` summary
+  line and a footer that lets the user switch between daily/weekly/cumulative views. Data is
+  read from the local session wire files; the per-provider adapter behavior is unchanged.
 
 ## 0.47.0 (2026-06-16)
 

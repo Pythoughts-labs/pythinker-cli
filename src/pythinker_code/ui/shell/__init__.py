@@ -2404,9 +2404,7 @@ def _value_style_for_label(label: str, level: WelcomeInfoItem.Level) -> str:
     if label == "Model":
         return f"bold {tokens.text}" if tokens.text else "bold bright_white"
     if label == "Branch":
-        from pythinker_code.ui.theme import get_statusline_colors
-
-        return get_statusline_colors().branch.removeprefix("fg:")
+        return tokens.warning or "#EAB85F"
     if label == "Auto-save":
         return tokens.muted or "grey50"
     return level.value

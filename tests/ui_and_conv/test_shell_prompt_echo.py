@@ -190,6 +190,15 @@ def test_user_echo_renders_pasted_markdown_tables() -> None:
     assert "| --- |" not in plain
 
 
+def test_user_echo_leaves_trailing_blank_before_agent_stream() -> None:
+    from rich.console import Console
+
+    console = Console(record=True, width=40, color_system=None)
+    console.print(render_user_echo_text("apply"))
+    lines = console.export_text().splitlines()
+    assert lines[-1] == ""
+
+
 def test_user_echo_wraps_message_in_tinted_block() -> None:
     from rich.console import Console
 

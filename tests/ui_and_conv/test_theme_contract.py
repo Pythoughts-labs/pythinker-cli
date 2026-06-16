@@ -53,11 +53,11 @@ def test_no_bold_inline_code():
     assert style.bold is not True
 
 
-def test_inline_code_uses_info_not_accent():
+def test_inline_code_uses_accent_not_info():
     colors = get_markdown_colors("dark")
     tokens = get_tui_tokens("dark")
-    assert colors.inline_code == tokens.info
-    assert colors.inline_code != tokens.accent
+    assert colors.inline_code == tokens.accent
+    assert colors.inline_code != tokens.info
 
 
 def test_unknown_token_raises():
@@ -84,4 +84,4 @@ def test_resolver_heading_bold_inline_not_bold():
     inline = resolver.markdown_inline_code_style()
     assert heading.bold is True
     assert inline.bold is not True
-    assert inline.color == RichStyle(color=get_tui_tokens("dark").info).color
+    assert inline.color == RichStyle(color=get_tui_tokens("dark").accent).color

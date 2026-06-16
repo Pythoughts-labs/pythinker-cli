@@ -55,6 +55,17 @@ def test_padding_constants_have_zero_vertical() -> None:
         assert pad[0] == 0
 
 
+def test_emit_scrollback_block_appends_trailing_blank() -> None:
+    from rich.console import Console
+    from rich.text import Text
+
+    console = Console(record=True, width=40, color_system=None)
+    spacing.emit_scrollback_block(console, Text("tool body"))
+    lines = console.export_text().splitlines()
+    assert lines[-2].endswith("tool body")
+    assert lines[-1] == ""
+
+
 def test_ensure_prompt_newline_appends_when_missing() -> None:
     fragments: StyleAndTextTuples = [("", "hello")]
     spacing.ensure_prompt_newline(fragments)

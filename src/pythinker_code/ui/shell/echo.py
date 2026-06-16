@@ -34,7 +34,9 @@ class UserEcho:
         return Measurement.get(console, options, self._block)
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        yield from console.render(Group(BLANK_ROW, self._block), options)
+        # Leading blank separates from prior scrollback; trailing blank gives one
+        # row of breathing room before the agent stream starts in the Live area.
+        yield from console.render(Group(BLANK_ROW, self._block, BLANK_ROW), options)
 
 
 def render_user_echo(message: Message) -> RenderableType:
