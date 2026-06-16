@@ -73,7 +73,9 @@ async def read_message(stdout: AsyncReadable) -> dict[str, Any]:
 
 async def write_message(stdin: AsyncWritable, message: dict[str, Any]) -> None:
     """Write one LSP message with Content-Length framing."""
-    body = json.dumps(message, separators=(",", ":")).encode()
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode()
-    stdin.write(header + body)
+    body = json.dumps(message, separators=(",", ":")).encode(encoding="utf-8")
+    # Encode via a local (not a string literal) so the explicit encoding survives
+    # ruff UP012 while satisfying the explicit-encoding static check.
+    header = f"Content-Length: {len(body)}\r\n\r\n"
+    stdin.write(header.encode(encoding="utf-8") + body)
     await stdin.drain()

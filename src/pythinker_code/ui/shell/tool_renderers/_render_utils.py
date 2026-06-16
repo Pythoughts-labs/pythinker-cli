@@ -79,6 +79,89 @@ def _status_marker(style_token: str) -> str:
     return "✘" if style_token == "error" else TRANSCRIPT_ASSISTANT_MARKER
 
 
+# Normalized agent/task status labels for user-facing TUI rows.
+AGENT_STATUS_LABELS: dict[str, str] = {
+    "queued": "queued",
+    "created": "queued",
+    "starting": "starting",
+    "running": "running",
+    "launched": "running",
+    "awaiting_approval": "waiting",
+    "waiting": "waiting",
+    "completed": "completed",
+    "success": "completed",
+    "succeeded": "completed",
+    "failed": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "cancelled": "cancelled",
+    "killed": "cancelled",
+    "timed_out": "timed out",
+    "deferred": "queued",
+    "lost": "failed",
+    "recoverable": "failed",
+}
+
+
+def normalize_agent_status(status: str) -> str:
+    """Map backend status strings to a single user-facing label."""
+    normalized = status.strip().lower().replace(" ", "_")
+    return AGENT_STATUS_LABELS.get(normalized, status.strip() or "unknown")
+
+
+def agent_status_glyph(status: str) -> str:
+    """Icon for an agent/task row based on normalized status."""
+    label = normalize_agent_status(status)
+    if label in {"failed", "timed out"}:
+        return "✘"
+    if label == "completed":
+        return "✓"
+    if label in {"starting", "running", "waiting", "queued"}:
+        return "●"
+    if label == "cancelled":
+        return "○"
+    return "○"
+
+
+def agent_status_style_token(status: str) -> str:
+    """Theme token for a normalized agent/task status."""
+    label = normalize_agent_status(status)
+    if label in {"failed", "timed out"}:
+        return "error"
+    if label == "completed":
+        return "success"
+    if label in {"starting", "running", "waiting", "queued"}:
+        return "success"
+    if label == "cancelled":
+        return "muted"
+    return "muted"
+
+
+def format_byte_size(num_bytes: int) -> str:
+    """Human-readable byte size (KB/MB)."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    if num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    return f"{num_bytes / (1024 * 1024):.1f} MB"
+
+
+def shorten_home_path(path: str) -> str:
+    """Shorten an absolute path with ``~/`` when under the user home directory."""
+    if not path:
+        return path
+    try:
+        resolved = Path(path).expanduser().resolve()
+        home = Path.home().resolve()
+        if resolved == home:
+            return "~"
+        if resolved.is_relative_to(home):
+            return f"~/{resolved.relative_to(home)}"
+    except (OSError, RuntimeError, ValueError):
+        return path
+    return path
+
+
 def tool_call_header(
     name: str,
     summary: str | Text | None = None,

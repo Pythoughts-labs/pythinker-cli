@@ -310,7 +310,10 @@ def code_themes_match_for_picker(theme: str, configured: str) -> bool:
     if isinstance(resolved_theme, str) and isinstance(resolved_configured, str):
         return resolved_theme.casefold() == resolved_configured.casefold()
     if not isinstance(resolved_theme, str) and not isinstance(resolved_configured, str):
-        return type(resolved_theme) is type(resolved_configured)
+        # Builtin/adaptive themes resolve to stable singleton instances, so compare
+        # by identity. `type(...) is type(...)` wrongly matched distinct variants of
+        # the same class (e.g. catppuccin-frappe vs catppuccin-macchiato).
+        return resolved_theme is resolved_configured
     return False
 
 

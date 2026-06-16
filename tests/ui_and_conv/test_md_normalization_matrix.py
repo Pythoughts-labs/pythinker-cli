@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rich.console import RenderableType
+
 from pythinker_code.ui.shell.components.markdown import (
     PythinkerMarkdown,
     PythinkerMarkdownStream,
@@ -20,7 +22,7 @@ from pythinker_code.ui.shell.render_constants import MAX_HIGHLIGHT_LINES
 _TABLE_BODY = "| Name | Value |\n|------|-------|\n| a    | 1     |\n"
 
 
-def _plain(renderable: object, *, width: int = 80) -> str:
+def _plain(renderable: RenderableType, *, width: int = 80) -> str:
     return render_plain(renderable, width=width)
 
 

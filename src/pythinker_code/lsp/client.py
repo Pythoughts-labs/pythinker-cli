@@ -24,6 +24,8 @@ from pythinker_code.lsp.protocol import InitializeParams, InitializeResult, Serv
 NotificationHandler = Callable[[Any], None] | Callable[[Any], Awaitable[None]]
 RequestHandler = Callable[[Any], Any] | Callable[[Any], Awaitable[Any]]
 
+_SHUTDOWN_TIMEOUT_S = 2.0
+
 
 class LspClient:
     """Minimal LSP client: spawn via Host.exec, JSON-RPC over Content-Length framing."""
@@ -137,8 +139,12 @@ class LspClient:
 
         proc = self._proc
         if proc is not None and proc.returncode is None:
+            # Bound the graceful handshake: a hung server must not block teardown.
+            # On timeout (or any error) we fall through to killing the process below.
             with suppress(Exception):
-                await self.send_request("shutdown", None)
+                await asyncio.wait_for(
+                    self.send_request("shutdown", None), timeout=_SHUTDOWN_TIMEOUT_S
+                )
             with suppress(Exception):
                 await self.send_notification("exit", None)
 

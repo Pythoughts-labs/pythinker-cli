@@ -93,6 +93,7 @@ class TokenActivity:
     summary: ActivitySummary
     daily_values: tuple[int, ...]  # length == CELL_COUNT
     today_index: int  # position in daily_values that maps to ``today``
+    today: date  # anchor date the window was built around (not wall-clock)
 
 
 def load_activity(today: date | None = None) -> TokenActivity:
@@ -154,6 +155,7 @@ def _build_activity(steps: Iterable[StepRecord], today: date) -> TokenActivity:
         summary=_summarize(values, today),
         daily_values=values,
         today_index=today_index,
+        today=today,
     )
 
 
@@ -186,6 +188,11 @@ def _current_streak(values: Sequence[int], today_offset: int) -> int:
     end = min(today_offset, len(values) - 1)
     for offset in range(end, -1, -1):
         if values[offset] <= 0:
+            # Today's bucket is often empty mid-day; per the contract a partial
+            # today must not look like the streak ended. Skip an empty *today*,
+            # but any earlier empty day genuinely breaks the streak.
+            if offset == end:
+                continue
             break
         streak += 1
     return streak
@@ -408,7 +415,10 @@ def _chart_lines(
             )
         ]
     first_column = WEEK_COUNT - shown
-    today = datetime.now(tz=UTC).date()
+    # Anchor month labels and future-cell masking to the window the payload was
+    # built around, not wall-clock now() — so non-current snapshots and
+    # deterministic test loads stay aligned.
+    today = activity.today
     out: list[RenderableType] = [_month_labels(today, first_column, shown)]
 
     if view is TokenActivityView.DAILY:

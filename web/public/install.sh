@@ -641,13 +641,17 @@ until release_has_assets; do
     fail "release assets for v${VERSION} are not available after ~${max_elapsed}s: ${tarball_url}
 The latest release may still be publishing. Try again shortly, or pin a known-good version with --version X.Y.Z"
   fi
-  printf '\033[%d;1H\033[K  %s%-11s%s release assets, retrying in %s%ss%s' "$PROGRESS_ROW" "$DIM" "Waiting" "$RESET" "$BAR" "$delay" "$RESET"
+  if [ -n "$_anim" ]; then
+    printf '\033[%d;1H\033[K  %s%-11s%s release assets, retrying in %s%ss%s' "$PROGRESS_ROW" "$DIM" "Waiting" "$RESET" "$BAR" "$delay" "$RESET"
+  else
+    printf '  Waiting for release assets, retrying in %ss\n' "$delay"
+  fi
   sleep "$delay"
   elapsed=$((elapsed + delay))
   delay=$((delay * 2))
   [ "$delay" -gt 120 ] && delay=120
 done
-[ "$attempt" -gt 0 ] && printf '\033[%d;1H\033[K' "$PROGRESS_ROW"
+[ -n "$_anim" ] && [ "$attempt" -gt 0 ] && printf '\033[%d;1H\033[K' "$PROGRESS_ROW"
 
 # --- download + verify --------------------------------------------------
 tmpdir="$(mktemp -d -t pythinker-install.XXXXXX)"

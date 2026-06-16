@@ -31,6 +31,7 @@ class LspServerManager:
         self._instances: dict[str, LspServerInstance] = {}
         self._ext_map: dict[str, list[str]] = {}
         self._opened_files: dict[str, str] = {}
+        self._doc_versions: dict[str, int] = {}
 
     async def initialize(self) -> None:
         errors: list[str] = []
@@ -82,6 +83,7 @@ class LspServerManager:
         self._instances.clear()
         self._ext_map.clear()
         self._opened_files.clear()
+        self._doc_versions.clear()
 
         stop_errors = [
             f"{to_stop[i][0]}: {result}"
@@ -105,8 +107,18 @@ class LspServerManager:
         if server is None:
             return None
         if server.state in (LspState.STOPPED, LspState.ERROR):
+            # A (re)start spawns a fresh process with no open documents. Drop any
+            # stale per-server open-file and version state so didOpen is re-sent
+            # instead of being skipped as already-open on the new process.
             await server.start()
+            self._clear_server_doc_state(server.name)
         return server
+
+    def _clear_server_doc_state(self, server_name: str) -> None:
+        stale_uris = [uri for uri, name in self._opened_files.items() if name == server_name]
+        for uri in stale_uris:
+            self._opened_files.pop(uri, None)
+            self._doc_versions.pop(uri, None)
 
     async def send_request(self, path: str, method: str, params: Any) -> Any | None:
         server = await self.ensure_started(path)
@@ -143,6 +155,7 @@ class LspServerManager:
             },
         )
         self._opened_files[file_uri] = server.name
+        self._doc_versions[file_uri] = 1
 
     async def change_file(self, path: str, content: str) -> None:
         server = self.server_for_file(path)
@@ -155,10 +168,12 @@ class LspServerManager:
             await self.open_file(path, content)
             return
 
+        version = self._doc_versions.get(file_uri, 1) + 1
+        self._doc_versions[file_uri] = version
         await server.send_notification(
             "textDocument/didChange",
             {
-                "textDocument": {"uri": file_uri, "version": 1},
+                "textDocument": {"uri": file_uri, "version": version},
                 "contentChanges": [{"text": content}],
             },
         )
@@ -183,6 +198,7 @@ class LspServerManager:
             {"textDocument": {"uri": file_uri}},
         )
         self._opened_files.pop(file_uri, None)
+        self._doc_versions.pop(file_uri, None)
 
 
 def _file_uri(path: str) -> str:

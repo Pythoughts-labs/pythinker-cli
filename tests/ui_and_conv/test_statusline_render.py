@@ -173,11 +173,16 @@ def test_flags_segment():
 
 
 def test_context_segment_bar_and_gradient():
-    frags = SEGMENT_REGISTRY["context"].render(make_ctx())
-    text = _text(frags)
+    # Low usage is decluttered: the percentage shows but the gradient bar is
+    # suppressed until context starts filling up (>= 70%).
+    text = _text(SEGMENT_REGISTRY["context"].render(make_ctx()))
     assert text.startswith("ctx 36k/200k ")
     assert "18%" in text
-    assert "▰" in text and "▱" in text
+    assert "▰" not in text and "▱" not in text
+    # At >= 70% (but below the 90% CTX LOW warning) the gradient bar appears.
+    hot = _text(SEGMENT_REGISTRY["context"].render(make_ctx(context_tokens=150_000)))
+    assert "75%" in hot
+    assert "▰" in hot and "▱" in hot
     assert SEGMENT_REGISTRY["context"].render(make_ctx(max_context_tokens=0)) is None
 
 

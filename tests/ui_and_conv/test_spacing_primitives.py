@@ -44,15 +44,16 @@ def test_append_gap_zero_or_negative_is_noop() -> None:
 
 
 def test_padding_constants_have_zero_vertical() -> None:
-    # Vertical padding stays 0 so the stream spacer is the only inter-block gap.
+    # Stream/card/worklog padding has zero vertical so the stream spacer is the only gap.
+    # Dialog panels are exempt: they intentionally have vertical breathing room.
     for pad in (
         spacing.CARD_PADDING,
         spacing.TINTED_CARD_PADDING,
-        spacing.DIALOG_PANEL_PADDING,
         spacing.WORKLOG_PANEL_PADDING,
         spacing.CODE_BLOCK_PADDING,
     ):
         assert pad[0] == 0
+    assert spacing.DIALOG_PANEL_PADDING == (1, 1)
 
 
 def test_emit_scrollback_block_appends_trailing_blank() -> None:

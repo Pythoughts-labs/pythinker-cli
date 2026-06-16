@@ -12,6 +12,7 @@ from pythinker_code.ui.shell.usage_activity import (
     TokenActivityView,
     _bar_levels,
     _chart_start,
+    _current_streak,
     _graded_levels,
     _month_labels,
     _summary_lines,
@@ -115,6 +116,18 @@ def test_summary_streak_uses_best_format() -> None:
     assert "12d (best 54d)" in text
 
 
+def test_current_streak_ignores_empty_today_but_counts_prior_days() -> None:
+    # values[end] is today. An empty today (partial mid-day) must not end the
+    # streak; prior consecutive active days still count.
+    values = [0, 1, 1, 1, 0]  # today (index 4) empty, three active days before
+    assert _current_streak(values, today_offset=4) == 3
+    # An empty day *before* today does break the streak.
+    values_gap = [1, 1, 0, 1, 0]
+    assert _current_streak(values_gap, today_offset=4) == 1
+    # Active today extends the streak normally.
+    assert _current_streak([0, 1, 1, 1, 1], today_offset=4) == 4
+
+
 # ----- rendering -----
 
 
@@ -142,6 +155,7 @@ def test_render_activity_includes_title_summary_and_footer() -> None:
         ),
         daily_values=tuple(1 if idx % 5 == 0 else 0 for idx in range(7 * 52)),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.DAILY, width=120))
     assert "Token activity" in text
@@ -158,6 +172,7 @@ def test_render_activity_wide_left_aligns_chart() -> None:
         summary=ActivitySummary(1, 1, 0, 0, 0),
         daily_values=(0,) * (7 * 52 - 1) + (1,),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.DAILY, width=160))
     lines = text.splitlines()
@@ -179,6 +194,7 @@ def test_render_activity_weekly_uses_bar_chart() -> None:
         ),
         daily_values=_sample_weekly_buckets(),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.WEEKLY, width=22))
     # In the bar view, the gutter shows "max" / "0" instead of weekday labels.
@@ -197,6 +213,7 @@ def test_render_activity_cumulative_caption() -> None:
         ),
         daily_values=_sample_weekly_buckets(),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.CUMULATIVE, width=22))
     assert "Running total" in text
@@ -207,6 +224,7 @@ def test_render_activity_narrow_widens_terminal_hint() -> None:
         summary=ActivitySummary(0, 0, 0, 0, 0),
         daily_values=(1,) * (7 * 52),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.DAILY, width=2))
     assert "Widen terminal" in text
@@ -217,6 +235,7 @@ def test_render_activity_empty_history_shows_placeholder() -> None:
         summary=ActivitySummary(0, 0, 0, 0, 0),
         daily_values=(0,) * (7 * 52),
         today_index=7 * 52 - 1,
+        today=date(2025, 6, 15),
     )
     text = _render(render_activity(activity, TokenActivityView.DAILY, width=80))
     assert "No token activity in the last 12 months" in text

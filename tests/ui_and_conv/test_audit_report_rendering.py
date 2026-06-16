@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rich.console import RenderableType
+
 from pythinker_code.ui.shell.components.render_utils import render_plain
 from pythinker_code.ui.shell.components.report import render_agent_body
 from pythinker_code.ui.shell.markdown.audit import (
@@ -13,7 +15,7 @@ from pythinker_code.ui.shell.markdown.audit import (
 from pythinker_code.ui.shell.markdown.renderer import pythinker_report_markdown
 
 
-def _plain(renderable: object, *, width: int = 100) -> str:
+def _plain(renderable: RenderableType, *, width: int = 100) -> str:
     return render_plain(renderable, width=width)
 
 

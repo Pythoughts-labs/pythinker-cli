@@ -11,6 +11,8 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from pythinker_code.tools.display import BackgroundTaskDisplayBlock
+from pythinker_code.ui.shell.components.key_hints import key_display_text
+from pythinker_code.ui.shell.keymap import key_text
 from pythinker_code.ui.shell.tool_renderers import (
     ToolRenderContext,
     ToolRenderDefinition,
@@ -24,10 +26,12 @@ from pythinker_code.ui.shell.tool_renderers._render_utils import (
     format_lines_block,
     invalid_arg,
     missing_required_arg,
+    normalize_agent_status,
     pending_tool_call_header,
     running_spinner,
     tool_call_header,
 )
+from pythinker_code.ui.theme import tui_rich_style
 
 # Process-wide resolver: task_id -> human description. Registered by the shell
 # from the runtime's background-task store so a TaskOutput/TaskStop header can
@@ -107,6 +111,104 @@ def _render_call_with_id(
     )
 
 
+def _parse_task_output(text: str) -> tuple[dict[str, str], str]:
+    """Split TaskOutput tool text into metadata and the ``[output]`` body."""
+    meta: dict[str, str] = {}
+    body_lines: list[str] = []
+    in_output = False
+    for raw_line in text.splitlines():
+        if raw_line.strip() == "[output]":
+            in_output = True
+            continue
+        if in_output:
+            body_lines.append(raw_line)
+            continue
+        if ":" not in raw_line:
+            continue
+        key, _, value = raw_line.partition(":")
+        key = key.strip()
+        if key and " " not in key:
+            meta[key] = value.strip()
+    body = "\n".join(body_lines).strip()
+    if body.startswith("[Truncated. Full output:"):
+        _, _, rest = body.partition("]\n\n")
+        if rest:
+            body = rest.strip()
+    return meta, body
+
+
+def _read_output_collapsed_hint() -> Text:
+    expand_key = key_display_text(key_text("app.tools.expand") or "ctrl+o")
+    return fg("dim", f"Read output ({expand_key} to expand)")
+
+
+def _task_output_is_running(meta: dict[str, str]) -> bool:
+    retrieval = meta.get("retrieval_status", "").lower()
+    if retrieval in {"not_ready", "timeout"}:
+        return True
+    status = normalize_agent_status(meta.get("status", ""))
+    return status in {"starting", "running", "waiting", "queued"}
+
+
+def _render_task_output_result(
+    ctx: ToolRenderContext,
+    result: ToolResultPayload,
+    *,
+    collapsed_lines: int = 12,
+) -> RenderableType | None:
+    _stash_task_label(ctx, result)
+    if not result.text:
+        return None
+    if result.is_error:
+        return _render_block_result(ctx, result, collapsed_lines=collapsed_lines)
+
+    meta, body = _parse_task_output(result.text)
+    if not meta:
+        return _render_block_result(ctx, result, collapsed_lines=collapsed_lines)
+
+    description = (
+        meta.get("description")
+        or ctx.state.get("task_label")
+        or _resolve_task_label(ctx, meta.get("task_id", ""))
+        or meta.get("task_id", "task")
+    )
+    retrieval = meta.get("retrieval_status", "").lower()
+    if not retrieval and normalize_agent_status(meta.get("status", "")) == "completed" and body:
+        retrieval = "success"
+
+    if _task_output_is_running(meta):
+        ctx.state["__suppress_generic_expand_hint__"] = True
+        return fg("dim", "Task is still running…")
+
+    if retrieval != "success" or not body:
+        ctx.state["__suppress_generic_expand_hint__"] = True
+        if retrieval == "not_ready":
+            return fg("dim", "Task is still running…")
+        return fg("dim", "No task output available")
+
+    if not ctx.expanded:
+        ctx.state["__suppress_generic_expand_hint__"] = True
+        return _read_output_collapsed_hint()
+
+    line_count = body.count("\n") + 1 if body else 0
+    children: list[RenderableType] = [
+        Text(f"{description} ({line_count} lines)", style=tui_rich_style("tool_title"))
+    ]
+    body_block, remaining = format_lines_block(
+        body,
+        expanded=True,
+        collapsed_max_lines=collapsed_lines,
+        style_token="tool_output",
+    )
+    children.append(body_block)
+    if remaining > 0:
+        children.append(fg("muted", f"… ({remaining} more lines)"))
+    error = meta.get("error")
+    if error:
+        children.append(fg("error", f"Error: {error}"))
+    return Group(*children)
+
+
 def _render_block_result(
     ctx: ToolRenderContext,
     result: ToolResultPayload,
@@ -176,7 +278,7 @@ TASK_OUTPUT_RENDERER = ToolRenderDefinition(
     label="task output",
     render_shell="default",
     render_call=_render_task_output_call,
-    render_result=lambda ctx, r: _render_block_result(ctx, r, collapsed_lines=20),
+    render_result=lambda ctx, r: _render_task_output_result(ctx, r, collapsed_lines=20),
 )
 
 

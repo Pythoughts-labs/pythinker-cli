@@ -86,7 +86,7 @@ def diagnostic_key(entry: DiagnosticEntry) -> str:
                 },
             },
             "source": entry.source or None,
-            "code": entry.code or None,
+            "code": entry.code if entry.code is not None else None,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -281,10 +281,17 @@ def register_publish_diagnostics_handler(
             parsed = PublishDiagnosticsParams.model_validate(params)
             path = uri_to_path(parsed.uri) or parsed.uri
             entries = [diagnostic_entry_from_lsp(item) for item in parsed.diagnostics]
-            registry.register_pending(
-                server_name,
-                [DiagnosticFile(uri=parsed.uri, path=path, diagnostics=entries)],
-            )
+            if not entries:
+                # An empty payload means "no problems now" for this file, so drop
+                # any previously stored diagnostics for it. clear_for_file clears
+                # across all servers and the sent-key LRU; that is safe here
+                # because routing is one server per extension.
+                registry.clear_for_file(parsed.uri)
+            else:
+                registry.register_pending(
+                    server_name,
+                    [DiagnosticFile(uri=parsed.uri, path=path, diagnostics=entries)],
+                )
             failure_count = 0
         except Exception as exc:
             failure_count += 1

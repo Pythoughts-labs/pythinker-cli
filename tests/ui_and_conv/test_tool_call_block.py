@@ -401,3 +401,52 @@ def test_finished_call_with_null_command_still_shows_invalid_badge(
     block = _ToolCallBlock(_tool_call("Shell", '{"command": null}'))
     block.finish(ToolOk(output=""))
     assert "<invalid>" in _plain(block.compose())
+
+
+def test_run_agents_background_launch_stays_background_pending():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":true,"agents":[{"name":"a","prompt":"p"}]}',
+        )
+    )
+    block.finish(
+        ToolOk(
+            output=(
+                "tool_status: launched\n"
+                "mode: background\n"
+                "agent_count: 1\n"
+                "agents:\n"
+                "- name: a\n"
+                "  subagent_type: explore\n"
+                "  status: starting\n"
+                "  task_id: agent-abc\n"
+            )
+        )
+    )
+    assert block.finished
+    assert block.is_background_pending
+
+
+def test_run_agents_foreground_completion_is_not_background_pending():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":false,"agents":[{"name":"a","prompt":"p"}]}',
+        )
+    )
+    block.finish(
+        ToolOk(
+            output=(
+                "tool_status: success\n"
+                "mode: foreground\n"
+                "agent_count: 1\n"
+                "agents:\n"
+                "- name: a\n"
+                "  subagent_type: explore\n"
+                "  status: completed\n"
+            )
+        )
+    )
+    assert block.finished
+    assert not block.is_background_pending

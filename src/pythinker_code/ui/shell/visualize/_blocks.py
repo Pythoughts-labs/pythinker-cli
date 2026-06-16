@@ -30,6 +30,11 @@ from pythinker_code.ui.shell.components.markdown import (
 )
 from pythinker_code.ui.shell.components.render_utils import render_message_response, sanitize_ansi
 from pythinker_code.ui.shell.components.report import render_agent_body
+from pythinker_code.ui.shell.components.report_update import (
+    ReportUpdateComponent,
+    looks_like_report_update,
+    parse_report_update,
+)
 from pythinker_code.ui.shell.console import current_console_width
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER, TRANSCRIPT_STATUS_MARKER
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
@@ -124,16 +129,32 @@ _MUTATING_TOOL_NAMES = frozenset(
 )
 
 
-def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
-    """Return True when result_text represents a still-running background Agent."""
-    if tool_name != "Agent":
-        return False
-    values: dict[str, str] = {}
+def _parse_tool_result_top_fields(result_text: str) -> dict[str, str]:
+    """Parse top-level ``key: value`` lines before nested agent/task sections."""
+    top: dict[str, str] = {}
     for line in result_text.splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            values[k.strip()] = v.strip()
-    return values.get("kind") == "agent" and values.get("status") in _AGENT_ACTIVE_STATUSES
+        stripped = line.strip()
+        if not stripped or stripped.startswith("- ") or line.startswith("  "):
+            break
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if not key or " " in key:
+            continue
+        top[key] = value.strip()
+    return top
+
+
+def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
+    """Return True when a tool card should stay in the Live area after its result arrives."""
+    if tool_name == "Agent":
+        values = _parse_tool_result_top_fields(result_text)
+        return values.get("kind") == "agent" and values.get("status") in _AGENT_ACTIVE_STATUSES
+    if tool_name == "RunAgents":
+        values = _parse_tool_result_top_fields(result_text)
+        return values.get("mode") == "background" and values.get("tool_status") == "launched"
+    return False
 
 
 def _truncate_to_display_width(line: str, max_width: int) -> str:
@@ -254,8 +275,28 @@ class _ContentBlock:
         # pairs to compute rate over the last ~1.5s. Float cumulative_tokens avoids
         # per-sample truncation.
         self._token_samples: deque[tuple[float, float]] = deque()
+        self._report_update: ReportUpdateComponent | None = None
 
     # -- Public API ----------------------------------------------------------
+
+    @property
+    def has_expandable_card(self) -> bool:
+        return self._report_update is not None and self._report_update.can_expand
+
+    def toggle_expanded(self) -> None:
+        if self._report_update is None:
+            return
+        self._report_update.toggle_expanded()
+
+    def render_expanded(self) -> RenderableType:
+        if self._report_update is None:
+            return self.promote_to_scrollback() or Text("")
+        was_expanded = self._report_update.expanded
+        self._report_update.set_expanded(True)
+        try:
+            return self._render_report_update_body() or Text("")
+        finally:
+            self._report_update.set_expanded(was_expanded)
 
     def append(self, content: str) -> None:
         self.raw_text += content
@@ -350,7 +391,7 @@ class _ContentBlock:
         remaining = self._pending_text()
         if not remaining:
             return Text("")
-        rendered = self._wrap_bullet(render_agent_body(remaining))
+        rendered = self._render_body(remaining)
         if self._committed_renderables:
             return Group(*self._committed_renderables, BLANK_ROW, rendered)
         if self._has_printed_bullet:
@@ -359,10 +400,13 @@ class _ContentBlock:
 
     def promote_to_scrollback(self) -> RenderableType | None:
         """Build the full block renderable for one-shot scrollback promotion."""
+        report_body = self._render_report_update_body()
+        if report_body is not None:
+            return report_body
         parts: list[RenderableType] = list(self._committed_renderables)
         remaining = self._pending_text()
         if remaining:
-            tail = self._wrap_bullet(render_agent_body(remaining))
+            tail = self._render_body(remaining)
             if parts:
                 parts.extend([BLANK_ROW, tail])
             else:
@@ -424,6 +468,8 @@ class _ContentBlock:
 
     def _flush_committed(self) -> None:
         """Stage confirmed markdown blocks for the next Live compose pass."""
+        if looks_like_report_update(self.raw_text):
+            return
         pending = self._pending_text()
         if not pending:
             return
@@ -435,6 +481,23 @@ class _ContentBlock:
             self._committed_renderables.append(BLANK_ROW)
         self._committed_renderables.append(self._wrap_bullet(render_agent_body(committed_text)))
         self._committed_len += boundary
+
+    def _render_report_update_body(self) -> RenderableType | None:
+        update = parse_report_update(self.raw_text)
+        if update is None:
+            return None
+        if self._report_update is None:
+            self._report_update = ReportUpdateComponent(update)
+        return self._report_update.render()
+
+    def _render_body(self, text: str) -> RenderableType:
+        if looks_like_report_update(text):
+            update = parse_report_update(text)
+            if update is not None:
+                if self._report_update is None:
+                    self._report_update = ReportUpdateComponent(update)
+                return self._report_update.render()
+        return self._wrap_bullet(render_agent_body(text))
 
     def _activity_snapshot(
         self, label: str, *, label_style: Style | None = None
@@ -493,11 +556,22 @@ class _ContentBlock:
         return Group(spinner, BLANK_ROW, preview_row)
 
     def _render_preview_text(self, preview: str, *, caret: bool) -> Text:
-        """Plain-text preview path shared by live compose and finalize."""
+        """Plain-text preview path shared by live compose and finalize.
+
+        Leading newline separators (typically ``\\n`` from a markdown commit
+        boundary landing at a paragraph separator) are stripped so they do not
+        produce a blank row in the transient Live region. The ``BLANK_ROW``
+        between the spinner and the preview row already provides the visual gap.
+        """
         if not preview:
             return Text("")
+        # Strip leading "\n" / "\r\n" — paragraph separator left over from the
+        # commit boundary; not whitespace-only lines.
+        stripped = preview.lstrip("\r\n")
+        if not stripped:
+            return Text("")
         body = Text()
-        lines = preview.split("\n")
+        lines = stripped.split("\n")
         for index, line in enumerate(lines):
             if index:
                 body.append("\n")
@@ -965,8 +1039,6 @@ class _ToolCallBlock:
                 label=style.label,
                 target=self._argument,
                 state=WorkLogState.RUNNING,
-                icon=style.icon,
-                icon_style=style.style,
                 children=children,
             )
 
@@ -990,8 +1062,6 @@ class _ToolCallBlock:
             target=self._argument,
             state=state,
             detail=error_message if self._result.is_error else None,
-            icon=style.icon,
-            icon_style=style.style,
             children=children,
         )
 

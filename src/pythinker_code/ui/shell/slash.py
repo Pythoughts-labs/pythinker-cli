@@ -1053,13 +1053,15 @@ async def _theme_code_picker(app: Shell, soul: PythinkerSoul, arg: str) -> None:
     available = list_picker_code_themes(get_share_dir())
 
     if arg:
-        if arg not in available:
+        # Match case-insensitively but resolve to the canonical picker name so
+        # custom mixed-case theme stems are reachable regardless of typed case.
+        chosen = next((name for name in available if name.casefold() == arg.casefold()), None)
+        if chosen is None:
             console.print(
                 f"[{_t.error}]Unknown code theme: {_rich_escape(arg)}. "
                 f"Use `/theme code` to pick from {len(available)} themes.[/]"
             )
             return
-        chosen = arg
     else:
         saved = get_active_code_theme()
 
@@ -1122,8 +1124,12 @@ async def theme(app: Shell, args: str) -> None:
 
     _t_theme = _get_tok_theme()
     configured = soul.runtime.config.theme
-    arg = args.strip().lower()
-    sub, _, rest = arg.partition(" ")
+    raw_arg = args.strip()
+    sub_raw, _, rest = raw_arg.partition(" ")
+    # Lowercase only the subcommand for routing; preserve the theme-name case so
+    # mixed-case custom code themes stay reachable via `/theme code <Name>`.
+    sub = sub_raw.lower()
+    arg = raw_arg.lower()
 
     if sub in ("current", "doctor", "tokens", "code"):
         if sub == "current":

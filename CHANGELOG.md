@@ -15,6 +15,13 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI composing preview gap.** Removed the visible double-blank row between
+  `Composing…` and the in-progress preview (leading newline from commit
+  boundaries no longer leaks through the plain-text preview path), and aligned
+  the Rich `Live` paint rate with the 25 Hz reveal scheduler (was 10 Hz).
+- **ToolSearch TUI display.** `ToolSearch` results now render as a compact
+  "N tools discovered (Agent, Grep, …)" summary instead of dumping the full
+  tool catalog with descriptions; ctrl+o expands to tool names only.
 - **Tool header highlights.** Read/Write/Edit/Grep and similar tool-call subjects
   now use the brand periwinkle `accent` token instead of cyan `info`; line ranges
   stay on the yellow `warning` token.
@@ -48,6 +55,23 @@ GitHub Releases page; `0.8.0` is the new starting line.
   total tokens consumed each day, with a `Lifetime · Peak · Streak · Longest task` summary
   line and a footer that lets the user switch between daily/weekly/cumulative views. Data is
   read from the local session wire files; the per-provider adapter behavior is unchanged.
+- **RunAgents tolerates blank list entries.** Models occasionally emit bare `"\n"` strings
+  between the agent objects in the `agents` array; those are now stripped before validation so
+  a multi-agent launch no longer fails with a validation error, while genuinely invalid entries
+  are still rejected.
+- **Report panel rendering.** Standardized report panels render only the panel title and section
+  headers bold (body prose stays regular weight), tag finding locations with a file marker, and
+  use a dedicated `secondary` theme token for scope/note text.
+- **Theme token consistency.** The dark prompt frame/separator/dialog borders and the prompt
+  glyph now track their canonical core theme tokens, and inline code spans correctly drop an
+  inherited background.
+- **External approvals repaint promptly.** Out-of-band approval requests and steer input now
+  force an immediate live-view repaint instead of waiting for the streaming frame budget, and
+  the live-view refresh loop is supervised so a refresh-loop failure surfaces instead of
+  silently freezing the view.
+- **LSP robustness.** Bounded JSON-RPC frame size and graceful-shutdown timeout, document
+  version tracking for `didChange`, open-document state cleared on server restart, empty
+  diagnostics payloads clear stale entries, and tightened `/usage` activity-argument validation.
 
 ## 0.47.0 (2026-06-16)
 

@@ -220,6 +220,10 @@ def test_pyinstaller_datas():
             "pythinker_code/tools/goal",
         ),
         (
+            "src/pythinker_code/tools/lsp/tool.md",
+            "pythinker_code/tools/lsp",
+        ),
+        (
             "src/pythinker_code/tools/mcp_resource/list_description.md",
             "pythinker_code/tools/mcp_resource",
         ),

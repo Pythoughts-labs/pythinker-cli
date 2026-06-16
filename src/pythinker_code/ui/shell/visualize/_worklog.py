@@ -73,6 +73,7 @@ _TOOL_STYLES: dict[str, ToolStyle] = {
     "TaskList": ToolStyle("Tasks", "☷", "accent"),
     "TaskOutput": ToolStyle("TaskOutput", "☷", "accent"),
     "TaskStop": ToolStyle("TaskStop", "■", "warning"),
+    "ToolSearch": ToolStyle("Tools", "◇", "accent"),
     "ReadSkill": ToolStyle("Skill", "◇", "accent"),
     "Skill": ToolStyle("Skill", "◇", "accent"),
 }
@@ -136,8 +137,6 @@ def render_worklog_entry(
     target: str | None = None,
     state: WorkLogState,
     detail: str | None = None,
-    icon: str = "•",
-    icon_style: str = "accent",
     icon_renderable: RenderableType | None = None,
     children: list[RenderableType] | None = None,
 ) -> RenderableType:

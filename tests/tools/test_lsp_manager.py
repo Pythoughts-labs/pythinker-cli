@@ -223,6 +223,70 @@ class TestLspServerManager:
         await manager.shutdown()
 
     @pytest.mark.asyncio
+    async def test_did_change_versions_increment_monotonically(
+        self, local_host: LocalHost, tmp_path: Path
+    ) -> None:
+        import json
+
+        log_file = tmp_path / "events.jsonl"
+        manager = LspServerManager(
+            local_host,
+            {"pyright": _server_config(ext=".py", language="python", log_file=log_file)},
+            workspace_folder=str(tmp_path),
+        )
+        await manager.initialize()
+
+        target = tmp_path / "sample.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+
+        await manager.open_file(str(target), "x = 1\n")
+        await manager.change_file(str(target), "x = 2\n")
+        await manager.change_file(str(target), "x = 3\n")
+        await manager.shutdown()
+
+        versions = [
+            event["payload"]["textDocument"]["version"]
+            for event in (
+                json.loads(line)
+                for line in log_file.read_text(encoding="utf-8").splitlines()
+                if line
+            )
+            if event["event"] == "textDocument/didChange"
+        ]
+        assert versions == [2, 3]
+
+    @pytest.mark.asyncio
+    async def test_restart_clears_open_doc_state(
+        self, local_host: LocalHost, tmp_path: Path
+    ) -> None:
+        manager = LspServerManager(
+            local_host,
+            {"pyright": _server_config(ext=".py", language="python")},
+            workspace_folder=str(tmp_path),
+        )
+        await manager.initialize()
+        target = tmp_path / "sample.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+
+        await manager.open_file(str(target), "x = 1\n")
+        assert manager.is_file_open(str(target))
+
+        # Stop the underlying instance, then park it in ERROR — the state a
+        # mid-session crash leaves behind. ensure_started then spawns a fresh
+        # process, which has no open documents, so the manager must forget the
+        # stale open-file state instead of skipping didOpen on the new process.
+        server = manager.server_for_file(str(target))
+        assert server is not None
+        await server.stop()
+        server.mark_crashed(RuntimeError("crash"))
+        assert server.state == LspState.ERROR
+
+        assert await manager.ensure_started(str(target)) is not None
+        assert not manager.is_file_open(str(target))
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
     async def test_shutdown_isolates_failing_server(
         self, local_host: LocalHost, tmp_path: Path
     ) -> None:

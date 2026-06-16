@@ -34,6 +34,10 @@ from rich.style import Style as RichStyle
 from rich.table import Table
 from rich.text import Text
 
+from pythinker_code.ui.shell.components.report_update import (
+    parse_report_update,
+    render_report_update,
+)
 from pythinker_code.ui.shell.glyphs import REPORT_FILE_MARKER
 from pythinker_code.ui.shell.markdown.audit import detect_audit_report
 from pythinker_code.ui.shell.markdown.normalizers import (
@@ -521,6 +525,9 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
         cursor = end
 
     if not segments:
+        report_update = parse_report_update(text)
+        if report_update is not None:
+            return render_report_update(report_update, theme=theme)
         report_prose = _render_report_prose(text, theme=theme)
         if report_prose is not None:
             return report_prose

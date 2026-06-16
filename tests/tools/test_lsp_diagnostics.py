@@ -64,6 +64,21 @@ class TestDiagnosticRegistry:
         )
         assert registry.pending_count == 1
 
+    def test_dedup_key_preserves_zero_code(self) -> None:
+        registry = DiagnosticRegistry()
+        # A diagnostic with code 0 must be distinguishable from one with no code;
+        # a falsy check would collapse both keys and drop the zero-code entry.
+        registry.register_pending(
+            "pyright",
+            [
+                _file(
+                    "file:///tmp/a.py",
+                    [_entry("same", 1, code=0), _entry("same", 1, code=None)],
+                )
+            ],
+        )
+        assert registry.pending_count == 2
+
     def test_dedup_across_turns(self) -> None:
         registry = DiagnosticRegistry()
         file = _file("file:///tmp/a.py", [_entry("error one", 1)])
@@ -174,6 +189,34 @@ class TestPublishDiagnosticsHandler:
 
         await handler({"uri": "not-a-valid-params"})
         assert registry.pending_count == 1
+
+    async def test_empty_payload_clears_previous_diagnostics(self) -> None:
+        registry = DiagnosticRegistry()
+        instance = MagicMock()
+        register_publish_diagnostics_handler(registry, "pyright", instance)
+        handler = instance.on_notification.call_args[0][1]
+
+        await handler(
+            {
+                "uri": "file:///tmp/a.py",
+                "diagnostics": [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 1},
+                        },
+                        "message": "bad",
+                        "severity": 1,
+                    }
+                ],
+            }
+        )
+        assert registry.pending_count == 1
+
+        # An empty diagnostics list means "no problems now" and must clear the
+        # file's stored entry instead of being ignored.
+        await handler({"uri": "file:///tmp/a.py", "diagnostics": []})
+        assert registry.pending_count == 0
 
 
 class TestLspDiagnosticsInjectionProvider:

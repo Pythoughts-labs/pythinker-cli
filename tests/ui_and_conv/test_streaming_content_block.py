@@ -302,6 +302,32 @@ def test_composing_committed_prose_has_gap_before_spinner() -> None:
     assert any(lines[j] == "" for j in range(first_idx + 1, composing_idx))
 
 
+def test_composing_preview_does_not_double_blank_after_commit_boundary() -> None:
+    """Pending text that starts with "\\n" after a commit boundary must not
+    produce a second blank row in the transient Live region.
+    """
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph here.\n\nSecond paragraph here.\n\n")
+    block.append("\nThird still streaming")
+    assert block._committed_renderables
+
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "Composing" in output
+    assert "Third still streaming" in output
+    lines = output.splitlines()
+    activity_index = next(i for i, line in enumerate(lines) if "Composing" in line)
+    assert activity_index + 1 < len(lines)
+    assert lines[activity_index + 1].strip() == ""
+    if activity_index + 2 < len(lines):
+        assert lines[activity_index + 2].strip() != "", (
+            "Second blank row after 'Composing' — leading '\\n' in pending "
+            "text is leaking through the preview path."
+        )
+
+
 def test_composing_preview_has_standard_gap_after_activity_line(monkeypatch):
     from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 

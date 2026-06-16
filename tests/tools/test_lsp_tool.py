@@ -450,3 +450,25 @@ async def test_unavailable_when_init_failed(runtime, tmp_path: Path) -> None:
 
     assert result.is_error
     assert "unavailable" in result.message.lower()
+
+
+def test_format_result_document_symbol_hierarchical_file_count() -> None:
+    from pythinker_code.tools.lsp.formatters import format_result
+
+    symbols = [{"name": "Foo", "kind": 5, "range": {"start": {"line": 0, "character": 0}}}]
+    _formatted, count, file_count = format_result("documentSymbol", symbols, None)
+    assert count == 1
+    assert file_count == 1
+
+
+def test_format_result_document_symbol_fallback_counts_unique_files() -> None:
+    from pythinker_code.tools.lsp.formatters import format_result
+
+    # SymbolInformation[] fallback: no "range" key, locations may span files.
+    symbols = [
+        {"name": "Foo", "kind": 5, "location": {"uri": "file:///tmp/a.py"}},
+        {"name": "Bar", "kind": 5, "location": {"uri": "file:///tmp/b.py"}},
+    ]
+    _formatted, count, file_count = format_result("documentSymbol", symbols, None)
+    assert count == 2
+    assert file_count == 2

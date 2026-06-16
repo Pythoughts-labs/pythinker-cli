@@ -145,6 +145,26 @@ def test_long_code_block_does_not_reparse_per_tick() -> None:
     assert first == second
 
 
+def test_live_paint_rate_matches_reveal_scheduler() -> None:
+    """Live auto-refresh must use the same rate constant as the reveal scheduler."""
+    import inspect
+    import re
+
+    from pythinker_code.ui.shell import motion
+    from pythinker_code.ui.shell.visualize import _live_view
+
+    assert motion.STREAM_FPS == 25
+
+    source = inspect.getsource(_live_view._LiveView.visualize_loop)
+    match = re.search(r"refresh_per_second=(\w+)", source)
+    assert match is not None, "Live(...) is not passing refresh_per_second"
+    const_name = match.group(1)
+    assert hasattr(motion, const_name), (
+        f"refresh_per_second uses {const_name!r} which is not in motion.py"
+    )
+    assert getattr(motion, const_name) == motion.STREAM_FPS
+
+
 def test_streaming_caret_appended_during_compose(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "pythinker_code.ui.shell.motion.streaming_caret_visible",

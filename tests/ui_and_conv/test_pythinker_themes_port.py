@@ -65,3 +65,7 @@ def test_code_themes_match_for_picker_resolves_aliases():
     assert code_themes_match_for_picker("github", "github")
     assert code_themes_match_for_picker("github-dark", "github")
     assert not code_themes_match_for_picker("dracula", "github")
+    # Distinct Catppuccin variants resolve to different non-string theme instances
+    # of the same class; they must not be treated as the same selection.
+    assert not code_themes_match_for_picker("catppuccin-frappe", "catppuccin-macchiato")
+    assert code_themes_match_for_picker("catppuccin-frappe", "catppuccin-frappe")

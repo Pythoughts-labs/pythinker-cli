@@ -1036,15 +1036,15 @@ class LspServerConfig(BaseModel):
     initialization_options: dict[str, Any] | None = Field(
         default=None, alias="initializationOptions"
     )
-    startup_timeout: float = Field(default=30.0, alias="startupTimeout")
-    max_restarts: int = Field(default=3, alias="maxRestarts")
+    startup_timeout: float = Field(default=30.0, alias="startupTimeout", gt=0)
+    max_restarts: int = Field(default=3, alias="maxRestarts", ge=0)
 
 
 class LspConfig(BaseModel):
     enabled: bool = True
     recommendation_disabled: bool = False
     recommendation_never: list[str] = Field(default_factory=list)
-    recommendation_ignored_count: int = 0
+    recommendation_ignored_count: int = Field(default=0, ge=0)
 
 
 class PluginsConfig(BaseModel):

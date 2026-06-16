@@ -45,6 +45,7 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
 from pythinker_code.ui.shell.motion import (
+    STREAM_FPS,
     STREAM_FRAME_INTERVAL_S,
     ActivitySnapshot,
     active_marker_frame,
@@ -241,6 +242,7 @@ class _LiveView:
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
         self._last_tool_call_block: _ToolCallBlock | None = None
         self._completed_expandable_tool_blocks = deque[_ToolCallBlock](maxlen=20)
+        self._completed_expandable_content_blocks = deque[_ContentBlock](maxlen=20)
         self._current_step_retry: StepRetry | None = None
         self._approval_request_queue = deque[ApprovalRequest]()
         """
@@ -314,7 +316,7 @@ class _LiveView:
         with Live(
             self.compose(),
             console=console,
-            refresh_per_second=10,
+            refresh_per_second=STREAM_FPS,
             transient=True,
             # Never let the transient Live region paint beyond the terminal
             # viewport.  Interactive prompt mode has its own row budget; this
@@ -329,7 +331,11 @@ class _LiveView:
                 if event in (KeyEvent.CTRL_O, KeyEvent.CTRL_E):
                     if self._has_expandable_modal_panel() or (
                         self._expandable_tool_card() is None
-                        and self._completed_expandable_tool_card() is not None
+                        and self._expandable_content_block() is None
+                        and (
+                            self._completed_expandable_tool_card() is not None
+                            or self._completed_expandable_content_block() is not None
+                        )
                     ):
                         from pythinker_code.telemetry import track
 
@@ -475,7 +481,9 @@ class _LiveView:
         return (
             self._has_expandable_modal_panel()
             or self._expandable_tool_card() is not None
+            or self._expandable_content_block() is not None
             or self._completed_expandable_tool_card() is not None
+            or self._completed_expandable_content_block() is not None
         )
 
     def _has_expandable_modal_panel(self) -> bool:
@@ -512,7 +520,24 @@ class _LiveView:
                 return block
         return None
 
+    def _expandable_content_block(self) -> _ContentBlock | None:
+        block = self._current_content_block
+        if block is not None and block.has_expandable_card:
+            return block
+        return None
+
+    def _completed_expandable_content_block(self) -> _ContentBlock | None:
+        for block in reversed(self._completed_expandable_content_blocks):
+            if block.has_expandable_card:
+                return block
+        return None
+
     def _toggle_latest_tool_card(self) -> bool:
+        block = self._expandable_content_block()
+        if block is not None:
+            block.toggle_expanded()
+            self.refresh_soon()
+            return True
         block = self._expandable_tool_card()
         if block is None:
             return False
@@ -526,6 +551,10 @@ class _LiveView:
             return True
         if question_panel := self._expandable_question_panel():
             show_question_body_in_pager(question_panel)
+            return True
+        if block := self._completed_expandable_content_block():
+            with console.screen(), console.pager(styles=True):
+                console.print(block.render_expanded())
             return True
         if block := self._completed_expandable_tool_card():
             with console.screen(), console.pager(styles=True):
@@ -1277,6 +1306,8 @@ class _LiveView:
                 renderable = block.promote_to_scrollback()
                 if renderable is not None:
                     emit_scrollback_block(console, renderable)
+                if block.has_expandable_card:
+                    self._completed_expandable_content_blocks.append(block)
             self._current_content_block = None
             self.refresh_soon()
 

@@ -365,7 +365,7 @@ def _render_context(ctx: StatusLineContext) -> list[StyleFragment] | None:
         (_style(ctx, colors.dim), "/"),
         (_style(ctx, level_color), f"{total} "),
     ]
-    if ctx.style != "plain":
+    if ctx.style != "plain" and pct >= 70:
         frags.append((level_color, smooth_bar(pct, width=ctx.bar_width, ascii_only=ctx.ascii_only)))
         frags.append(("", " "))
     frags.append((_style(ctx, f"bold {level_color}".strip()), f"{pct}%"))

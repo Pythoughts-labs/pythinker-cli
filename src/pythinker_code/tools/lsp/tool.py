@@ -63,7 +63,21 @@ class Lsp(CallableTool2[Params]):
         if validation_error is not None:
             return validation_error
 
+        # Re-check the manager after the validation await: a concurrent
+        # reinitialize() can clear it (the property returns None during reinit),
+        # so the earlier check at the top of __call__ may now be stale.
         manager = self._lsp.manager
+        # pyright narrows the property from the check at the top of __call__ and
+        # flags this as unreachable, but the value can change across the await
+        # above (reinitialize clears it), so the re-check is deliberate.
+        if manager is None:  # pyright: ignore[reportUnnecessaryComparison]
+            return builder.error(
+                (
+                    "LSP is still initializing or unavailable. "
+                    "Try again after language servers finish starting."
+                ),
+                brief="LSP unavailable",
+            )
         assert absolute_path is not None
 
         if manager.server_for_file(absolute_path) is None:
@@ -365,6 +379,11 @@ async def _filter_gitignored_locations(
 
 
 async def _run_git_check_ignore(cwd: str, paths: list[str]) -> str | None:
+    # This is a relevance filter, not a security boundary: callers fail OPEN
+    # (show LSP results) when ignore status cannot be determined, so a non-git
+    # directory or a transient git error never hides results. We still
+    # distinguish git's normal "nothing ignored" exit 1 (no log) from real
+    # errors (exit 128, timeout, spawn failure), which are logged for diagnosis.
     proc = None
     try:
         proc = await pythinker_host.exec("git", "-C", cwd, "check-ignore", *paths)
@@ -376,13 +395,23 @@ async def _run_git_check_ignore(cwd: str, paths: list[str]) -> str | None:
         exit_code = await asyncio.wait_for(proc.wait(), timeout=_GIT_CHECK_IGNORE_TIMEOUT)
         if exit_code == 0:
             return stdout_bytes.decode("utf-8", errors="replace")
+        if exit_code != 1:
+            # 1 = no paths ignored (expected). Anything else (e.g. 128 outside a
+            # git repo) is a real error; log it and fail open.
+            logger.debug(
+                "git check-ignore failed in {cwd} with exit code {code}",
+                cwd=cwd,
+                code=exit_code,
+            )
         return None
     except TimeoutError:
+        logger.debug("git check-ignore timed out in {cwd}", cwd=cwd)
         if proc is not None:
             await proc.kill()
             await proc.wait()
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("git check-ignore errored in {cwd}: {err}", cwd=cwd, err=exc)
         if proc is not None and proc.returncode is None:
             await proc.kill()
             await proc.wait()

@@ -652,7 +652,11 @@ class _PromptLiveView(_LiveView):
         if key in {"c-o", "c-e"}:
             if self._has_expandable_modal_panel() or (
                 self._expandable_tool_card() is None
-                and self._completed_expandable_tool_card() is not None
+                and self._expandable_content_block() is None
+                and (
+                    self._completed_expandable_tool_card() is not None
+                    or self._completed_expandable_content_block() is not None
+                )
             ):
                 event.app.create_background_task(self._show_panel_in_pager())
             elif self._toggle_latest_tool_card():

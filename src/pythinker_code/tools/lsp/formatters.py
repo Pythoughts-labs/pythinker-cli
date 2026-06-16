@@ -407,9 +407,17 @@ def format_result(
         case "documentSymbol":
             symbols = result or []
             is_document_symbol = bool(symbols and "range" in symbols[0])
-            count = count_symbols(symbols) if is_document_symbol else len(symbols)
             formatted = format_document_symbol_result(result, cwd)
-            file_count = 1 if symbols else 0
+            if is_document_symbol:
+                # Hierarchical DocumentSymbol[] always describes the one open file.
+                count = count_symbols(symbols)
+                file_count = 1 if symbols else 0
+            else:
+                # SymbolInformation[] fallback carries per-symbol locations that may
+                # span files; count unique URIs like workspaceSymbol does.
+                count = len(symbols)
+                locations = [sym.get("location") for sym in symbols]
+                file_count = count_unique_files_from_locations([loc for loc in locations if loc])
             return formatted, count, file_count
         case "workspaceSymbol":
             symbols = result or []

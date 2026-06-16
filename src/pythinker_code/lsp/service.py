@@ -97,6 +97,14 @@ class LspService:
         await manager.save_file(path)
 
     async def reinitialize(self, *, servers: dict[str, LspServerConfig] | None = None) -> None:
+        # Cancel any in-flight init before replacing the event/manager. Otherwise
+        # the stale task's finally can set the old event (waking callers parked in
+        # wait_for_init on a future that never completes) and _kickoff_init would
+        # return early while PENDING.
+        if self._init_task is not None and not self._init_task.done():
+            self._init_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._init_task
         if servers is not None:
             self._servers = servers
         if self._manager is not None:

@@ -296,6 +296,13 @@ async def usage(app: Shell, args: str):
     # provider filter, so route to it before we try to interpret the argument
     # as a managed provider key.
     if positional and _parse_activity_view(positional[0]) is not None:
+        if len(positional) > 1:
+            extra = escape(" ".join(positional[1:]))
+            console.print(
+                f"[{_t.error}]Invalid usage arguments: the '{positional[0]}' activity "
+                f"card takes no extra arguments (got '{extra}')[/]"
+            )
+            return
         await _print_activity_card(positional[0], json_mode=json_mode)
         return
     scoped_to_active = False

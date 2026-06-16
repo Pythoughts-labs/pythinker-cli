@@ -126,6 +126,8 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     view._turn_ended = False
     view._active_turn_depth = 1
     view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
 
     out = view.render_pinned_status_tail(80)
     assert out.value.strip() != ""
@@ -187,6 +189,8 @@ def test_pinned_tail_stays_visible_while_foreground_tool_executes() -> None:
     view._turn_ended = False
     view._active_turn_depth = 1
     view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
 
     block = _ToolCallBlock(
         ToolCall(id="tc-1", function=ToolCall.FunctionBody(name="Shell", arguments="{}"))
