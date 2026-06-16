@@ -46,6 +46,7 @@ def test_dark_tokens_have_brand_values():
     assert t.border_muted == "#5D6570"
     assert t.muted == "#8F969E"
     assert t.dim == "#6F767E"
+    assert t.secondary == "#AAB0B6"
     assert t.text == "#D7DBDF"
     assert t.info == "#8FDDEA"
     assert t.success == "#7CCF8A"

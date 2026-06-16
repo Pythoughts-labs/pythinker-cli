@@ -29,6 +29,7 @@ class CoreToken(StrEnum):
     WARNING = "warning"
     MUTED = "muted"
     DIM = "dim"
+    SECONDARY = "secondary"
     TEXT = "text"
     THINKING_TEXT = "thinking_text"
     ACTIVITY_LABEL = "activity_label"
@@ -98,6 +99,7 @@ class TuiTokens:
     warning: str
     muted: str
     dim: str
+    secondary: str
     text: str
     thinking_text: str
     activity_label: str

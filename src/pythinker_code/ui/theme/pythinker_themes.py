@@ -1,5 +1,4 @@
-"""pythinker-x (TUI) theme constants — ported verbatim where possible.
-"""
+"""pythinker-x (TUI) theme constants — ported verbatim where possible."""
 
 from __future__ import annotations
 

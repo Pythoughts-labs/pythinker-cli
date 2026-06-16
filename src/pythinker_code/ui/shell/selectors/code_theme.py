@@ -12,7 +12,10 @@ def _build_code_theme_config(
     *,
     theme_matches_current: Callable[[str, str], bool] | None = None,
 ) -> SelectorConfig[str]:
-    matches = theme_matches_current or (lambda theme, configured: theme == configured)
+    def _default_match(theme: str, configured: str) -> bool:
+        return theme == configured
+
+    matches = theme_matches_current or _default_match
     return SelectorConfig(
         title="Select syntax theme",
         items=[

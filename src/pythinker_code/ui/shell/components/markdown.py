@@ -792,7 +792,8 @@ class PythinkerMarkdown(Markdown):
         "table_open": _ReportTableElement,
     }
 
-    def __init__(self, markup: str, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, markup: str, *args: Any, report: bool = False, **kwargs: Any) -> None:
+        self._report_mode = report
         safe_markup = sanitize_ansi(markup)
         unwrapped_markup = _unwrap_fenced_markdown_tables(safe_markup)
         repaired_markup = _repair_crammed_markdown_tables(unwrapped_markup)
@@ -801,7 +802,13 @@ class PythinkerMarkdown(Markdown):
         super().__init__(_simplify_markdown_report_icons(loosened_markup), *args, **kwargs)
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        overrides = _markdown_style_overrides()
+        from pythinker_code.ui.theme.adapters.markdown import report_markdown_style_overrides
+
+        overrides = (
+            report_markdown_style_overrides()
+            if self._report_mode
+            else _markdown_style_overrides()
+        )
         with console.use_theme(Theme(overrides, inherit=True)):
             yield from super().__rich_console__(console, options)
 
@@ -812,6 +819,13 @@ def pythinker_markdown(text: str, *, code_theme: str | None = None) -> Pythinker
     ``code_theme=None`` defers to the active code theme (``config.tui.code_theme``).
     """
     return PythinkerMarkdown(text, code_theme=code_theme)
+
+
+def pythinker_report_markdown(
+    text: str, *, code_theme: str | None = None, style: str | RichStyle = "none"
+) -> PythinkerMarkdown:
+    """Report-body markdown: only H1 headings render bold; everything else is regular weight."""
+    return PythinkerMarkdown(text, code_theme=code_theme, style=style, report=True)
 
 
 # ---------------------------------------------------------------------------

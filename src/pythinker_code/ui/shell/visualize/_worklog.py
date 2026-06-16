@@ -22,6 +22,7 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER
 from pythinker_code.ui.shell.motion import blink_visible
 from pythinker_code.ui.shell.spacing import REPORT_PANEL_PADDING, WORKLOG_PANEL_PADDING
 from pythinker_code.ui.theme import get_tui_tokens, tui_rich_style
+from pythinker_code.ui.theme.spec import TUI_TOKEN_NAMES
 from pythinker_code.utils.rich.columns import BulletColumns
 from pythinker_code.utils.rich.diff_render import (
     collect_diff_hunks,
@@ -102,8 +103,10 @@ def _state_icon(state: WorkLogState) -> Text:
 
 
 def _tool_token_style(token_name: str) -> str:
+    if token_name not in TUI_TOKEN_NAMES:
+        raise ValueError(f"Unknown TUI token: {token_name!r}")
     tokens = get_tui_tokens()
-    return getattr(tokens, token_name, tokens.info)
+    return getattr(tokens, token_name)
 
 
 def tool_style(name: str) -> ToolStyle:

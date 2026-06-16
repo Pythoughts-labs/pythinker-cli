@@ -64,6 +64,8 @@ LIST_BULLET: Final = "*" if _ASCII_GLYPHS else "•"
 #: inline view, interactive dialog body, pager, and ``prompt_other_input``.
 #: ASCII mode falls back to plain ``?`` for legacy terminals.
 QUESTION_MARKER: Final = "?" if _ASCII_GLYPHS else "❓"
+#: Report finding location rows (file path + line refs).
+REPORT_FILE_MARKER: Final = "+" if _ASCII_GLYPHS else "⌁"
 
 __all__ = [
     "SPINNER_FRAMES",
@@ -82,4 +84,5 @@ __all__ = [
     "TRANSCRIPT_TOOL_GUTTER",
     "LIST_BULLET",
     "QUESTION_MARKER",
+    "REPORT_FILE_MARKER",
 ]

@@ -1068,7 +1068,7 @@ class _ToolCallBlock:
             )
         )
         if activity_children:
-            return Group(card_rendered, *activity_children)
+            return Group(card_rendered, BLANK_ROW, *activity_children)
         return card_rendered
 
     def _streamed_output_text(self) -> str:

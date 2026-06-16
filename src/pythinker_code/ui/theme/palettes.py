@@ -40,6 +40,7 @@ _CORE_DARK: dict[str, str] = {
     "warning": "#FFD166",
     "muted": "#8F969E",
     "dim": "#6F767E",
+    "secondary": "#AAB0B6",
     "text": "#D7DBDF",
     "thinking_text": "#D4D4D4",
     "activity_label": "#F1F3F5",
@@ -75,6 +76,7 @@ _CORE_LIGHT: dict[str, str] = {
     "warning": "#9A6B18",
     "muted": "#666666",
     "dim": "#8A93A0",
+    "secondary": "#8A93A0",
     "text": "#213853",
     "thinking_text": "#7A7A7A",
     "activity_label": "#213853",
@@ -104,7 +106,7 @@ _PROMPT_HEX_DARK: dict[PromptToken, str] = {
     PromptToken.MENTION: "#56C7B0",
     PromptToken.BASH_PREFIX: "#E5C07B",
     PromptToken.GHOST_TEXT: "#6B7280",
-    PromptToken.PROMPT_GLYPH: "#F4F4F5",
+    PromptToken.PROMPT_GLYPH: "#F1F3F5",
     PromptToken.FRAME: "#8a8d91",
     PromptToken.EFFORT: "#A3A3A3",
     PromptToken.PLACEHOLDER: "#A3A3A3",
@@ -153,6 +155,7 @@ _THINKING_FRAME_SCALE: dict[str, str] = {
     "xhigh": "#b91c1c",
     "max": "#7f1d1d",
 }
+
 
 def _tokens_from_core(core: dict[str, str]) -> TuiTokens:
     return TuiTokens(**core)

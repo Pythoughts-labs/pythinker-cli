@@ -18,6 +18,7 @@ from pythinker_code.lsp.diagnostics import (
     uri_to_path,
 )
 from pythinker_code.lsp.protocol import Position, Range
+from pythinker_code.soul.agent import Runtime
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.dynamic_injection import (
     DynamicInjection,
@@ -340,3 +341,19 @@ class TestFileToolLspHooks:
             tool = WriteFile(runtime, Approval(yolo=True))
             result = await tool(WriteParams(path=str(target), content="x"))
         assert not result.is_error
+
+
+def test_lsp_provider_registered_in_subagent_soul(runtime: Runtime, tmp_path: Path) -> None:
+    """LspDiagnosticsInjectionProvider must be wired into every PythinkerSoul, including subagents."""
+    from pythinker_core.tooling.empty import EmptyToolset
+
+    from pythinker_code.soul.agent import Agent
+    from pythinker_code.soul.context import Context
+    from pythinker_code.soul.pythinkersoul import PythinkerSoul
+
+    sub_runtime = runtime.copy_for_subagent(agent_id="sa-1", subagent_type="coder")
+    agent = Agent(name="test", system_prompt="", toolset=EmptyToolset(), runtime=sub_runtime)
+    soul = PythinkerSoul(agent, context=Context(file_backend=tmp_path / "h.jsonl"))
+
+    assert any(isinstance(p, LspDiagnosticsInjectionProvider) for p in soul._injection_providers)
+    assert sub_runtime.rearm_injection is not None
