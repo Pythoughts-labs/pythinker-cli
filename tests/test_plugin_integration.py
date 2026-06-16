@@ -207,6 +207,76 @@ def test_plugin_hook_defs_expands_plugin_data(tmp_path: Path, monkeypatch, _no_e
     assert defs[0].command == f"{plugin_data_dir('sp')}/r.sh"
 
 
+def _mcp_plugin_with_user_config(cache: Path) -> None:
+    root = cache / "db" / "db" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": "db",
+                "version": "1.0.0",
+                "userConfig": {"token": {"type": "string", "title": "T", "description": "d"}},
+                "mcpServers": {"pg": {"command": "pg", "env": {"TOKEN": "${user_config.token}"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_plugin_mcp_servers_substitutes_user_config(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    from typing import Any, cast
+
+    cache = tmp_path / "cache"
+    _mcp_plugin_with_user_config(cache)
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    servers = integration.plugin_mcp_servers(PluginPolicy(options={"db": {"token": "s3cret"}}))
+    pg = cast("dict[str, Any]", servers["pg"])
+    assert pg["env"]["TOKEN"] == "s3cret"
+
+
+def test_plugin_mcp_servers_skips_unconfigured_user_config(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    cache = tmp_path / "cache"
+    _mcp_plugin_with_user_config(cache)
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    # No value configured for ${user_config.token} -> server skipped fail-soft.
+    assert integration.plugin_mcp_servers() == {}
+
+
+def test_plugin_hook_defs_substitutes_user_config(
+    tmp_path: Path, monkeypatch, _no_external
+) -> None:
+    cache = tmp_path / "cache"
+    root = cache / "sp" / "sp" / "1.0.0"
+    manifest = root / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "name": "sp",
+                "version": "1.0.0",
+                "userConfig": {"flag": {"type": "string", "title": "F", "description": "d"}},
+                "hooks": {
+                    "SessionStart": [
+                        {"hooks": [{"type": "command", "command": "run ${user_config.flag}"}]}
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "plugin_cache_dir", lambda: cache)
+
+    defs = integration.plugin_hook_defs(PluginPolicy(options={"sp": {"flag": "on"}}))
+    assert defs[0].command == "run on"
+
+
 def test_plugin_hook_defs_translates_claude_hooks(
     tmp_path: Path, monkeypatch, _no_external
 ) -> None:

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +30,7 @@ from pythinker_code.hooks.config import HOOK_EVENT_TYPES, HookDef
 from pythinker_code.plugin import artifacts
 from pythinker_code.plugin.directories import plugin_data_dir
 from pythinker_code.plugin.loader import LoadedPlugin, discover_plugins
+from pythinker_code.plugin.options import UserConfigError, substitute_user_config_vars
 from pythinker_code.plugin.policy import PluginPolicy, current_plugin_policy
 from pythinker_code.utils.logging import logger
 
@@ -102,31 +104,53 @@ def _expand_plugin_vars(text: str, plugin: LoadedPlugin) -> str:
     )
 
 
-def _expand_in_config(value: object, plugin: LoadedPlugin) -> object:
-    """Recursively expand plugin vars in an MCP-server config value."""
+def _map_strings(value: object, transform: Callable[[str], str]) -> object:
+    """Apply *transform* to every string in a nested config value."""
     if isinstance(value, str):
-        return _expand_plugin_vars(value, plugin)
+        return transform(value)
     if isinstance(value, list):
-        return [_expand_in_config(item, plugin) for item in cast("list[object]", value)]
+        return [_map_strings(item, transform) for item in cast("list[object]", value)]
     if isinstance(value, dict):
         return {
-            key: _expand_in_config(val, plugin)
+            key: _map_strings(val, transform)
             for key, val in cast("dict[str, object]", value).items()
         }
     return value
+
+
+def _plugin_options(plugin: LoadedPlugin, policy: PluginPolicy | None) -> dict[str, object]:
+    """User-config values configured for *plugin* (empty if none)."""
+    pol = policy if policy is not None else current_plugin_policy()
+    return pol.options.get(plugin.name, {})
 
 
 def plugin_mcp_servers(policy: PluginPolicy | None = None) -> dict[str, object]:
     """MCP server configs contributed by enabled plugins (earlier plugins win).
 
     Executable artifact: external plugins contribute only when ``external_exec``.
-    ``${...PLUGIN_ROOT}``/``${...PLUGIN_DATA}`` in the config are expanded so a
-    plugin can point at its own bundled server.
+    ``${...PLUGIN_ROOT}``/``${...PLUGIN_DATA}`` are expanded so a plugin can point
+    at its own bundled server, and ``${user_config.KEY}`` is filled from config. A
+    server referencing an unconfigured option is skipped (fail-soft), not run blank.
     """
     servers: dict[str, object] = {}
     for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
+        options = _plugin_options(plugin, policy) if plugin.manifest.user_config else None
         for key, value in artifacts.mcp_servers(plugin).items():
-            servers.setdefault(key, _expand_in_config(value, plugin))
+            expanded = _map_strings(value, partial(_expand_plugin_vars, plugin=plugin))
+            if options is not None:
+                try:
+                    expanded = _map_strings(
+                        expanded, partial(substitute_user_config_vars, values=options)
+                    )
+                except UserConfigError as exc:
+                    logger.warning(
+                        "Skipping MCP server {key} from {plugin}: unconfigured user_config {error}",
+                        key=key,
+                        plugin=plugin.name,
+                        error=exc,
+                    )
+                    continue
+            servers.setdefault(key, expanded)
     return servers
 
 
@@ -148,13 +172,16 @@ def _hooks_payload(plugin: LoadedPlugin) -> dict[str, Any] | None:
     return cast("dict[str, Any]", data) if isinstance(data, dict) else None
 
 
-def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[HookDef]:
+def _translate_hook_defs(
+    plugin: LoadedPlugin, payload: dict[str, Any], options: dict[str, object] | None
+) -> list[HookDef]:
     """Translate a Claude-style hooks mapping into pythinker ``HookDef`` entries.
 
     Shape: ``{event: [{matcher, hooks: [{type: command, command, timeout}]}]}``,
     optionally wrapped in a top-level ``"hooks"`` key. Only ``command`` hooks are
-    supported; the ``${CLAUDE_PLUGIN_ROOT}`` / ``${PYTHINKER_PLUGIN_ROOT}`` vars
-    expand to the plugin root. Malformed entries are skipped, never fatal.
+    supported; ``${...PLUGIN_ROOT}``/``${...PLUGIN_DATA}`` expand to the plugin's
+    dirs and ``${user_config.KEY}`` is filled from *options* (a hook referencing an
+    unconfigured option is skipped). Malformed entries are skipped, never fatal.
     """
     raw = payload.get("hooks", payload)
     if not isinstance(raw, dict):
@@ -179,6 +206,17 @@ def _translate_hook_defs(plugin: LoadedPlugin, payload: dict[str, Any]) -> list[
                 if entry_d.get("type", "command") != "command" or not isinstance(command, str):
                     continue
                 expanded = _expand_plugin_vars(command, plugin)
+                if options is not None:
+                    try:
+                        expanded = substitute_user_config_vars(expanded, options)
+                    except UserConfigError as exc:
+                        logger.warning(
+                            "Skipping {event} hook in {plugin}: unconfigured user_config {error}",
+                            event=event,
+                            plugin=plugin.name,
+                            error=exc,
+                        )
+                        continue
                 timeout = entry_d.get("timeout")
                 try:
                     defs.append(
@@ -207,5 +245,6 @@ def plugin_hook_defs(policy: PluginPolicy | None = None) -> list[HookDef]:
     for plugin in _enabled_plugins(policy, include_external=_exec_external(policy)):
         payload = _hooks_payload(plugin)
         if payload is not None:
-            defs.extend(_translate_hook_defs(plugin, payload))
+            options = _plugin_options(plugin, policy) if plugin.manifest.user_config else None
+            defs.extend(_translate_hook_defs(plugin, payload, options))
     return defs

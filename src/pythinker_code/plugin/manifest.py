@@ -123,6 +123,11 @@ class PluginManifest(BaseModel):
     # Plugin dependencies: "name" or "name@marketplace".
     dependencies: list[str] = Field(default_factory=list)
 
+    # User-configurable options ({key: {type, title, sensitive, ...}}). Kept raw;
+    # only its presence + keys are used today (values are substituted into MCP/hook
+    # artifacts). Typed validation lands with the enable-time prompt.
+    user_config: dict[str, object] = Field(default_factory=dict, alias="userConfig")
+
     @field_validator("author", mode="before")
     @classmethod
     def _author(cls, v: Any) -> Any:

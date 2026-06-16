@@ -392,3 +392,34 @@ Plugin-contributed hook and MCP commands may reference the plugin's own
 directories via `${CLAUDE_PLUGIN_ROOT}` / `${PYTHINKER_PLUGIN_ROOT}` (the
 versioned install dir) and `${CLAUDE_PLUGIN_DATA}` / `${PYTHINKER_PLUGIN_DATA}`
 (a persistent per-plugin data dir); both are expanded on load.
+
+### Plugin dependencies
+
+A plugin may declare `dependencies` in its `plugin.json` (`"name"` or
+`"name@marketplace"`). Installing a plugin from a marketplace also installs its
+transitive dependencies from the same marketplace; cross-marketplace
+dependencies are blocked (install them from their own marketplace first). At load
+time, a plugin whose dependencies are not present and enabled is disabled, so it
+never half-activates.
+
+### Plugin options (`userConfig`)
+
+A plugin may declare `userConfig` options and reference them as
+`${user_config.KEY}` in its MCP server configs and hook commands. Provide values
+per plugin in config:
+
+```toml
+[plugins.options.my-plugin]
+api_base = "https://example.test"
+```
+
+An MCP server or hook that references an option with no configured value is
+skipped (it never runs with a blank), and the value is filled in on load.
+
+::: info Not yet ported
+`${user_config.KEY}` substitution in **skill/agent/command content**, the
+`PYTHINKER_PLUGIN_OPTION_*` **hook environment variables**, keychain-backed
+storage for `sensitive` options, and an interactive enable-time prompt are not
+implemented yet — they require changes outside the plugin subsystem. Today,
+option values (including any marked `sensitive`) are read from config.
+:::

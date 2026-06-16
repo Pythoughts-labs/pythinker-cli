@@ -10,7 +10,11 @@ it propagates to subagent tasks and is safe under concurrency.
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+def _empty_options() -> dict[str, dict[str, object]]:
+    return {}
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,9 @@ class PluginPolicy:
     # Names explicitly turned off; excluded even when ``enabled`` would allow them.
     # This is how "disable" works under auto-detect (all-on) defaults.
     disabled: frozenset[str] = frozenset()
+    # Per-plugin user-config values ({plugin_name: {option_key: value}}), filled
+    # into ``${user_config.KEY}`` references in MCP/hook artifacts.
+    options: dict[str, dict[str, object]] = field(default_factory=_empty_options)
 
 
 _DEFAULT_POLICY = PluginPolicy()
@@ -56,6 +63,7 @@ def policy_from_config(
     external_exec: bool,
     enabled: list[str],
     disabled: list[str] | None = None,
+    options: dict[str, dict[str, object]] | None = None,
 ) -> PluginPolicy:
     """Build a :class:`PluginPolicy` from config values.
 
@@ -70,4 +78,5 @@ def policy_from_config(
         external_exec=external_exec,
         enabled=names or None,
         disabled=off,
+        options=options or {},
     )

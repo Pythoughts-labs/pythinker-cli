@@ -111,6 +111,7 @@ def test_default_config_dump():
                 "external_exec": False,
                 "enabled": [],
                 "disabled": [],
+                "options": {},
             },
             "extra_skill_dirs": [],
             "telemetry": True,

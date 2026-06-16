@@ -1060,6 +1060,14 @@ class PluginsConfig(BaseModel):
             "is how `pythinker plugin disable <name>` works under the all-on default."
         ),
     )
+    options: dict[str, dict[str, object]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-plugin user-config values, keyed by plugin name: "
+            "{plugin: {option_key: value}}. Substituted into ${user_config.KEY} "
+            "references in the plugin's MCP server configs and hook commands."
+        ),
+    )
 
 
 class Config(BaseModel):

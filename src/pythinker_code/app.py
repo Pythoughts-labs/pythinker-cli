@@ -265,6 +265,7 @@ class PythinkerCLI:
                 config.plugins.external_exec,
                 config.plugins.enabled,
                 config.plugins.disabled,
+                config.plugins.options,
             )
         )
 

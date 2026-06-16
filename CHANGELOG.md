@@ -24,6 +24,15 @@ GitHub Releases page; `0.8.0` is the new starting line.
   <name>` — control which installed plugins contribute artifacts. Hook and MCP commands
   expand `${CLAUDE_PLUGIN_ROOT}`/`${PYTHINKER_PLUGIN_ROOT}` and
   `${CLAUDE_PLUGIN_DATA}`/`${PYTHINKER_PLUGIN_DATA}`.
+- **Plugin dependencies.** Plugins may declare `dependencies`; installing one pulls its
+  transitive dependencies from the same marketplace (cross-marketplace deps are blocked),
+  and a plugin whose dependencies aren't present+enabled is disabled at load instead of
+  half-activating.
+- **Plugin options (`userConfig`).** `${user_config.KEY}` in a plugin's MCP server configs
+  and hook commands is filled from `[plugins.options.<plugin>]` config; an artifact that
+  references an unconfigured option is skipped rather than run blank. (Content substitution,
+  `PYTHINKER_PLUGIN_OPTION_*` hook env vars, and keychain-backed sensitive storage are not
+  yet implemented.)
 - **MCP tool lists refresh automatically when servers change.** Connected MCP
   sessions stay open for `tools/list_changed` (and resources/prompts) notifications;
   inventory is re-published without a manual `/mcp refresh`.
