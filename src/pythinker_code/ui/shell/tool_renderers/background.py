@@ -111,14 +111,16 @@ def _render_call_with_id(
     )
 
 
-def _parse_task_output(text: str) -> tuple[dict[str, str], str]:
+def _parse_task_output(text: str) -> tuple[dict[str, str], str, bool]:
     """Split TaskOutput tool text into metadata and the ``[output]`` body."""
     meta: dict[str, str] = {}
     body_lines: list[str] = []
     in_output = False
+    saw_output_marker = False
     for raw_line in text.splitlines():
         if raw_line.strip() == "[output]":
             in_output = True
+            saw_output_marker = True
             continue
         if in_output:
             body_lines.append(raw_line)
@@ -134,7 +136,7 @@ def _parse_task_output(text: str) -> tuple[dict[str, str], str]:
         _, _, rest = body.partition("]\n\n")
         if rest:
             body = rest.strip()
-    return meta, body
+    return meta, body, saw_output_marker
 
 
 def _read_output_collapsed_hint() -> Text:
@@ -162,8 +164,8 @@ def _render_task_output_result(
     if result.is_error:
         return _render_block_result(ctx, result, collapsed_lines=collapsed_lines)
 
-    meta, body = _parse_task_output(result.text)
-    if not meta:
+    meta, body, saw_output_marker = _parse_task_output(result.text)
+    if not meta or not saw_output_marker:
         return _render_block_result(ctx, result, collapsed_lines=collapsed_lines)
 
     description = (

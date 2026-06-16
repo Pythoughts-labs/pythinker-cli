@@ -83,7 +83,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
             return fg("error" if result.is_error else "muted", message.strip())
         return None
 
-    if text.startswith("No visible tools") or text.startswith("No visible tools matched"):
+    if text.startswith(("No visible tools", "No visible tools matched")):
         ctx.state["__suppress_generic_expand_hint__"] = True
         return fg("error" if result.is_error else "muted", text)
 

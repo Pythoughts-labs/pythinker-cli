@@ -121,11 +121,11 @@ def test_tool_search_does_not_cross_text_boundary(monkeypatch) -> None:
     view.dispatch_wire_message(_ts_result("ts-1"))
     # Text forces a flush of the first TS group and the text itself.
     view.dispatch_wire_message(TextPart(text="Thinking..."))
+    view.dispatch_wire_message(_ts_call("ts-2"))
+    view.dispatch_wire_message(_ts_result("ts-2"))
     view.cleanup(is_interrupt=False)
 
-    # First TS must have printed (flushed before the text), second turn cleanup
-    # also prints — total 1 TS + text path (via emit_scrollback_block).
-    assert len(printed) >= 1, "First ToolSearch should appear before assistant text"
+    assert len(printed) == 2, "ToolSearch blocks separated by text must not collapse together"
 
 
 def test_tool_search_discarded_on_retry(monkeypatch) -> None:

@@ -1089,8 +1089,11 @@ def test_failed_cursor_todowrite_shape_renders_error_badge_not_tree():
         expanded=False,
         execution_started=True,
     )
-    assert TODO_RENDERER.render_call is not None
-    rendered = render_plain(TODO_RENDERER.render_call(ctx), width=100)
+    render_call = TODO_RENDERER.render_call
+    assert render_call is not None
+    result = render_call(ctx)
+    assert result is not None
+    rendered = render_plain(result, width=100)
     assert "update failed · 2 items" in rendered
     assert "Install framer-motion" not in rendered
     assert "Create background paths" not in rendered

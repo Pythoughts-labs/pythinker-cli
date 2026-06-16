@@ -56,6 +56,6 @@ def iter_fence_aware_lines(
     state = FenceState()
     for line in markup.splitlines(keepends=keepends):
         body = line.rstrip("\r\n")
-        inside = state.active
+        was_active = state.active
         state.feed(body, strict_close=strict_close)
-        yield line, inside
+        yield line, was_active or state.active

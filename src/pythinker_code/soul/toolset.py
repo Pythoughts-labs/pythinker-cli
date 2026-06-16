@@ -836,6 +836,15 @@ class PythinkerToolset:
 
             tool = self._tool_dict[tool_call.function.name]
 
+            if tool_call.function.name == "ToolSearch" and self._runtime is not None:
+                from pythinker_code.llm import supports_deferred_tool_search
+
+                if not supports_deferred_tool_search(self._runtime.llm):
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        return_value=ToolNotFoundError(tool_call.function.name),
+                    )
+
             try:
                 arguments: JsonType = json.loads(tool_call.function.arguments or "{}", strict=False)
             except json.JSONDecodeError as e:

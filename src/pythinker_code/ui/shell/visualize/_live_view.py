@@ -445,11 +445,11 @@ class _LiveView:
                     external_task.cancel()
                     self._external_messages.shutdown(immediate=True)
                     with suppress(asyncio.CancelledError, QueueShutDown):
-                        await frame_task
+                        _ = await frame_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
-                        await wire_task
+                        _ = await wire_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
-                        await external_task
+                        _ = await external_task
 
     def refresh_soon(self, force: bool = False) -> None:
         self._dirty = True

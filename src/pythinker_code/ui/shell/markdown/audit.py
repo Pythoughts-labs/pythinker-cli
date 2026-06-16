@@ -301,7 +301,6 @@ def collapse_parity_matrix(markup: str) -> str:
     changed = False
     for start, end, title in section_ranges:
         out.extend(lines[cursor:start])
-        cursor = start
         if not any(hint in title for hint in _PARITY_SECTION_HINTS):
             out.extend(lines[start:end])
             cursor = end
@@ -400,7 +399,11 @@ def normalize_divergence_cards(markup: str) -> str:
             if candidate.startswith("#"):
                 break
             label_match = _UNDERLINE_HEADING_RE.match(candidate)
-            if label_match is not None and cursor + 1 < len(lines):
+            if (
+                label_match is not None
+                and cursor + 1 < len(lines)
+                and _UNICODE_RULE_LINE_RE.match(lines[cursor + 1].strip())
+            ):
                 body_lines: list[str] = []
                 cursor += 2
                 while cursor < len(lines):

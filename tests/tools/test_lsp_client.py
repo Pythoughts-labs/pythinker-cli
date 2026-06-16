@@ -211,18 +211,17 @@ class TestLspClient:
     async def test_notification_reaches_handler(self, local_host: LocalHost) -> None:
         client = LspClient(local_host)
         seen: dict[str, Any] = {}
+        got_notification = asyncio.Event()
 
         def handler(params: Any) -> None:
             seen["params"] = params
+            got_notification.set()
 
         client.on_notification("textDocument/publishDiagnostics", handler)
         await client.start(sys.executable, ["-c", _FAKE_SERVER])
         try:
             await client.initialize(InitializeParams(processId=1))
-            for _ in range(50):
-                if "params" in seen:
-                    break
-                await asyncio.sleep(0.05)
+            await asyncio.wait_for(got_notification.wait(), timeout=2.0)
             assert seen["params"]["uri"] == "file:///tmp/x.py"
         finally:
             await client.stop()

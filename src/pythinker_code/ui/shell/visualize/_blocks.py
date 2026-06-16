@@ -594,16 +594,20 @@ class _ContentBlock:
         update = parse_report_update(self.raw_text)
         if update is None:
             return None
-        if self._report_update is None:
-            self._report_update = ReportUpdateComponent(update)
+        was_expanded = self._report_update.expanded if self._report_update is not None else False
+        self._report_update = ReportUpdateComponent(update)
+        self._report_update.set_expanded(was_expanded)
         return self._report_update.render()
 
     def _render_body(self, text: str) -> RenderableType:
         if looks_like_report_update(text):
             update = parse_report_update(text)
             if update is not None:
-                if self._report_update is None:
-                    self._report_update = ReportUpdateComponent(update)
+                was_expanded = (
+                    self._report_update.expanded if self._report_update is not None else False
+                )
+                self._report_update = ReportUpdateComponent(update)
+                self._report_update.set_expanded(was_expanded)
                 return self._report_update.render()
         return self._wrap_bullet(render_agent_body(text))
 

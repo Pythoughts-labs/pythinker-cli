@@ -31,9 +31,7 @@ class TestNormalizeSetTodoListArgs:
     """Boundary normalization: one compatibility alias (content → title), strict elsewhere."""
 
     def test_normalizes_cursor_todowrite_content_to_title(self):
-        args = {
-            "todos": [{"id": "1", "content": "Install framer-motion", "status": "in_progress"}]
-        }
+        args = {"todos": [{"id": "1", "content": "Install framer-motion", "status": "in_progress"}]}
         out = normalize_set_todo_list_args(args)
         assert out["todos"][0]["title"] == "Install framer-motion"
         assert "content" not in out["todos"][0]
@@ -53,30 +51,24 @@ class TestNormalizeSetTodoListArgs:
         assert "content" not in out["todos"][0]
 
     def test_normalizer_does_not_mutate_input(self):
-        args = {
-            "todos": [{"content": "Install framer-motion", "status": "pending"}]
-        }
-        original = {
-            "todos": [{"content": "Install framer-motion", "status": "pending"}]
-        }
+        args = {"todos": [{"content": "Install framer-motion", "status": "pending"}]}
+        original = {"todos": [{"content": "Install framer-motion", "status": "pending"}]}
         normalize_set_todo_list_args(args)
         assert args == original
 
     def test_blank_title_with_content_normalizes_to_title(self):
-        args = {
-            "todos": [{"title": "", "content": "Install framer-motion", "status": "pending"}]
-        }
+        args = {"todos": [{"title": "", "content": "Install framer-motion", "status": "pending"}]}
         out = normalize_set_todo_list_args(args)
         assert out["todos"][0]["title"] == "Install framer-motion"
         assert "content" not in out["todos"][0]
 
     def test_params_mixed_non_dict_item_fails_validation(self):
+        from typing import Any, cast
+
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
-            Params(  # type: ignore[arg-type]
-                todos=[{"title": "ok", "status": "pending"}, "bad"]
-            )
+            Params(todos=cast(Any, [{"title": "ok", "status": "pending"}, "bad"]))
 
     def test_missing_title_still_fails_after_normalization(self):
         args = {"todos": [{"id": "1", "status": "pending"}]}
@@ -171,9 +163,7 @@ class TestParamsJsonStringCoercion:
         assert state.todos[0].title == "Install framer-motion"
         assert state.todos[0].status == "in_progress"
 
-    async def test_callable_tool_call_accepts_content_shape(
-        self, set_todo_list_tool: SetTodoList
-    ):
+    async def test_callable_tool_call_accepts_content_shape(self, set_todo_list_tool: SetTodoList):
         """``CallableTool2.call`` must accept raw JSON with ``content`` items."""
         result = await set_todo_list_tool.call(
             {

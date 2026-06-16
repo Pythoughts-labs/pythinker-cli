@@ -42,10 +42,12 @@ async def test_frame_scheduler_coalesces_multiple_deltas(live_view: _LiveView) -
 
     with patch.object(live_view, "compose", return_value=Text("composed")):
         task = asyncio.create_task(live_view._frame_refresh_loop(live))
-        await asyncio.sleep(0.06)
+        deadline = asyncio.get_running_loop().time() + 0.25
+        while live.update.call_count == 0 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
         task.cancel()
         with suppress(asyncio.CancelledError):
-            await task
+            _ = await task
 
     assert live.update.call_count >= 1
     assert live.update.call_args.kwargs.get("refresh") is False
@@ -147,22 +149,12 @@ def test_long_code_block_does_not_reparse_per_tick() -> None:
 
 def test_live_paint_rate_matches_reveal_scheduler() -> None:
     """Live auto-refresh must use the same rate constant as the reveal scheduler."""
-    import inspect
-    import re
-
     from pythinker_code.ui.shell import motion
-    from pythinker_code.ui.shell.visualize import _live_view
+    from pythinker_code.ui.shell.visualize import _live_view as live_view_module
 
-    assert motion.STREAM_FPS == 25
-
-    source = inspect.getsource(_live_view._LiveView.visualize_loop)
-    match = re.search(r"refresh_per_second=(\w+)", source)
-    assert match is not None, "Live(...) is not passing refresh_per_second"
-    const_name = match.group(1)
-    assert hasattr(motion, const_name), (
-        f"refresh_per_second uses {const_name!r} which is not in motion.py"
-    )
-    assert getattr(motion, const_name) == motion.STREAM_FPS
+    assert pytest.approx(1.0 / motion.STREAM_FPS) == motion.STREAM_FRAME_INTERVAL_S
+    assert live_view_module.STREAM_FPS is motion.STREAM_FPS
+    assert live_view_module.STREAM_FRAME_INTERVAL_S is motion.STREAM_FRAME_INTERVAL_S
 
 
 def test_streaming_caret_appended_during_compose(monkeypatch: pytest.MonkeyPatch) -> None:

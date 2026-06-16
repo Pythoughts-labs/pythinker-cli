@@ -153,13 +153,13 @@ class LspClient:
         if self._read_task is not None:
             self._read_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self._read_task
+                _ = await self._read_task
             self._read_task = None
 
         if self._stderr_task is not None:
             self._stderr_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self._stderr_task
+                _ = await self._stderr_task
             self._stderr_task = None
 
         if proc is not None and proc.returncode is None:

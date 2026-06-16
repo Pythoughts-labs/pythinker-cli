@@ -71,7 +71,8 @@ def format_uri(uri: str | None, cwd: str | None = None) -> str:
             if len(relative) < len(file_path) and not relative.startswith("../.."):
                 return relative
         except ValueError:
-            pass
+            # Path is outside cwd; fall back to the absolute/normalized path below.
+            relative = None
 
     return file_path
 

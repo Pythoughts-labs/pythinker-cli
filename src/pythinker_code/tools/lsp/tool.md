@@ -1,3 +1,5 @@
+# LSP tool
+
 Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
 Supported operations:

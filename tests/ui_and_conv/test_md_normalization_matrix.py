@@ -111,7 +111,7 @@ def test_streaming_does_not_commit_incomplete_fenced_code() -> None:
     partial = "Before.\n\n```python\ndef foo():\n    pass"
     boundary = markdown_commit_boundary(partial)
     if boundary is not None:
-        assert "```python" not in partial[:boundary] or "def foo" in partial[:boundary]
+        assert "```python" not in partial[:boundary]
 
 
 def test_emoji_outside_code_changes_to_monochrome() -> None:

@@ -643,10 +643,13 @@ class MarkdownContext:
         style = style.copy()
         if isinstance(style_name, str) and style_name in {"markdown.code", "markdown.code_block"}:
             if style.bgcolor is not None:
-                # Rich Styles are additive: `+ Style(bgcolor=None)` is a no-op and
-                # does NOT drop an inherited code background. Mutate the copied
-                # style's bgcolor directly, matching the clear pattern used above.
-                style._bgcolor = None
+                style = Style(
+                    color=style.color,
+                    bold=style.bold,
+                    italic=style.italic,
+                    underline=style.underline,
+                    strike=style.strike,
+                )
             style = style + Style(bold=False)
         self.style_stack.push(style)
         return self.current_style

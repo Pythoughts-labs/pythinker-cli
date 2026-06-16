@@ -36,6 +36,7 @@ def get_symbol_context(
 
     path = Path(file_path)
     try:
+        file_size = path.stat().st_size
         with path.open("rb") as handle:
             chunk = handle.read(MAX_READ_BYTES)
     except OSError:
@@ -49,11 +50,11 @@ def get_symbol_context(
 
     if zero_line < 0 or zero_line >= len(lines):
         return None
-    if len(chunk) == MAX_READ_BYTES and zero_line == len(lines) - 1:
+    if file_size > MAX_READ_BYTES and zero_line == len(lines) - 1:
         return None
 
     line_content = lines[zero_line]
-    if zero_char < 0 or zero_char >= len(line_content):
+    if zero_char < 0 or zero_char > len(line_content):
         return None
 
     symbol: str | None = None

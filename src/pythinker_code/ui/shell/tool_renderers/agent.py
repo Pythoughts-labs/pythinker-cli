@@ -414,8 +414,13 @@ def _run_agent_is_resolved(status: str, *, is_async: bool) -> bool:
     norm = normalize_agent_status(status)
     if norm in {"completed", "failed", "timed out", "cancelled"}:
         return True
-    raw = status.lower()
-    return is_async and raw in {"starting", "running", "created", "launched"}
+    return is_async and norm in {
+        "starting",
+        "running",
+        "created",
+        "launched",
+        "awaiting approval",
+    }
 
 
 def _run_agent_is_backgrounded(*, is_async: bool, is_resolved: bool, status: str) -> bool:
@@ -426,6 +431,8 @@ def _run_agent_is_backgrounded(*, is_async: bool, is_resolved: bool, status: str
 
 def _run_agent_status_subline(entry: dict[str, str], *, is_resolved: bool) -> str:
     if not is_resolved:
+        if normalize_agent_status(entry.get("status", "")) == "awaiting approval":
+            return "Awaiting approval…"
         preview = entry.get("summary_preview") or entry.get("message") or entry.get("brief")
         if preview:
             return _compact_inline(preview, max_chars=72)

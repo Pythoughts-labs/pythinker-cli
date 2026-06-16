@@ -287,6 +287,8 @@ def _method_and_params(params: Params, absolute_path: str) -> tuple[str, dict[st
             return "textDocument/implementation", text_document
         case Operation.PREPARE_CALL_HIERARCHY | Operation.INCOMING_CALLS | Operation.OUTGOING_CALLS:
             return "textDocument/prepareCallHierarchy", text_document
+        case _:
+            raise ValueError(f"Unsupported LSP operation: {params.operation}")
 
 
 def _to_location(item: dict[str, Any]) -> dict[str, Any]:
@@ -368,7 +370,10 @@ async def _filter_gitignored_locations(
     ignored_paths: set[str] = set()
     for index in range(0, len(unique_paths), _GIT_CHECK_IGNORE_BATCH_SIZE):
         batch = unique_paths[index : index + _GIT_CHECK_IGNORE_BATCH_SIZE]
-        stdout = await _run_git_check_ignore(cwd, batch)
+        ok, stdout = await _run_git_check_ignore(cwd, batch)
+        if not ok:
+            logger.warning("git check-ignore failed; dropping locations for safety")
+            return []
         if stdout:
             ignored_paths.update(line.strip() for line in stdout.splitlines() if line.strip())
 
@@ -378,12 +383,9 @@ async def _filter_gitignored_locations(
     return [loc for loc in valid_locations if uri_to_path.get(loc["uri"], "") not in ignored_paths]
 
 
-async def _run_git_check_ignore(cwd: str, paths: list[str]) -> str | None:
-    # This is a relevance filter, not a security boundary: callers fail OPEN
-    # (show LSP results) when ignore status cannot be determined, so a non-git
-    # directory or a transient git error never hides results. We still
-    # distinguish git's normal "nothing ignored" exit 1 (no log) from real
-    # errors (exit 128, timeout, spawn failure), which are logged for diagnosis.
+async def _run_git_check_ignore(cwd: str, paths: list[str]) -> tuple[bool, str]:
+    # Fail closed when ignore status cannot be determined so gitignored paths
+    # are not leaked when git is unavailable or check-ignore errors out.
     proc = None
     try:
         proc = await pythinker_host.exec("git", "-C", cwd, "check-ignore", *paths)
@@ -394,25 +396,24 @@ async def _run_git_check_ignore(cwd: str, paths: list[str]) -> str | None:
         )
         exit_code = await asyncio.wait_for(proc.wait(), timeout=_GIT_CHECK_IGNORE_TIMEOUT)
         if exit_code == 0:
-            return stdout_bytes.decode("utf-8", errors="replace")
-        if exit_code != 1:
-            # 1 = no paths ignored (expected). Anything else (e.g. 128 outside a
-            # git repo) is a real error; log it and fail open.
-            logger.debug(
-                "git check-ignore failed in {cwd} with exit code {code}",
-                cwd=cwd,
-                code=exit_code,
-            )
-        return None
+            return True, stdout_bytes.decode("utf-8", errors="replace")
+        if exit_code == 1:
+            return True, ""
+        logger.debug(
+            "git check-ignore failed in {cwd} with exit code {code}",
+            cwd=cwd,
+            code=exit_code,
+        )
+        return False, ""
     except TimeoutError:
         logger.debug("git check-ignore timed out in {cwd}", cwd=cwd)
         if proc is not None:
             await proc.kill()
             await proc.wait()
-        return None
+        return False, ""
     except Exception as exc:
         logger.debug("git check-ignore errored in {cwd}: {err}", cwd=cwd, err=exc)
         if proc is not None and proc.returncode is None:
             await proc.kill()
             await proc.wait()
-        return None
+        return False, ""

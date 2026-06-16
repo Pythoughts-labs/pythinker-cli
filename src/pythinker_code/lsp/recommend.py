@@ -145,6 +145,7 @@ def get_matching_lsp_plugins(
         return []
 
     never_plugins = set(lsp_config.recommendation_never)
+    installed_plugins = load_installed_plugins()
     all_lsp_plugins = _lsp_plugins_from_marketplaces()
     matching: list[tuple[MarketplaceEntry, str, _LspInfo, bool, str]] = []
 
@@ -153,7 +154,7 @@ def get_matching_lsp_plugins(
             continue
         if plugin_id in never_plugins:
             continue
-        if is_plugin_installed(plugin_id):
+        if plugin_id in installed_plugins:
             continue
         matching.append((entry, marketplace_name, lsp_info, is_official, plugin_id))
 
