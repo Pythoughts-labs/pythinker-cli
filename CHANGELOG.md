@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Output-token-limit nudge text aligned with reference.** The system-reminder injected when a response is cut off by the output token limit now matches the reference byte-exactly: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
 - **`SetTodoList` accepts Cursor-style todo payloads.** Todo items sent with `content` instead of `title` (the shape models learn from Cursor/Claude `TodoWrite`) now validate and persist correctly instead of failing with missing-`title` errors.
 - **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
 - **Bare skill/flow slash names.** The slash menu now matches `skill:`/`flow:`
