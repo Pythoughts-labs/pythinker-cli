@@ -15,6 +15,7 @@ in :mod:`pythinker_code.plugin` is unrelated and stays as-is.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -64,6 +65,34 @@ def _as_str_list(value: Any) -> list[str]:
     return []
 
 
+# A trailing ``@^<version>`` segment is a forward-compat version constraint we do
+# not yet enforce; strip it so the dep is matched by name[@marketplace] only.
+_DEP_VERSION_SUFFIX = re.compile(r"@\^[^@]*$")
+
+
+def _normalize_dependencies(value: Any) -> list[str]:
+    """Normalize ``dependencies`` entries to ``"name"`` / ``"name@marketplace"``.
+
+    Accepts the string form (``"name"``, ``"name@mkt"``, ``"name@mkt@^1.2"``) and
+    the object form (``{"name": ..., "marketplace": ...}``) used by some Claude
+    manifests. Version suffixes (``@^...``) are stripped; malformed entries drop.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for entry in cast("list[object]", value):
+        if isinstance(entry, str):
+            out.append(_DEP_VERSION_SUFFIX.sub("", entry))
+        elif isinstance(entry, dict):
+            entry_d = cast("dict[str, object]", entry)
+            name = entry_d.get("name")
+            if not isinstance(name, str):
+                continue
+            marketplace = entry_d.get("marketplace")
+            out.append(f"{name}@{marketplace}" if isinstance(marketplace, str) else name)
+    return out
+
+
 class PluginManifest(BaseModel):
     """Parsed ``plugin.json`` for an artifact-contributing plugin."""
 
@@ -103,6 +132,11 @@ class PluginManifest(BaseModel):
     @classmethod
     def _paths(cls, v: Any) -> list[str]:
         return _as_str_list(v)
+
+    @field_validator("dependencies", mode="before")
+    @classmethod
+    def _dependencies(cls, v: Any) -> list[str]:
+        return _normalize_dependencies(v)
 
 
 class MarketplaceEntry(BaseModel):

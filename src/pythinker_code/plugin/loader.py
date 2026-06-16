@@ -14,7 +14,7 @@ recorded as an error and contributes nothing.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -144,4 +144,30 @@ def discover_plugins(
                     enabled=enabled,
                 )
             )
+    return _demote_unsatisfied(plugins, errors)
+
+
+def _demote_unsatisfied(
+    plugins: list[LoadedPlugin], errors: list[PluginLoadError]
+) -> PluginLoadResult:
+    """Disable plugins whose declared dependencies are not present+enabled.
+
+    A dependency is matched by name (discovery de-dups by name). Demotions are
+    recorded as per-plugin load errors so ``/doctor``-style surfaces can explain
+    why a plugin contributes nothing.
+    """
+    from pythinker_code.plugin.dependency import verify_and_demote
+
+    enabled_names = {p.name for p in plugins if p.enabled}
+    names_with_deps = [(p.name, p.manifest.dependencies) for p in plugins]
+    demoted, issues = verify_and_demote(names_with_deps, enabled_names)
+    if not demoted:
+        return PluginLoadResult(plugins=plugins, errors=errors)
+
+    roots = {p.name: p.root for p in plugins}
+    plugins = [replace(p, enabled=False) if p.name in demoted else p for p in plugins]
+    errors = [
+        *errors,
+        *(PluginLoadError(root=roots[issue.plugin], message=issue.message()) for issue in issues),
+    ]
     return PluginLoadResult(plugins=plugins, errors=errors)

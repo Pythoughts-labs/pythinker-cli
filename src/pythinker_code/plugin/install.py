@@ -21,19 +21,27 @@ from datetime import UTC
 from pathlib import Path
 from typing import cast
 
+from pythinker_code.plugin.dependency import parse_plugin_identifier
 from pythinker_code.plugin.directories import (
     external_installed_plugin_dirs,
     external_marketplace_dirs,
     marketplaces_cache_dir,
     plugin_cache_dir,
 )
-from pythinker_code.plugin.installed import InstalledRecord, plugin_identifier, record_install
+from pythinker_code.plugin.installed import (
+    InstalledRecord,
+    load_installed_plugins,
+    plugin_identifier,
+    record_install,
+)
 from pythinker_code.plugin.manifest import (
     MarketplaceEntry,
     MarketplaceManifest,
+    PluginManifestError,
     find_marketplace_manifest,
     find_plugin_manifest,
     load_marketplace_manifest,
+    load_plugin_manifest,
 )
 from pythinker_code.plugin.marketplace import (
     KnownMarketplaceEntry,
@@ -254,6 +262,21 @@ def install_plugin_from_marketplace(
         return record
 
     manifest, marketplace_root = _load_marketplace(marketplace_name, known[marketplace_name])
+    installed: dict[str, InstalledRecord] = {}
+    _install_with_deps(
+        plugin_name, marketplace_name, manifest, marketplace_root, scope, installed, []
+    )
+    return installed[plugin_name]
+
+
+def _materialize_and_record(
+    plugin_name: str,
+    marketplace_name: str,
+    manifest: MarketplaceManifest,
+    marketplace_root: Path,
+    scope: str,
+) -> InstalledRecord:
+    """Fetch one plugin's source into the versioned cache and record the install."""
     entry = _find_entry(manifest, plugin_name)
     version = _safe_name(entry.version or "unknown", "version")
 
@@ -276,3 +299,57 @@ def install_plugin_from_marketplace(
         dest=dest,
     )
     return record
+
+
+def _installed_manifest_deps(install_path: Path) -> list[str]:
+    """Read a just-installed plugin's normalized ``dependencies`` (fail-soft)."""
+    try:
+        return load_plugin_manifest(install_path).dependencies
+    except PluginManifestError:
+        return []
+
+
+def _install_with_deps(
+    plugin_name: str,
+    marketplace_name: str,
+    manifest: MarketplaceManifest,
+    marketplace_root: Path,
+    scope: str,
+    installed: dict[str, InstalledRecord],
+    in_progress: list[str],
+) -> None:
+    """Install a plugin and its transitive dependencies from the same marketplace.
+
+    Dependencies are resolved from each plugin's own ``plugin.json`` after it is
+    materialized (marketplace entries don't carry them). Cross-marketplace
+    dependencies are blocked (install them from their own marketplace first), and
+    cycles are detected via the active install path. Already-installed
+    dependencies are skipped.
+    """
+    if plugin_name in installed:
+        return
+    if plugin_name in in_progress:
+        cycle = " -> ".join([*in_progress, plugin_name])
+        raise MarketplaceError(f"Plugin dependency cycle: {cycle}")
+
+    in_progress.append(plugin_name)
+    record = _materialize_and_record(
+        plugin_name, marketplace_name, manifest, marketplace_root, scope
+    )
+    for dep in _installed_manifest_deps(Path(record.install_path)):
+        dep_name, dep_marketplace = parse_plugin_identifier(dep)
+        if dep_marketplace is not None and dep_marketplace != marketplace_name:
+            raise MarketplaceError(
+                f"Cross-marketplace dependency '{dep}' of '{plugin_name}' is not allowed; "
+                f"install it from '{dep_marketplace}' first."
+            )
+        dep_name = _safe_name(dep_name, "plugin")
+        if dep_name in installed or plugin_identifier(dep_name, marketplace_name) in (
+            load_installed_plugins()
+        ):
+            continue
+        _install_with_deps(
+            dep_name, marketplace_name, manifest, marketplace_root, scope, installed, in_progress
+        )
+    in_progress.remove(plugin_name)
+    installed[plugin_name] = record
