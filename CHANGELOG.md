@@ -15,14 +15,24 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Tool header highlights.** Read/Write/Edit/Grep and similar tool-call subjects
+  now use the brand periwinkle `accent` token instead of cyan `info`; line ranges
+  stay on the yellow `warning` token.
+- **pythinker-x theme port.** Diff palette, 32 bundled syntax theme names, Catppuccin
+  Frappe/Macchiato styles, and `/theme code` syntax picker aligned with the Pythinker-X TUI.
 - **TUI inline code color.** Inline `` `code` `` highlights and the `pythinker-ansi`
   syntax theme now use brand periwinkle/accent and blue ANSI roles instead of cyan.
 - **TUI transcript spacing.** User prompts leave one blank row before the agent stream
   starts; finished tool cards and flushed agent paragraphs leave a trailing blank row
   before the next block (Bash/Read output → next ⏺ paragraph, etc.).
-- **Welcome banner branch color.** Branch name on the startup panel uses the muted
-  yellow warning token instead of the status-line teal.
+- **Welcome banner colors.** Branch uses light neutral grey; model name uses the muted
+  yellow warning token.
+- **TUI theme package.** Centralize dark/light palettes, prompt classes, and Rich/PTK
   adapters in `ui/theme/` with `/theme current|doctor|tokens` inspection commands.
+- **TUI diff markers.** Inline diff rows now leave a space after `+`/`-` markers so
+  `@`-prefixed lines (e.g. CSS `@keyframes`) do not run together with the sign.
+- **Composing block spacing.** Staged agent paragraphs keep one blank row before the
+  Composing activity line while the stream is still live.
 - **Slash input UX.** Prefix-highlight skills and plugins while typing; ghost-complete
   and highlight fixed subcommands such as `/theme current`.
 - **TUI streaming smoothness (Phase 0).** Coalesce Rich Live repaints to a 25 Hz frame budget,
@@ -34,7 +44,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
   server lifecycle, passive diagnostics injected after file edits, and plugin-based server
   discovery/recommendation — no bundled language-server binaries.
 - **Token activity card.** `/usage daily|weekly|cumulative` (and the bare `/usage` default
-  when no provider adapter is configured) now render a Codex-style 52-week × 7-day heatmap of
+  when no provider adapter is configured) now render a 52-week × 7-day heatmap of
   total tokens consumed each day, with a `Lifetime · Peak · Streak · Longest task` summary
   line and a footer that lets the user switch between daily/weekly/cumulative views. Data is
   read from the local session wire files; the per-provider adapter behavior is unchanged.

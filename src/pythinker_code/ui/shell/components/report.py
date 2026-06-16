@@ -63,7 +63,7 @@ _SEVERITY_TOKEN: dict[Severity, tuple[str, bool]] = {
     "high": ("error", False),
     "medium": ("warning", False),
     "low": ("accent", False),
-    "info": ("muted", False),
+    "info": ("activity_spinner", False),
 }
 
 _DOT = "●"
@@ -313,16 +313,17 @@ def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> Renderab
     title.add_column(overflow="fold")
     title.add_row(
         Text(_DOT, style=_severity_style(finding.severity, theme)),
-        Text(finding.title, style=tui_rich_style("border", theme=theme) + RichStyle(bold=True)),
+        Text(finding.title, style=tui_rich_style("text", theme=theme)),
     )
     rows.append(title)
 
     if finding.location:
+        rows.append(Text(""))
         # Keep wrapped file paths in the same hanging-indent column. A raw
         # leading-space Text only indents the first physical line after Rich
         # wraps, which makes long locations drift left inside wide reports.
         rows.append(
-            Padding(Text(finding.location, style=tui_rich_style("dim", theme=theme)), (0, 0, 0, 2))
+            Padding(Text(finding.location, style=tui_rich_style("muted", theme=theme)), (0, 0, 0, 2))
         )
 
     if finding.body.strip():
@@ -337,7 +338,7 @@ def _render_finding(finding: ReportFinding, theme: ThemeName | None) -> Renderab
 def render_report(report: Report, *, theme: ThemeName | None = None) -> RenderableType:
     """Render *report* as a padded, syntax-friendly Rich report panel."""
     counts = _counts(report.findings)
-    border = tui_rich_style("border_muted", theme=theme)
+    border = tui_rich_style("border", theme=theme)
     blank = Text("")
 
     rows: list[RenderableType] = []
@@ -362,7 +363,7 @@ def render_report(report: Report, *, theme: ThemeName | None = None) -> Renderab
             Text(report.note, style=tui_rich_style("muted", theme=theme)),
         ]
 
-    title = Text(report.title, style=tui_rich_style("warning", theme=theme) + RichStyle(bold=True))
+    title = Text(report.title, style=tui_rich_style("tool_title", theme=theme) + RichStyle(bold=True))
     return Panel(
         Group(*rows),
         title=title,

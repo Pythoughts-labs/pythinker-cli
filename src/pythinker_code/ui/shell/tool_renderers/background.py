@@ -20,6 +20,7 @@ from pythinker_code.ui.shell.tool_renderers._file_diff import display_blocks_fro
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_lines_block,
     invalid_arg,
     missing_required_arg,
@@ -91,10 +92,10 @@ def _render_call_with_id(
         # id as a dim suffix for traceability.
         task_label = _resolve_task_label(ctx, task_id)
         if task_label:
-            summary.append_text(fg("info", task_label))
+            summary.append_text(fg_subject(task_label))
             summary.append_text(fg("muted", f" · {task_id}"))
         else:
-            summary.append_text(fg("info", task_id))
+            summary.append_text(fg_subject(task_id))
     for extra in extras:
         summary.append_text(fg("muted", f" · {extra}"))
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"

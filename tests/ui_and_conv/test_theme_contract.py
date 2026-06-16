@@ -50,7 +50,7 @@ def test_prompt_styles_derive_from_theme_spec():
 
 def test_no_bold_inline_code():
     style = markdown_style_overrides("dark")["markdown.code"]
-    assert style.bold is not True
+    assert style.bold is False
 
 
 def test_inline_code_uses_accent_not_info():
@@ -83,5 +83,5 @@ def test_resolver_heading_bold_inline_not_bold():
     heading = resolver.markdown_heading_style(level=1)
     inline = resolver.markdown_inline_code_style()
     assert heading.bold is True
-    assert inline.bold is not True
+    assert inline.bold is False
     assert inline.color == RichStyle(color=get_tui_tokens("dark").accent).color

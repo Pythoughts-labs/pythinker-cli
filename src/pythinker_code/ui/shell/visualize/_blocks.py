@@ -479,7 +479,7 @@ class _ContentBlock:
         committed = list(self._committed_renderables)
         if not pending:
             if committed:
-                return Group(*committed, spinner)
+                return Group(*committed, BLANK_ROW, spinner)
             return spinner
         preview = self._build_preview(
             pending,
@@ -489,7 +489,7 @@ class _ContentBlock:
         body = self._render_preview_text(preview, caret=True)
         preview_row = self._wrap_preview_bullet(body)
         if committed:
-            return Group(*committed, spinner, BLANK_ROW, preview_row)
+            return Group(*committed, BLANK_ROW, spinner, BLANK_ROW, preview_row)
         return Group(spinner, BLANK_ROW, preview_row)
 
     def _render_preview_text(self, preview: str, *, caret: bool) -> Text:
@@ -1423,7 +1423,7 @@ class _CompactionBlock:
         filled = int(round(progress * self.BAR_WIDTH))
         empty = self.BAR_WIDTH - filled
         pct = int(progress * 100)
-        accent = tui_rich_style("info")
+        accent = tui_rich_style("accent")
         muted = tui_rich_style("muted")
         subtle = tui_rich_style("dim")
         title_style = accent + Style(italic=True)

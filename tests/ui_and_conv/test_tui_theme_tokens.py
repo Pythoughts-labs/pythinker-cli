@@ -40,19 +40,25 @@ def _restore_active_theme():
 def test_dark_tokens_have_brand_values():
     set_active_theme("dark")
     t = get_tui_tokens()
-    assert t.accent == "#AEB7FF"
+    assert t.accent == "#A9B4FF"
     assert t.border_accent == "#7C88DE"  # accent-family chrome (active borders)
-    assert t.border == "#8a8d91"  # mid grey
+    assert t.border == "#9AA3AD"
+    assert t.border_muted == "#5D6570"
+    assert t.muted == "#8F969E"
+    assert t.dim == "#6F767E"
+    assert t.text == "#D7DBDF"
     assert t.info == "#8FDDEA"
     assert t.success == "#7CCF8A"
-    assert t.error == "#F87171"
+    assert t.error == "#FF7A7A"
+    assert t.warning == "#FFD166"
     assert t.thinking_text == "#D4D4D4"  # light neutral grey, not purple-tinted muted
     assert t.thinking_text != t.muted
     assert t.activity_verb == "#C68D7E"  # muted clay-coral resting
     assert t.activity_verb_mid == "#D8AC9E"  # soft coral
     assert t.activity_verb_highlight == "#E9CDC2"  # calm coral spark
-    assert t.activity_spinner == "#B8C0CC"
-    assert t.tool_title == t.activity_label
+    assert t.activity_spinner == "#A8ADB4"
+    assert t.tool_title == t.activity_label == "#F1F3F5"
+    assert t.tool_output == "#D7DBDF"
     assert t.tool_pending_bg == "#1B2230"
     assert t.tool_error_bg == "#2E1D24"
 
@@ -81,10 +87,8 @@ def test_get_tui_tokens_with_explicit_theme_arg():
     assert light.tool_pending_bg == "#EFE7E8"
 
 
-def test_text_token_is_empty_string_for_terminal_default():
-    # Dark theme: empty string = use terminal's default fg color.
-    # Light theme uses an explicit navy text color (#213853).
-    assert get_tui_tokens("dark").text == ""
+def test_text_token_is_explicit_primary_on_dark():
+    assert get_tui_tokens("dark").text == "#D7DBDF"
 
 
 def test_selected_bg_reharmonized_and_drives_prompt_selection():
@@ -143,11 +147,10 @@ def test_tui_rich_style_fg_token_produces_color():
     assert style.bgcolor is None
 
 
-def test_tui_rich_style_empty_token_produces_empty_style():
-    # text="" means terminal default — should not set color or bgcolor.
+def test_tui_rich_style_text_token_produces_primary_color():
     set_active_theme("dark")
     style = tui_rich_style("text")
-    assert style.color is None
+    assert style.color is not None
     assert style.bgcolor is None
 
 
@@ -158,14 +161,14 @@ def test_tui_rich_style_unknown_token_raises():
 
 def test_dark_markdown_uses_professional_report_roles():
     colors = get_markdown_colors("dark")
-    assert colors.heading == "#F4F4F5"  # primary white, not coral/orange
-    assert colors.strong == "#F4F4F5"
-    assert colors.emphasis == "#8A8A8A"  # neutral UI grey (refined muted contrast)
-    assert colors.inline_code == "#AEB7FF"
+    assert colors.heading == "#F1F3F5"  # primary white, not coral/orange
+    assert colors.strong == "#F1F3F5"
+    assert colors.emphasis == "#8F969E"  # WCAG-safe muted metadata grey
+    assert colors.inline_code == "#A9B4FF"
     assert colors.link == "bright_blue"
     assert colors.spinner_active == "#8FDDEA"
     assert colors.spinner_done == "#7CCF8A"
-    assert colors.spinner_failed == "#F87171"
+    assert colors.spinner_failed == "#FF7A7A"
     assert markdown_rich_style("link", theme="dark").color is not None
 
 

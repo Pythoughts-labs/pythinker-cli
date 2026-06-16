@@ -92,8 +92,9 @@ class StyleResolver:
         return f"fg:{color}" if color else ""
 
     def markdown_inline_code_style(self) -> RichStyle:
-        """Inline code: color only — headers stay bold elsewhere."""
-        return self.rich_style(CoreToken.ACCENT)
+        """Inline code: accent color only — no bold (headers stay bold elsewhere)."""
+        style = self.rich_style(CoreToken.ACCENT)
+        return RichStyle(color=style.color, bold=False)
 
     def markdown_heading_style(self, *, level: int = 1) -> RichStyle:
         style = self.rich_style(CoreToken.TOOL_TITLE, bold=True)

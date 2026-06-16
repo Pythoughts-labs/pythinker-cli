@@ -14,6 +14,7 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_lines_block,
     running_spinner,
     tool_call_header,
@@ -82,7 +83,7 @@ def _render_exit_call(ctx: ToolRenderContext) -> RenderableType:
     children: list[RenderableType] = [line]
     for opt in opts[:3]:
         label = as_str(opt.get("label")) or "?"
-        children.append(fg("info", f"  • {label}"))
+        children.append(fg_subject(f"  • {label}"))
     rendered = Group(*children)
     return running_spinner(
         rendered, execution_started=ctx.execution_started, has_result=ctx.has_result

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pygments.style import Style as PygmentsStyle
@@ -91,6 +92,8 @@ PYTHINKER_ANSI_THEME = ANSISyntaxTheme(
 CATPPUCCIN_ADAPTIVE_THEME_NAME = "catppuccin-adaptive"
 CATPPUCCIN_MOCHA_THEME_NAME = "catppuccin-mocha"
 CATPPUCCIN_LATTE_THEME_NAME = "catppuccin-latte"
+CATPPUCCIN_FRAPPE_THEME_NAME = "catppuccin-frappe"
+CATPPUCCIN_MACCHIATO_THEME_NAME = "catppuccin-macchiato"
 
 # Official palettes (catppuccin.com/palette).
 _CATPPUCCIN_MOCHA = {
@@ -122,6 +125,36 @@ _CATPPUCCIN_LATTE = {
     "sky": "#04a5e5",
     "blue": "#1e66f5",
     "pink": "#ea76cb",
+}
+_CATPPUCCIN_FRAPPE = {
+    "base": "#303446",
+    "text": "#c6d0f5",
+    "overlay0": "#737994",
+    "overlay2": "#949cbb",
+    "mauve": "#ca9ee6",
+    "red": "#e78284",
+    "peach": "#ef9f76",
+    "yellow": "#e5c890",
+    "green": "#a6d189",
+    "teal": "#81c8be",
+    "sky": "#99d1db",
+    "blue": "#8caaee",
+    "pink": "#f4b8e4",
+}
+_CATPPUCCIN_MACCHIATO = {
+    "base": "#24273a",
+    "text": "#cad3f5",
+    "overlay0": "#6e738d",
+    "overlay2": "#939ab7",
+    "mauve": "#c6a0f6",
+    "red": "#ed8796",
+    "peach": "#f5a97f",
+    "yellow": "#eed49f",
+    "green": "#a6da95",
+    "teal": "#8bd5ca",
+    "sky": "#91d7e3",
+    "blue": "#8aadf4",
+    "pink": "#f5bde6",
 }
 
 
@@ -192,8 +225,29 @@ class CatppuccinLatteStyle(PygmentsStyle):
     styles = _catppuccin_styles(_CATPPUCCIN_LATTE)
 
 
+class CatppuccinFrappeStyle(PygmentsStyle):
+    name = "catppuccin-frappe"
+    background_color = _CATPPUCCIN_FRAPPE["base"]
+    styles = _catppuccin_styles(_CATPPUCCIN_FRAPPE)
+
+
+class CatppuccinMacchiatoStyle(PygmentsStyle):
+    name = "catppuccin-macchiato"
+    background_color = _CATPPUCCIN_MACCHIATO["base"]
+    styles = _catppuccin_styles(_CATPPUCCIN_MACCHIATO)
+
+
 CATPPUCCIN_MOCHA_THEME = PygmentsSyntaxTheme(CatppuccinMochaStyle)
 CATPPUCCIN_LATTE_THEME = PygmentsSyntaxTheme(CatppuccinLatteStyle)
+CATPPUCCIN_FRAPPE_THEME = PygmentsSyntaxTheme(CatppuccinFrappeStyle)
+CATPPUCCIN_MACCHIATO_THEME = PygmentsSyntaxTheme(CatppuccinMacchiatoStyle)
+
+_BUILTIN_CATPPUCCIN_THEMES: dict[str, PygmentsSyntaxTheme] = {
+    CATPPUCCIN_MOCHA_THEME_NAME: CATPPUCCIN_MOCHA_THEME,
+    CATPPUCCIN_LATTE_THEME_NAME: CATPPUCCIN_LATTE_THEME,
+    CATPPUCCIN_FRAPPE_THEME_NAME: CATPPUCCIN_FRAPPE_THEME,
+    CATPPUCCIN_MACCHIATO_THEME_NAME: CATPPUCCIN_MACCHIATO_THEME,
+}
 
 
 def resolve_code_theme(theme: str | SyntaxTheme) -> str | SyntaxTheme:
@@ -210,29 +264,54 @@ def resolve_code_theme(theme: str | SyntaxTheme) -> str | SyntaxTheme:
             if get_active_theme() == "light":
                 return CATPPUCCIN_LATTE_THEME
             return CATPPUCCIN_MOCHA_THEME
-        if name == CATPPUCCIN_MOCHA_THEME_NAME:
-            return CATPPUCCIN_MOCHA_THEME
-        if name == CATPPUCCIN_LATTE_THEME_NAME:
-            return CATPPUCCIN_LATTE_THEME
+        if name in _BUILTIN_CATPPUCCIN_THEMES:
+            return _BUILTIN_CATPPUCCIN_THEMES[name]
+        from pythinker_code.ui.theme.pythinker_themes import PYGMENTS_THEME_ALIASES
+
+        alias = PYGMENTS_THEME_ALIASES.get(name, name)
+        if alias == PYTHINKER_ANSI_THEME_NAME:
+            return PYTHINKER_ANSI_THEME
+        if alias in _BUILTIN_CATPPUCCIN_THEMES:
+            return _BUILTIN_CATPPUCCIN_THEMES[alias]
+        return alias
     return theme
 
 
 def available_code_themes() -> list[str]:
-    """Accepted ``code_theme`` values: the Catppuccin + ANSI sentinels plus every
-    stock Pygments style.
-
-    Imported lazily so the (modest) Pygments style enumeration cost is only paid
-    when a config value is validated, not on every ``syntax`` import.
-    """
+    """Accepted ``code_theme`` values: pythinker-x bundled names, sentinels, custom, Pygments."""
     from pygments.styles import get_all_styles
 
-    return [
+    from pythinker_code.ui.theme.pythinker_themes import list_syntax_theme_names
+
+    bundled = list_syntax_theme_names()
+    extras = [
         CATPPUCCIN_ADAPTIVE_THEME_NAME,
-        CATPPUCCIN_MOCHA_THEME_NAME,
-        CATPPUCCIN_LATTE_THEME_NAME,
         PYTHINKER_ANSI_THEME_NAME,
         *sorted(get_all_styles()),
     ]
+    merged = sorted(set(bundled) | set(extras), key=str.casefold)
+    return merged
+
+
+def list_picker_code_themes(share_dir: Path | None = None) -> list[str]:
+    """Themes shown in ``/theme code``: validator union plus share-dir ``.tmTheme`` files."""
+    from pythinker_code.ui.theme.pythinker_themes import discover_custom_syntax_themes
+
+    custom = discover_custom_syntax_themes(share_dir)
+    return sorted(set(available_code_themes()) | set(custom), key=str.casefold)
+
+
+def code_themes_match_for_picker(theme: str, configured: str) -> bool:
+    """Whether *theme* should appear selected for a configured ``code_theme`` value."""
+    if theme.casefold() == configured.casefold():
+        return True
+    resolved_theme = resolve_code_theme(theme)
+    resolved_configured = resolve_code_theme(configured)
+    if isinstance(resolved_theme, str) and isinstance(resolved_configured, str):
+        return resolved_theme.casefold() == resolved_configured.casefold()
+    if not isinstance(resolved_theme, str) and not isinstance(resolved_configured, str):
+        return type(resolved_theme) is type(resolved_configured)
+    return False
 
 
 # Process-wide default code-fence theme, resolved once at shell startup from

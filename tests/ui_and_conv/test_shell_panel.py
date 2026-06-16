@@ -9,7 +9,7 @@ def test_brand_panel_is_rounded_and_uses_border_token():
     p = brand_panel("hello", title="Demo")
     assert p.box is box.ROUNDED
     # border style resolves to the mid grey border token
-    assert "#8a8d91" in str(p.border_style).lower()
+    assert "#9aa3ad" in str(p.border_style).lower()
 
 
 def test_brand_panel_active_uses_accent_border():

@@ -20,6 +20,7 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_numbered_lines_block,
     invalid_arg,
     missing_required_arg,
@@ -74,7 +75,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 line, execution_started=ctx.execution_started, has_result=ctx.has_result
             )
     else:
-        summary.append_text(fg("info", shorten_path(raw_path, cwd=ctx.cwd)))
+        summary.append_text(fg_subject(shorten_path(raw_path, cwd=ctx.cwd)))
 
     range_text = _format_line_range(args)
     if range_text is not None:
