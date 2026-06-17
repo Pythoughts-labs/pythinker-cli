@@ -71,7 +71,7 @@ def test_finished_expandable_tool_card_remains_available_after_flush(monkeypatch
     block = view._completed_expandable_tool_card()
     assert block is not None
     expanded = render_plain(block.render_expanded(), width=100)
-    assert "Read 1 file" in expanded
+    assert "Read 20 lines from big.py" in expanded
     assert "line 0" in expanded
     assert "line 19" in expanded
 

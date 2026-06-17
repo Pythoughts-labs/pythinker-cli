@@ -134,7 +134,9 @@ def test_read_renders_path_and_range():
     assert "⏺ Read(" in rendered
     assert "src/foo.py" in rendered
     assert ":10-39" in rendered
-    assert "Read 1 file (ctrl+o to expand)" in rendered
+    # Line-count-aware summary with basename, not the generic "Read 1 file".
+    assert "Read 2 lines from foo.py (ctrl+o to expand)" in rendered
+    assert "Read 1 file" not in rendered
 
 
 def test_read_renders_negative_offset_as_tail():
@@ -158,12 +160,93 @@ def test_read_renders_negative_offset_with_limit():
     assert ":tail 100 · limit 20" in rendered
 
 
-def test_read_result_matches_reference_summary_only():
+def test_read_collapsed_shows_count_and_capped_preview():
     body = "\n".join(f"line {i}" for i in range(20))
     rendered = _render("ReadFile", {"path": "/repo/x.py"}, output=body)
-    assert "Read 1 file (ctrl+o to expand)" in rendered
-    assert "line 0" not in rendered
-    assert "more lines" not in rendered
+    # Line-count-aware summary replaces the generic "Read 1 file".
+    assert "Read 20 lines from x.py (ctrl+o to expand)" in rendered
+    assert "Read 1 file" not in rendered
+    # A short preview of leading lines is shown, but the preview is capped:
+    # the first line appears, a line past the cap does not.
+    assert "line 0" in rendered
+    assert "line 19" not in rendered
+
+
+def test_read_collapsed_caps_preview_line_width_no_giant_output():
+    # A single very long line must not blow up the collapsed card height.
+    long_line = "x" * 500
+    rendered = _render("ReadFile", {"path": "/repo/big.py"}, output=long_line, width=80)
+    assert "Read 1 line from big.py (ctrl+o to expand)" in rendered
+    # Width-capped: the full 500-char line is truncated, so total output stays small.
+    assert "x" * 500 not in rendered
+    assert rendered.count("\n") < 6
+
+
+def test_read_preview_skips_on_narrow_terminal():
+    from pythinker_code.ui.shell.tool_renderers.read import _preview
+
+    # Too narrow to show anything useful → no preview at all.
+    assert _preview("some content here", width=10) is None
+    # Roomy terminal → preview present.
+    assert _preview("some content here", width=100) is not None
+
+
+def test_read_preview_truncates_by_cell_width_not_char_count():
+    # Wide (2-cell) glyphs must be measured by display width, so the preview
+    # line fits the column budget instead of overflowing on char count alone.
+    from pythinker_code.ui.shell.components.render_utils import cell_len
+    from pythinker_code.ui.shell.tool_renderers.read import _preview
+
+    preview = _preview("世" * 200, width=60)
+    assert preview is not None
+    assert cell_len(preview.plain) <= 60
+
+
+def test_read_collapsed_uses_message_line_count():
+    rendered = _render(
+        "ReadFile",
+        {"path": "/repo/src/_live_view.py", "line_offset": 1, "n_lines": 1000},
+        details={
+            "message": "140 lines read from file starting from line 1. Total lines in file: 320.",
+            "output": "     1\tdef view():\n     2\t    return 1",
+        },
+    )
+    assert "Read 140 lines from _live_view.py (ctrl+o to expand)" in rendered
+
+
+def test_read_collapsed_falls_back_when_count_unknown():
+    # No message and no body text → count is unknowable; never assert a fake 0.
+    rendered = _render("ReadFile", {"path": "/repo/x.py"}, details={"message": ""})
+    assert "Read file content" in rendered
+    assert "Read 0 lines" not in rendered
+
+
+def test_read_collapsed_empty_file_is_truthful():
+    rendered = _render(
+        "ReadFile",
+        {"path": "/repo/empty.py"},
+        details={"message": "No lines read from file. Total lines in file: 0."},
+    )
+    assert "Read 0 lines from empty.py" in rendered
+    # Nothing to expand for an empty file.
+    assert "ctrl+o to expand" not in rendered
+
+
+def test_read_collapsed_preview_sanitizes_control_sequences():
+    body = "\x1b[31mred\x1b[0m\x07\nsecond"
+    rendered = _render("ReadFile", {"path": "/repo/x.py"}, output=body)
+    assert "red" in rendered
+    assert "\x1b" not in rendered
+    assert "\x07" not in rendered
+
+
+def test_read_expanded_shows_full_content():
+    body = "\n".join(f"line {i}" for i in range(20))
+    rendered = _render("ReadFile", {"path": "/repo/x.py"}, output=body, expanded=True)
+    assert "Read 20 lines from x.py" in rendered
+    # Every line is present when expanded, including past the collapsed cap.
+    assert "line 0" in rendered
+    assert "line 19" in rendered
 
 
 def test_read_error_prefers_structured_message():
