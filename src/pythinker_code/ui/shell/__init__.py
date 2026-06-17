@@ -2095,22 +2095,10 @@ class Shell:
     async def _auto_update(self) -> None:
         # Background-refresh the cached latest version (throttled); never blocks startup.
         await refresh_update_cache_if_due()
-        # Non-blocking shell notice based on the cached value.
-        notice = pending_update_notice()
-        if notice:
-            # Make version notices easy to see on macOS/Linux terminals too:
-            # put them at the front of the toast queue, keep them around long
-            # enough to survive startup redraws, and force a repaint if the
-            # prompt is already active.
-            toast(
-                notice,
-                topic="update",
-                duration=30.0,
-                immediate=True,
-                style="fg:ansibrightyellow bold",
-            )
-            if self._prompt_session is not None:
-                self._prompt_session.invalidate()
+        # The persistent under-input line renders the cached update hint; refresh
+        # it when the cache changes instead of duplicating the text as a toast.
+        if pending_update_notice():
+            self._refresh_update_notice_line()
 
     async def _silent_auto_update(self) -> None:
         """Install a newer release silently in the background at startup."""
@@ -2147,10 +2135,15 @@ class Shell:
                 style="fg:ansiyellow",
             )
             return
-        self._update_toast(
-            self._installed_update_restart_notice(),
-            style="fg:ansibrightyellow bold",
-        )
+        # The persistent under-input line (_prepend_update_notice) already renders
+        # the restart message; a toast duplicates it on the footer's second row.
+        self._refresh_update_notice_line()
+
+    def _refresh_update_notice_line(self) -> None:
+        """Drop the update-notice memo and repaint so the footer picks up new text."""
+        self._update_notice_cache = (0.0, None)
+        if self._prompt_session is not None:
+            self._prompt_session.invalidate()
 
     def _installed_update_smoke_check_failed(self) -> bool:
         status = read_update_status()
