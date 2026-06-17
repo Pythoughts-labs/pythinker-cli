@@ -13,11 +13,7 @@ from pythinker_code.ui.shell.markdown.normalizers import (
     parse_aligned_field_line,
 )
 
-PROJECT_PATH_PREFIXES: tuple[str, ...] = (
-    "src/pythinker_code/",
-    "/Users/panda/Projects/active/Projects/pythinker-code-main/src/pythinker_code/",
-    "/Users/panda/Projects/active/Projects/pythinker-code-main/",
-)
+PROJECT_PATH_PREFIXES: tuple[str, ...] = ("src/pythinker_code/",)
 
 _QUOTE_GUTTER_RE = re.compile(r"^(\s*)▌\s?")
 _UNDERLINE_HEADING_RE = re.compile(
@@ -90,7 +86,7 @@ _GROUP_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 @dataclass(slots=True)
 class _ParityItem:
     title: str
-    fields: dict[str, str] = field(default_factory=lambda: {})
+    fields: dict[str, str] = field(default_factory=dict[str, str])
 
     @property
     def status(self) -> str:

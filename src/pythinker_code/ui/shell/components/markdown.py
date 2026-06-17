@@ -25,25 +25,59 @@ from pythinker_code.ui.shell.markdown.elements import (  # noqa: F401
     _ReportTableElement,
 )
 from pythinker_code.ui.shell.markdown.normalizers import (  # noqa: F401
-    _escape_code_span_pipes,
-    _loosen_tight_ordered_lists,
-    _normalize_markdown_tables,
-    _normalize_space_aligned_report_blocks,
-    _normalize_table_block,
-    _parse_aligned_field_line,
-    _repair_crammed_markdown_tables,
-    _simplify_markdown_report_icons,
-    _unwrap_fenced_markdown_tables,
-    loosen_tight_ordered_lists,
-    normalize_markdown_tables,
-    normalize_space_aligned_report_blocks,
-    normalize_table_block,
-    parse_aligned_field_line,
-    repair_crammed_markdown_tables,
-    simplify_markdown_report_icons,
-    unwrap_fenced_markdown_tables,
+    _escape_code_span_pipes as _escape_code_span_pipes,
 )
-from pythinker_code.ui.shell.markdown.renderer import _markdown_style_overrides  # noqa: F401
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _loosen_tight_ordered_lists as _loosen_tight_ordered_lists,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _normalize_markdown_tables as _normalize_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _normalize_space_aligned_report_blocks as _normalize_space_aligned_report_blocks,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _normalize_table_block as _normalize_table_block,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _parse_aligned_field_line as _parse_aligned_field_line,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _repair_crammed_markdown_tables as _repair_crammed_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _simplify_markdown_report_icons as _simplify_markdown_report_icons,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    _unwrap_fenced_markdown_tables as _unwrap_fenced_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    loosen_tight_ordered_lists as loosen_tight_ordered_lists,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    normalize_markdown_tables as normalize_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    normalize_space_aligned_report_blocks as normalize_space_aligned_report_blocks,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    normalize_table_block as normalize_table_block,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    parse_aligned_field_line as parse_aligned_field_line,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    repair_crammed_markdown_tables as repair_crammed_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    simplify_markdown_report_icons as simplify_markdown_report_icons,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (
+    unwrap_fenced_markdown_tables as unwrap_fenced_markdown_tables,
+)
+from pythinker_code.ui.shell.markdown.renderer import (
+    _markdown_style_overrides as _markdown_style_overrides,
+)  # noqa: F401
 from pythinker_code.ui.shell.markdown.streaming import (  # noqa: F401
     _get_md_parser,
     _markdown_commit_boundary_cached,
