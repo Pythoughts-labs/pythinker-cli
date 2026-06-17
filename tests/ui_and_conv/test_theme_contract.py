@@ -23,7 +23,6 @@ from pythinker_code.ui.theme.spec import ThemeMode
 
 _HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 _THEME_PKG = Path(__file__).resolve().parents[2] / "src" / "pythinker_code" / "ui" / "theme"
-_PALETTE_ONLY_FILES = {_THEME_PKG / "palettes.py", _THEME_PKG / "adapters" / "task_browser.py"}
 
 
 @pytest.fixture(autouse=True)

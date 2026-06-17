@@ -83,30 +83,3 @@ __all__ += [
     "simplify_markdown_report_icons",
     "unwrap_fenced_markdown_tables",
 ]
-
-# Keep characterization-pin re-exports reachable; referenced so static analysis
-# treats the module-level bindings as intentionally exported, not dead code.
-_REEXPORT_REGISTRY: tuple[object, ...] = (
-    _BorderedCodeBlock,
-    _ReportTableElement,
-    _escape_code_span_pipes,
-    _get_md_parser,
-    _loosen_tight_ordered_lists,
-    _markdown_commit_boundary_cached,
-    _markdown_style_overrides,
-    _normalize_markdown_tables,
-    _normalize_space_aligned_report_blocks,
-    _normalize_table_block,
-    _parse_aligned_field_line,
-    _repair_crammed_markdown_tables,
-    _simplify_markdown_report_icons,
-    _unwrap_fenced_markdown_tables,
-    loosen_tight_ordered_lists,
-    normalize_markdown_tables,
-    normalize_space_aligned_report_blocks,
-    normalize_table_block,
-    parse_aligned_field_line,
-    repair_crammed_markdown_tables,
-    simplify_markdown_report_icons,
-    unwrap_fenced_markdown_tables,
-)
