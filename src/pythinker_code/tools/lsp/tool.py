@@ -10,7 +10,7 @@ from typing import Any, override
 from urllib.parse import unquote
 
 import pythinker_host
-from pythinker_core.tooling import CallableTool2, ToolReturnValue
+from pythinker_core import tooling as _tooling
 from pythinker_host.path import HostPath
 
 from pythinker_code.lsp.recommend import get_matching_lsp_plugins
@@ -28,7 +28,7 @@ _GIT_CHECK_IGNORE_BATCH_SIZE = 50
 _GIT_CHECK_IGNORE_TIMEOUT = 5.0
 
 
-class Lsp(CallableTool2[Params]):
+class Lsp(_tooling.CallableTool2[Params]):
     name: str = "LSP"
     supports_parallel: bool = True
     description: str = load_desc(Path(__file__).parent / "tool.md", {})
@@ -44,7 +44,7 @@ class Lsp(CallableTool2[Params]):
         self._recommended_exts: set[str] = set()
 
     @override
-    async def __call__(self, params: Params) -> ToolReturnValue:
+    async def __call__(self, params: Params) -> _tooling.ToolReturnValue:
         builder = ToolResultBuilder(max_chars=MAX_RESULT_SIZE_CHARS, max_line_length=None)
 
         if self._lsp.status() == LspInitStatus.PENDING:
@@ -182,7 +182,9 @@ class Lsp(CallableTool2[Params]):
             return f"{params.operation} {symbol}"
         return f"{params.operation} {params.file_path}:{params.line}:{params.character}"
 
-    async def _validate_file(self, file_path: str) -> tuple[str | None, ToolReturnValue | None]:
+    async def _validate_file(
+        self, file_path: str
+    ) -> tuple[str | None, _tooling.ToolReturnValue | None]:
         builder = ToolResultBuilder(max_chars=MAX_RESULT_SIZE_CHARS, max_line_length=None)
 
         if _is_unc_path(file_path):
@@ -224,7 +226,7 @@ class Lsp(CallableTool2[Params]):
         manager: Any,
         absolute_path: str,
         display_path: str,
-    ) -> ToolReturnValue | None:
+    ) -> _tooling.ToolReturnValue | None:
         builder = ToolResultBuilder(max_chars=MAX_RESULT_SIZE_CHARS, max_line_length=None)
         host_path = HostPath(absolute_path)
         try:
@@ -289,6 +291,7 @@ def _method_and_params(params: Params, absolute_path: str) -> tuple[str, dict[st
             return "textDocument/prepareCallHierarchy", text_document
         case _:
             raise ValueError(f"Unsupported LSP operation: {params.operation}")
+    raise AssertionError(f"Unsupported LSP operation: {params.operation}")
 
 
 def _to_location(item: dict[str, Any]) -> dict[str, Any]:

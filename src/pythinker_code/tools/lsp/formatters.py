@@ -449,3 +449,4 @@ def format_result(
             return formatted, len(calls), file_count
         case _:
             return str(result), 0, 0
+    raise AssertionError(f"Unhandled LSP format operation: {operation!r}")
