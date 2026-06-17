@@ -370,11 +370,6 @@ def _compact_report_location(location: str) -> str:
     return ", ".join(compacted)
 
 
-_COMPACT_REPORT_FINDING_THRESHOLD = 5
-_COMPACT_REPORT_BODY_CHAR_THRESHOLD = 800
-_COMPACT_REPORT_LOCATION_CHAR_THRESHOLD = 240
-
-
 def _report_layout_mode(report: Report) -> Literal["panel", "compact"]:
     body_chars = sum(len(finding.body) for finding in report.findings)
     location_chars = sum(len(finding.location or "") for finding in report.findings)

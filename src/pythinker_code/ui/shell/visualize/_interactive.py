@@ -100,6 +100,8 @@ def _handoff_trace(event: str) -> None:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"{time.monotonic():.3f}\t{event}\n")
     except OSError:
+        # Intentional: handoff diagnostics are best-effort and must never
+        # disrupt the interactive UI if the log path is unwritable.
         pass
 
 

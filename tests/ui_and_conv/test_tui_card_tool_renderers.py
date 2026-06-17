@@ -1081,12 +1081,12 @@ def test_render_diff_without_path_stays_plain_foreground():
 
 
 def test_render_diff_without_path_does_not_construct_highlighter(monkeypatch):
-    from pythinker_code.utils.rich import diff_render
+    from pythinker_code.ui.shell.components import diff as diff_component
 
     def _boom(_path: str):
         raise AssertionError("make_diff_highlighter must not run when path is omitted")
 
-    monkeypatch.setattr(diff_render, "make_diff_highlighter", _boom)
+    monkeypatch.setattr(diff_component, "make_diff_highlighter", _boom)
     diff = compute_edit_diff_string("a\n", "b\n").diff
     render_diff(diff)
 
