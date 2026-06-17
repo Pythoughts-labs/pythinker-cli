@@ -991,17 +991,17 @@ class TestCodeFenceSuppression:
         closed_out = blocks_module._suppress_unclosed_code_fence_preview(_TILDE_CLOSED_FENCE_STREAM)
         assert closed_out == _TILDE_CLOSED_FENCE_STREAM
 
-    def test_helper_leaves_bare_fence_line_untouched(self):
-        """A bare triple-backtick line is structurally a closer in this
-        codebase (``_FENCE_CLOSE_RE``), so an opener without a language tag
-        cannot be told apart from a closer. The helper intentionally
-        suppresses only fences that carry a language tag; otherwise it would
-        risk eating real closers. Confirms the conservative contract.
+    def test_helper_suppresses_bare_fence_opener(self):
+        """A bare triple-backtick opener (no language tag) is now suppressed
+        using "code" as the fallback language, so its raw body is hidden until
+        the closer arrives — same as a tagged fence.
         """
         from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 
         out = blocks_module._suppress_unclosed_code_fence_preview(_NO_LANG_OPEN_FENCE_STREAM)
-        assert out == _NO_LANG_OPEN_FENCE_STREAM
+        assert "plain text inside fence" not in out
+        assert "streaming code block" in out
+        assert "(code)" in out
 
     def test_helper_does_not_touch_report_fence(self):
         from pythinker_code.ui.shell.visualize import _blocks as blocks_module

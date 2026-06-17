@@ -15,6 +15,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI: smoother agent-working streaming.** Buffered text now reveals at an even,
+  bounded rate instead of backlog-proportional lurches, and incremental scrollback
+  commits are coalesced so the prompt no longer pops/flickers on every paragraph
+  boundary during a stream.
+
 - **TUI tool-card diffs use syntax highlighting.** Edit/Write inline diffs now share the
   approval/pager ``PythinkerSyntax`` pipeline (``tui.code_theme``, file-extension lexer) while
   keeping the compact boxless card layout.

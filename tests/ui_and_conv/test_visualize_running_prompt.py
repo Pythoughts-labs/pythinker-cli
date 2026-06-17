@@ -365,9 +365,7 @@ async def test_suppressed_incremental_commit_remains_visible_in_live_preview(mon
             pass
 
     monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
-    monkeypatch.setattr(
-        _live_view_mod, "emit_scrollback_block", lambda _console, renderable: None
-    )
+    monkeypatch.setattr(_live_view_mod, "emit_scrollback_block", lambda _console, renderable: None)
     monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
 
     view = _PromptLiveView(
@@ -401,9 +399,7 @@ async def test_throttled_committed_blocks_eventually_flush_on_direct_drain(monke
             pass
 
     monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
-    monkeypatch.setattr(
-        _live_view_mod, "emit_scrollback_block", lambda _console, renderable: None
-    )
+    monkeypatch.setattr(_live_view_mod, "emit_scrollback_block", lambda _console, renderable: None)
     monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
 
     view = _PromptLiveView(
@@ -1020,6 +1016,9 @@ async def test_live_view_processes_external_approval_messages(monkeypatch) -> No
         def update(self, renderable, refresh: bool = True) -> None:
             updates.append(renderable)
 
+        def refresh(self) -> None:
+            return None
+
         def stop(self) -> None:
             return None
 
@@ -1034,7 +1033,7 @@ async def test_live_view_processes_external_approval_messages(monkeypatch) -> No
     async def _no_keyboard_listener(*args, **kwargs):
         yield
 
-    monkeypatch.setattr(_live_view_mod, "Live", _FakeLive)
+    monkeypatch.setattr(_live_view_mod, "DiffLive", _FakeLive)
     monkeypatch.setattr(_live_view_mod, "_keyboard_listener", _no_keyboard_listener)
 
     view = _LiveView(StatusUpdate())

@@ -161,7 +161,12 @@ def test_set_todo_list_params_schema(set_todo_list_tool: SetTodoList):
                     ],
                     "default": None,
                     "description": "The updated todo list. If not provided, returns the current todo list without making changes.",
-                }
+                },
+                "merge": {
+                    "anyOf": [{"type": "boolean"}, {"type": "null"}],
+                    "default": None,
+                    "description": "Accepted for compatibility with some LLM providers; silently ignored.",
+                },
             },
             "type": "object",
         }
