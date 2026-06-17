@@ -18,70 +18,34 @@ from pythinker_code.ui.shell.markdown import (
     pythinker_markdown,
     pythinker_report_markdown,
 )
+from pythinker_code.ui.shell.markdown import elements as _md_elements
+from pythinker_code.ui.shell.markdown import normalizers as _md_normalizers
+from pythinker_code.ui.shell.markdown import renderer as _md_renderer
+from pythinker_code.ui.shell.markdown import streaming as _md_streaming
 
-# Private re-exports consumed by tests and characterization pins (F401: listed in __all__).
-from pythinker_code.ui.shell.markdown.elements import (  # noqa: F401
-    _BorderedCodeBlock,
-    _ReportTableElement,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (  # noqa: F401
-    _escape_code_span_pipes as _escape_code_span_pipes,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _loosen_tight_ordered_lists as _loosen_tight_ordered_lists,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _normalize_markdown_tables as _normalize_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _normalize_space_aligned_report_blocks as _normalize_space_aligned_report_blocks,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _normalize_table_block as _normalize_table_block,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _parse_aligned_field_line as _parse_aligned_field_line,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _repair_crammed_markdown_tables as _repair_crammed_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _simplify_markdown_report_icons as _simplify_markdown_report_icons,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    _unwrap_fenced_markdown_tables as _unwrap_fenced_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    loosen_tight_ordered_lists as loosen_tight_ordered_lists,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    normalize_markdown_tables as normalize_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    normalize_space_aligned_report_blocks as normalize_space_aligned_report_blocks,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    normalize_table_block as normalize_table_block,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    parse_aligned_field_line as parse_aligned_field_line,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    repair_crammed_markdown_tables as repair_crammed_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    simplify_markdown_report_icons as simplify_markdown_report_icons,
-)
-from pythinker_code.ui.shell.markdown.normalizers import (
-    unwrap_fenced_markdown_tables as unwrap_fenced_markdown_tables,
-)
-from pythinker_code.ui.shell.markdown.renderer import (
-    _markdown_style_overrides as _markdown_style_overrides,
-)  # noqa: F401
-from pythinker_code.ui.shell.markdown.streaming import (  # noqa: F401
-    _get_md_parser,
-    _markdown_commit_boundary_cached,
-)
+# Private re-exports consumed by tests and characterization pins.
+_BorderedCodeBlock = _md_elements._BorderedCodeBlock
+_ReportTableElement = _md_elements._ReportTableElement
+_escape_code_span_pipes = _md_normalizers._escape_code_span_pipes
+_loosen_tight_ordered_lists = _md_normalizers._loosen_tight_ordered_lists
+_normalize_markdown_tables = _md_normalizers._normalize_markdown_tables
+_normalize_space_aligned_report_blocks = _md_normalizers._normalize_space_aligned_report_blocks
+_normalize_table_block = _md_normalizers._normalize_table_block
+_parse_aligned_field_line = _md_normalizers._parse_aligned_field_line
+_repair_crammed_markdown_tables = _md_normalizers._repair_crammed_markdown_tables
+_simplify_markdown_report_icons = _md_normalizers._simplify_markdown_report_icons
+_unwrap_fenced_markdown_tables = _md_normalizers._unwrap_fenced_markdown_tables
+loosen_tight_ordered_lists = _md_normalizers.loosen_tight_ordered_lists
+normalize_markdown_tables = _md_normalizers.normalize_markdown_tables
+normalize_space_aligned_report_blocks = _md_normalizers.normalize_space_aligned_report_blocks
+normalize_table_block = _md_normalizers.normalize_table_block
+parse_aligned_field_line = _md_normalizers.parse_aligned_field_line
+repair_crammed_markdown_tables = _md_normalizers.repair_crammed_markdown_tables
+simplify_markdown_report_icons = _md_normalizers.simplify_markdown_report_icons
+unwrap_fenced_markdown_tables = _md_normalizers.unwrap_fenced_markdown_tables
+_markdown_style_overrides = _md_renderer._markdown_style_overrides
+_get_md_parser = _md_streaming._get_md_parser
+_markdown_commit_boundary_cached = _md_streaming._markdown_commit_boundary_cached
 
 __all__ = [
     "MarkdownNormalizationResult",
