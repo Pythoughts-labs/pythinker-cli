@@ -17,6 +17,87 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI composing preview wraps space-aligned report prose cleanly.** The
+  streaming preview now runs the same lightweight space-column normalizer used at
+  finalize and wraps long `Severity`/`Location`/`What` rows with a hanging
+  continuation indent, so wrapped fragments no longer orphan at column 0.
+- **ToolSearch hidden from models that can't use it.** `ToolSearch` is now offered
+  only when the active model genuinely supports the deferred tool-search workflow
+  (Anthropic's `tool_reference`/`defer_loading` beta on `api.anthropic.com`). The
+  `type="anthropic"` compat proxies (z.ai/GLM, Kimi, MiniMax, opencode) and all
+  non-Anthropic providers no longer see it, fixing a loop where weaker tool-callers
+  (e.g. GLM-5.2) repeatedly "searched" for tools instead of calling them. Override
+  with `ENABLE_TOOL_SEARCH=true|false`. The tool's description no longer claims that
+  hidden/deferred tools exist (pythinker loads no tools lazily), removing the prompt
+  that primed the loop in the first place.
+- **Output-token-limit nudge text aligned with reference.** The system-reminder injected when a response is cut off by the output token limit now matches the reference byte-exactly: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
+- **`SetTodoList` accepts Cursor-style todo payloads.** Todo items sent with `content` instead of `title` (the shape models learn from Cursor/Claude `TodoWrite`) are normalized at the validation boundary (`content` → `title` when `title` is absent; canonical `title` wins; `content` is dropped) and persist as title-only session state instead of failing with missing-`title` errors.
+- **Failed `SetTodoList` cards stay compact.** Validation failures no longer render a broken todo tree with blank labels plus a raw Pydantic dump; the card shows a short actionable summary (with full detail only when expanded).
+- **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
+- **Bare skill/flow slash names.** The slash menu now matches `skill:`/`flow:`
+  commands on their bare segment, so typing `/designer` (or `/design`) surfaces
+  `/skill:designer-skill`; accepting inserts the canonical command name. When no
+  prefix matches, a fuzzy fallback surfaces the distinctive word even when
+  misspelled (`/gurd` → `/skill:pythinker-guard`), so skills sharing a common
+  prefix stay reachable.
+- **TUI composing preview gap.** Removed the visible double-blank row between
+  `Composing…` and the in-progress preview (leading newline from commit
+  boundaries no longer leaks through the plain-text preview path), and aligned
+  the Rich `Live` paint rate with the 25 Hz reveal scheduler (was 10 Hz).
+- **ToolSearch TUI display.** `ToolSearch` results now render as a compact
+  "N tools discovered (Agent, Grep, …)" summary instead of dumping the full
+  tool catalog with descriptions; ctrl+o expands to tool names only.
+- **Tool header highlights.** Read/Write/Edit/Grep and similar tool-call subjects
+  now use the brand periwinkle `accent` token instead of cyan `info`; line ranges
+  stay on the yellow `warning` token.
+- **pythinker-x theme port.** Diff palette, 32 bundled syntax theme names, Catppuccin
+  Frappe/Macchiato styles, and `/theme code` syntax picker aligned with the Pythinker-X TUI.
+- **TUI inline code color.** Inline `` `code` `` highlights and the `pythinker-ansi`
+  syntax theme now use brand periwinkle/accent and blue ANSI roles instead of cyan.
+- **TUI transcript spacing.** User prompts leave one blank row before the agent stream
+  starts; finished tool cards and flushed agent paragraphs leave a trailing blank row
+  before the next block (Bash/Read output → next ⏺ paragraph, etc.).
+- **Welcome banner colors.** Branch uses light neutral grey; model name uses the muted
+  yellow warning token.
+- **TUI theme package.** Centralize dark/light palettes, prompt classes, and Rich/PTK
+  adapters in `ui/theme/` with `/theme current|doctor|tokens` inspection commands.
+- **TUI diff markers.** Inline diff rows now leave a space after `+`/`-` markers so
+  `@`-prefixed lines (e.g. CSS `@keyframes`) do not run together with the sign.
+- **Composing block spacing.** Staged agent paragraphs keep one blank row before the
+  Composing activity line while the stream is still live.
+- **Slash input UX.** Prefix-highlight skills and plugins while typing; ghost-complete
+  and highlight fixed subcommands such as `/theme current`.
+- **TUI streaming smoothness (Phase 0).** Coalesce Rich Live repaints to a 25 Hz frame budget,
+  render live previews as plain text (no per-token markdown re-parse), stage committed slices
+  inside the Live region until finalize, and use a fixed-width blinking streaming caret that
+  does not reflow wrapped lines.
+- **LSP code intelligence.** Plugin-provided language servers power a new `LSP` agent tool
+  (go-to-definition, find-references, hover, symbols, call hierarchy) with session-scoped
+  server lifecycle, passive diagnostics injected after file edits, and plugin-based server
+  discovery/recommendation — no bundled language-server binaries.
+- **Token activity card.** `/usage daily|weekly|cumulative` (and the bare `/usage` default
+  when no provider adapter is configured) now render a 52-week × 7-day heatmap of
+  total tokens consumed each day, with a `Lifetime · Peak · Streak · Longest task` summary
+  line and a footer that lets the user switch between daily/weekly/cumulative views. Data is
+  read from the local session wire files; the per-provider adapter behavior is unchanged.
+- **RunAgents tolerates blank list entries.** Models occasionally emit bare `"\n"` strings
+  between the agent objects in the `agents` array; those are now stripped before validation so
+  a multi-agent launch no longer fails with a validation error, while genuinely invalid entries
+  are still rejected.
+- **Report panel rendering.** Standardized report panels render only the panel title and section
+  headers bold (body prose stays regular weight), tag finding locations with a file marker, and
+  use a dedicated `secondary` theme token for scope/note text.
+- **Theme token consistency.** The dark prompt frame/separator/dialog borders and the prompt
+  glyph now track their canonical core theme tokens, and inline code spans correctly drop an
+  inherited background.
+- **External approvals repaint promptly.** Out-of-band approval requests and steer input now
+  force an immediate live-view repaint instead of waiting for the streaming frame budget, and
+  the live-view refresh loop is supervised so a refresh-loop failure surfaces instead of
+  silently freezing the view.
+- **LSP robustness.** Bounded JSON-RPC frame size and graceful-shutdown timeout, document
+  version tracking for `didChange`, open-document state cleared on server restart, empty
+  diagnostics payloads clear stale entries, and tightened `/usage` activity-argument validation.
+
 ## 0.47.0 (2026-06-16)
 
 - **Plugin marketplaces and activation policy.** `pythinker plugin marketplace` can add,

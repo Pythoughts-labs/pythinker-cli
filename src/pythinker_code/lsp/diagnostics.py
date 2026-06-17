@@ -128,6 +128,9 @@ class DiagnosticRegistry:
         server_paths = self._pending_paths.setdefault(server_name, {})
         for file in files:
             if not file.diagnostics:
+                # Empty payload is an LSP "clear all diagnostics for this URI" signal.
+                server_pending.pop(file.uri, None)
+                server_paths.pop(file.uri, None)
                 continue
             server_paths[file.uri] = file.path
             entries = server_pending.setdefault(file.uri, [])

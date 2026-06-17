@@ -4,13 +4,57 @@ Pythinker Code can connect to [Language Server Protocol](https://microsoft.githu
 
 ## Plugin-only servers
 
-LSP servers are **not** configured in user or project TOML. They come only from installed plugins — inline `lspServers` in `plugin.json` or a plugin-root `.lsp.json` file (same shape as MCP plugin servers). Pythinker does not bundle language-server binaries.
+LSP servers are **not** configured in user or project TOML. They come only from installed plugins — inline `lspServers` in `plugin.json` or a plugin-root `.lsp.json` file. Pythinker does not bundle language-server binaries.
 
 Enable executable plugin artifacts (`plugins.external_exec = true` or `pythinker plugin enable <name>`) so plugin-provided LSP subprocesses are allowed.
+
+### Server config schema
+
+Each entry in `lspServers` (or the root object of `.lsp.json`) maps a server name to a config object:
+
+```json
+{
+  "my-server": {
+    "command": "pylsp",
+    "args": ["--check-parent-process"],
+    "extensionToLanguage": { ".py": "python" },
+    "env": { "VIRTUAL_ENV": "${VIRTUAL_ENV:-}" },
+    "initializationOptions": {},
+    "startupTimeout": 30.0,
+    "maxRestarts": 3
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `command` | yes | Executable to launch |
+| `args` | no | Additional CLI arguments |
+| `extensionToLanguage` | yes | Maps file extensions to LSP language IDs |
+| `env` | no | Extra environment variables for the server process |
+| `initializationOptions` | no | Passed verbatim in the LSP `initialize` request |
+| `startupTimeout` | no | Seconds to wait for server ready (default `30.0`, must be `> 0`) |
+| `maxRestarts` | no | Max automatic restarts on crash (default `3`, `0` disables) |
+
+Values in `command`, `args`, and `env` support `${VAR}` and `${VAR:-default}` expansion against the process environment. Two plugin-local path variables are always available: `${PYTHINKER_PLUGIN_ROOT}` (the plugin directory) and `${PYTHINKER_PLUGIN_DATA}` (a writable per-plugin data directory). The `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` spellings are accepted as aliases.
 
 ## Agent tool
 
 The `LSP` tool is available on the default agent and the `coder` subagent (not on read-only profiles such as `code_reviewer`). It exposes nine operations with 1-based line/character positions (editor-style).
+
+| Operation | LSP method |
+|-----------|------------|
+| `goToDefinition` | `textDocument/definition` |
+| `findReferences` | `textDocument/references` |
+| `hover` | `textDocument/hover` |
+| `documentSymbol` | `textDocument/documentSymbol` |
+| `workspaceSymbol` | `workspace/symbol` |
+| `goToImplementation` | `textDocument/implementation` |
+| `prepareCallHierarchy` | `textDocument/prepareCallHierarchy` |
+| `incomingCalls` | `callHierarchy/incomingCalls` |
+| `outgoingCalls` | `callHierarchy/outgoingCalls` |
+
+Results from `findReferences`, `goToDefinition`, `goToImplementation`, and `workspaceSymbol` automatically filter out paths that match the project's `.gitignore`.
 
 Servers start lazily on first use per language and stay alive for the session. Subagents share the root session's LSP processes.
 
