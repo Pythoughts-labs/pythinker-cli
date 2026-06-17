@@ -505,18 +505,19 @@ async def test_go_to_implementation_unsupported_server(runtime, tmp_path: Path) 
     assert "implementationProvider" in result.message
     assert "fake" in result.message
     # C14: the guard must short-circuit before dispatching the request.
-    # The fake server logs every received method; assert no implementation
-    # request was ever sent.
+    # The fake server only writes lsp.log when it receives a loggable method;
+    # if the guard fired first the file may not exist at all.
     logged_methods: list[str] = []
-    for line in log_file.read_text(encoding="utf-8").splitlines():
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        method = entry.get("method")
-        if isinstance(method, str):
-            logged_methods.append(method)
+    if log_file.exists():
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            method = entry.get("method")
+            if isinstance(method, str):
+                logged_methods.append(method)
     assert "textDocument/implementation" not in logged_methods
     await service.shutdown()
