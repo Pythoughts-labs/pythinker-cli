@@ -9,6 +9,7 @@ in-shell run_update_prompt flow.
 from __future__ import annotations
 
 import os
+import time
 from types import SimpleNamespace
 from typing import cast
 
@@ -86,24 +87,24 @@ def test_windows_source_checkout_keeps_python_upgrade_command(monkeypatch):
     ]
 
 
-async def test_shell_auto_update_toast_shows_new_version_immediately(monkeypatch):
+async def test_shell_auto_update_refreshes_persistent_notice(monkeypatch):
     import pythinker_code.ui.shell as shell_mod
 
     async def fake_refresh():
         return update.UpdateResult.UPDATE_AVAILABLE
 
-    toast_calls: list[tuple[str, dict[str, object]]] = []
     invalidated: list[bool] = []
 
-    def fake_toast(message: str, **kwargs):
-        toast_calls.append((message, kwargs))
-
     shell = shell_mod.Shell.__new__(shell_mod.Shell)
-    # SimpleNamespace stand-in for the CustomPromptSession; only invalidate()
-    # is exercised by _auto_update().
+    shell._update_notice_cache = (time.monotonic(), "stale")  # type: ignore[attr-defined]
     shell._prompt_session = SimpleNamespace(  # type: ignore[assignment]
         invalidate=lambda: invalidated.append(True)
     )
+
+    toast_calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_toast(message: str, **kwargs):
+        toast_calls.append((message, kwargs))
 
     monkeypatch.setattr(shell_mod, "refresh_update_cache_if_due", fake_refresh)
     monkeypatch.setattr(
@@ -115,18 +116,9 @@ async def test_shell_auto_update_toast_shows_new_version_immediately(monkeypatch
 
     await shell_mod.Shell._auto_update(shell)
 
-    assert toast_calls == [
-        (
-            "Update available: 0.19.0 → 0.21.0. Run /update to install.",
-            {
-                "topic": "update",
-                "duration": 30.0,
-                "immediate": True,
-                "style": "fg:ansibrightyellow bold",
-            },
-        )
-    ]
+    assert toast_calls == []
     assert invalidated == [True]
+    assert shell._update_notice_cache == (0.0, None)  # type: ignore[attr-defined]
 
 
 def test_windows_installer_launches_signed_inno_directly(monkeypatch, tmp_path):
