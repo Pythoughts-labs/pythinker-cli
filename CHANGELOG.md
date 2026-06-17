@@ -27,6 +27,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   Terminal resize triggers a hard preamble invalidation and briefly hides tips
   while prompt_toolkit settles at the new geometry. Handoffs defer during resize
   recovery; failed emits leave scrollback queued for retry instead of dropping it.
+  Outermost turn end always flushes completed prose even when recovery is active,
+  so PTY sessions no longer stall on ``Finalizing…`` without emitting the response.
 - **DiffLive streaming scroll geometry.** Non-interactive live streaming now uses
   cursor-down only when the next row provably fits the visible terminal region
   (frame origin + target row vs height); otherwise it falls back to newline scroll,

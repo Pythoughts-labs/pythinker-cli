@@ -535,12 +535,11 @@ def test_resize_triggers_recovery_and_hides_tips(monkeypatch) -> None:
     current_size[:] = [100, 30]
     view._tick_resize_recovery()
     assert view._force_refresh is True
-    assert view._resize_recovery_remaining == _interactive_mod._RESIZE_RECOVERY_FRAMES
+    assert view._resize_recovery_remaining == _interactive_mod._RESIZE_RECOVERY_FRAMES - 1
     assert "Tip:" not in view.render_pinned_status_tail(80).value
 
     view._force_refresh = False
     for expected in (
-        _interactive_mod._RESIZE_RECOVERY_FRAMES - 1,
         _interactive_mod._RESIZE_RECOVERY_FRAMES - 2,
         0,
     ):
@@ -580,6 +579,42 @@ async def test_flush_pending_scrollback_deferred_during_resize_recovery(monkeypa
 
     assert printed == []
     assert len(view._pending_scrollback) == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_scrollback_forced_on_turn_end_during_resize_recovery(
+    monkeypatch,
+) -> None:
+    printed: list[object] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._pending_scrollback.append((Text("Smoke turn one completed."), True))
+    view._resize_recovery_remaining = 2
+
+    await view._flush_pending_scrollback(force=True)
+
+    assert len(printed) == 1
+    assert isinstance(printed[0], Text)
+    assert printed[0].plain == "Smoke turn one completed."
+    assert view._pending_scrollback == []
 
 
 @pytest.mark.asyncio

@@ -186,18 +186,16 @@ class _PromptLiveView(_LiveView):
     def _tick_resize_recovery(self) -> None:
         """Detect terminal geometry changes and force a hard preamble invalidation."""
         size = self._current_terminal_size()
-        if size is None:
-            return
-        columns, rows = size
-        if columns < 1 or rows < 1:
-            _handoff_trace(f"RESIZE_IGNORE\t{columns}x{rows}")
-            return
-        if self._last_terminal_size != size:
-            self._last_terminal_size = size
-            self._resize_recovery_remaining = _RESIZE_RECOVERY_FRAMES
-            self._force_refresh = True
-            _handoff_trace(f"RESIZE\t{columns}x{rows}")
-            return
+        if size is not None:
+            columns, rows = size
+            if columns >= 1 and rows >= 1:
+                if self._last_terminal_size != size:
+                    self._last_terminal_size = size
+                    self._resize_recovery_remaining = _RESIZE_RECOVERY_FRAMES
+                    self._force_refresh = True
+                    _handoff_trace(f"RESIZE\t{columns}x{rows}")
+            else:
+                _handoff_trace(f"RESIZE_IGNORE\t{columns}x{rows}")
         if self._resize_recovery_remaining > 0:
             self._resize_recovery_remaining -= 1
 
@@ -388,7 +386,7 @@ class _PromptLiveView(_LiveView):
     async def _after_incremental_scrollback_emitted(self) -> None:
         self._prompt_session.invalidate()
 
-    async def _flush_pending_scrollback(self) -> None:
+    async def _flush_pending_scrollback(self, *, force: bool = False) -> None:
         """Drain queued scrollback to scrollback.
 
         In a real terminal, route through run_in_terminal so the prompt preamble
@@ -398,11 +396,12 @@ class _PromptLiveView(_LiveView):
 
         Scrollback is removed from the queue only after a successful handoff emit.
         Failed emits leave the queue intact for a later retry; handoffs are deferred
-        while terminal geometry is settling after a resize.
+        while terminal geometry is settling after a resize unless ``force`` is set
+        (e.g. outermost turn end must not leave completed prose stuck finalizing).
         """
         if not self._pending_scrollback:
             return
-        if self._defer_scrollback_handoff():
+        if not force and self._defer_scrollback_handoff():
             _handoff_trace(f"HANDOFF_DEFER\tpending_scrollback({len(self._pending_scrollback)})")
             return
         batch = self._pending_scrollback[:]
@@ -542,7 +541,7 @@ class _PromptLiveView(_LiveView):
                     else:
                         self._turn_ended = False
                     self._force_refresh = True
-                    await self._flush_pending_scrollback()
+                    await self._flush_pending_scrollback(force=turn_ended)
                     self._flush_prompt_refresh()
                     continue
 
