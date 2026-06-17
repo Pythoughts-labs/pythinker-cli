@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI: fix fossilized pinned spinner in interactive mode.** All scrollback emissions in `_PromptLiveView` (content blocks, tool cards, notifications, steer echoes, turn recaps) now route through `run_in_terminal` instead of calling `console.print` directly, preventing prompt_toolkit's ephemeral preamble from being captured into permanent scrollback. `ty` type checker is now blocking for the `pythinker-code` package.
+
+- **TUI report prose blocks:** Agent summaries with a parent bullet plus aligned field rows (`Issue` / `Anchor`, `Finding` / `Severity`, etc.) now render as structured blocks with preserved hierarchy, per-block label columns, and correct continuation wrap indent instead of flattening into sibling markdown bullets.
 - **LSP `go_to_implementation` now returns a structured error when the server does not advertise `implementationProvider`** instead of surfacing a raw exception. The client also advertises `implementation` capability during the LSP handshake so servers like Pyright enable the provider automatically.
 - **TUI Rich Live streaming matches interactive smoothness.** Non-interactive
   shell mode now emits stable markdown to scrollback during streams, drains paced

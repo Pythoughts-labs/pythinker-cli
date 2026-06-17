@@ -123,8 +123,11 @@ def test_render_agent_status_uses_compose_agent_output_not_compose() -> None:
     assert "agent-status" in rendered.value
 
 
-def test_prompt_final_scrollback_invalidates_after_transient_block_detached(monkeypatch) -> None:
-    """Prompt mode must clear the transient preamble before printing final scrollback."""
+@pytest.mark.asyncio
+async def test_prompt_final_scrollback_invalidates_after_transient_block_detached(
+    monkeypatch,
+) -> None:
+    """Prompt mode must detach the content block and flush it via run_in_terminal."""
     from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
 
     printed: list[object] = []
@@ -137,6 +140,16 @@ def test_prompt_final_scrollback_invalidates_after_transient_block_detached(monk
                 view_holder["view"]._current_content_block is None
             )
 
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
+    )
+
     view = _PromptLiveView(
         StatusUpdate(),
         prompt_session=cast(Any, _PromptSession()),
@@ -146,13 +159,8 @@ def test_prompt_final_scrollback_invalidates_after_transient_block_detached(monk
     view._current_content_block = _ContentBlock(is_think=False)
     view._current_content_block.append("final prompt text")
 
-    monkeypatch.setattr(
-        _live_view_mod,
-        "emit_scrollback_block",
-        lambda _console, renderable: printed.append(renderable),
-    )
-
     view.flush_content()
+    await view._flush_pending_scrollback()
 
     assert invalidation_saw_detached_block == [True]
     assert len(printed) == 1
@@ -917,10 +925,14 @@ async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkey
             await gate.wait()
             raise shell_visualize.QueueShutDown
 
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
     monkeypatch.setattr(
-        _live_view_mod,
-        "emit_scrollback_block",
-        lambda _console, renderable: printed.append(renderable),
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
     )
 
     view = _PromptLiveView(

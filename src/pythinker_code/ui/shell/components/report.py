@@ -34,6 +34,7 @@ from rich.style import Style as RichStyle
 from rich.table import Table
 from rich.text import Text
 
+from pythinker_code.ui.shell.components.report_prose_blocks import render_report_prose_blocks
 from pythinker_code.ui.shell.components.report_update import (
     parse_report_update,
     render_report_update,
@@ -500,6 +501,15 @@ def has_report_block(text: str) -> bool:
     )
 
 
+def _render_agent_segment(text: str, *, theme: ThemeName | None = None) -> RenderableType:
+    """Render a prose segment adjacent to a fenced report block through the prose-block renderer."""
+    if not detect_audit_report(text):
+        prose_blocks = render_report_prose_blocks(text, theme=theme)
+        if prose_blocks is not None:
+            return prose_blocks
+    return _agent_markdown(text)
+
+
 def render_agent_body(text: str, *, theme: ThemeName | None = None) -> RenderableType:
     """Render assistant text, promoting top-level ` ```report ` blocks to reports.
 
@@ -520,7 +530,7 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
             continue  # malformed — leave it for the markdown renderer
         before = "\n".join(lines[cursor:start]).strip("\n")
         if before:
-            segments.append(_agent_markdown(before))
+            segments.append(_render_agent_segment(before, theme=theme))
         segments.append(render_report(report, theme=theme))
         cursor = end
 
@@ -528,6 +538,10 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
         report_update = parse_report_update(text)
         if report_update is not None:
             return render_report_update(report_update, theme=theme)
+        if not detect_audit_report(text):
+            prose_blocks = render_report_prose_blocks(text, theme=theme)
+            if prose_blocks is not None:
+                return prose_blocks
         report_prose = _render_report_prose(text, theme=theme)
         if report_prose is not None:
             return report_prose
@@ -535,7 +549,7 @@ def render_agent_body(text: str, *, theme: ThemeName | None = None) -> Renderabl
 
     rest = "\n".join(lines[cursor:]).strip("\n")
     if rest:
-        segments.append(_agent_markdown(rest))
+        segments.append(_render_agent_segment(rest, theme=theme))
 
     spaced: list[RenderableType] = []
     for i, segment in enumerate(segments):

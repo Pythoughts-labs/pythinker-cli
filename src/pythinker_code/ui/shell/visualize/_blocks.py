@@ -311,7 +311,25 @@ def _normalize_streaming_preview_text(text: str) -> str:
 
 def _preview_wrap_parts(line: str) -> tuple[str, str, str]:
     """Return ``(first_prefix, hang_indent, content)`` for preview line wrapping."""
+    from pythinker_code.ui.shell.markdown.normalizers import (
+        is_field_continuation_line,
+        parse_aligned_field_line,
+    )
+
     stripped = line.rstrip("\r\n")
+    aligned = parse_aligned_field_line(stripped)
+    if aligned is not None:
+        _indent, label, value = aligned
+        value_start = stripped.rfind(value) if value else len(stripped)
+        prefix = stripped[:value_start]
+        hang_indent = " " * value_start
+        return prefix, hang_indent, value
+
+    if is_field_continuation_line(stripped):
+        leading_len = len(stripped) - len(stripped.lstrip())
+        hang_indent = " " * leading_len
+        return "", hang_indent, stripped.strip()
+
     match = _PREVIEW_FIELD_LINE_RE.match(stripped)
     if match is not None:
         leading, label, value = match.group(1), match.group(2), match.group(3)

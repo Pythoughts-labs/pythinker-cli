@@ -734,33 +734,13 @@ def _preview_orphan_lines(output: str) -> list[str]:
 
 
 class TestSpaceAlignedPreviewWrapping:
-    def test_normalize_preview_converts_space_columns_to_list_fields(self):
+    def test_normalize_preview_converts_space_columns_to_nested_fields(self):
         normalized = _normalize_streaming_preview_text(_FINDINGS_PREVIEW_SAMPLE)
-        assert "- Severity: medium" in normalized
+        assert "  - Severity: medium" in normalized
+        assert "- 1" in normalized
         assert "Severity  medium" not in normalized
 
-    def test_wrap_preview_line_hangs_continuation_indent(self):
-        line = (
-            "    What      Host allowlist is a single-member frozenset; safe-by-default but "
-            "invisible on new genuine-Anthropic hosts."
-        )
-        wrapped = _wrap_preview_line(line, 72)
-        assert wrapped.startswith("    What")
-        assert "\nbut invisible" not in wrapped
-        assert "\n    invisible" in wrapped or "\n    but invisible" in wrapped
-
-    def test_composing_preview_has_no_orphan_wrap_fragments(self, monkeypatch):
-        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
-
-        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
-        block = _ContentBlock(is_think=False)
-        block.append(_FINDINGS_PREVIEW_SAMPLE)
-        console = Console(record=True, width=72, color_system=None)
-        console.print(block.compose())
-        output = console.export_text()
-        assert _preview_orphan_lines(output) == []
-
-    def test_finalize_scrollback_uses_normalized_render_not_raw_columns(self, monkeypatch):
+    def test_finalize_scrollback_uses_structured_render_not_raw_columns(self, monkeypatch):
         from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 
         monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
@@ -773,8 +753,45 @@ class TestSpaceAlignedPreviewWrapping:
         console = Console(record=True, width=72, color_system=None)
         console.print(renderable)
         output = console.export_text()
-        assert "Severity: medium" in output
-        assert "Severity  medium" not in output
+        assert "● Severity:" not in output
+        assert "medium" in output
+        assert "llm.py:58-60" in output
+        assert "● Issue:" not in output
+        assert _preview_orphan_lines(output) == []
+
+    def test_wrap_preview_line_hangs_continuation_indent(self):
+        line = (
+            "    What      Host allowlist is a single-member frozenset; safe-by-default but "
+            "invisible on new genuine-Anthropic hosts."
+        )
+        wrapped = _wrap_preview_line(line, 72)
+        assert wrapped.startswith("    What")
+        assert "\nbut invisible" not in wrapped
+        assert "invisible on new" in wrapped
+        continuation_line = wrapped.split("\n", 1)[1]
+        assert continuation_line.startswith(" ")
+
+    def test_wrap_preview_line_hangs_raw_issue_row(self):
+        line = (
+            "    Issue   Nested interactive elements: card <button> contains <button>s — "
+            "invalid HTML"
+        )
+        wrapped = _wrap_preview_line(line, 72)
+        assert wrapped.startswith("    Issue")
+        assert "invalid HTML" in wrapped
+        if "\n" in wrapped:
+            continuation_line = wrapped.split("\n", 1)[1]
+            assert continuation_line.startswith(" ")
+
+    def test_composing_preview_has_no_orphan_wrap_fragments(self, monkeypatch):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
+        block = _ContentBlock(is_think=False)
+        block.append(_FINDINGS_PREVIEW_SAMPLE)
+        console = Console(record=True, width=72, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
         assert _preview_orphan_lines(output) == []
 
 

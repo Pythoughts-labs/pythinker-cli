@@ -69,11 +69,11 @@ format-web: ## Auto-format web sources with npm run format.
 .PHONY: check check-pythinker-code check-pythinker-core check-pythinker-host check-pythinker-review check-pythinker-sdk check-web
 check: check-pythinker-code check-pythinker-core check-pythinker-host check-pythinker-review check-pythinker-sdk check-web ## Run linting and type checks for all packages.
 check-pythinker-code: ## Run linting and type checks for Pythinker Code.
-	@echo "==> Checking Pythinker Code (ruff + pyright + ty; ty is non-blocking)"
+	@echo "==> Checking Pythinker Code (ruff + pyright + ty)"
 	@uv run ruff check
 	@uv run ruff format --check
 	@uv run pyright
-	@uv run ty check || true
+	@uv run ty check
 check-pythinker-core: ## Run linting and type checks for Pythinker core.
 	@echo "==> Checking Pythinker core (ruff + pyright + ty; ty is non-blocking)"
 	@uv run --directory packages/pythinker-core ruff check

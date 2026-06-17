@@ -808,9 +808,9 @@ class _LiveView:
             if isinstance(block, DiffDisplayBlock) and block.path:
                 self._recap_files_modified.add(block.path)
 
-    def _print_turn_recap(self) -> None:
+    def _build_turn_recap_block(self) -> RenderableType | None:
         if not self._show_turn_recaps:
-            return
+            return None
         # TextPart values are streaming deltas, not paragraphs. Concatenate them
         # directly; joining with spaces/newlines can split BPE-sized chunks into
         # unreadable recap text such as `. py think er /re ports ...`.
@@ -822,16 +822,20 @@ class _LiveView:
             files_changed=len(self._recap_files_modified),
         )
         if not line:
+            return None
+        return Padding(
+            Markdown(sanitize_ansi(line), style=tui_rich_style("muted") + Style(italic=True)),
+            (0, 1),
+        )
+
+    def _print_turn_recap(self) -> None:
+        block = self._build_turn_recap_block()
+        if block is None:
             return
         console.print()
         # Pad the recap to the same horizontal inset as message/tool cards so
         # it stays aligned with the transcript instead of spanning edge-to-edge.
-        console.print(
-            Padding(
-                Markdown(sanitize_ansi(line), style=tui_rich_style("muted") + Style(italic=True)),
-                (0, 1),
-            )
-        )
+        console.print(block)
         console.print()
 
     def _working_indicator(self) -> RenderableType:
@@ -1119,7 +1123,7 @@ class _LiveView:
                     content = list(user_input)
                 else:
                     content = [TextPart(text=user_input)]
-                console.print(render_user_echo(Message(role="user", content=content)))
+                self._emit_steer_echo(render_user_echo(Message(role="user", content=content)))
             case TurnEnd():
                 self._active_turn_depth = max(0, self._active_turn_depth - 1)
                 if self._active_turn_depth == 0:
@@ -1161,7 +1165,7 @@ class _LiveView:
                 truncated_q = (q[:50] + "...") if len(q) > 50 else q
                 self._btw_question = None
                 if response:
-                    _print_action_block(
+                    self._emit_action_block(
                         Panel(
                             Markdown(response),
                             title=f"[dim]btw: {rich_escape(truncated_q)}[/dim]",
@@ -1171,7 +1175,7 @@ class _LiveView:
                         )
                     )
                 elif error:
-                    _print_action_block(
+                    self._emit_action_block(
                         Panel(
                             Text(error, style=tui_rich_style("error")),
                             title="[dim]btw (error)[/dim]",
@@ -1380,7 +1384,7 @@ class _LiveView:
         for tool_call_id in list(self._tool_call_blocks.keys()):
             block = self._tool_call_blocks.pop(tool_call_id)
             self._archive_completed_tool_card(block)
-            _print_action_block(block.compose())
+            self._emit_action_block(block.compose())
             self.refresh_soon()
         self.flush_notifications()
         if not is_interrupt and self._active_turn_depth == 0 and self._pending_turn_recap:
@@ -1439,6 +1443,12 @@ class _LiveView:
     def _emit_incremental_scrollback(self, renderable: RenderableType) -> None:
         emit_scrollback_block(console, renderable)
 
+    def _emit_action_block(self, renderable: RenderableType) -> None:
+        _print_action_block(renderable)
+
+    def _emit_steer_echo(self, renderable: RenderableType) -> None:
+        console.print(renderable)
+
     def _finalize_content_block_once(self, block: _ContentBlock) -> None:
         """Promote one content block to scrollback exactly once."""
         self._flush_held_tool_search()
@@ -1456,7 +1466,7 @@ class _LiveView:
         if self._held_tool_search_block is not None:
             block = self._held_tool_search_block
             self._held_tool_search_block = None
-            _print_action_block(block.compose())
+            self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_finished_tool_calls(self) -> None:
@@ -1489,14 +1499,14 @@ class _LiveView:
                 self._held_tool_search_block = block
             else:
                 self._flush_held_tool_search()
-                _print_action_block(block.compose())
+                self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
         self._live_notification_blocks.clear()
         while self._notification_blocks:
-            _print_action_block(self._notification_blocks.popleft().compose())
+            self._emit_action_block(self._notification_blocks.popleft().compose())
             self.refresh_soon()
 
     def append_content(self, part: ContentPart) -> None:
@@ -1607,27 +1617,27 @@ class _LiveView:
                 )
             )
         block.resolve(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_question_answered(self, event: QuestionAnswered) -> None:
         self.flush_content(FlushReason.TOOL_START)
         block = _QuestionAnsweredBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_progress_note(self, event: ProgressNote) -> None:
         self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _ProgressNoteBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_suggestion(self, event: Suggestion) -> None:
         self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _SuggestionBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def request_approval(self, request: ApprovalRequest) -> None:
@@ -1686,7 +1696,7 @@ class _LiveView:
             subtitle=msg.file_path,
             border_style=tui_rich_style("border"),
         )
-        _print_action_block(panel)
+        self._emit_action_block(panel)
 
     def request_question(self, request: QuestionRequest) -> None:
         self._question_request_queue.append(request)

@@ -152,7 +152,7 @@ class TestParamsJsonStringCoercion:
 
     def test_todo_write_merge_field_is_ignored(self):
         params = Params(
-            merge=True,  # type: ignore[call-arg]
+            merge=True,
             todos=[{"content": "Task A", "status": "pending"}],  # type: ignore[list-item]
         )
         assert params.todos is not None

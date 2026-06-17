@@ -130,6 +130,7 @@ class _PromptLiveView(_LiveView):
         self._btw_refresh_task: asyncio.Task[None] | None = None
         self._btw_run_task: asyncio.Task[None] | None = None
         self._status_refresh_task: asyncio.Task[None] | None = None
+        self._pending_scrollback: list[tuple[RenderableType, bool]] = []
 
     # -- Helpers -------------------------------------------------------------
 
@@ -222,6 +223,7 @@ class _PromptLiveView(_LiveView):
                 # through to the calm status cadence below.
                 advanced = self.advance_stream_reveal()
                 emitted = await self._emit_incremental_content_commits()
+                await self._flush_pending_scrollback()
                 needs_animation = self._streaming_needs_animation_frame()
                 if advanced or emitted or needs_animation:
                     self._dirty = True
@@ -264,6 +266,39 @@ class _PromptLiveView(_LiveView):
 
     async def _after_incremental_scrollback_emitted(self) -> None:
         self._prompt_session.invalidate()
+
+    async def _flush_pending_scrollback(self) -> None:
+        """Drain queued scrollback via run_in_terminal to avoid fossilizing the preamble."""
+        if not self._pending_scrollback:
+            return
+        to_print = self._pending_scrollback[:]
+        self._pending_scrollback.clear()
+
+        def emit() -> None:
+            for renderable, blank_row in to_print:
+                console.print(renderable)
+                if blank_row:
+                    console.print()
+
+        await run_in_terminal(emit)
+        self._prompt_session.invalidate()
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, True))
+
+    def _emit_action_block(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, True))
+
+    def _emit_steer_echo(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, False))
+
+    def _print_turn_recap(self) -> None:
+        block = self._build_turn_recap_block()
+        if block is None:
+            return
+        self._pending_scrollback.append((Text(""), False))
+        self._pending_scrollback.append((block, False))
+        self._pending_scrollback.append((Text(""), False))
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
         await super()._drain_content_for_transition(reason)
@@ -340,15 +375,18 @@ class _PromptLiveView(_LiveView):
                         if reason := self._transition_flush_reason(msg):
                             await self._drain_content_for_transition(reason)
                         self.dispatch_wire_message(msg)
+                        await self._flush_pending_scrollback()
                         self._flush_prompt_refresh()
                         continue
                     self.cleanup(is_interrupt=False)
+                    await self._flush_pending_scrollback()
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, StepInterrupted):
                     self.cleanup(is_interrupt=True)
+                    await self._flush_pending_scrollback()
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
@@ -364,6 +402,7 @@ class _PromptLiveView(_LiveView):
                     else:
                         self._turn_ended = False
                     self._force_refresh = True
+                    await self._flush_pending_scrollback()
                     self._flush_prompt_refresh()
                     continue
 
@@ -375,6 +414,7 @@ class _PromptLiveView(_LiveView):
                     # input — are interactive and must repaint at once rather than
                     # wait for the status refresh cadence.
                     self._force_refresh = True
+                await self._flush_pending_scrollback()
                 self._flush_prompt_refresh()
 
             # NOTE: btw dismiss waiting is handled by the shell layer
@@ -541,8 +581,8 @@ class _PromptLiveView(_LiveView):
         # Intercept shell-only commands — same handling as the Enter/queue path
         if self._intercept_shell_command(user_input):
             return
-        # Print permanently in conversation flow with UI-only text placeholders expanded.
-        console.print(render_user_echo_text(user_input.resolved_command))
+        # Queue permanently in conversation flow with UI-only text placeholders expanded.
+        self._emit_steer_echo(render_user_echo_text(user_input.resolved_command))
         from pythinker_code.telemetry import track
 
         track("input_steer")
@@ -617,10 +657,6 @@ class _PromptLiveView(_LiveView):
             return ANSI("")
         body = render_to_ansi(Group(*blocks), columns=columns).rstrip("\n")
         return ANSI(body if body else "")
-
-    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
-        self._prompt_session.invalidate()
-        super()._emit_final_scrollback(renderable)
 
     def render_pinned_status_tail(self, columns: int) -> ANSI:
         """Render the trailing verb spinner that the prompt keeps pinned below a

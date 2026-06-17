@@ -513,7 +513,7 @@ everything sequentially.
 - Line length is 100.
 - Ruff handles lint and format (`E`, `F`, `UP`, `B`, `SIM`, `I`).
 - Pyright runs in standard mode with strict coverage for `src/pythinker_code/**/*.py`.
-- `ty` is run but currently non-blocking in Makefile targets.
+- `ty` is run and **blocking** in `check-pythinker-code`; other package targets still use `|| true` due to third-party type stubs. Keep `pythinker-code` ty-clean.
 - Tests use `pytest` and `pytest-asyncio`; unit tests are `tests/test_*.py`.
 - Prefer explicit async boundaries; avoid blocking calls in async runtime paths.
 - Keep exceptions actionable. User-facing CLI errors should explain what to do next.
