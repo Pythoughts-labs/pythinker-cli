@@ -90,7 +90,13 @@ _COMPOSING_PREVIEW_LINES = 12
 # a little per refresh tick so text flows smoothly. "Keep up" pacing: the step
 # scales with the backlog so a fast model never lags noticeably behind.
 _STREAM_REVEAL_MIN_CELLS = 2
-_STREAM_REVEAL_CATCHUP_TICKS = 2
+# Spread the backlog over more frames so each step is small and even. Higher =
+# smoother but slower catch-up.
+_STREAM_REVEAL_CATCHUP_TICKS = 4
+# Hard cap on cells revealed per 25fps tick (normal motion). Bounds a bursty
+# chunk to an even flow (~800 cells/s) instead of one lurch; reveal_all and
+# drain_for_transition still drain instantly at finalize/transition.
+_STREAM_REVEAL_MAX_CELLS = 32
 _TOKEN_RATE_WINDOW_S = 1.5
 _TOKEN_RATE_MIN_SAMPLES = 3
 
@@ -625,7 +631,12 @@ class _ContentBlock:
             -(-backlog_cells // _STREAM_REVEAL_CATCHUP_TICKS),
         )
         if reduced_motion_enabled():
+            # Reduced motion: drain faster (fewer frames); skip the smoothing cap.
             step_cells = max(step_cells, -(-backlog_cells // 2))
+        else:
+            # Bound the per-tick step so large bursts reveal as an even flow
+            # across several frames instead of one lurch.
+            step_cells = min(step_cells, _STREAM_REVEAL_MAX_CELLS)
         self._revealed_len = _advance_by_display_cells(
             self.raw_text,
             self._revealed_len,

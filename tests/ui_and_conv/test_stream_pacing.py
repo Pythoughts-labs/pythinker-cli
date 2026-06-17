@@ -64,6 +64,43 @@ def test_paced_reveal_is_monotonic_and_bounded() -> None:
     assert block._revealed_len == len(_TEXT)
 
 
+def test_paced_reveal_step_is_capped_per_tick(monkeypatch) -> None:
+    """A large backlog reveals as an even flow, not one lurch (normal motion)."""
+    from rich.cells import cell_len
+
+    from pythinker_code.ui.shell.visualize import _blocks
+    from pythinker_code.ui.shell.visualize._blocks import _STREAM_REVEAL_MAX_CELLS
+
+    # Force normal motion so the smoothing cap applies (test env may disable motion).
+    monkeypatch.setattr(_blocks, "reduced_motion_enabled", lambda: False)
+
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append("x" * 1000)  # 1000 single-cell chars => large backlog
+
+    before = block._revealed_len
+    assert block.reveal_tick() is True
+    revealed_cells = cell_len(block.raw_text[before : block._revealed_len])
+    assert revealed_cells <= _STREAM_REVEAL_MAX_CELLS
+
+
+def test_paced_reveal_reduced_motion_ignores_cap(monkeypatch) -> None:
+    """Reduced motion still drains fast (>= half the backlog), bypassing the cap."""
+    from rich.cells import cell_len
+
+    from pythinker_code.ui.shell.visualize import _blocks
+    from pythinker_code.ui.shell.visualize._blocks import _STREAM_REVEAL_MAX_CELLS
+
+    monkeypatch.setattr(_blocks, "reduced_motion_enabled", lambda: True)
+
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append("x" * 1000)
+
+    before = block._revealed_len
+    block.reveal_tick()
+    revealed_cells = cell_len(block.raw_text[before : block._revealed_len])
+    assert revealed_cells > _STREAM_REVEAL_MAX_CELLS
+
+
 def test_paced_reveal_advances_by_display_cells_for_cjk() -> None:
     from rich.cells import cell_len
 
