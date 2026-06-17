@@ -208,6 +208,261 @@ async def test_prompt_incremental_scrollback_uses_terminal_handoff(monkeypatch) 
     assert invalidations == ["invalidate"]
 
 
+@pytest.mark.asyncio
+async def test_incremental_commits_throttled_between_ticks(monkeypatch) -> None:
+    """Status-loop commits are rate-limited so run_in_terminal teardown is rare."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+    from pythinker_code.ui.shell.visualize._interactive import (
+        _INCREMENTAL_COMMIT_MIN_INTERVAL_S,
+    )
+
+    terminal_handoffs: list[str] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        terminal_handoffs.append("run")
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: None,
+    )
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: clock["now"])
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    def _fresh_block() -> _ContentBlock:
+        block = _ContentBlock(is_think=False)
+        block.append("Paragraph one.\n\ntail")
+        assert block._committed_renderables
+        return block
+
+    # First tick: due immediately (last-commit time starts at 0.0) -> one handoff.
+    view._current_content_block = _fresh_block()
+    assert await view._maybe_emit_incremental_commits() is True
+
+    # Second tick within the interval: suppressed, no extra handoff, content kept.
+    view._current_content_block = _fresh_block()
+    assert await view._maybe_emit_incremental_commits() is False
+    assert view._current_content_block._committed_renderables  # not taken/stranded
+
+    # Advance past the interval: emits again.
+    clock["now"] += _INCREMENTAL_COMMIT_MIN_INTERVAL_S + 0.01
+    assert await view._maybe_emit_incremental_commits() is True
+
+    assert terminal_handoffs == ["run", "run"]
+
+
+@pytest.mark.asyncio
+async def test_transition_drain_bypasses_commit_throttle(monkeypatch) -> None:
+    """The direct (unthrottled) emit path always flushes, even within the interval."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    terminal_handoffs: list[str] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        terminal_handoffs.append("run")
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: None,
+    )
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: clock["now"])
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    # Throttled call consumes the budget.
+    block_a = _ContentBlock(is_think=False)
+    block_a.append("First.\n\ntail")
+    view._current_content_block = block_a
+    assert await view._maybe_emit_incremental_commits() is True
+
+    # Within the interval, the DIRECT method still flushes (used by transition/finalize).
+    block_b = _ContentBlock(is_think=False)
+    block_b.append("Second.\n\ntail")
+    view._current_content_block = block_b
+    assert await view._emit_incremental_content_commits() is True
+
+    assert terminal_handoffs == ["run", "run"]
+
+
+@pytest.mark.asyncio
+async def test_many_completed_paragraphs_batch_into_one_terminal_handoff(monkeypatch) -> None:
+    """N completed paragraphs in one tick coalesce into a SINGLE teardown, not N."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    terminal_handoffs: list[str] = []
+    printed: list[object] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        terminal_handoffs.append("run")
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    block = _ContentBlock(is_think=False)
+    for paragraph in ("p1.\n\n", "p2.\n\n", "p3.\n\n"):
+        block.append(paragraph)
+    block.append("tail")  # three committable paragraphs
+    assert len(block._committed_renderables) >= 3
+    view._current_content_block = block
+
+    assert await view._maybe_emit_incremental_commits() is True
+    # One teardown for all three paragraphs; each paragraph printed exactly once.
+    assert terminal_handoffs == ["run"]
+    assert len(printed) >= 3
+
+
+@pytest.mark.asyncio
+async def test_suppressed_incremental_commit_remains_visible_in_live_preview(monkeypatch) -> None:
+    """A throttled-away commit is NOT taken from the block, so the preview still shows it."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod, "emit_scrollback_block", lambda _console, renderable: None
+    )
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._last_incremental_commit_at = 1000.0  # interval not yet elapsed -> suppress
+
+    block = _ContentBlock(is_think=False)
+    block.append("Visible paragraph.\n\ntail")
+    before = list(block._committed_renderables)
+    assert before  # something is committable
+    view._current_content_block = block
+
+    assert await view._maybe_emit_incremental_commits() is False
+    # Suppressed: renderables retained verbatim, still rendering in the preview.
+    assert block._committed_renderables == before
+
+
+@pytest.mark.asyncio
+async def test_throttled_committed_blocks_eventually_flush_on_direct_drain(monkeypatch) -> None:
+    """After suppression, the direct drain (transition/turn-end) clears the block."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod, "emit_scrollback_block", lambda _console, renderable: None
+    )
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._last_incremental_commit_at = 1000.0  # suppress the throttled path
+
+    block = _ContentBlock(is_think=False)
+    block.append("Pending.\n\ntail")
+    view._current_content_block = block
+    assert await view._maybe_emit_incremental_commits() is False
+    assert block._committed_renderables  # still pending
+
+    # Finalize/transition path drains directly and leaves nothing stranded.
+    assert await view._emit_incremental_content_commits() is True
+    assert not block._committed_renderables
+
+
+@pytest.mark.asyncio
+async def test_throttled_commits_do_not_duplicate_scrollback(monkeypatch) -> None:
+    """A suppressed-then-drained commit prints each renderable exactly once (no dupes)."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    printed: list[object] = []
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(id(renderable)),
+    )
+    monkeypatch.setattr(_interactive_mod.time, "monotonic", lambda: 1000.0)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._last_incremental_commit_at = 1000.0  # suppress first
+
+    block = _ContentBlock(is_think=False)
+    block.append("Once.\n\ntail")
+    view._current_content_block = block
+
+    assert await view._maybe_emit_incremental_commits() is False  # suppressed, nothing printed
+    assert await view._emit_incremental_content_commits() is True  # direct drain prints once
+    # No renderable printed twice across the suppressed call + the drain.
+    assert len(printed) == len(set(printed))
+
+
 def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     import time as _time
 

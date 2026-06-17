@@ -79,6 +79,17 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
+# Minimum seconds between status-loop scrollback commits. Each commit triggers a
+# run_in_terminal prompt-app teardown (visible pop); coalescing to ~3/s removes
+# most per-paragraph flicker. This is a MITIGATION, not the structural fix —
+# transition/turn-end drains call the unthrottled path directly, and a preview
+# overflow forces an immediate flush (see _INCREMENTAL_COMMIT_FORCE_BLOCKS) so
+# content is never stranded or silently clipped.
+_INCREMENTAL_COMMIT_MIN_INTERVAL_S = 0.30
+# If this many committed blocks pile up before the interval elapses, flush now:
+# they would otherwise be cropped out of the bounded live preview (silent
+# clipping) while waiting for the next allowed commit.
+_INCREMENTAL_COMMIT_FORCE_BLOCKS = 4
 
 
 class _PromptLiveView(_LiveView):
@@ -131,6 +142,7 @@ class _PromptLiveView(_LiveView):
         self._btw_run_task: asyncio.Task[None] | None = None
         self._status_refresh_task: asyncio.Task[None] | None = None
         self._pending_scrollback: list[tuple[RenderableType, bool]] = []
+        self._last_incremental_commit_at: float = 0.0
 
     # -- Helpers -------------------------------------------------------------
 
@@ -222,7 +234,7 @@ class _PromptLiveView(_LiveView):
                 # has backlog, so reduced-motion / unpaced turns fall straight
                 # through to the calm status cadence below.
                 advanced = self.advance_stream_reveal()
-                emitted = await self._emit_incremental_content_commits()
+                emitted = await self._maybe_emit_incremental_commits()
                 await self._flush_pending_scrollback()
                 needs_animation = self._streaming_needs_animation_frame()
                 if advanced or emitted or needs_animation:
@@ -247,6 +259,33 @@ class _PromptLiveView(_LiveView):
 
     def advance_stream_reveal(self) -> bool:
         return super().advance_stream_reveal()
+
+    async def _maybe_emit_incremental_commits(self) -> bool:
+        """Coalescing wrapper for the 25fps status loop.
+
+        Each emit triggers a run_in_terminal teardown; cap them to
+        ``_INCREMENTAL_COMMIT_MIN_INTERVAL_S`` so streaming doesn't pop per
+        paragraph. When suppressed, committed renderables stay in the block and
+        keep rendering in the live preview (no vanish gap) — UNLESS they pile up
+        past ``_INCREMENTAL_COMMIT_FORCE_BLOCKS``, in which case the preview would
+        crop them (silent clipping), so flush now. Transition and turn-end drains
+        call ``_emit_incremental_content_commits`` directly and are never
+        throttled, so nothing is stranded at finalize.
+        """
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return False
+        now = time.monotonic()
+        overflow = len(block._committed_renderables) >= _INCREMENTAL_COMMIT_FORCE_BLOCKS
+        within_interval = (
+            now - self._last_incremental_commit_at < _INCREMENTAL_COMMIT_MIN_INTERVAL_S
+        )
+        if within_interval and not overflow:
+            return False
+        emitted = await self._emit_incremental_content_commits()
+        if emitted:
+            self._last_incremental_commit_at = now
+        return emitted
 
     async def _emit_incremental_content_commits(self) -> bool:
         block = self._current_content_block
