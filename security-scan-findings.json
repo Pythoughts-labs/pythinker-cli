@@ -109,7 +109,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/code-review/code_review/servers/github_app.py",
+    "filePath": "reference-scan/code-review/code_review/servers/github_app.py",
     "severity": "CRITICAL",
     "vulnSlug": "missing-webhook-signature",
     "title": "Missing mandatory webhook secret verification",
@@ -124,7 +124,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/codereview-pythinker/src/mapper.ts",
+    "filePath": "reference-scan/codereview-pythinker/src/mapper.ts",
     "severity": "CRITICAL",
     "vulnSlug": "other-rce-project-config",
     "title": "Arbitrary Command Execution via Project Configuration",
@@ -139,7 +139,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/codereview-pythinker/src/validation.ts",
+    "filePath": "reference-scan/codereview-pythinker/src/validation.ts",
     "severity": "CRITICAL",
     "vulnSlug": "other-command-injection",
     "title": "Command injection via feature test commands",
@@ -154,7 +154,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/harness/env/nodejs.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/harness/env/nodejs.ts",
     "severity": "CRITICAL",
     "vulnSlug": "rce",
     "title": "Remote Code Execution via Agent Shell Tool",
@@ -169,7 +169,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/harness/types.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/harness/types.ts",
     "severity": "CRITICAL",
     "vulnSlug": "agent-tool-definition-shell-exec",
     "title": "Unrestricted shell command execution tool exposed to AI agent",
@@ -182,7 +182,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/harness/utils/shell-output.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/harness/utils/shell-output.ts",
     "severity": "CRITICAL",
     "vulnSlug": "rce",
     "title": "Remote Code Execution via env.exec in Shell Tool",
@@ -195,7 +195,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
     "severity": "CRITICAL",
     "vulnSlug": "other-rce-new-function",
     "title": "Arbitrary Code Execution via Function Constructor",
@@ -214,7 +214,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/src/core/resolve-config-value.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/src/core/resolve-config-value.ts",
     "severity": "CRITICAL",
     "vulnSlug": "command-injection",
     "title": "Command injection via shell execution in config value resolution",
@@ -228,7 +228,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/src/core/tools/bash.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/src/core/tools/bash.ts",
     "severity": "CRITICAL",
     "vulnSlug": "rce",
     "title": "RCE via prompt injection in bash tool",
@@ -241,7 +241,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/src/core/tools/find.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/src/core/tools/find.ts",
     "severity": "CRITICAL",
     "vulnSlug": "rce",
     "title": "RCE via argument injection in find tool",
@@ -254,7 +254,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
     "severity": "CRITICAL",
     "vulnSlug": "command-injection",
     "title": "Command Injection in OAuth URL opening via exec",
@@ -622,7 +622,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/code-review/code_review/git_providers/gitlab_provider.py",
+    "filePath": "reference-scan/code-review/code_review/git_providers/gitlab_provider.py",
     "severity": "HIGH",
     "vulnSlug": "other-gitlab-submodule-injection",
     "title": "Unvalidated submodule project resolution allows accessing internal projects",
@@ -638,7 +638,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/codereview-pythinker/src/state.ts",
+    "filePath": "reference-scan/codereview-pythinker/src/state.ts",
     "severity": "HIGH",
     "vulnSlug": "other-path-traversal",
     "title": "Path traversal in file operations via unsanitized featureId",
@@ -662,7 +662,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/agent.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/agent.ts",
     "severity": "HIGH",
     "vulnSlug": "agentic-untrusted-prompt-input",
     "title": "Untrusted user input flows into LLM prompt without separation from system instructions",
@@ -675,7 +675,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/harness/session/uuid.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/harness/session/uuid.ts",
     "severity": "HIGH",
     "vulnSlug": "insecure-crypto",
     "title": "Insecure random number generation using Math.random",
@@ -688,7 +688,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/harness/types.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/harness/types.ts",
     "severity": "HIGH",
     "vulnSlug": "agent-tool-definition-file-write",
     "title": "Unrestricted file write tools exposed to AI agent",
@@ -703,7 +703,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/agent/src/proxy.ts",
+    "filePath": "reference-scan/pi-main/packages/agent/src/proxy.ts",
     "severity": "HIGH",
     "vulnSlug": "other-ssrf",
     "title": "SSRF via HTTP tool with potentially controllable proxy URL",
@@ -716,7 +716,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/ai/src/utils/oauth/oauth-page.ts",
+    "filePath": "reference-scan/pi-main/packages/ai/src/utils/oauth/oauth-page.ts",
     "severity": "HIGH",
     "vulnSlug": "xss",
     "title": "Cross-site scripting in OAuth callback page via unescaped title",
@@ -733,7 +733,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
     "severity": "HIGH",
     "vulnSlug": "supply-chain",
     "title": "Unvalidated Download of Doom WAD File Leading to Supply Chain Risk",
@@ -748,7 +748,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/processor/src/agents/claude-agent-sdk.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/processor/src/agents/claude-agent-sdk.ts",
     "severity": "HIGH",
     "vulnSlug": "prompt-injection",
     "title": "Prompt injection via repository files enables arbitrary code execution in AI agent",
@@ -763,7 +763,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/processor/src/agents/codex-sdk.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/processor/src/agents/codex-sdk.ts",
     "severity": "HIGH",
     "vulnSlug": "prompt-injection",
     "title": "Prompt injection via repository files enables arbitrary code execution in AI agent",
@@ -778,7 +778,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/processor/src/index.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/processor/src/index.ts",
     "severity": "HIGH",
     "vulnSlug": "path-traversal",
     "title": "Path traversal via unsanitized manifestPath, rootPathOverride, and projectId",
@@ -792,7 +792,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/processor/src/triage.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/processor/src/triage.ts",
     "severity": "HIGH",
     "vulnSlug": "path-traversal",
     "title": "Path traversal via unsanitized projectId in dataDir, readProjectConfig, and loadAllFileRecords",
@@ -807,7 +807,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/processor/src/triage.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/processor/src/triage.ts",
     "severity": "HIGH",
     "vulnSlug": "other-prompt-injection",
     "title": "Prompt injection via unsanitized finding data sent to LLM",
@@ -993,7 +993,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/examples/extensions/doom-overlay/wad-finder.ts",
     "severity": "MEDIUM",
     "vulnSlug": "path-traversal",
     "title": "Missing Path Validation in WAD File Discovery",
@@ -1008,7 +1008,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/scripts/tool-stats.ts",
+    "filePath": "reference-scan/pi-main/scripts/tool-stats.ts",
     "severity": "MEDIUM",
     "vulnSlug": "xss",
     "title": "Cross-Site Scripting in generated HTML report",
@@ -1021,7 +1021,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/pythinker-security-scanner/src/commands/export.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/pythinker-security-scanner/src/commands/export.ts",
     "severity": "MEDIUM",
     "vulnSlug": "xss",
     "title": "Markdown injection via github_username in exported findings",
@@ -1048,7 +1048,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/ai/src/cli.ts",
+    "filePath": "reference-scan/pi-main/packages/ai/src/cli.ts",
     "severity": "HIGH_BUG",
     "vulnSlug": "missing-await",
     "title": "Missing await on prompt call may corrupt auth credentials",
@@ -1063,7 +1063,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
+    "filePath": "reference-scan/pi-main/packages/coding-agent/examples/extensions/doom-overlay/doom-engine.ts",
     "severity": "HIGH_BUG",
     "vulnSlug": "missing-await",
     "title": "Missing await on Async Module Initialization",
@@ -1107,7 +1107,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/scanner/src/matchers/connectrpc-handler-impl.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/scanner/src/matchers/connectrpc-handler-impl.ts",
     "severity": "BUG",
     "vulnSlug": "other-incomplete-function-detection",
     "title": "Multi-line function signatures not detected by ConnectRPC handler matcher",
@@ -1120,7 +1120,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pythinker-security-scanner/packages/scanner/src/matchers/github-workflow-security.ts",
+    "filePath": "reference-scan/pythinker-security-scanner/packages/scanner/src/matchers/github-workflow-security.ts",
     "severity": "BUG",
     "vulnSlug": "other-ineffective-run-block-pattern",
     "title": "Ineffective regex for run block expression interpolation in GitHub workflow scanner",
@@ -1328,7 +1328,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/code-review/code_review/servers/github_app.py",
+    "filePath": "reference-scan/code-review/code_review/servers/github_app.py",
     "severity": "LOW",
     "vulnSlug": "unauthenticated-endpoint",
     "title": "Marketplace webhook endpoint lacks authentication",
@@ -1341,7 +1341,7 @@
     "producedByRunId": "20260522131731-829aeca41599b1a8"
   },
   {
-    "filePath": "blackbox/pi-main/packages/ai/src/providers/openai-codex-responses.ts",
+    "filePath": "reference-scan/pi-main/packages/ai/src/providers/openai-codex-responses.ts",
     "severity": "LOW",
     "vulnSlug": "other-weak-random-id",
     "title": "Weak request ID generation using Math.random fallback",

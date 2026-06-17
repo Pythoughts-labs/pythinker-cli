@@ -1,6 +1,6 @@
 """Marketplace registry: state, source parsing, and local resolution.
 
-Mirrors the reference (``blackbox/pythinker-src`` ``utils/plugins``): a
+Mirrors the Claude/Codex marketplace plugin layout: a
 *marketplace* is a named catalog of plugins. Configured marketplaces are tracked
 in ``known_marketplaces.json`` as ``{name: {source, installLocation,
 lastUpdated, autoUpdate}}``; each ``source`` is a discriminated union

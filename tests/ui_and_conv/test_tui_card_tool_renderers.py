@@ -204,6 +204,89 @@ def test_read_directory_result_says_listed_directory():
 
 
 # ---------------------------------------------------------------------------
+# ReadMediaFile
+# ---------------------------------------------------------------------------
+
+
+def test_readmedia_renders_image_summary_from_message():
+    raw_payload = (
+        '<image path="/repo/assets/cat.png">'
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+        "</image>"
+    )
+    rendered = _render(
+        "ReadMediaFile",
+        {"path": "/repo/assets/cat.png"},
+        output=raw_payload,
+        details={
+            "message": (
+                "Loaded image file `/repo/assets/cat.png` "
+                "(image/png, 2048 bytes, original size 640x480px)."
+            )
+        },
+    )
+
+    assert "⏺ ReadMedia(" in rendered
+    assert "assets/cat.png" in rendered
+    assert "Read image" in rendered
+    assert "image/png" in rendered
+    assert "2.0 KB" in rendered
+    assert "640x480" in rendered
+    assert "data:image/png;base64" not in rendered
+    assert "iVBORw0KGgo" not in rendered
+
+
+def test_readmedia_renders_video_summary_from_message():
+    rendered = _render(
+        "ReadMediaFile",
+        {"path": "/repo/assets/clip.mp4"},
+        output='<video path="/repo/assets/clip.mp4">data:video/mp4;base64,AAAA</video>',
+        details={
+            "message": "Loaded video file `/repo/assets/clip.mp4` (video/mp4, 1048576 bytes)."
+        },
+    )
+
+    assert "⏺ ReadMedia(" in rendered
+    assert "assets/clip.mp4" in rendered
+    assert "Read video" in rendered
+    assert "video/mp4" in rendered
+    assert "1.0 MB" in rendered
+    assert "data:video/mp4;base64" not in rendered
+
+
+def test_readmedia_unsupported_text_file_preserves_error():
+    rendered = _render(
+        "ReadMediaFile",
+        {"path": "/repo/notes.txt"},
+        output="`/repo/notes.txt` is a text file. Use ReadFile to read text files.",
+        is_error=True,
+    )
+
+    assert "⏺ ReadMedia(" not in rendered
+    assert "✘ ReadMedia(" in rendered
+    assert "`/repo/notes.txt` is a text file. Use ReadFile to read text files." in rendered
+    assert "Read text" not in rendered
+
+
+def test_readmedia_collapsed_output_suppresses_wrapped_base64_payload():
+    raw_payload = (
+        '<image path="/repo/assets/cat.png">\n'
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB\n"
+        "</image>"
+    )
+    rendered = _render(
+        "ReadMediaFile",
+        {"path": "/repo/assets/cat.png"},
+        output=raw_payload,
+    )
+
+    assert "Read image" in rendered
+    assert "data:image/png;base64" not in rendered
+    assert "iVBORw0KGgo" not in rendered
+    assert "<image" not in rendered
+
+
+# ---------------------------------------------------------------------------
 # write
 # ---------------------------------------------------------------------------
 
@@ -431,6 +514,114 @@ def test_invalid_empty_grep_call_names_missing_pattern():
     assert "✘ Search(<missing pattern> in .)" in rendered
     assert "Error searching files" in rendered
     assert "Search ... in ." not in rendered
+
+
+# ---------------------------------------------------------------------------
+# SmartSearch
+# ---------------------------------------------------------------------------
+
+
+def test_smartsearch_renders_query_path_and_structured_counts():
+    rendered = _render(
+        "SmartSearch",
+        {"query": "renderer parity", "path": "/repo/src"},
+        output="## exact\nsrc/ui/card.py:12:renderer parity",
+        details={
+            "extras": {
+                "result_count": 4,
+                "file_count": 2,
+                "line_count": 4,
+                "returned_results": 4,
+            }
+        },
+    )
+
+    assert "⏺ SmartSearch(" in rendered
+    assert "renderer parity" in rendered
+    assert "src" in rendered
+    assert "Found 4 lines across 2 files" in rendered
+    assert "src/ui/card.py" not in rendered
+
+
+def test_smartsearch_renders_query_without_path():
+    rendered = _render(
+        "SmartSearch",
+        {"query": "ToolExecutionComponent"},
+        output="No matches found across smart search passes.",
+    )
+
+    assert "ToolExecutionComponent" in rendered
+    assert " in ." not in rendered
+    assert "No matches found across smart search passes." in rendered
+
+
+def test_smartsearch_short_collapsed_result_that_hides_text_is_expandable():
+    defn = get_tool_renderer("SmartSearch")
+    assert defn is not None
+    comp = ToolExecutionComponent("SmartSearch", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"query": "renderer parity", "path": "/repo"})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text="src/ui/card.py:12:renderer parity"))
+
+    collapsed = render_plain(comp.render(), width=120)
+
+    assert "Found 1 line across 1 file" in collapsed
+    assert "src/ui/card.py" not in collapsed
+    assert comp.can_expand
+
+
+def test_smartsearch_expanded_shows_bounded_sectioned_text():
+    output = "\n".join(
+        [
+            "## exact",
+            "src/a.py:1:renderer parity",
+            "src/a.py:2:renderer parity",
+            "",
+            "## any term",
+            "src/b.py:3:smart search renderer",
+            "src/c.py:4:smart search renderer",
+            "src/d.py:5:smart search renderer",
+            "src/e.py:6:smart search renderer",
+            "src/f.py:7:smart search renderer",
+            "src/g.py:8:smart search renderer",
+            "src/h.py:9:smart search renderer",
+            "src/i.py:10:smart search renderer",
+            "src/j.py:11:smart search renderer",
+            "src/k.py:12:smart search renderer",
+            "src/l.py:13:smart search renderer",
+            "src/m.py:14:smart search renderer",
+            "src/n.py:15:smart search renderer",
+            "src/o.py:16:smart search renderer",
+            "src/p.py:17:smart search renderer",
+        ]
+    )
+
+    rendered = _render(
+        "SmartSearch",
+        {"query": "renderer parity", "path": "/repo"},
+        output=output,
+        expanded=True,
+    )
+
+    assert "Found 17 lines across 16 files" in rendered
+    assert "## exact" in rendered
+    assert "src/a.py:1:renderer parity" in rendered
+    assert "## any term" in rendered
+    assert "src/p.py:17:smart search renderer" not in rendered
+    assert "more lines" in rendered
+
+
+def test_smartsearch_error_preserves_tool_text():
+    rendered = _render(
+        "SmartSearch",
+        {"query": "renderer parity", "path": "/outside"},
+        output="`/outside` is outside the workspace.",
+        is_error=True,
+    )
+
+    assert "Error searching files" in rendered
+    assert "`/outside` is outside the workspace." in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -1396,6 +1587,169 @@ def test_task_output_renders_id_and_block_flag():
     assert "block" in rendered
 
 
+def test_taskinput_renders_id_and_redacted_input_preview():
+    rendered = _render(
+        "TaskInput",
+        {
+            "task_id": "bash-abc123",
+            "text": "OPENAI_API_KEY=sk-secret\nrun migration",
+            "newline": False,
+        },
+    )
+
+    assert "⏺ TaskInput(" in rendered
+    assert "bash-abc123" in rendered
+    assert "[redacted: input looks secret-like]" in rendered
+    assert "sk-secret" not in rendered
+
+
+def test_taskinput_result_uses_extras_status():
+    rendered = _render(
+        "TaskInput",
+        {"task_id": "bash-abc123", "text": "continue", "newline": True},
+        output=(
+            "tool_status: success\n"
+            "task_id: bash-abc123\n"
+            "input_event_id: i123\n"
+            "newline: true\n"
+            "input: continue"
+        ),
+        details={"extras": {"status": "success"}},
+    )
+
+    assert "Input queued" in rendered
+    assert "success" in rendered
+    assert "tool_status:" not in rendered
+    assert "input_event_id:" not in rendered
+
+
+def test_taskinput_collapsed_metadata_is_expandable_and_expanded_shows_details():
+    defn = get_tool_renderer("TaskInput")
+    assert defn is not None
+    output = (
+        "tool_status: success\n"
+        "task_id: bash-abc123\n"
+        "input_event_id: i123\n"
+        "newline: true\n"
+        "input: continue"
+    )
+    comp = ToolExecutionComponent("TaskInput", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"task_id": "bash-abc123", "text": "continue", "newline": True})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text=output, details={"extras": {"status": "success"}}))
+
+    collapsed = render_plain(comp.render(), width=120)
+
+    assert "Input queued" in collapsed
+    assert "input_event_id:" not in collapsed
+    assert "tool_status:" not in collapsed
+    assert comp.can_expand
+
+    comp.set_expanded(True)
+    expanded = render_plain(comp.render(), width=120)
+
+    assert "input_event_id: i123" in expanded
+    assert "tool_status: success" in expanded
+    assert "input: continue" in expanded
+
+
+def test_taskhandoff_renders_id():
+    rendered = _render(
+        "TaskHandoff",
+        {"task_id": "agent-abc123"},
+        output="tool_status: success\ntask_id: agent-abc123\nstatus: running",
+    )
+
+    assert "⏺ TaskHandoff(" in rendered
+    assert "agent-abc123" in rendered
+
+
+def test_taskhandoff_result_parses_metadata_and_status():
+    rendered = _render(
+        "TaskHandoff",
+        {"task_id": "agent-abc123"},
+        output=(
+            "tool_status: success\n"
+            "task_id: agent-abc123\n"
+            "kind: agent\n"
+            "status: completed\n"
+            "description: Python subagents scan\n"
+            "command: [not a shell task]\n"
+            "cwd: /repo\n"
+            "output_path: /tmp/pythinker/tasks/agent-abc123.output\n"
+            "stop_hint: Use TaskStop with this task_id to request cancellation.\n"
+            "reattach_warning: Live terminal reattachment is not available for this task."
+        ),
+        details={"extras": {"status": "success"}},
+        width=120,
+    )
+
+    assert "Handoff details" in rendered
+    assert "success" in rendered
+    assert "completed" in rendered
+    assert "Python subagents scan" in rendered
+    assert "agent-abc123.output" in rendered
+    assert "tool_status:" not in rendered
+    assert "output_path:" not in rendered
+
+
+def test_taskhandoff_metadata_description_sanitizes_ansi():
+    rendered = _render(
+        "TaskHandoff",
+        {"task_id": "agent-abc123"},
+        output=(
+            "tool_status: success\n"
+            "task_id: agent-abc123\n"
+            "status: completed\n"
+            "description: Python subagents scan\x1b[31m\n"
+            "output_path: /tmp/pythinker/tasks/agent-abc123.output"
+        ),
+        details={"extras": {"status": "success"}},
+        width=120,
+    )
+
+    assert "\x1b" not in rendered
+    assert "Python subagents scan" in rendered
+
+
+def test_taskhandoff_collapsed_metadata_is_expandable_and_expanded_shows_details():
+    defn = get_tool_renderer("TaskHandoff")
+    assert defn is not None
+    output = (
+        "tool_status: success\n"
+        "task_id: agent-abc123\n"
+        "kind: agent\n"
+        "status: completed\n"
+        "description: Python subagents scan\n"
+        "command: [not a shell task]\n"
+        "cwd: /repo\n"
+        "output_path: /tmp/pythinker/tasks/agent-abc123.output\n"
+        "stop_hint: Use TaskStop with this task_id to request cancellation.\n"
+        "reattach_warning: Live terminal reattachment is not available for this task."
+    )
+    comp = ToolExecutionComponent("TaskHandoff", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"task_id": "agent-abc123"})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text=output, details={"extras": {"status": "success"}}))
+
+    collapsed = render_plain(comp.render(), width=120)
+
+    assert "Handoff details" in collapsed
+    assert "tool_status:" not in collapsed
+    assert "output_path:" not in collapsed
+    assert "stop_hint:" not in collapsed
+    assert comp.can_expand
+
+    comp.set_expanded(True)
+    expanded = render_plain(comp.render(), width=120)
+
+    assert "tool_status: success" in expanded
+    assert "output_path: /tmp/pythinker/tasks/agent-abc123.output" in expanded
+    assert "stop_hint: Use TaskStop with this task_id to request cancellation." in expanded
+
+
 def test_task_stop_renders_id():
     rendered = _render("TaskStop", {"task_id": "abc-123", "reason": "user requested"})
     assert "⏺ TaskStop(" in rendered
@@ -1458,6 +1812,408 @@ def test_tool_search_streaming_uses_searching_header():
     rendered = _render_streaming("ToolSearch", {})
     assert "Searching Tools…" in rendered
     assert "max_results" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Memory / Recall / Scratchpad
+# ---------------------------------------------------------------------------
+
+
+def test_memory_add_renders_compact_call_and_result_summary():
+    rendered = _render(
+        "Memory",
+        {
+            "action": "add",
+            "target": "memory",
+            "content": "Renderer cards now cover Memory without dumping note bodies.",
+        },
+        output="Added memory entry to MEMORY.md.",
+    )
+
+    assert "⏺ Memory(add to project memory)" in rendered
+    assert "Added project memory" in rendered
+    assert "Renderer cards now cover Memory" not in rendered
+
+
+def test_memory_action_call_sanitizes_ansi():
+    rendered = _render(
+        "Memory",
+        {
+            "action": "add\x1b[31m",
+            "target": "memory",
+            "content": "Renderer cards now cover Memory without dumping note bodies.",
+        },
+        output="Added memory entry to MEMORY.md.",
+    )
+
+    assert "\x1b" not in rendered
+
+
+def test_memory_list_expanded_shows_bounded_status_text():
+    status = "\n".join(f"{index}. Memory fact {index}" for index in range(1, 20))
+    rendered = _render(
+        "Memory",
+        {"action": "list", "target": "memory"},
+        output=status,
+        expanded=True,
+    )
+
+    assert "⏺ Memory(list project memory)" in rendered
+    assert "Listed project memory" in rendered
+    assert "19 entries" in rendered
+    assert "1. Memory fact 1" in rendered
+    assert "15. Memory fact 15" in rendered
+    assert "19. Memory fact 19" not in rendered
+    assert "more lines" in rendered
+
+
+def test_memory_short_collapsed_list_with_expand_hint_is_expandable():
+    defn = get_tool_renderer("Memory")
+    assert defn is not None
+    comp = ToolExecutionComponent("Memory", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"action": "list", "target": "memory"})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text="1. Short memory fact"))
+
+    rendered = render_plain(comp.render(), width=120)
+
+    assert "ctrl+o expand" in rendered
+    assert comp.can_expand
+
+
+def test_memory_denial_text_is_preserved_verbatim():
+    denial = (
+        "Not saved to memory — you declined. This looks like it belongs in a "
+        "project file; edit that file directly so the change actually takes effect."
+    )
+    rendered = _render(
+        "Memory",
+        {"action": "add", "target": "user", "content": "Always run the renderer gate."},
+        output=denial,
+        width=200,
+    )
+
+    assert "⏺ Memory(add to user memory)" in rendered
+    assert denial in rendered
+
+
+def test_recall_search_renders_summary_without_raw_session_list():
+    output = "\n".join(
+        [
+            "Prior sessions in this workspace (most relevant first):",
+            "",
+            "- session_id: sess-abc",
+            "  title: Renderer parity investigation",
+            "- session_id: sess-def",
+            "  title: TUI streaming smoothness",
+            "",
+            'Read one with Recall(mode="read", session_id="...").',
+        ]
+    )
+    rendered = _render(
+        "Recall",
+        {"mode": "search", "query": "renderer parity"},
+        output=output,
+        details={"message": "Found 2 prior session(s)."},
+    )
+
+    assert '⏺ Recall(search "renderer parity")' in rendered
+    assert "Found 2 prior sessions" in rendered
+    assert "session_id:" not in rendered
+    assert "Renderer parity investigation" not in rendered
+
+
+def test_recall_short_collapsed_search_with_expand_hint_is_expandable():
+    defn = get_tool_renderer("Recall")
+    assert defn is not None
+    comp = ToolExecutionComponent("Recall", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"mode": "search", "query": "renderer"})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(
+        ToolResultPayload(
+            text="\n".join(
+                [
+                    "Prior sessions in this workspace (most relevant first):",
+                    "",
+                    "- session_id: sess-abc",
+                    "  title: Renderer parity investigation",
+                    "",
+                    'Read one with Recall(mode="read", session_id="...").',
+                ]
+            ),
+            details={"message": "Found 1 prior session(s)."},
+        )
+    )
+
+    rendered = render_plain(comp.render(), width=120)
+
+    assert "ctrl+o expand" in rendered
+    assert comp.can_expand
+
+
+def test_recall_read_expanded_shows_bounded_transcript_text():
+    transcript = "\n".join(f"[assistant] message {index}" for index in range(1, 25))
+    rendered = _render(
+        "Recall",
+        {"mode": "read", "session_id": "sess-abc", "message_offset": 5, "max_messages": 20},
+        output=transcript,
+        details={"message": "Read session sess-abc."},
+        expanded=True,
+    )
+
+    assert "⏺ Recall(read sess-abc · offset 5 · limit 20)" in rendered
+    assert "Read session sess-abc" in rendered
+    assert "[assistant] message 1" in rendered
+    assert "[assistant] message 15" in rendered
+    assert "[assistant] message 24" not in rendered
+    assert "more lines" in rendered
+
+
+def test_recall_read_session_id_sanitizes_ansi():
+    rendered = _render(
+        "Recall",
+        {"mode": "read", "session_id": "sess-abc\x1b[31m"},
+        output="[assistant] short recalled message",
+        details={"message": "Read session sess-abc."},
+    )
+
+    assert "\x1b" not in rendered
+
+
+def test_recall_short_collapsed_read_with_expand_hint_is_expandable():
+    defn = get_tool_renderer("Recall")
+    assert defn is not None
+    comp = ToolExecutionComponent("Recall", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"mode": "read", "session_id": "sess-abc"})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(
+        ToolResultPayload(
+            text="[assistant] short recalled message",
+            details={"message": "Read session sess-abc."},
+        )
+    )
+
+    rendered = render_plain(comp.render(), width=120)
+
+    assert "ctrl+o expand" in rendered
+    assert comp.can_expand
+
+
+def test_scratchpad_add_renders_kind_summary_without_note_body():
+    rendered = _render(
+        "Scratchpad",
+        {
+            "action": "add",
+            "kind": "decision",
+            "content": "Use bounded expanded text for memory-family cards.",
+        },
+        output="Note recorded (decision).",
+    )
+
+    assert "⏺ Scratchpad(decision)" in rendered
+    assert "Recorded decision note" in rendered
+    assert "Use bounded expanded text" not in rendered
+
+
+def test_scratchpad_kind_call_sanitizes_ansi():
+    rendered = _render(
+        "Scratchpad",
+        {
+            "action": "add",
+            "kind": "decision\x1b[31m",
+            "content": "Use bounded expanded text for memory-family cards.",
+        },
+        output="Note recorded (decision).",
+    )
+
+    assert "\x1b" not in rendered
+
+
+def test_scratchpad_error_text_is_preserved_verbatim():
+    error = "Scratchpad is only available to the root agent."
+    rendered = _render(
+        "Scratchpad",
+        {"action": "add", "kind": "note", "content": "temporary observation"},
+        output=error,
+        is_error=True,
+    )
+
+    assert "✘ Scratchpad(note)" in rendered
+    assert error in rendered
+
+
+# ---------------------------------------------------------------------------
+# LSP / MCP resources / Worktree
+# ---------------------------------------------------------------------------
+
+
+def test_lsp_renders_operation_location_and_result_summary():
+    rendered = _render(
+        "LSP",
+        {
+            "operation": "findReferences",
+            "file_path": "/repo/src/foo.py",
+            "line": 12,
+            "character": 8,
+        },
+        output="src/foo.py:12:8\nsrc/bar.py:4:1",
+        details={
+            "output": "src/foo.py:12:8\nsrc/bar.py:4:1",
+            "message": "",
+            "display": [],
+            "extras": {
+                "result_count": 2,
+                "file_count": 2,
+                "operation": "findReferences",
+            },
+        },
+    )
+
+    assert "⏺ LSP(" in rendered
+    assert 'operation: "findReferences"' in rendered
+    assert 'file: "src/foo.py"' in rendered
+    assert "position: 12:8" in rendered
+    assert "Found 2 references across 2 files" in rendered
+    assert "src/foo.py:12:8" not in rendered
+
+
+def test_lsp_short_collapsed_result_that_hides_text_is_expandable():
+    defn = get_tool_renderer("LSP")
+    assert defn is not None
+    comp = ToolExecutionComponent("LSP", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args(
+        {
+            "operation": "findReferences",
+            "file_path": "/repo/src/foo.py",
+            "line": 12,
+            "character": 8,
+        }
+    )
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(
+        ToolResultPayload(
+            text="src/foo.py:12:8",
+            details={
+                "extras": {
+                    "result_count": 1,
+                    "file_count": 1,
+                    "operation": "findReferences",
+                },
+            },
+        )
+    )
+
+    collapsed = render_plain(comp.render(), width=120)
+
+    assert "Found 1 reference" in collapsed
+    assert "src/foo.py:12:8" not in collapsed
+    assert comp.can_expand
+
+
+def test_lsp_zero_result_counts_preserve_guidance_text():
+    rendered = _render(
+        "LSP",
+        {
+            "operation": "findReferences",
+            "file_path": "/repo/src/foo.py",
+            "line": 12,
+            "character": 8,
+        },
+        output="No references found at this position.\nTry checking the symbol location.",
+        details={
+            "output": "No references found at this position.\nTry checking the symbol location.",
+            "message": "",
+            "display": [],
+            "extras": {
+                "result_count": 0,
+                "file_count": 0,
+                "operation": "findReferences",
+            },
+        },
+    )
+
+    assert "No references found at this position." in rendered
+    assert "Try checking the symbol location." in rendered
+    assert "Found 0" not in rendered
+
+
+def test_lsp_fallback_result_sanitizes_ansi_text():
+    rendered = _render(
+        "LSP",
+        {"operation": "hover", "file_path": "/repo/src/foo.py", "line": 3, "character": 4},
+        output="Hover info available\x1b[31m",
+    )
+
+    assert "\x1b" not in rendered
+    assert "Hover info available" in rendered
+
+
+def test_lsp_result_without_counts_renders_fallback_text():
+    rendered = _render(
+        "LSP",
+        {"operation": "hover", "file_path": "/repo/src/foo.py", "line": 3, "character": 4},
+        output="Hover info available\n```python\nvalue: int\n```",
+    )
+
+    assert "⏺ LSP(" in rendered
+    assert 'operation: "hover"' in rendered
+    assert "Hover info available" in rendered
+
+
+def test_mcp_resource_renderers_use_expected_labels():
+    listed = _render(
+        "ListMcpResources",
+        {"server": "context7"},
+        output='[{"uri":"docs://react","name":"React docs"}]',
+    )
+    read = _render(
+        "ReadMcpResource",
+        {"server": "context7", "uri": "docs://react"},
+        output='{"contents":[{"text":"React docs"}]}',
+    )
+
+    assert '⏺ MCPResources(List MCP resources from server "context7")' in listed
+    assert "React docs" in listed
+    assert '⏺ MCPResource(Read resource "docs://react" from server "context7")' in read
+    assert "React docs" in read
+
+
+def test_worktree_renderers_parse_tool_output_metadata():
+    entered = _render(
+        "EnterWorktree",
+        {"name": "fix-ui"},
+        output="\n".join(
+            [
+                "session_worktree: entered",
+                "worktree_path: /tmp/pythinker-worktree",
+                "original_work_dir: /repo",
+                "cleanup: retained until you remove it explicitly",
+            ]
+        ),
+    )
+    exited = _render(
+        "ExitWorktree",
+        {},
+        output="\n".join(
+            [
+                "session_worktree: exited",
+                "worktree_path: /tmp/pythinker-worktree",
+                "restored_work_dir: /repo",
+                "retained: true",
+            ]
+        ),
+    )
+
+    assert "⏺ Worktree(Creating worktree…)" in entered
+    assert "Switched to worktree" in entered
+    assert "/tmp/pythinker-worktree" in entered
+    assert "⏺ Worktree(Exiting worktree…)" in exited
+    assert "Kept worktree" in exited
+    assert "Returned to /repo" in exited
 
 
 # ---------------------------------------------------------------------------

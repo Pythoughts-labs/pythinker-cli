@@ -1037,7 +1037,7 @@ async def task(app: Shell, args: str):
 
 
 async def _theme_code_picker(app: Shell, soul: PythinkerSoul, arg: str) -> None:
-    """pythinker-x-style syntax theme picker (live preview + persist)."""
+    """Shell syntax theme picker (live preview + persist)."""
     from pythinker_code.share import get_share_dir
     from pythinker_code.ui.shell.selectors.code_theme import run_code_theme_selector
     from pythinker_code.ui.theme import get_tui_tokens as _get_tok_theme

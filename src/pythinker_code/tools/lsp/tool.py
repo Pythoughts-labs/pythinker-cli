@@ -140,13 +140,18 @@ class Lsp(_tooling.CallableTool2[Params]):
                 str(self._work_dir),
             )
 
-            formatted, _result_count, _file_count = format_result(
+            formatted, result_count, file_count = format_result(
                 params.operation,
                 result,
                 str(self._work_dir),
             )
             builder.write(formatted)
             builder.mark_untrusted()
+            builder.extras(
+                result_count=result_count,
+                file_count=file_count,
+                operation=params.operation.value,
+            )
             return builder.ok(brief=self._brief(params))
         except Exception as exc:
             logger.error(

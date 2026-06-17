@@ -61,9 +61,8 @@ class LLM:
 # through `api.anthropic.com` (see `auth/anthropic_direct.py:ANTHROPIC_BASE_URL`).
 _GENUINE_ANTHROPIC_HOSTS = frozenset({"api.anthropic.com"})
 
-# Model-name substrings that do NOT support `tool_reference`, mirroring the
-# reference's `DEFAULT_UNSUPPORTED_MODEL_PATTERNS` in
-# `blackbox/pythinker-src/src/utils/toolSearch.ts`. Haiku is the only known one.
+# Model-name substrings that do NOT support `tool_reference`. Haiku is the only
+# known unsupported pattern in the deferred tool-search workflow.
 _TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS = ("haiku",)
 
 
@@ -73,9 +72,8 @@ def supports_deferred_tool_search(llm: LLM | None) -> bool:
     WHY THIS GATE EXISTS — DO NOT REMOVE without reading this:
 
     `ToolSearch` only makes sense when the provider supports Anthropic's
-    `tool_reference` / `defer_loading` beta, the mechanism the reference impl
-    (`blackbox/pythinker-src/src/utils/toolSearch.ts`) uses to hold large MCP
-    tool sets out of context and discover them on demand. Crucially, MANY
+    `tool_reference` / `defer_loading` beta, the mechanism Pythinker uses to hold
+    large MCP tool sets out of context and discover them on demand. Crucially, MANY
     providers in this CLI declare `type="anthropic"` yet point at their OWN
     Anthropic-COMPATIBLE proxy that does NOT forward that beta: z.ai/GLM
     (`api.z.ai/api/anthropic`), Kimi, MiniMax, and opencode_go. On those — and on
@@ -84,17 +82,15 @@ def supports_deferred_tool_search(llm: LLM | None) -> bool:
     with GLM-5.2) loop on it, "searching" for tools forever instead of calling
     them. So `_is_tool_visible` hides `ToolSearch` whenever this returns False.
 
-    The gate mirrors the reference's three checks: env override (`getToolSearchMode`),
+    The gate applies three checks: env override (`ENABLE_TOOL_SEARCH`),
     a genuine-first-party-host check (`isFirstPartyPythoughtsBaseUrl`), and a
     model-capability check (`modelSupportsToolReference`). Keep it derived from the
     ACTIVE model so a mid-session `/model` switch re-evaluates it.
 
-    `ENABLE_TOOL_SEARCH` is the explicit escape hatch (mirrors the reference): set
-    it truthy to force-enable on a proxy you know forwards the beta, or falsy to
-    kill it entirely.
+    `ENABLE_TOOL_SEARCH` is the explicit escape hatch: set it truthy to force-enable
+    on a proxy you know forwards the beta, or falsy to kill it entirely.
     """
-    # Explicit opt-in / kill switch wins over host heuristics, exactly like the
-    # reference's `getToolSearchMode()` env precedence.
+    # Explicit opt-in / kill switch wins over host heuristics.
     env = os.getenv("ENABLE_TOOL_SEARCH")
     if env is not None:
         return env.strip().lower() not in {"", "0", "false", "no", "off"}

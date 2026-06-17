@@ -1,4 +1,4 @@
-"""Blackbox-inspired motion helpers for the shell TUI."""
+"""Motion and animation helpers for the shell TUI."""
 
 from __future__ import annotations
 

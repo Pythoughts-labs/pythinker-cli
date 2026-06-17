@@ -4,7 +4,7 @@ token estimation, and related utilities."""
 from __future__ import annotations
 
 import pytest
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.style import Style
 from rich.text import Text
 
@@ -1428,3 +1428,85 @@ class TestActivePreviewRowBudgetRepro:
 
         assert "formatting diagram" in ansi
         assert "╭" not in ansi
+
+
+# ---------------------------------------------------------------------------
+# Closed ```report fence followed by newline-free trailing prose
+# ---------------------------------------------------------------------------
+# A closed report fence followed by trailing prose that arrives in chunks
+# without newlines must still be committed to scrollback so the preview shows
+# the clean panel instead of raw fence bytes. The boundary is computable the
+# moment the trailing paragraph exists at all; the previous "no newline in new
+# content" guard incorrectly held the fence back until the next paragraph
+# break, which on small delta streams meant the raw JSON sat in the live
+# preview until end-of-stream.
+def test_closed_report_fence_commits_before_trailing_paragraph_terminator() -> None:
+    block = _ContentBlock(is_think=False)
+    stream = (
+        "Verification\n\n"
+        "Findings:\n\n"
+        "```report\n"
+        '{"title": "LSP review", "findings": []}\n'
+        "```\n\n"
+        "Overall the module is solid."
+    )
+    for ch in stream:
+        block.append(ch)
+    console = Console(record=True, width=100, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+    assert "LSP review" in output
+    # Trailing paragraph is still pending and shows the live caret.
+    assert "Overall the module is solid" in output
+    # The raw report fence must NOT be in the live preview anymore.
+    assert "```report" not in output
+    for token in _JSON_LEAK_TOKENS:
+        assert token not in output, f"{token!r} leaked into the active preview"
+
+
+class TestLiveViewIncrementalCommit:
+    @pytest.mark.asyncio
+    async def test_emit_incremental_content_commits_scrollback(self) -> None:
+        from pythinker_code.ui.shell.visualize._live_view import _LiveView
+        from pythinker_code.wire.types import StatusUpdate
+
+        view = _LiveView(StatusUpdate())
+        block = _ContentBlock(is_think=False)
+        view._current_content_block = block
+        block.append("Hello world.\n\nSecond paragraph continues here.")
+        block._flush_committed()
+
+        emitted: list[RenderableType] = []
+        view._emit_incremental_scrollback = lambda renderable: emitted.append(renderable)  # type: ignore[method-assign]
+
+        assert await view._emit_incremental_content_commits()
+        assert len(emitted) == 1
+        assert block._committed_renderables == []
+
+    @pytest.mark.asyncio
+    async def test_finalize_after_incremental_commit_no_double_emit(self) -> None:
+        from unittest.mock import patch
+
+        from pythinker_code.ui.shell.visualize._live_view import _LiveView
+        from pythinker_code.wire.types import StatusUpdate
+
+        view = _LiveView(StatusUpdate())
+        block = _ContentBlock(is_think=False)
+        view._current_content_block = block
+        block.append("Hello world.\n\nTail still streaming")
+        block._flush_committed()
+
+        emitted: list[RenderableType] = []
+        view._emit_incremental_scrollback = lambda renderable: emitted.append(renderable)  # type: ignore[method-assign]
+        await view._emit_incremental_content_commits()
+
+        with patch.object(
+            block,
+            "promote_to_scrollback",
+            wraps=block.promote_to_scrollback,
+        ) as promote:
+            view.flush_content()
+            assert len(emitted) == 1
+            promote.assert_called_once()
+            assert block.is_promoted
+            assert view._current_content_block is None

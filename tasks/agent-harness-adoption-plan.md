@@ -3,7 +3,7 @@
 **Generated:** 2026-06-12 from a 14-cluster / 28-agent map+adversarial-verify workflow comparing the
 local reference agent harness against `src/pythinker_code`. Every item survived a refutation pass
 against live source (124 kept, 3 refuted). `<ref>/` = the reference workspace root under
-`blackbox/` (Rust crates); pythinker paths are repo-relative. Naming rule: all adopted work is framed as
+`external reference ` (Rust crates); pythinker paths are repo-relative. Naming rule: all adopted work is framed as
 generic pythinker agent enhancements — no external product names in code, comments, commits, or docs.
 
 ## Execution discipline
@@ -1108,7 +1108,7 @@ generic pythinker agent enhancements — no external product names in code, comm
 
 **Today.** Partial. Wire protocol types are pydantic models with a versioned initialize handshake (src/pythinker_code/wire/jsonrpc.py protocol_version + ClientCapabilities; types.py WireMessageEnvelope with a v1 back-compat alias), and an e2e handshake snapshot pins the slash-command list (tests_e2e), but no JSON Schema fixtures are generated/checked in for wire or ACP types — external clients must read Python source.
 
-**Verifier note.** Claim confirmed with one naming nit. Versioned handshake exists: src/pythinker_code/wire/jsonrpc.py:85 ClientCapabilities, :109-113 InitializeParams.protocol_version. WireMessageEnvelope exists (src/pythinker_code/wire/types.py:722-749, untagged {type, payload}); the 'v1 back-compat alias' the claim cites is actually the _compat_legacy_fields validator (types.py:304-310) normalizing task_tool_call_id -> parent_tool_call_id — there is no literal 'v1' tag. The e2e handshake inline-snapshot pin is real (tests_e2e/test_wire_protocol.py:test_initialize_handshake, snapshot includes slash_commands). The core gap stands: no JSON Schema fixtures are generated or checked in for wire/ACP types — find for *.schema.json hits only blackbox/agent_x (the vendored upstream clone, not pythinker), and rg for model_json_schema across src/tests/tests_e2e/docs returns nothing.
+**Verifier note.** Claim confirmed with one naming nit. Versioned handshake exists: src/pythinker_code/wire/jsonrpc.py:85 ClientCapabilities, :109-113 InitializeParams.protocol_version. WireMessageEnvelope exists (src/pythinker_code/wire/types.py:722-749, untagged {type, payload}); the 'v1 back-compat alias' the claim cites is actually the _compat_legacy_fields validator (types.py:304-310) normalizing task_tool_call_id -> parent_tool_call_id — there is no literal 'v1' tag. The e2e handshake inline-snapshot pin is real (tests_e2e/test_wire_protocol.py:test_initialize_handshake, snapshot includes slash_commands). The core gap stands: no JSON Schema fixtures are generated or checked in for wire/ACP types — find for *.schema.json hits only external reference agent_x (the vendored upstream clone, not pythinker), and rg for model_json_schema across src/tests/tests_e2e/docs returns nothing.
 
 **Adopt.** Add a small generator (make target) that dumps model_json_schema() for the WireMessage envelope union and JSON-RPC message types into a checked-in schema/ dir, plus a snapshot test that regeneration is clean — giving wire clients a codegen artifact and CI drift detection for protocol changes.
 

@@ -1,7 +1,7 @@
 # Streaming render bug — root-cause report
 
 **Date:** 2026-06-16 · **Branch:** `feat/tui-streaming-pr`
-**Status:** Root cause PROVEN (code + reproduction). Fix plan pending blackbox-design synthesis.
+**Status:** Root cause PROVEN (code + reproduction). Fix plan integrated into shell streaming work.
 
 ## Symptom
 
@@ -83,61 +83,39 @@ If a stream is **cancelled mid-fence**, the ` ```report ` never closes → `pars
 `None` → `render_agent_body` falls back to markdown → raw JSON lands in **scrollback** (not just
 preview). Out of scope for the preview fix; note for the fix plan.
 
-## Blackbox reference synthesis (study complete)
+## Prior design study (complete)
 
-Neither reference is Python: **`pythinker-x` = codex-rs** (Rust/Ratatui), **`pythinker-src` = TS/React-Ink**.
-Neither has a fenced-`report`-JSON panel, but both render the in-progress tail **through the real
-markdown renderer** (not plain text like our `_render_preview_text`). codex-rs is the **decisively
-better** design for *this* leak; it adds two things on top of a two-region model:
+Other TUI stacks render the in-progress tail through markdown (not plain text like
+`_render_preview_text`). The better pattern for this leak combines:
 
-- **Newline-gated commit** (`pythinker-x/codex-rs/tui/src/markdown_stream.rs:87-96`): never render
-  past the last `\n`; a partial line is never shown.
-- **Fence-aware holdback** (`table_detect.rs:143-195` `FenceTracker` + `table_holdback.rs` +
-  `controller.rs:373-401` `active_tail_budget_lines`): a structurally-unstable region (table, or
-  anything inside an open fence) is kept in the **mutable tail** until it closes, then committed
-  atomically. Structured *review findings* are a typed event formatted on completion — never
-  streamed as text at all (`protocol.rs:3162-3190`, `review_format.rs:23-82`).
-- TS ref (`Markdown.tsx:176-235` `StreamingMarkdown`): stable-prefix/unstable-suffix split at the
-  last top-level block boundary, both through `<Markdown>`. Relies *implicitly* on `marked` lexing
-  an unclosed fence as one token — no explicit suppression, no placeholder. Weaker.
+- **Newline-gated commit:** never render past the last complete line; partial lines stay hidden.
+- **Fence-aware holdback:** structurally unstable regions (tables, open fences) stay in the mutable
+  tail until they close, then commit atomically. Typed review findings are ideally formatted on
+  completion, not streamed as raw text.
 
-**What our repo already has (≈ the two-region model):** commit boundary (`markdown_commit_boundary`),
+**What Pythinker already has (two-region model):** commit boundary (`markdown_commit_boundary`),
 committed scrollback (`_flush_committed`), transient tail (`_compose_composing`), atomic promotion
-(`promote_to_scrollback` re-renders from `raw_text`). The **one missing piece vs codex-rs is the
-fence-aware holdback** of the incomplete structured block — exactly our gap.
+(`promote_to_scrollback` re-renders from `raw_text`). The missing piece was **fence-aware holdback**
+for incomplete structured blocks — the gap behind the report JSON leak.
 
-Note: simply "render the preview tail through markdown" (the other blackbox trait) does **not** fix
-this leak — an incomplete ` ```report ` still renders as a raw code block, and a complete-but-
-uncommitted one would flash a full panel mid-preview. The **holdback is the real fix.**
+Note: rendering the preview tail through full markdown alone does **not** fix this leak — an
+incomplete ` ```report ` still renders as a raw code block. Holdback plus placeholder is the fix.
 
 ## Fix plan (FINAL)
 
-**Adopt codex-rs's fence-aware holdback, scoped to the one structured block that transforms on
-finalize (` ```report `).** Minimal, surgical, and the faithful port of the decisive blackbox idea.
+**Fence-aware holdback scoped to ` ```report ` blocks that transform on finalize.** Minimal and
+surgical.
 
-1. **New helper** in `_blocks.py` — `_holdback_incomplete_report(text) -> str`: if the pending text
-   contains a top-level ` ```report ` opener (line-anchored `^```report$`) with **no closing
-   ` ``` ` after it**, truncate at the opener and append a stable placeholder line (e.g.
-   `… formatting review findings`). Cheap regex scan — no markdown-it per tick (mirrors `FenceTracker`).
-2. **Hook it** into the composing preview only: `_compose_composing` → before `_build_preview`
-   (or as the first step inside `_build_preview`, guarded to composing). Leaves
-   `_compose_thinking_stream` untouched.
-3. **Scope guard (advisor #2):** match only ` ```report ` (and, if desired, report_update). Ordinary
-   ` ```python `/` ```ts ` fences keep streaming line-by-line — do **not** suppress them.
-4. **No change to commit/finalize:** open fence already isn't committed; closed fence already renders
-   the panel via `render_agent_body`. Scrollback is already correct.
-5. **Tests:** unit test asserting mid-stream `compose()` of a partial ` ```report ` shows the
-   placeholder and **none** of `"severity"/"title"/{`; and that an ordinary ` ```python ` fence is
-   **not** suppressed; plus the existing finalize-panel behavior is unchanged. Convert
-   `/tmp/repro_stream_leak.py` into a focused regression test under `tests/`.
+1. **New helper** in `_blocks.py` — detect an open top-level ` ```report ` fence and truncate the
+   preview with a stable placeholder (e.g. `… formatting review findings`).
+2. **Hook** into composing preview only via `_normalize_streaming_preview_text`.
+3. **Scope guard:** match only ` ```report ` (and report_update if needed). Ordinary code fences
+   keep streaming line-by-line.
+4. **No change to commit/finalize** for closed fences.
+5. **Tests** under `tests/ui_and_conv/test_streaming_content_block.py`.
 
-**Known limitation (separate, smaller):** stream cancelled mid-fence → `parse_report_block` returns
-`None` → raw JSON reaches **scrollback**. Optional follow-up: on cancel/finalize, if an unterminated
-` ```report ` fence is present, drop or close it before promotion. Out of scope for the preview fix.
-
-**Optional larger polish (NOT bundled):** render the preview tail through `render_agent_body`/markdown
-(the other blackbox trait). Bigger behavioral change, per-tick parse cost, and many pinned-preview
-tests would move. Not required to fix this bug; defer unless explicitly wanted.
+**Optional polish (deferred):** render preview tail through `render_agent_body`/markdown — larger
+behavior change and higher per-tick cost.
 
 ## Status — report-leak fix SHIPPED on this branch
 - `_blocks.py`: added `_suppress_unclosed_report_fence_preview` + wired into `_normalize_streaming_preview_text` (preview-only).
@@ -170,9 +148,8 @@ not the transient-until-finalize architecture, so it would not fix the flicker.
 
 **User-chosen direction:** "Fix the drain, keep smooth."
 
-**Fix = adopt the blackbox codex-rs incremental-commit model** (stable lines → scrollback as they
-complete; only the mutable tail stays transient + paced — `pythinker-x` `streaming.rs:326-349`,
-`controller.rs`). Staged, test-first:
+**Fix = incremental scrollback commit** (stable lines → scrollback as they complete; only the
+mutable tail stays transient + paced). Staged, test-first:
 
 - **Stage 1 — incremental scrollback commit (fixes flicker #3).** When `_flush_committed` produces a
   committed block mid-stream, emit it to real scrollback immediately (interactive already prints above

@@ -157,35 +157,53 @@ def register_builtin_renderers() -> None:
         find,
         generic,
         grep,
+        lsp,
+        mcp_resource,
+        memory,
         plan,
         read,
+        read_media,
         skill,
+        smart_search,
         think,
         todo,
         tool_search,
         web,
+        worktree,
         write,
     )
 
     register_tool_renderer(generic.GENERIC_RENDERER)
     register_tool_renderer(read.READ_RENDERER)
+    register_tool_renderer(read_media.READ_MEDIA_RENDERER)
     register_tool_renderer(write.WRITE_RENDERER)
     register_tool_renderer(edit.EDIT_RENDERER)
     register_tool_renderer(grep.GREP_RENDERER)
+    register_tool_renderer(smart_search.SMART_SEARCH_RENDERER)
     register_tool_renderer(find.FIND_RENDERER)
     register_tool_renderer(bash.SHELL_RENDERER)
     register_tool_renderer(skill.SKILL_RENDERER)
+    register_tool_renderer(lsp.LSP_RENDERER)
+    register_tool_renderer(mcp_resource.LIST_MCP_RESOURCES_RENDERER)
+    register_tool_renderer(mcp_resource.READ_MCP_RESOURCE_RENDERER)
     register_tool_renderer(agent.AGENT_RENDERER)
     register_tool_renderer(agent.RUN_AGENTS_RENDERER)
     register_tool_renderer(ask_user.ASK_USER_RENDERER)
     register_tool_renderer(think.THINK_RENDERER)
     register_tool_renderer(todo.TODO_RENDERER)
+    register_tool_renderer(memory.MEMORY_RENDERER)
+    register_tool_renderer(memory.RECALL_RENDERER)
+    register_tool_renderer(memory.SCRATCHPAD_RENDERER)
     register_tool_renderer(tool_search.TOOL_SEARCH_RENDERER)
     register_tool_renderer(web.FETCH_RENDERER)
     register_tool_renderer(web.SEARCH_RENDERER)
     register_tool_renderer(background.TASK_LIST_RENDERER)
     register_tool_renderer(background.TASK_OUTPUT_RENDERER)
+    register_tool_renderer(background.TASK_INPUT_RENDERER)
+    register_tool_renderer(background.TASK_HANDOFF_RENDERER)
     register_tool_renderer(background.TASK_STOP_RENDERER)
+    register_tool_renderer(worktree.ENTER_WORKTREE_RENDERER)
+    register_tool_renderer(worktree.EXIT_WORKTREE_RENDERER)
     register_tool_renderer(plan.ENTER_PLAN_RENDERER)
     register_tool_renderer(plan.EXIT_PLAN_RENDERER)
 

@@ -1,6 +1,6 @@
 # Code-reviewr to Pythinker migration
 
-This document records the production migration decision for `blackbox/code-review` ("code-reviewr") into Pythinker Review.
+This document records the production migration decision for `upstream review package` ("code-reviewr") into Pythinker Review.
 
 ## 1. Repository audit
 

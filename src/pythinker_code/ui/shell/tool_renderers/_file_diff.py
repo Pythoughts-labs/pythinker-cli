@@ -1,4 +1,4 @@
-"""Helpers for Blackbox-style file diff tool renderers."""
+"""Helpers for file-diff tool card renderers."""
 
 from __future__ import annotations
 
@@ -147,9 +147,9 @@ def diff_frame(
     collapsed_max_lines: int = 16,
     state: dict[str, object] | None = None,
 ) -> RenderableType:
-    """Render the Blackbox-style inline diff body.
+    """Render the inline diff body for a file tool card.
 
-    The reference terminal transcript shows the summary line immediately
+    The terminal transcript shows the summary line immediately
     followed by numbered +/- rows, without an ASCII box or dashed rails. Large
     diffs are collapsed by default and can be expanded from the tool card.
     """

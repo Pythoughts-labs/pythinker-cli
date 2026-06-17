@@ -1,7 +1,7 @@
 """Pythinker tool execution card.
 
 Wraps a registered :class:`ToolRenderDefinition` and renders it as a compact
-Blackbox-style tool row.
+shell tool card row.
 
 The card lifecycle:
 
@@ -218,8 +218,8 @@ class ToolExecutionComponent:
         if bg_style is None:
             return body
         # Error/denied rows retain a subtle tint. Normal pending/running rows
-        # intentionally do not: Blackbox renders tool rows directly on the
-        # terminal background unless a message is selected.
+        # intentionally do not: normal rows sit directly on the terminal
+        # background unless a message is selected.
         return Padding(body, TINTED_CARD_PADDING, style=bg_style)
 
     # -- Internals -----------------------------------------------------------

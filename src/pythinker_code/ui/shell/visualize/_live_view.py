@@ -53,6 +53,7 @@ from pythinker_code.ui.shell.motion import (
     blink_visible,
     reduced_motion_enabled,
     shimmer_text,
+    stream_reveal_interval_s,
 )
 from pythinker_code.ui.shell.spacing import BLANK_ROW, emit_scrollback_block
 from pythinker_code.ui.shell.spinner_words import spinner_message
@@ -77,6 +78,7 @@ from pythinker_code.ui.shell.visualize._blocks import (
     _ToolCallBlock,
     smooth_streaming_enabled,
 )
+from pythinker_code.ui.shell.visualize._diff_live import DiffLive
 from pythinker_code.ui.shell.visualize._question_panel import (
     QuestionRequestPanel,
     prompt_other_input,
@@ -127,6 +129,10 @@ from pythinker_code.wire.types import (
 
 MAX_LIVE_NOTIFICATIONS = 4
 EXTERNAL_MESSAGE_GRACE_S = 0.1
+_TRANSITION_DRAIN_MAX_TICKS = 12
+_COMPOSE_BATCH_PERIOD_S = 0.01
+_COMPOSE_BATCH_MAX_DURATION_S = 1 / 60
+_SCROLLED_COMPOSE_FPS = 16
 _LIVE_VERTICAL_OVERFLOW: Literal["crop", "ellipsis", "visible"] = "ellipsis"
 # Canonical inter-block spacer. The live stream owns the gaps *between* action
 # blocks; cards/panels must not add external top/bottom spacing (see spacing.py).
@@ -263,13 +269,15 @@ class _LiveView:
         self._dirty = False
         self._force_refresh = False
         self._external_messages: Queue[WireMessage] = Queue()
-        self._live: Live | None = None
+        self._live: Live | DiffLive | None = None
 
-    def _reset_live_shape(self, live: Live) -> None:
+    def _reset_live_shape(self, live: Live | DiffLive) -> None:
         # Rich doesn't expose a public API to clear Live's cached render height.
         # After leaving the pager, stale height causes cursor restores to jump,
         # so we reset the private _shape to re-anchor the next refresh.
-        live._live_render._shape = None  # type: ignore[reportPrivateUsage]
+        live_render = getattr(live, "_live_render", None)
+        if live_render is not None:
+            live_render._shape = None  # type: ignore[reportPrivateUsage]
 
     async def _drain_external_message_after_wire_shutdown(
         self,
@@ -284,14 +292,98 @@ class _LiveView:
             return None, external_task
         return msg, asyncio.create_task(self._external_messages.get())
 
-    async def _frame_refresh_loop(self, live: Live) -> None:
+    def _stream_compose_interval_s(self) -> float:
+        """Adaptive compose cadence: throttle when the live tail is long."""
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return STREAM_FRAME_INTERVAL_S
+        if block._committed_renderables or len(block._pending_text()) > 1500:
+            return 1 / _SCROLLED_COMPOSE_FPS
+        return STREAM_FRAME_INTERVAL_S
+
+    async def _emit_incremental_content_commits(self) -> bool:
+        """Emit stable markdown slices to scrollback during an active stream."""
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return False
+        committed = block.take_committed_renderables()
+        if not committed:
+            return False
+        for renderable in committed:
+            self._emit_incremental_scrollback(renderable)
+        await self._after_incremental_scrollback_emitted()
+        return True
+
+    async def _after_incremental_scrollback_emitted(self) -> None:
+        """Hook for subclasses (prompt_toolkit invalidate) after scrollback emit."""
+
+    def _transition_flush_reason(self, msg: WireMessage) -> FlushReason | None:
+        if isinstance(msg, (ToolCall, QuestionAnswered, ProgressNote, Suggestion, PlanDisplay)):
+            return FlushReason.TOOL_START
+        block = self._current_content_block
+        if block is None:
+            return None
+        if isinstance(msg, ThinkPart) and not block.is_think:
+            return FlushReason.TEXT_TO_THINK
+        if isinstance(msg, TextPart) and block.is_think:
+            return FlushReason.THINK_TO_TEXT
+        return None
+
+    async def _drain_content_for_transition(self, reason: FlushReason) -> None:
+        if reason not in {
+            FlushReason.TOOL_START,
+            FlushReason.TEXT_TO_THINK,
+            FlushReason.THINK_TO_TEXT,
+        }:
+            return
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return
+        for _ in range(_TRANSITION_DRAIN_MAX_TICKS):
+            if self._current_content_block is not block:
+                return
+            has_more = block.drain_for_transition()
+            emitted = await self._emit_incremental_content_commits()
+            if emitted or block.has_active_stream_preview():
+                self._dirty = True
+            if not has_more:
+                return
+            await asyncio.sleep(stream_reveal_interval_s())
+
+    async def _extend_wire_batch(
+        self,
+        wire: WireUISide,
+        wire_task: asyncio.Task[WireMessage],
+        messages: list[WireMessage],
+    ) -> asyncio.Task[WireMessage]:
+        """Coalesce bursty wire delivery before dispatch (short batch window)."""
+        deadline = time.monotonic() + _COMPOSE_BATCH_MAX_DURATION_S
+        while time.monotonic() < deadline:
+            if wire_task.done():
+                messages.append(wire_task.result())
+                wire_task = asyncio.create_task(wire.receive())
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, _ = await asyncio.wait(
+                [wire_task],
+                timeout=min(_COMPOSE_BATCH_PERIOD_S, remaining),
+            )
+            if wire_task in done:
+                messages.append(wire_task.result())
+                wire_task = asyncio.create_task(wire.receive())
+        return wire_task
+
+    async def _frame_refresh_loop(self, live: Live | DiffLive) -> None:
         """Coalesce wire-driven repaints to the streaming frame budget."""
         try:
             while True:
-                await asyncio.sleep(STREAM_FRAME_INTERVAL_S)
+                await asyncio.sleep(self._stream_compose_interval_s())
                 advanced = self.advance_stream_reveal()
+                emitted = await self._emit_incremental_content_commits()
                 needs_animation = self._streaming_needs_animation_frame()
-                if advanced or needs_animation:
+                if advanced or emitted or needs_animation:
                     self._dirty = True
                 if not self._dirty and not self._force_refresh:
                     continue
@@ -308,7 +400,7 @@ class _LiveView:
             return False
         return block.has_active_stream_preview()
 
-    def _flush_live_refresh(self, live: Live, *, force: bool = False) -> None:
+    def _flush_live_refresh(self, live: Live | DiffLive, *, force: bool = False) -> None:
         """Paint immediately; use for user-initiated repaints only."""
         if not force and not self._dirty and not self._force_refresh:
             return
@@ -317,18 +409,27 @@ class _LiveView:
         self._force_refresh = False
         self._need_recompose = False
 
-    async def visualize_loop(self, wire: WireUISide):
-        with Live(
+    def _open_live_region(self) -> Live | DiffLive:
+        """Return a live-region driver: diff-based on terminals, Rich Live otherwise."""
+        if console.is_terminal:
+            return DiffLive(
+                console=console,
+                transient=True,
+                get_renderable=lambda: self.compose(),
+            )
+        return Live(
             self.compose(),
             console=console,
             refresh_per_second=STREAM_FPS,
             transient=True,
-            # Never let the transient Live region paint beyond the terminal
-            # viewport.  Interactive prompt mode has its own row budget; this
-            # protects non-interactive Rich Live mode from tall tool cards,
-            # approval panels, or streaming output overlapping the screen.
             vertical_overflow=_LIVE_VERTICAL_OVERFLOW,
-        ) as live:
+        )
+
+    async def visualize_loop(self, wire: WireUISide):
+        live = self._open_live_region()
+        with live:
+            if isinstance(live, DiffLive):
+                live.refresh()
             self._live = live
 
             async def keyboard_handler(listener: KeyboardListener, event: KeyEvent) -> None:
@@ -414,10 +515,13 @@ class _LiveView:
                             if wire_task in done:
                                 msg = wire_task.result()
                                 wire_task = asyncio.create_task(wire.receive())
+                                messages = [msg]
+                                wire_task = await self._extend_wire_batch(wire, wire_task, messages)
                             else:
                                 msg = external_task.result()
                                 external_task = asyncio.create_task(self._external_messages.get())
                                 from_external = True
+                                messages = [msg]
                         except QueueShutDown:
                             (
                                 msg,
@@ -426,6 +530,8 @@ class _LiveView:
                                 external_task
                             )
                             if msg is not None:
+                                if reason := self._transition_flush_reason(msg):
+                                    await self._drain_content_for_transition(reason)
                                 self.dispatch_wire_message(msg)
                                 self._flush_live_refresh(live, force=True)
                                 continue
@@ -433,17 +539,24 @@ class _LiveView:
                             self._flush_live_refresh(live, force=True)
                             break
 
-                        if isinstance(msg, StepInterrupted):
-                            self.cleanup(is_interrupt=True)
-                            self._flush_live_refresh(live, force=True)
-                            break
+                        interrupted = False
+                        for msg in messages:
+                            if isinstance(msg, StepInterrupted):
+                                self.cleanup(is_interrupt=True)
+                                self._flush_live_refresh(live, force=True)
+                                interrupted = True
+                                break
 
-                        self.dispatch_wire_message(msg)
-                        if from_external:
-                            # External (out-of-band) messages — approval requests,
-                            # steer input — are interactive and must paint at once
-                            # rather than wait for the streaming frame budget.
-                            self._flush_live_refresh(live, force=True)
+                            if reason := self._transition_flush_reason(msg):
+                                await self._drain_content_for_transition(reason)
+                            self.dispatch_wire_message(msg)
+                            if from_external:
+                                # External (out-of-band) messages — approval requests,
+                                # steer input — are interactive and must paint at once
+                                # rather than wait for the streaming frame budget.
+                                self._flush_live_refresh(live, force=True)
+                        if interrupted:
+                            break
                 finally:
                     frame_task.cancel()
                     wire_task.cancel()
@@ -1355,8 +1468,8 @@ class _LiveView:
         blocks can still flush past them because background agents are async.
 
         ToolSearch blocks are absorbed silently — only the last one in a
-        consecutive run is shown, mirroring the blackbox ``isAbsorbedSilently``
-        contract.  A non-ToolSearch block triggers the held ToolSearch to flush
+        consecutive run is shown (``isAbsorbedSilently`` contract).  A
+        non-ToolSearch block triggers the held ToolSearch to flush
         first so ordering is preserved.
         """
         tool_call_ids = list(self._tool_call_blocks.keys())

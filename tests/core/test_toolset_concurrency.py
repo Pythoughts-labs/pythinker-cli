@@ -230,7 +230,7 @@ class TestPluginToolDefault:
         self, tmp_path: Path
     ) -> None:
         """Unflagged plugin/MCP tools default to exclusive so same-step mutation ordering
-        stays deterministic — mirrors blackbox partitionToolCalls isConcurrencySafe default."""
+        stays deterministic — mirrors the default ``isConcurrencySafe`` partition rule."""
         events: list[tuple[str, str]] = []
         plugin = _RecordingTool("MyPlugin", events, parallel=False)
         toolset = _toolset(plugin, cwd=tmp_path)

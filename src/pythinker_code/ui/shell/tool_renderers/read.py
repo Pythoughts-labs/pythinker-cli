@@ -1,8 +1,8 @@
-"""Blackbox-style renderer for Pythinker's ``ReadFile`` tool.
+"""Pythinker renderer for Pythinker's ``ReadFile`` tool.
 
-The reference UI shows a compact path/range in the tool-use row and a typed
-summary result (``Read N lines``, ``File not found``, etc.) rather than echoing
-the entire file body into the terminal transcript.
+The call row shows a compact path/range summary. Results use typed summaries
+(``Read N lines``, ``File not found``, etc.) rather than echoing the entire
+file body into the terminal transcript.
 """
 
 from __future__ import annotations

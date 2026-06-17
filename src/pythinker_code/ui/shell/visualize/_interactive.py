@@ -57,16 +57,10 @@ from pythinker_code.wire.types import (
     BtwEnd,
     ContentPart,
     Notification,
-    PlanDisplay,
-    ProgressNote,
-    QuestionAnswered,
     StatusUpdate,
     SteerInput,
     StepInterrupted,
     Suggestion,
-    TextPart,
-    ThinkPart,
-    ToolCall,
     TurnEnd,
     WireMessage,
 )
@@ -85,7 +79,6 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
-_TRANSITION_DRAIN_MAX_TICKS = 12
 
 
 class _PromptLiveView(_LiveView):
@@ -143,33 +136,6 @@ class _PromptLiveView(_LiveView):
     @property
     def _btw_active(self) -> bool:
         return self._btw_modal is not None
-
-    def _debug_content_state(self) -> dict[str, object]:
-        block = self._current_content_block
-        state: dict[str, object] = {
-            "activeTurnDepth": self._active_turn_depth,
-            "turnEnded": self._turn_ended,
-            "forceRefresh": self._force_refresh,
-            "dirty": self._dirty,
-            "hasContentBlock": block is not None,
-        }
-        if block is None:
-            return state
-        state.update(
-            {
-                "block": id(block),
-                "isThink": block.is_think,
-                "rawLen": len(block.raw_text),
-                "revealedLen": block._revealed_len,
-                "committedLen": block._committed_len,
-                "pendingLen": len(block._pending_text()),
-                "unrevealedLen": len(block.raw_text) - block._revealed_len,
-                "committedRenderables": len(block._committed_renderables),
-                "hasActiveStreamPreview": block.has_active_stream_preview(),
-                "promoted": block.is_promoted,
-            }
-        )
-        return state
 
     def _dismiss_btw(self) -> None:
         if self._btw_modal is not None:
@@ -288,50 +254,21 @@ class _PromptLiveView(_LiveView):
         if not committed:
             return False
 
-        # Stable markdown slices belong in real scrollback. Keeping them in the
-        # prompt preamble makes long streams clip and flicker while only the tail
-        # is still mutable.
         def emit_committed() -> None:
             for renderable in committed:
                 self._emit_incremental_scrollback(renderable)
 
         await run_in_terminal(emit_committed)
-        self._prompt_session.invalidate()
+        await self._after_incremental_scrollback_emitted()
         return True
 
-    def _transition_flush_reason(self, msg: WireMessage) -> FlushReason | None:
-        if isinstance(msg, (ToolCall, QuestionAnswered, ProgressNote, Suggestion, PlanDisplay)):
-            return FlushReason.TOOL_START
-        block = self._current_content_block
-        if block is None:
-            return None
-        if isinstance(msg, ThinkPart) and not block.is_think:
-            return FlushReason.TEXT_TO_THINK
-        if isinstance(msg, TextPart) and block.is_think:
-            return FlushReason.THINK_TO_TEXT
-        return None
+    async def _after_incremental_scrollback_emitted(self) -> None:
+        self._prompt_session.invalidate()
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
-        if reason not in {
-            FlushReason.TOOL_START,
-            FlushReason.TEXT_TO_THINK,
-            FlushReason.THINK_TO_TEXT,
-        }:
-            return
-        block = self._current_content_block
-        if block is None or block.is_think:
-            return
-        for _ in range(_TRANSITION_DRAIN_MAX_TICKS):
-            if self._current_content_block is not block:
-                return
-            has_more = block.drain_for_transition()
-            emitted = await self._emit_incremental_content_commits()
-            if emitted or block.has_active_stream_preview():
-                self._dirty = True
-                self._flush_prompt_refresh()
-            if not has_more:
-                return
-            await asyncio.sleep(stream_reveal_interval_s())
+        await super()._drain_content_for_transition(reason)
+        if self._dirty:
+            self._flush_prompt_refresh()
 
     # -- Public API: queued messages for the shell to drain ------------------
 

@@ -8,7 +8,6 @@ They have no knowledge of the event loop or prompt_toolkit.
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import time
@@ -186,8 +185,6 @@ _VISUAL_BLOCK_PREVIEW_PLACEHOLDER = "  … formatting diagram…"
 # Paced transitions drain small backlogs immediately; larger ones use a bounded step.
 _TRANSITION_SMALL_BACKLOG_CELLS = 40
 _TRANSITION_DRAIN_MAX_RATIO = 0.35
-_STREAM_PACING_DEBUG = os.environ.get("PYTHINKER_DEBUG_STREAM_PACING", "") == "1"
-_STREAM_PACING_LOG = "/tmp/pythinker-stream-pacing.log"
 
 
 class FlushReason(Enum):
@@ -255,7 +252,8 @@ def _suppress_unclosed_code_fence_preview(text: str) -> str:
     own (more specific) suppression so the streaming findings JSON does not
     flash a misleading "code block" placeholder mid-report.
     """
-    for match in reversed(list(_FENCE_OPEN_RE.finditer(text))):
+    matches = list(_FENCE_OPEN_RE.finditer(text))
+    for match in reversed(matches):
         marker, info = match.group(1), match.group(2)
         info = info.strip()
         first_token = info.split(maxsplit=1)[0] if info else ""
@@ -565,15 +563,20 @@ class _ContentBlock:
         self.raw_text += content
         self._token_count += _estimate_tokens(content)
         self._invalidate_preview_cache()
-        self._log_pacing_event("append", caller="append")
         if self._paced:
             # Reveal is paced by reveal_tick() for smooth streaming; just buffer
             # the raw text here. Commit happens as text is revealed.
             return
         # Unpaced (and all thinking blocks): reveal immediately (legacy behavior).
         self._revealed_len = len(self.raw_text)
-        # Block boundaries require newlines; skip parse for mid-line chunks.
-        if not self.is_think and "\n" in content:
+        if not self.is_think:
+            # Always attempt a commit. ``_flush_committed`` is the single owner
+            # of the no-newline guard via ``_last_commit_scan_len``; gating the
+            # call here would strand a closed ```` ```report ```` (or any other
+            # block) in the pending tail whenever the trailing prose arrives in
+            # newline-free chunks. The preview would then show raw JSON until
+            # the next paragraph break — a real, reproducible leak on small
+            # delta streams.
             self._flush_committed()
 
     def reveal_tick(self) -> bool:
@@ -605,7 +608,6 @@ class _ContentBlock:
             step_cells,
         )
         self._flush_committed()
-        self._log_pacing_event("reveal_tick", caller="reveal_tick")
         return True
 
     def reveal_all(self) -> bool:
@@ -615,7 +617,6 @@ class _ContentBlock:
         text is left to the finalize path (``compose_final``), matching the
         unpaced behavior so no block is committed twice.
         """
-        self._log_pacing_event("reveal_all", caller="reveal_all")
         changed = self._revealed_len < len(self.raw_text)
         self._revealed_len = len(self.raw_text)
         return changed
@@ -654,12 +655,10 @@ class _ContentBlock:
             step_cells,
         )
         self._flush_committed()
-        self._log_pacing_event("drain_for_transition", caller="drain_for_transition")
         return self._revealed_len < len(self.raw_text)
 
     def prepare_for_finalize(self, reason: FlushReason) -> None:
         """Reveal buffered text according to the finalize/transition reason."""
-        self._log_pacing_event("prepare_for_finalize", reason=reason, caller="prepare_for_finalize")
         if reason in {
             FlushReason.TOOL_START,
             FlushReason.TEXT_TO_THINK,
@@ -774,31 +773,6 @@ class _ContentBlock:
         self._preview_text_cache_key = None
         self._preview_text_cache = None
 
-    def _log_pacing_event(
-        self,
-        event: str,
-        *,
-        reason: FlushReason | None = None,
-        caller: str = "",
-    ) -> None:
-        if not _STREAM_PACING_DEBUG:
-            return
-        raw_len = len(self.raw_text)
-        backlog_len = raw_len - self._revealed_len
-        line = (
-            f"{time.monotonic():.3f} block={id(self)} event={event}"
-            f" raw_len={raw_len} revealed_len={self._revealed_len}"
-            f" committed_len={self._committed_len} backlog_len={backlog_len}"
-            f" paced={self._paced} caller={caller}"
-        )
-        if reason is not None:
-            line += f" reason={reason.value}"
-        try:
-            with open(_STREAM_PACING_LOG, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
-
     def _wrap_bullet(self, renderable: RenderableType) -> BulletColumns:
         """First call gets the ``•`` bullet; subsequent calls get a space."""
         if self._has_printed_bullet:
@@ -841,8 +815,15 @@ class _ContentBlock:
         if "\n" not in pending:
             self._last_commit_scan_len = len(pending)
             return
-        new_pending = pending[self._last_commit_scan_len :]
-        if self._last_commit_scan_len and "\n" not in new_pending:
+        # The trailing text grew (or appeared for the first time) since the
+        # last scan, so the second-to-last block may have changed; recompute
+        # the boundary. ``markdown_commit_boundary`` is lru_cached, so the
+        # cost is a single dict lookup when the pending text is unchanged
+        # between calls. Skipping the recompute purely on the absence of a
+        # newline in the new chunk is wrong: a closed ```` ```report ````
+        # fence followed by a non-newline trailing paragraph commits the
+        # moment the paragraph exists at all, even before its own terminator.
+        if self._last_commit_scan_len and len(pending) == self._last_commit_scan_len:
             return
         boundary = _find_committed_boundary(pending)
         if boundary is None:
@@ -1604,7 +1585,7 @@ class _ToolCallBlock:
 
     @staticmethod
     def _card_result_details(result: ToolReturnValue) -> dict[str, Any]:
-        """Preserve structured tool result data for Blackbox-style cards.
+        """Preserve structured tool result data for TUI tool cards.
 
         The legacy card boundary only passed flattened text, which made exact
         file/shell renderers impossible: diffs lost their display blocks,

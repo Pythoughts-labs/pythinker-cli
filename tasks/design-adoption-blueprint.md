@@ -2,7 +2,7 @@
 
 Source: multi-agent architecture study (12 subsystem maps, 2 architect lenses, adversarial
 verification per recommendation) comparing pythinker against a cleanly layered reference
-agent harness (local clone under `blackbox/`, gitignored). All recommendations below
+agent harness (local clone under `external reference `, gitignored). All recommendations below
 survived adversarial verification against both codebases. Each is independently landable
 and behavior-preserving unless flagged.
 

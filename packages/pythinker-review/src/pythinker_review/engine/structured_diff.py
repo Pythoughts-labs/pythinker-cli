@@ -1,4 +1,4 @@
-"""Render unified diffs into blackbox-style __new hunk__/__old hunk__ blocks."""
+"""Render unified diffs into __new hunk__/__old hunk__ review blocks."""
 
 from __future__ import annotations
 

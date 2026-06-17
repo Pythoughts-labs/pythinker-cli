@@ -1,7 +1,7 @@
 """Pythinker renderer for Pythinker's ``Grep`` tool.
 
-Blackbox-style search cards keep the call row compact and summarize results
-first. Expanded cards show the raw matches under the same response gutter.
+Search cards keep the call row compact and summarize results first. Expanded
+cards show the raw matches under the same response gutter.
 """
 
 from __future__ import annotations

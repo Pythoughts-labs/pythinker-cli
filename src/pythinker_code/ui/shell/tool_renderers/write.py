@@ -1,9 +1,8 @@
-"""Blackbox-style renderer for Pythinker's ``WriteFile`` tool.
+"""Pythinker renderer for Pythinker's ``WriteFile`` tool.
 
-The tool-use row stays compact (``write path`` / ``append path``). Success
-results render like the reference file-write UI: created files
-show ``Wrote N lines to path`` plus a capped content preview, while updates
-prefer the real diff display blocks returned by the Python tool.
+The call row stays compact (``write path`` / ``append path``). Success results
+show ``Wrote N lines to path`` plus a capped content preview for creates; updates
+prefer the diff display blocks returned by the tool.
 """
 
 from __future__ import annotations

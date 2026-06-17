@@ -12,8 +12,8 @@ here for detail. Paths are relative to the repository root unless noted.
 
 The CLI is a uv workspace: the application lives under `src/pythinker_code/`, and reusable
 layers are split into `packages/pythinker-core`, `packages/pythinker-host`,
-`packages/pythinker-review`, and `sdks/pythinker-sdk`. The vendored reference repositories
-under `blackbox/` are out of scope and are not part of this map.
+`packages/pythinker-review`, and `sdks/pythinker-sdk`. Local gitignored reference clones are
+out of scope and are not part of this map.
 
 ## How AGENTS.md guidance loads
 

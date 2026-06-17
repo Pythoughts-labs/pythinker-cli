@@ -76,7 +76,7 @@ def mock_shell(work_dir: HostPath) -> Mock:
     return shell
 
 
-def test_blackbox_style_slash_aliases_are_registered() -> None:
+def test_shell_slash_aliases_are_registered() -> None:
     aliases = {
         "keybindings": "keys",
         "color": "theme",

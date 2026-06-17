@@ -1,4 +1,4 @@
-"""pythinker-x theme port contract tests."""
+"""Bundled TUI theme contract tests."""
 
 from __future__ import annotations
 
