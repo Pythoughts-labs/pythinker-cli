@@ -414,9 +414,7 @@ class _PromptLiveView(_LiveView):
                     console.print()
 
         try:
-            await self._run_scrollback_handoff(
-                emit, reason=f"pending_scrollback({len(batch)})"
-            )
+            await self._run_scrollback_handoff(emit, reason=f"pending_scrollback({len(batch)})")
         except Exception:
             return
 
