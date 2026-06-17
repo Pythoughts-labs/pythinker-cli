@@ -320,3 +320,18 @@ def test_live_view_enables_pacing_from_smooth_streaming_flag(monkeypatch) -> Non
     assert block is not None
     assert block._paced is True
     assert block._revealed_len == 0
+
+
+def test_composing_preview_shows_hidden_rows_marker_when_budget_trims() -> None:
+    from pythinker_code.ui.shell.console import render_to_ansi
+    from pythinker_code.ui.shell.spacing import PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT
+
+    block = _ContentBlock(is_think=False, paced=False)
+    for index in range(6):
+        block.append(f"Paragraph {index} with enough prose to consume vertical space.\n\n")
+    block.append("live tail")
+    block.set_preview_row_budget(6)
+    ansi = render_to_ansi(block.compose(include_activity=False), columns=80)
+
+    assert PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT in ansi
+    assert "live tail" in ansi

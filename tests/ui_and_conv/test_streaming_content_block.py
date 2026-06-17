@@ -1377,7 +1377,7 @@ class TestActivePreviewRowBudget:
         ansi = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
         clipped = _fit_agent_status_like_prompt(ansi)
 
-        assert "output clipped to fit terminal" not in clipped
+        assert "earlier output hidden · Ctrl+O expand" not in clipped
         assert "Render Layer Map" in clipped
         assert "╭" not in clipped
         assert "formatting diagram" in clipped
@@ -1420,7 +1420,7 @@ class TestActivePreviewRowBudget:
         mid_stream = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
         clipped = _fit_agent_status_like_prompt(mid_stream)
 
-        assert "output clipped to fit terminal" not in clipped
+        assert "earlier output hidden · Ctrl+O expand" not in clipped
         assert "╭" not in clipped
 
         for ch in text[len(block.raw_text) :]:

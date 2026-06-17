@@ -13,7 +13,12 @@ from pythinker_code.ui.shell.markdown.normalizers import (
     parse_aligned_field_line,
 )
 
-PROJECT_PATH_PREFIXES: tuple[str, ...] = ("src/pythinker_code/",)
+PROJECT_PATH_PREFIXES: tuple[str, ...] = (
+    "src/pythinker_code/",
+    "tests/ui_and_conv/",
+    "tests/",
+    "packages/",
+)
 
 _QUOTE_GUTTER_RE = re.compile(r"^(\s*)▌\s?")
 _UNDERLINE_HEADING_RE = re.compile(

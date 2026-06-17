@@ -594,3 +594,18 @@ def test_refresh_resumed_legacy_prompt_inserts_guard():
 
     assert guard in refreshed
     assert refreshed.index(guard) < refreshed.index("Before every tool response")
+
+
+def test_default_system_prompt_prevents_duplicate_report_prose() -> None:
+    from pathlib import Path
+
+    prompt = Path("src/pythinker_code/agents/default/system.md").read_text(encoding="utf-8")
+
+    assert "Emit either a structured ` ```report ` block or a prose summary, not both" in prompt
+    assert (
+        "After a structured ` ```report ` block, only a short artifact footer is allowed" in prompt
+    )
+    assert (
+        "Do not repeat counts, top actions, findings, or severity summaries outside the report block"
+        in prompt
+    )

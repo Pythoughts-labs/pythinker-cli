@@ -81,7 +81,10 @@ from pythinker_code.ui.shell.placeholders import (
     normalize_pasted_text,
     sanitize_surrogates,
 )
-from pythinker_code.ui.shell.spacing import ensure_prompt_newline
+from pythinker_code.ui.shell.spacing import (
+    PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
+    ensure_prompt_newline,
+)
 from pythinker_code.ui.shell.spinner_words import spinner_message
 from pythinker_code.ui.shell.sync_output import install_synchronized_output
 from pythinker_code.ui.terminal_capabilities import synchronized_output_enabled
@@ -797,14 +800,19 @@ def _fit_formatted_text_to_rows(
     content_rows = max(0, max_rows - 1 - len(tail_rows))
     if content_rows == 0:
         return FormattedText(
-            [("class:dim", _truncate_right("… output clipped to fit terminal", columns))]
+            [
+                (
+                    "class:dim",
+                    _truncate_right(PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT, columns),
+                )
+            ]
         )
 
     out: FormattedText = FormattedText()
     _extend_rows(out, rows[:content_rows])
     if out and not out[-1][1].endswith("\n"):
         out.append(("", "\n"))
-    clip_hint = _truncate_right("… output clipped to fit terminal", columns)
+    clip_hint = _truncate_right(PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT, columns)
     out.append(("class:dim", clip_hint))
     if tail_rows:
         out.append(("", "\n"))

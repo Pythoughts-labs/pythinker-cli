@@ -40,6 +40,16 @@ def test_compact_known_paths_strips_repo_prefix() -> None:
     assert compact_known_paths(path) == "lsp/client.py:65-73"
 
 
+def test_compact_known_paths_strips_common_terminal_prefixes() -> None:
+    assert compact_known_paths("tests/ui_and_conv/test_report.py:12") == "test_report.py:12"
+    assert (
+        compact_known_paths("tests/core/test_default_agent.py:5") == "core/test_default_agent.py:5"
+    )
+    assert (
+        compact_known_paths("packages/pythinker-review/src/x.py:1") == "pythinker-review/src/x.py:1"
+    )
+
+
 def test_small_parity_report_renders_field_tables() -> None:
     sample = (
         "Deep Code Scan Analysis\n"

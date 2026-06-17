@@ -15,10 +15,20 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Cleaner terminal report rendering.** Structured ` ```report ` outputs now suppress duplicated trailing summaries, keep only artifact footers after the report, compact long finding locations, and switch large reports to a borderless dashboard layout for faster terminal scanning.
+- **Unknown subagent-type recovery hints.** Invalid types still fail loudly, but
+  `Agent`/`RunAgents` errors now include best-effort suggestions for common
+  cross-harness aliases (e.g. `general-purpose` → `coder`) and close typos when the
+  suggested subagent exists in the current session. No silent substitution; the full
+  valid-type list is unchanged.
 - **TUI: smoother agent-working streaming.** Buffered text now reveals at an even,
-  bounded rate instead of backlog-proportional lurches, and incremental scrollback
-  commits are coalesced so the prompt no longer pops/flickers on every paragraph
-  boundary during a stream.
+  bounded rate instead of backlog-proportional lurches, and completed prose is no
+  longer committed to scrollback mid-stream — it stays in the in-place live preview
+  and is flushed once at a tool transition or turn end, so the prompt no longer
+  pops/flickers on every paragraph boundary during a stream. The prompt stays in a
+  **Finalizing** state (not a false idle `❯`) while scrollback is pending, and clipped
+  live output shows an **earlier output hidden · Ctrl+O expand** marker instead of
+  silently dropping rows.
 
 - **TUI tool-card diffs use syntax highlighting.** Edit/Write inline diffs now share the
   approval/pager ``PythinkerSyntax`` pipeline (``tui.code_theme``, file-extension lexer) while

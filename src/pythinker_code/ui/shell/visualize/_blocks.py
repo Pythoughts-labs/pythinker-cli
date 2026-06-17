@@ -46,7 +46,7 @@ from pythinker_code.ui.shell.motion import (
     append_streaming_caret,
     reduced_motion_enabled,
 )
-from pythinker_code.ui.shell.spacing import BLANK_ROW
+from pythinker_code.ui.shell.spacing import BLANK_ROW, PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT
 from pythinker_code.ui.shell.tips import FEATURE_TIPS
 from pythinker_code.ui.shell.tool_renderers import (
     ToolResultPayload,
@@ -981,6 +981,7 @@ class _ContentBlock:
 
         trimmed = list(committed)
         preview_lines = _COMPOSING_PREVIEW_LINES
+        earlier_rows_hidden = False
         while True:
             result = self._assemble_composing(
                 spinner=spinner,
@@ -990,13 +991,21 @@ class _ContentBlock:
             )
             row_count = self._renderable_row_count(result)
             if row_count <= budget:
+                if earlier_rows_hidden:
+                    marker = Text(
+                        PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
+                        style=tui_rich_style("muted"),
+                    )
+                    return Group(marker, BLANK_ROW, result)
                 return result
             if preview_lines > 1:
                 preview_lines -= 1
+                earlier_rows_hidden = True
                 continue
             if trimmed:
                 trimmed.pop(0)
                 preview_lines = _COMPOSING_PREVIEW_LINES
+                earlier_rows_hidden = True
                 continue
             if pending:
                 return self._assemble_composing(

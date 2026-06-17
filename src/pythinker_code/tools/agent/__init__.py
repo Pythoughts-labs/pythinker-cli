@@ -1,7 +1,8 @@
 import asyncio
+import difflib
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast, override
@@ -23,6 +24,38 @@ from pythinker_code.subagents.usage import aggregate_findings, summarize_batch
 from pythinker_code.tools.utils import ToolResultStatus, load_desc, tool_status_line
 from pythinker_code.utils.logging import logger
 from pythinker_code.wire.types import MCPStatusSnapshot, SubagentToolFallback
+
+# Default agent-type names from other harnesses that models reach for by reflex.
+# They share no characters with our type names, so fuzzy matching finds nothing —
+# map them explicitly to the nearest local equivalent.
+_SUBAGENT_TYPE_ALIASES = {
+    "general-purpose": "coder",
+    "general": "coder",
+    "general_purpose": "coder",
+}
+
+
+def _suggest_subagent_type(requested: str, valid_types: Iterable[str]) -> str | None:
+    """Best-effort 'did you mean?' for a hallucinated subagent type name.
+
+    Maps well-known cross-harness default names to their local equivalent, else
+    fuzzy-matches against the valid types. Returns a suggestion that is itself a
+    valid type, or ``None`` when nothing is close. Never substitutes silently —
+    callers surface the suggestion in a fail-loud error so the model self-corrects.
+    """
+    key = requested.strip().lower()
+    valid = set(valid_types)
+    alias = _SUBAGENT_TYPE_ALIASES.get(key)
+    if alias in valid:
+        return alias
+    matches = difflib.get_close_matches(key, sorted(valid), n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _did_you_mean(requested: str, valid_types: Iterable[str]) -> str:
+    """Render a leading ' Did you mean 'x'?' fragment, or '' when no suggestion."""
+    suggestion = _suggest_subagent_type(requested, valid_types)
+    return f" Did you mean {suggestion!r}?" if suggestion else ""
 
 
 def _missing_required_mcp_servers(
@@ -470,7 +503,8 @@ class AgentTool(CallableTool2[Params]):
             return ToolError(message=f"Failed to run agent: {exc}", brief="Agent failed")
         except KeyError as exc:
             # Hallucinated subagent type: routine model error, not a crash —
-            # name the valid types so the model can self-correct.
+            # name the valid types (and a best-effort suggestion) so the model
+            # can self-correct.
             _emit_subagent_tool_fallback(
                 reason="unavailable_agent_type",
                 requested_type=requested_type,
@@ -478,7 +512,9 @@ class AgentTool(CallableTool2[Params]):
             )
             return ToolError(
                 message=(
-                    f"{exc.args[0] if exc.args else exc}. Available types: "
+                    f"{exc.args[0] if exc.args else exc}."
+                    f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                    f" Available types: "
                     f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
                 ),
                 brief="Invalid subagent type",
@@ -638,14 +674,17 @@ class AgentTool(CallableTool2[Params]):
             # Malformed resume id (store.instance_dir validates [A-Za-z0-9_-]{1,64}).
             return ToolError(message=str(exc), brief="Agent not found")
         except KeyError as exc:
+            requested_type = params.subagent_type or "coder"
             _emit_subagent_tool_fallback(
                 reason="unavailable_agent_type",
-                requested_type=params.subagent_type or "coder",
+                requested_type=requested_type,
                 runtime=self._runtime,
             )
             return ToolError(
                 message=(
-                    f"{exc.args[0] if exc.args else exc}. Available types: "
+                    f"{exc.args[0] if exc.args else exc}."
+                    f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                    f" Available types: "
                     f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
                 ),
                 brief="Invalid subagent type",
@@ -826,7 +865,9 @@ class RunAgentsTool(CallableTool2[RunAgentsParams]):
                 return ToolError(
                     message=(
                         f"Unknown subagent type {requested_type!r} for agent "
-                        f"{child.name!r}. Available types: "
+                        f"{child.name!r}."
+                        f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                        f" Available types: "
                         f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
                     ),
                     brief="Invalid subagent type",
