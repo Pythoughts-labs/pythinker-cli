@@ -1,6 +1,6 @@
 ---
 Author: Mohamed Elkholy
-Updated: 2026-6-15
+Updated: 2026-6-16
 Status: Proposed
 ---
 
@@ -31,6 +31,72 @@ This is the complete port. No operation, no lifecycle behaviour, and no diagnost
 the reference is dropped. The only thing that does **not** port is the React/Ink UI layer
 (recommendation menu, init-notification toasts); its *intent* is re-expressed through the existing
 CLI notification + dynamic-injection systems.
+
+## Verification status & corrections (2026-06-16)
+
+Fact-checked against `blackbox/pythinker-src` (reference behaviour) and the live Python tree
+(integration points). Findings folded into the phases below.
+
+**Reference behaviour — verified exact (kept as-is):** crash cap default 3
+(`LSPServerInstance.ts:142`); transient `-32801` retry 3× at 500→1000→2000 ms
+(`LSPServerInstance.ts:17,22,28,355-410`); diagnostic caps **10/file + 30/total** and a **500-file
+LRU** for cross-turn dedup (`LSPDiagnosticRegistry.ts:42-46`); severity Error=1…Hint=4, sorted
+before truncation; **9** tool operations (`schemas.ts:180-190`); 1-based→0-based conversion; 10 MB
+file cap; UNC rejection; `git check-ignore` filtering batched ≤50; `maxResultSizeChars` 100 000;
+`workspace/configuration` → `[null]` per item (`LSPServerManager.ts:133`); first-server-wins ext
+routing; generation guard on reinit; recommendation auto-disable at ignore-count **≥5**
+(`lspRecommendation.ts:41`).
+
+**Corrections (these contradicted the reference or the live tree — fixed in-plan):**
+
+1. **Servers are plugin-only.** `config.ts:9-11` verbatim: *"LSP servers are only supported via
+   plugins, not user/project settings."* So **drop `config_loader.py`, the user `lsp.servers`
+   registry, and the built-in pyright default** (Open Question 1 → resolved). `LspService` consumes
+   `plugin_lsp_servers()` directly; `LspConfig` keeps only `enabled` + recommendation flags +
+   limits.
+2. **`rearm_injection` is a nullable callback, not a method.** `Runtime.rearm_injection:
+   Callable[[str], None] | None` (`soul/agent.py:255`); the method lives on `PythinkerSoul`
+   (`soul/pythinkersoul.py:658`, calls `provider.rearm(key)`). The file-tool hook calls the callback
+   **guarded by `is not None`**.
+3. **`get_injections(self, history, soul)`** is the real base signature
+   (`soul/dynamic_injection.py`) — not `(self, budget, …)`. Budget is applied by
+   `collect_within_budget` / `injection_budget_from_runtime`, not passed in.
+4. **Wire passive diagnostics for subagent souls, not just root.** Providers are built for both
+   roles (`pythinkersoul.py:552`; only a few gated `role == "root"`, `:581`). Most edits happen in
+   subagents, so a root-only registration silently no-ops the edit→diagnose loop where it matters.
+5. **Do not register the tool on `code_reviewer`.** That profile is offline/read-only and
+   fail-closed (blocks network + MCP, `code_reviewer.yaml:67`; subagent profiles default to
+   `read_only`, `soul/permission.py:273`); LSP spawns executable plugin subprocesses — the same
+   risk class it refuses. Register on **default + `coder`** only (Open Question 4 → resolved).
+6. **`SkipThisTool` is load-time only** (`tools/__init__.py:11`) — for `enabled=False` / no service.
+   Per-call unavailability (init pending, no server for the extension, server in `ERROR`) returns a
+   typed tool *result*, never `SkipThisTool`.
+7. **No "once per session" recommendation gate exists in the reference** — `lspRecommendation.ts`
+   queries per file and gates on ignore-count ≥5 + a disabled flag. Mirror that; a session throttle
+   would be a labelled CLI adaptation, not parity.
+8. **`LspClient` needs one `asyncio.Lock` around frame write+drain** — the tool is concurrency-safe
+   and subagents share one client per server, so concurrent `send_request` calls would otherwise
+   interleave frames on stdin (vscode-jsonrpc gives the reference this for free).
+9. **Plugin server loading gates on `PluginPolicy.external_exec`.** `plugin_lsp_servers(policy)`
+   mirrors `plugin_mcp_servers(policy)` (`plugin/integration.py:127,56`); external-plugin servers
+   are executable artifacts and stay opt-in.
+
+**Integration points confirmed present** (build against these exact names): `CallableTool2` +
+constructor DI (`tools/file/write.py:44`); `ToolResultBuilder.mark_untrusted()`
+(`tools/utils.py`); `UntrustedData.render_for_prompt()` (`utils/trust.py`); `Host.exec`/`HostProcess`
+stdio (`packages/pythinker-host/.../__init__.py:106-236`); `PluginManifest` with `Field(alias=…)`
+(`plugin/manifest.py:106`); `Runtime.copy_for_subagent` (`soul/agent.py:432`); session teardown
+`cleanup_runtime_resources()` (`app.py:526`); wire tool-list snapshot `tests_e2e/test_wire_config.py`.
+
+**Second-pass corrections (2026-06-16, folded in below):** (a) `manifest.lspServers` is a union
+`str | dict | list`, not a `dict` (`lspPluginIntegration.ts:127-131`) — a plain dict drops the
+path/array forms. (b) Phase 1 `LspService` *receives* an injected server map; the `plugin_servers.py`
+loader is a leaf wired by `Runtime.create()` (resolves a Phase-1→Phase-4 forward dependency). (c) No
+`/doctor` command or `plugins.errors` channel exists in the CLI agent — init errors use the existing
+notification/log path. (d) No runtime plugin-refresh hook exists — reinit triggers on session reload.
+(e) `recommendation_ignored_count` is mutable user/global state persisted per ignore
+(`getGlobalConfig`/`saveGlobalConfig`, `lspRecommendation.ts:15`), not a frozen field. (f) Tool name is
+byte-exact `LSP` (`prompt.ts:1`); the Python class stays `Lsp`.
 
 ## Motivation
 
@@ -180,20 +246,23 @@ Every claim below was checked against the live tree.
   building on it gives Local/SSH/ACP backends for free instead of raw
   `asyncio.create_subprocess_exec`.
 * **No reusable JSON-RPC framing** exists in target (see dependency decision). We add it.
-* **Config**: `Config` is a Pydantic `BaseModel` with nested sections (`src/pythinker_code/config.py`).
-  Add an `lsp: LspConfig` section the same way `web`/`services` are modelled. Secret-bearing
-  sections are scope-locked via `SCOPE_LOCKED_PATHS`; LSP commands are not secrets, so they stay
-  project-overridable.
+* **Config**: `Config` is a Pydantic `BaseModel` with nested sections (`src/pythinker_code/config.py`;
+  e.g. `GoalConfig`, `BackgroundConfig`). Add an `lsp: LspConfig` section the same way. `LspConfig`
+  holds **only** `enabled` + recommendation flags + limits — **no server registry**: servers are
+  plugin-only (`config.ts:9-11`), so there is nothing user-overridable to scope-lock.
 * **Approval / read-only**: a tool is read-only simply by never calling
   `self._runtime.approval.request(...)`; gating happens at the execution-policy layer
   (`resolve_execution_policy`, see `tools/web/search.py:62-75`). LSP queries are read-only.
 * **Passive-context injection point**: `src/pythinker_code/soul/dynamic_injection.py` defines
-  `DynamicInjectionProvider(ABC)` with `async def get_injections(...)`, `DynamicInjection`,
-  `ContextBudget`/`injection_budget_from_runtime`, and `collect_within_budget`. Providers are
-  registered in `PythinkerSoul` (`soul/pythinkersoul.py:82-96` — `git_status`, `goal_mode`,
-  `agent_list`, … under `soul/dynamic_injections/`). **Passive diagnostics become one provider
-  here**, budget-aware by construction. `Runtime.rearm_injection` (`soul/agent.py:255-256`) lets a
-  tool refresh injections after an edit.
+  `DynamicInjectionProvider(ABC)` with `async def get_injections(self, history, soul)`,
+  `DynamicInjection`, `ContextBudget`/`injection_budget_from_runtime`, and `collect_within_budget`.
+  Providers are built in `PythinkerSoul.__init__` (`soul/pythinkersoul.py:552` — `git_status`,
+  `goal_mode`, `agent_list`, … under `soul/dynamic_injections/`) for **both root and subagent**
+  souls (a few are gated `role == "root"`, `:581`). **Passive diagnostics become one provider
+  here**, budget-aware by construction. `Runtime.rearm_injection` is a **nullable callback**
+  (`Callable[[str], None] | None`, `soul/agent.py:255`) wired per-soul to
+  `PythinkerSoul.rearm_injection` (`:658`); a tool calls it (guarded) to refresh injections after an
+  edit.
 * **Plugin system**: discovery/loading under `src/pythinker_code/plugin/`; manifests are
   `plugin.json`. The reference's `.lsp.json` / `manifest.lspServers` recommendation flow maps onto
   this loader.
@@ -211,7 +280,7 @@ Every claim below was checked against the live tree.
 | `services/lsp/LSPServerInstance.ts` | `lsp/instance.py` | state machine, retry, restart |
 | `services/lsp/LSPServerManager.ts` | `lsp/manager.py` | routing + file sync |
 | `services/lsp/manager.ts` | `lsp/service.py` | session-scoped service (not a global singleton) |
-| `services/lsp/config.ts` | `lsp/config_loader.py` | merge built-in + plugin server configs |
+| `services/lsp/config.ts` | `lsp/plugin_servers.py` (aggregate) | plugin-only; no merge, no built-in default |
 | `services/lsp/LSPDiagnosticRegistry.ts` | `lsp/diagnostics.py` | store/dedup/volume-limit |
 | `services/lsp/passiveFeedback.ts` | `lsp/diagnostics.py` (handler) + injection provider | split: capture vs surface |
 | `tools/LSPTool/{LSPTool,schemas,formatters,symbolContext,prompt}.ts` | `src/pythinker_code/tools/lsp/` | the agent tool |
@@ -221,9 +290,11 @@ Every claim below was checked against the live tree.
 
 **Singleton → session-scoped.** The reference uses a *global* singleton (`manager.ts`) because the
 TUI is one process serving one workspace. Pythinker is multi-instance and session-oriented
-(`pythinker-multi-instance-invariants`), so the port owns the LSP service on the **`Runtime`**
-(one service per session), constructed in `Runtime.create()` and torn down in session cleanup. No
-module-global mutable state.
+(`pythinker-multi-instance-invariants`), so the port owns the LSP service on the **`Runtime`** (one
+service per session), constructed for the root runtime and **shared by subagents**
+(`copy_for_subagent` passes the same `LspService` reference — no duplicate language-server
+processes), and shut down in `cleanup_runtime_resources()` (`app.py:526`) on reload and final
+teardown so server subprocesses never leak (C08). No module-global mutable state.
 
 ## Target module layout
 
@@ -236,7 +307,6 @@ src/pythinker_code/lsp/
   instance.py            LspServerInstance: lifecycle + state machine + retry + restart
   manager.py             LspServerManager: ext routing + open/change/save/close file sync
   service.py             LspService: session-scoped facade, lazy init, status, shutdown
-  config_loader.py       merge built-in defaults + user config + plugin servers
   diagnostics.py         DiagnosticRegistry (store/dedup/limit) + publishDiagnostics handler
   plugin_servers.py      load LSP server configs from installed plugins
   recommend.py           file-ext → recommendable plugin server, install gating
@@ -322,6 +392,10 @@ class LspClient:
   pending request as success after the process died) and mark the client stopped.
 * **`stop()`**: `send_request("shutdown")` → `send_notification("exit")` → cancel read loop →
   `proc.kill()` with a short grace; idempotent; suppress errors during teardown.
+* **Concurrent sends**: the `Lsp` tool is concurrency-safe and subagents share one client per
+  server, so guard `write_message` + `drain` with a single `asyncio.Lock` — otherwise parallel
+  `send_request` calls interleave frames on one stdin. (vscode-jsonrpc gives the reference this for
+  free; the hand-rolled client must add it.)
 
 ### Verification (Phase 0)
 
@@ -413,12 +487,20 @@ class LspService:
 * Held on `Runtime` (new field `lsp: LspService | None`), constructed in `Runtime.create()`,
   shut down in session teardown alongside other session resources.
 
-### Step 1.4 — `lsp/config_loader.py` + config model
+### Step 1.4 — config model (no `config_loader.py`)
 
-`src/pythinker_code/config.py`:
+Servers are **plugin-only** (`config.ts:9-11`: *"LSP servers are only supported via plugins, not
+user/project settings"*) — no user/project registry, no built-in default, no merge layer, so
+`config_loader.py` is dropped. `LspService` **receives** its server map (injected, exactly as
+`LspServerManager(host, servers=…)` takes it at Step 1.2): in Phase 1 the service is built and tested
+against a fake/empty map (see Phase 1 verification), and `Runtime.create()` feeds the real map from
+`plugin_lsp_servers(policy)` once the loader (`plugin_servers.py`, Step 4.1) lands. Nothing in Phase 1
+calls the loader directly, so Phase 1 needs no placeholder and the loader can land earlier if convenient.
+
+`src/pythinker_code/config.py` adds only feature switches + limits:
 
 ```python
-class LspServerConfig(BaseModel):
+class LspServerConfig(BaseModel):           # parsed shape plugin_servers.py emits — NOT user TOML
     command: str
     args: list[str] = Field(default_factory=list)
     extension_to_language: dict[str, str]          # ".py": "python"
@@ -429,27 +511,26 @@ class LspServerConfig(BaseModel):
 
 class LspConfig(BaseModel):
     enabled: bool = True
-    servers: dict[str, LspServerConfig] = Field(default_factory=dict)
+    recommendation_disabled: bool = False
+    recommendation_never: list[str] = Field(default_factory=list)
+    recommendation_ignored_count: int = 0          # persisted user/global state, auto-disable at >= 5 — see Step 4.2 (lspRecommendation.ts:15,41)
 
 class Config(BaseModel):
     ...
     lsp: LspConfig = Field(default_factory=LspConfig)
 ```
 
-* `config_loader.py` merges: built-in defaults (e.g. `pyright --stdio` for `.py` if present on
-  PATH) ← user `config.lsp.servers` ← plugin-provided servers (Phase 4). Later wins.
-* Ship a sane built-in default for Python only (pyright if discoverable); everything else is
-  user/plugin-supplied. Do **not** bundle server binaries.
+* **No `lsp.servers` and no built-in default server.** Servers come only from installed plugins
+  (inline `manifest.lspServers` or `<plugin_root>/.lsp.json`, Phase 4), mirroring `config.ts`. Do
+  **not** bundle server binaries.
 
-TOML shape:
+TOML shape (feature switches only — there is no `[lsp.servers.*]`):
 
 ```toml
 [lsp]
 enabled = true
-[lsp.servers.python]
-command = "pyright-langserver"
-args = ["--stdio"]
-extension_to_language = { ".py" = "python", ".pyi" = "python" }
+recommendation_disabled = false
+recommendation_never = []
 ```
 
 ### Verification (Phase 1)
@@ -485,7 +566,7 @@ regular file; reject UNC (`\\`/`//` prefix); reject >10 MB. Convert to 0-based L
 
 ```python
 class Lsp(CallableTool2[Params]):
-    name = "Lsp"
+    name = "LSP"                   # model-facing contract: byte-exact from prompt.ts (LSP_TOOL_NAME = 'LSP'); the Python class stays Lsp
     description = load_desc(Path(__file__).parent / "tool.md", {})
     params = Params
     supports_parallel = True       # isConcurrencySafe
@@ -527,6 +608,9 @@ Dispatch table (operation → LSP method(s)):
   profile forbids subprocess (LSP spawns a process) — mirror `search.py`'s policy check.
 * **Untrusted output**: hover/symbol text comes from project files; pass through
   `ToolResultBuilder.mark_untrusted()` so it is wrapped, consistent with `utils/trust.py`.
+* **`SkipThisTool` is load-time** (`tools/__init__.py:11`) — raise it only for `enabled=False` / no
+  service. Per-call unavailability (init still pending, no server for the extension, server in
+  `ERROR`) returns a typed tool *result* with guidance, never `SkipThisTool`.
 
 ### Step 2.3 — `tools/lsp/formatters.py` + `symbol_context.py`
 
@@ -546,10 +630,11 @@ caveat). Register in `src/pythinker_code/agents/default/agent.yaml` under `tools
     - "pythinker_code.tools.lsp:Lsp"
 ```
 
-Add the same line to any subagent spec that should have code-intelligence (e.g. `coder.yaml`,
-`code_reviewer.yaml`) — decision: include in `coder`/`code-reviewer`, exclude from `explore`/`scout`
-(they are textual-recon by design). Wire `Runtime` into the tool deps if not already present
-(it is — `search.py` receives it).
+Add the same line to **`coder.yaml` only**. **Do not register on `code_reviewer.yaml`** — that
+profile runs offline/read-only and fail-closed (blocks network + MCP, `code_reviewer.yaml:67`;
+subagent profiles default to `read_only`, `soul/permission.py:273`), and LSP spawns executable
+plugin subprocesses, the same risk class the reviewer profile refuses. Exclude `explore`/`scout` too
+(textual-recon by design). `Runtime` is already a tool dep (`search.py`/`write.py` receive it).
 
 ### Verification (Phase 2)
 
@@ -593,22 +678,29 @@ The *surface* half — a provider mirroring `git_status.py`:
 ```python
 class LspDiagnosticsInjectionProvider(DynamicInjectionProvider):
     def __init__(self, runtime: Runtime): self._runtime = runtime
-    async def get_injections(self, budget: ContextBudget, ...) -> list[DynamicInjection]:
+    async def get_injections(                           # real base signature (dynamic_injection.py)
+        self, history: Sequence[Message], soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
         if self._runtime.lsp is None or not self._runtime.lsp.is_connected(): return []
         groups = self._runtime.lsp.diagnostics.check_for_diagnostics()
         if not groups: return []
-        text = render_diagnostics_block(groups)        # "<system-reminder> LSP diagnostics …"
-        return [DynamicInjection(text=text, ...)]       # collect_within_budget truncates if needed
+        text = render_diagnostics_block(groups)         # "<system-reminder> LSP diagnostics …"
+        return [DynamicInjection(text=text, ...)]        # collect_within_budget applies the budget
 ```
 
-* Register it in `PythinkerSoul` alongside the other providers (`soul/pythinkersoul.py:82-96`).
+* Register it in `PythinkerSoul.__init__`'s provider list (`soul/pythinkersoul.py:552`) — **for both
+  root and subagent souls**. Providers are built for both roles (only a few gated `role == "root"`,
+  `:581`); most file edits happen inside subagents, so a root-only registration would silently no-op
+  the edit→diagnose loop where it matters most.
 * The provider is **budget-governed** automatically by `collect_within_budget` /
-  `injection_budget_from_runtime` — no separate volume logic needed beyond the registry's own caps.
-* **Edit→save→diagnose loop**: after `WriteFile`/`StrReplaceFile` mutate a file, call
-  `runtime.lsp.manager.save_file(path)` (and `change_file` with new content) so the server
-  re-diagnoses, then `runtime.rearm_injection(...)` so the next turn picks up fresh diagnostics.
-  Wire this in the file tools' success path (a 3-line hook guarded by `runtime.lsp is not None`).
-  This is the single cross-cutting touch into existing tools — keep it surgical.
+  `injection_budget_from_runtime` — no separate volume logic beyond the registry's own caps.
+* **Edit→save→diagnose loop**: after `WriteFile`/`StrReplaceFile` mutate a file, go through the
+  service (`runtime.lsp.change_file(path, content)` + `save_file(path)`) so the server re-diagnoses,
+  then re-arm via the **callback** `runtime.rearm_injection` — `Callable[[str], None] | None`
+  (`soul/agent.py:255`), wired per-soul to `PythinkerSoul.rearm_injection` (`:658`). Guard it:
+  `if runtime.lsp and runtime.rearm_injection: runtime.rearm_injection("lsp_diagnostics")`. Confirm
+  the callback is wired on **subagent** runtimes too, or the loop no-ops there. Keep the hook
+  surgical (a few lines in each file tool's success path).
 
 ### Verification (Phase 3)
 
@@ -624,12 +716,24 @@ make test-pythinker-code`.
 
 ### Step 4.1 — `lsp/plugin_servers.py`
 
-Port `lspPluginIntegration.ts`: read LSP server configs from installed plugins via two sources —
-inline `manifest.lspServers` and an external `<plugin_root>/.lsp.json` (same schema). Resolve env
-placeholders: `${PYTHINKER_PLUGIN_ROOT}`, `${PYTHINKER_PLUGIN_DATA}`, `${user_config.KEY}`, and
-standard `${VAR}`. Scope names as `plugin:<plugin>:<server>` to avoid collisions. Feed the result
-into `config_loader.py`'s merge (highest precedence after explicit user config — decision: user
-config wins over plugin, so a user can override a plugin's command).
+Port `lspPluginIntegration.ts` as `plugin_lsp_servers(policy)`, mirroring `plugin_mcp_servers(policy)`
+(`plugin/integration.py:127`): read LSP server configs from installed plugins via two sources —
+inline `manifest.lspServers` (add `lsp_servers: str | dict | list | None = Field(default=None,
+alias="lspServers")` to `PluginManifest`, which already uses aliases, `plugin/manifest.py:106`) and an
+external `<plugin_root>/.lsp.json` (same schema). **The manifest field is a union, not a `dict`:** the
+reference accepts `string | Record | Array<string | Record>` (`lspPluginIntegration.ts:127-131`) — a
+string is a relative path to a `.lsp.json`-style file (validated within the plugin dir), a record is an
+inline server map, and an array mixes both. A plain `dict` silently drops the string-path and array
+forms, so normalise/validate the three shapes in `plugin_servers.py`. Resolve env placeholders: `${PYTHINKER_PLUGIN_ROOT}`,
+`${PYTHINKER_PLUGIN_DATA}`, `${user_config.KEY}`, and standard `${VAR}`. Reject manifest path
+traversal; isolate per-plugin errors so one bad plugin never drops the others (`config.ts:33-41`).
+Scope names as `plugin:<plugin>:<server>`. **Gate external-plugin servers on
+`PluginPolicy.external_exec`** (executable artifacts are opt-in, like MCP servers,
+`plugin/integration.py:56`). `Runtime.create()` passes the returned map into `LspService` — no merge
+layer, no user-config override (servers are plugin-only). **Build-order:** this loader is a
+dependency-free leaf and a prerequisite for the Phase 1 service's *production* wiring; it sits under
+Phase 4 only because recommendation (4.2-4.3) builds on it, so implement it as soon as Phase 1 needs
+real servers (Phase 1 itself runs against injected fake maps).
 
 ### Step 4.2 — `lsp/recommend.py`
 
@@ -637,7 +741,16 @@ Port `lspRecommendation.ts`: on a file edit, match the extension against discove
 servers (inline manifests only — `.lsp.json` is post-install, not pre-install readable); filter by:
 server supports ext ∧ binary on PATH ∧ plugin not installed ∧ not in
 `config.lsp.recommendation_never` ∧ recommendations not disabled. Sort official-marketplace plugins
-first. Surface **once per session**.
+first. **Gating matches the reference**: queried per file, auto-disabled once
+`recommendation_ignored_count >= 5` (`lspRecommendation.ts:41`) or the disabled flag is set — there
+is **no "once per session" flag** in the reference. A session-level throttle, if wanted, is a
+clearly-labelled CLI adaptation, not parity.
+
+**Persistence:** `recommendation_ignored_count` is **mutable user/global config** — incremented and
+written back on each ignore (the reference reads/writes it via `getGlobalConfig`/`saveGlobalConfig`,
+`lspRecommendation.ts:15`). It is **not** a frozen field loaded from project TOML: model it on the
+user/global config store and persist on update, or the counter never advances and the ≥5 auto-disable
+never fires.
 
 ### Step 4.3 — Recommendation surface (UI intent, not React)
 
@@ -650,14 +763,19 @@ Re-express the intent on the CLI:
   No interactive blocking menu; the agent/user acts via existing plugin commands. Track
   never/disable in config (`lsp.recommendation_never: list[str]`, `lsp.recommendation_disabled:
   bool`), and auto-disable after N ignores.
-* **Init errors**: when `LspService.status()` is `failed` or a server is in `ERROR`, log to the
-  plugins-error channel surfaced by `/doctor` (dedup by `source:message`), exactly as the reference
-  feeds `appState.plugins.errors`.
+* **Init errors**: when `LspService.status()` is `failed` or a server is in `ERROR`, surface through
+  the existing notification/log path (dedup by `source:message`) — the plugin loader already records
+  per-plugin load errors (`plugin/loader.py`), so reuse that. **There is no `/doctor` command or
+  `plugins.errors` channel in the CLI agent** (only the reference's React `appState.plugins.errors`);
+  do not invent one — a dedicated error surface would be separate, clearly-labelled CLI work.
 
-### Step 4.4 — Reinit on plugin refresh
+### Step 4.4 — Reinit on plugin change
 
-When plugins are added/removed/refreshed, call `runtime.lsp.reinitialize()` (the generation guard
-makes this safe). Hook into the existing plugin-refresh path in `src/pythinker_code/plugin/`.
+When the installed plugin set changes, call `runtime.lsp.reinitialize()` (the generation guard makes
+this safe). **There is no runtime plugin-refresh hook in `src/pythinker_code/plugin/` today** (only
+install/uninstall), so the realistic trigger is **session reload** — the same
+`cleanup_runtime_resources()` teardown + `Runtime` reconstruction already used for config reload.
+A dedicated runtime refresh hook is optional follow-up, not a prerequisite for this PLIP.
 
 ### Verification (Phase 4)
 
@@ -685,31 +803,34 @@ make test-pythinker-code`.
 * **Performance**: servers are lazy (spawned on first file touch per language) and long-lived
   (reused across tool calls). `documentSymbol`/`workspace/symbol` can be large → the 100 000-char
   cap + spill. Diagnostics are budget-capped by the injection system.
-* **Compatibility**: new config keys (`config.lsp.*`), a new tool name (`Lsp`), and a new dynamic
+* **Compatibility**: new config keys (`config.lsp.*`), a new tool name (`LSP`, byte-exact; Python class `Lsp`), and a new dynamic
   injection. The tool addition changes the agent's advertised tool list → update the wire-handshake
   inline snapshot in `tests_e2e/` (`full-test-scope-includes-tests-e2e`). Add a `## Unreleased`
   CHANGELOG bullet. No persisted-session schema change (LSP state is ephemeral per session).
-* **Docs**: add an LSP page under `docs/en/customization/` (config shape, built-in Python default,
-  how to add a server, plugin recommendation), and update the architecture repo-map
+* **Docs**: add an LSP page under `docs/en/customization/` (plugin-only config shape, no
+  bundled/default servers, how to add a plugin-provided server, plugin recommendation), and update the
+  architecture repo-map
   (`docs/en/customization/architecture.md`) with the `lsp/` subsystem and its trust boundary.
 
 ## What does NOT port
 
 * React/Ink components and hooks (`components/LspRecommendation`, `hooks/useLsp*`) — their *intent*
-  is re-expressed via the CLI notification/suggest path and `/doctor` error surface (Phase 4.3).
+  is re-expressed via the CLI notification/suggest + log path (Phase 4.3); the reference's
+  `appState.plugins.errors` / `/doctor` surface has no CLI-agent equivalent and is not recreated.
 * The global-singleton lifetime model — replaced by session-scoped ownership on `Runtime`.
 
 ## Open questions (resolve before/while implementing)
 
-1. **Built-in default servers**: ship only a Python default (pyright if on PATH), or none at all
-   (everything user/plugin-supplied)? Recommendation: Python-only default, gated on binary presence.
+1. ~~**Built-in default servers**~~ **RESOLVED (verified):** none. `config.ts:9-11` is plugin-only
+   with no built-in/default server, so the port ships no bundled pyright and no user server registry.
 2. **`lsprotocol` vs hand-rolled**: this plan recommends hand-rolled (no new dep). Confirm with
    maintainers; if they prefer `lsprotocol`, it replaces `protocol.py` + framing only.
 3. **Server output trust level**: confirm `mark_untrusted` is the right wrapper for hover/symbol
    text (it is project source, same trust class as `ReadFile` output).
-4. **Execution-profile gating**: should LSP be disabled under read-only/review profiles (they
-   shouldn't spawn processes), or allowed because it's read-only? Recommendation: allow in
-   `coder`/default, disable where the profile forbids subprocess.
+4. ~~**Execution-profile gating**~~ **RESOLVED:** register on default + `coder`; **exclude
+   `code_reviewer`** and other offline/fail-closed profiles (`code_reviewer.yaml:67` blocks
+   network/MCP; `soul/permission.py:273`) — LSP spawns executable plugin subprocesses. Gate
+   plugin-sourced servers on `PluginPolicy.external_exec`.
 
 ## Verification matrix (per AGENTS.md)
 
@@ -727,9 +848,8 @@ make test-pythinker-code`.
 - [ ] `tests/tools/test_lsp_client.py`
 - [ ] `src/pythinker_code/lsp/instance.py` — `LspServerInstance` (state machine, retry, restart)
 - [ ] `src/pythinker_code/lsp/manager.py` — `LspServerManager` (routing, file sync)
-- [ ] `src/pythinker_code/lsp/service.py` — `LspService` (session-scoped, lazy init, reinit)
-- [ ] `src/pythinker_code/lsp/config_loader.py` — merge defaults/user/plugin
-- [ ] `src/pythinker_code/config.py` — add `LspConfig`/`LspServerConfig` + `Config.lsp`
+- [ ] `src/pythinker_code/lsp/service.py` — `LspService` (session-scoped, lazy init, reinit; consumes `plugin_lsp_servers()`)
+- [ ] `src/pythinker_code/config.py` — add `LspConfig` (enabled + recommendation flags + limits) + `LspServerConfig` (plugin-emitted shape) + `Config.lsp`
 - [ ] `src/pythinker_code/soul/agent.py` — `Runtime.lsp` field + construct in `Runtime.create` + teardown
 - [ ] `tests/tools/test_lsp_manager.py`
 - [ ] `src/pythinker_code/tools/lsp/schemas.py`
@@ -737,7 +857,7 @@ make test-pythinker-code`.
 - [ ] `src/pythinker_code/tools/lsp/symbol_context.py`
 - [ ] `src/pythinker_code/tools/lsp/tool.py` — `Lsp(CallableTool2)`
 - [ ] `src/pythinker_code/tools/lsp/tool.md`
-- [ ] `src/pythinker_code/agents/default/agent.yaml` (+ `coder.yaml`, `code_reviewer.yaml`)
+- [ ] `src/pythinker_code/agents/default/agent.yaml` (+ `coder.yaml`; NOT `code_reviewer.yaml`)
 - [ ] `tests/tools/test_lsp_tool.py`
 - [ ] `src/pythinker_code/lsp/diagnostics.py` — registry + publishDiagnostics handler
 - [ ] `src/pythinker_code/soul/dynamic_injections/lsp_diagnostics.py` — injection provider

@@ -46,6 +46,9 @@ from pythinker_code.ui.shell.visualize._blocks import (
     _find_committed_boundary as _find_committed_boundary,
 )
 from pythinker_code.ui.shell.visualize._blocks import (
+    _normalize_streaming_preview_text as _normalize_streaming_preview_text,
+)
+from pythinker_code.ui.shell.visualize._blocks import (
     _NotificationBlock as _NotificationBlock,
 )
 from pythinker_code.ui.shell.visualize._blocks import (
@@ -68,6 +71,9 @@ from pythinker_code.ui.shell.visualize._blocks import (
 )
 from pythinker_code.ui.shell.visualize._blocks import (
     _truncate_to_display_width as _truncate_to_display_width,
+)
+from pythinker_code.ui.shell.visualize._blocks import (
+    _wrap_preview_line as _wrap_preview_line,
 )
 
 # BTW panel

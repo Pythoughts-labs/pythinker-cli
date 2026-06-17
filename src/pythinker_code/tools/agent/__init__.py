@@ -4,9 +4,9 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, override
+from typing import Literal, cast, override
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pythinker_core.tooling import CallableTool2, ToolError, ToolReturnValue
 
 from pythinker_code.execution_profiles import resolve_execution_policy
@@ -202,6 +202,24 @@ class RunAgentsParams(BaseModel):
         min_length=1,
         max_length=8,
     )
+
+    @field_validator("agents", mode="before")
+    @classmethod
+    def _drop_blank_agent_entries(cls, value: object) -> object:
+        """Drop stray whitespace-only string entries the model emits as array noise.
+
+        Some models render the ``agents`` array with bare ``"\\n"`` string elements
+        between the real objects, e.g. ``[{...}, "\\n", {...}]``. Those parse as valid
+        JSON but fail ``AgentRunConfig`` validation. The model's intent — the object
+        entries — is unambiguous, so strip whitespace-only strings before per-item
+        validation. Non-blank strings and other types are left for normal validation
+        to reject with a clear error.
+        """
+        if isinstance(value, list):
+            items = cast("list[object]", value)
+            return [item for item in items if not (isinstance(item, str) and item.strip() == "")]
+        return value
+
     model: str | None = Field(
         default=None,
         description="Optional model override applied to every child agent.",

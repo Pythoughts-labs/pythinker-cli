@@ -14,6 +14,7 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_lines_block,
     running_spinner,
     tool_call_header,
@@ -60,11 +61,19 @@ ENTER_PLAN_RENDERER = ToolRenderDefinition(
 # ---------------------------------------------------------------------------
 
 
+def _exit_plan_phase(ctx: ToolRenderContext) -> str:
+    """Label plan-exit phase for the tool card header."""
+    if ctx.has_result:
+        return "exiting"
+    return "awaiting approval"
+
+
 def _render_exit_call(ctx: ToolRenderContext) -> RenderableType:
     args = ctx.args or {}
     options = args.get("options")
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
-    line = tool_call_header("Plan", fg("muted", "exiting"), style_token=style_token)
+    phase = _exit_plan_phase(ctx)
+    line = tool_call_header("Plan", fg("muted", phase), style_token=style_token)
 
     if not isinstance(options, list) or not options:
         return running_spinner(
@@ -82,7 +91,7 @@ def _render_exit_call(ctx: ToolRenderContext) -> RenderableType:
     children: list[RenderableType] = [line]
     for opt in opts[:3]:
         label = as_str(opt.get("label")) or "?"
-        children.append(fg("accent", f"  • {label}"))
+        children.append(fg_subject(f"  • {label}"))
     rendered = Group(*children)
     return running_spinner(
         rendered, execution_started=ctx.execution_started, has_result=ctx.has_result

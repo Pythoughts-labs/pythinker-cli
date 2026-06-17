@@ -510,6 +510,8 @@ class QuestionItem(BaseModel):
     """Custom label for the synthetic 'Other' free-text option. Empty uses default."""
     other_description: str = ""
     """Custom description for the synthetic 'Other' option. Empty uses default."""
+    other_index: int = -1
+    """0-based index for the free-text option. ``-1`` appends it after all fixed options."""
 
 
 class QuestionResponse(BaseModel):

@@ -523,7 +523,7 @@ async def test_truncated_response_nudges_continuation(runtime: Runtime, tmp_path
     assert provider.generate_attempts == 2
     assert record_turn.call_args.kwargs["stop_reason"] == "no_tool_calls"
     history_text = " ".join(m.extract_text(" ") for m in context.history)
-    assert "cut off by the output token limit" in history_text
+    assert "Output token limit hit" in history_text
 
 
 @pytest.mark.asyncio

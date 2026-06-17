@@ -203,11 +203,11 @@ class ExitPlanMode(CallableTool2[Params]):
         _reject_options = [
             QuestionOption(
                 label="Reject",
-                description="Reject and stay in plan mode",
+                description="Stay in plan mode",
             ),
             QuestionOption(
                 label="Reject and Exit",
-                description="Reject and exit plan mode",
+                description="Leave plan mode",
             ),
         ]
 
@@ -222,7 +222,7 @@ class ExitPlanMode(CallableTool2[Params]):
             question_options = [
                 QuestionOption(
                     label="Approve",
-                    description="Exit plan mode and start execution",
+                    description="Start execution",
                 ),
                 *_reject_options,
             ]
@@ -242,11 +242,12 @@ class ExitPlanMode(CallableTool2[Params]):
             tool_call_id=tool_call.id,
             questions=[
                 QuestionItem(
-                    question="Approve this plan",
+                    question="Approve this plan?",
                     header="Plan",
                     options=question_options,
                     other_label="Revise",
-                    other_description="Stay in plan mode and provide feedback",
+                    other_description="Stay in plan mode and edit plan",
+                    other_index=1 if not has_options else len(question_options) - 2,
                 )
             ],
         )

@@ -1412,6 +1412,12 @@ def test_bottom_toolbar_hides_status_while_slash_menu_is_active(monkeypatch: Any
     )
     prompt_session = object.__new__(CustomPromptSession)
     prompt_session._session = cast(Any, SimpleNamespace(default_buffer=default_buffer))
+    # _render_bottom_toolbar consults the active-mode slash completer to decide
+    # whether the menu is showing; a bare instance needs both wired up.
+    prompt_session._mode = PromptMode.AGENT
+    prompt_session._agent_slash_completer = cast(
+        Any, SimpleNamespace(completion_active=lambda _document: True)
+    )
 
     monkeypatch.setattr(shell_prompt, "get_app_or_none", lambda: object())
 

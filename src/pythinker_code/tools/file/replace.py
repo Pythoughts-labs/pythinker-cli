@@ -523,6 +523,19 @@ class StrReplaceFile(CallableTool2[Params]):
                 st = await p.stat()
                 self._runtime.file_read_cache.record(real_p, st.st_mtime, st.st_size)
 
+            if self._runtime.lsp and self._runtime.rearm_injection:
+                file_uri = Path(str(p)).resolve().as_uri()
+                self._runtime.lsp.diagnostics.clear_for_file(file_uri)
+                try:
+                    await self._runtime.lsp.change_file(str(p), content)
+                    await self._runtime.lsp.save_file(str(p))
+                    self._runtime.rearm_injection("lsp_diagnostics")
+                except Exception:
+                    logger.warning(
+                        "LSP notification failed for {path}; skipping diagnostic rearm",
+                        path=p,
+                    )
+
             # Count changes for success message (tallied per-edit during application).
             total_replacements = sum(per_edit_counts)
 

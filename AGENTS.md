@@ -224,6 +224,41 @@ Pick the smallest reliable gate for the change, then run broader gates before re
 If a gate cannot run because of missing system tools (for example `npm`), report that explicitly
 instead of claiming success.
 
+## Pre-PR gate (run before pushing or opening a PR)
+
+CI failures that "slip to GitHub" almost always trace to pushing after a *partial* local check
+(for example running `ruff`/`pyright` on a single file instead of the whole package). Before you
+push a branch or open a PR that touches shipped code, run the full gate and clear every item below.
+Running a focused check on only the files you edited is **not** sufficient — snapshot, static, and
+bundling tests fail on files you did not touch.
+
+1. **Full gate, not partial.** Run `make check-pythinker-code` (ruff + format + pyright) **and**
+   `make test-pythinker-code`. Paste/confirm the actual "All checks passed" / passing summary — a
+   green `ruff` alone is not a green `check` (pyright and format are separate). For changes to
+   another workspace package, run that package's `make check-* && make test-*` too.
+2. **Include `tests_e2e`.** CI runs `tests` and `tests_e2e`. New slash commands, wire events, or
+   agent-spec/tool changes move the wire-handshake snapshot and the agent-spec/config/pyinstaller
+   snapshots. Re-run the affected tests; apply deliberate snapshot updates with
+   `uv run pytest <node> --inline-snapshot=fix` and **read the resulting diff** before committing.
+3. **Snapshot fix-direction.** A hardcoded expected value that changed deliberately → update the
+   **test**. An invariant of the form "two values must stay equal" (e.g. a prompt token that must
+   track a core theme token) → fix the **code** that drifted, never the test.
+4. **New source files clear the static checks.** `tests/test_ai_static_requirements.py` enforces
+   explicit text encoding (`encoding="utf-8"`, `errors="replace"` for tool decodes) and other
+   invariants across `src/pythinker_code/**`. Note the ruff-vs-static conflict: ruff `UP012` strips
+   `"utf-8"` from a **string-literal** `.encode("utf-8")`, but the static check wants an explicit
+   `encoding=`. Encode/decode via a **local variable or call result**, not a literal, so both gates
+   pass (see `lsp/framing.py`).
+5. **New bundled files/tools update the manifests.** A new tool `*.md`, prompt, or package adds
+   entries to `tests/utils/test_pyinstaller_utils.py` (`datas` + `hiddenimports`) and, for new
+   config keys, `tests/core/test_config.py::test_default_config_dump`.
+6. **Changelog.** Any change to shipped paths (`src/*`, `packages/*`, installers, release
+   workflows, `pythinker.spec`) needs a new `- ...` line under `## Unreleased` in `CHANGELOG.md`, or
+   the `changelog-entry-required` check fails the PR.
+7. **Confirm what is actually new.** Diff against `origin/main` (`git log origin/main..HEAD`,
+   `git diff origin/main...HEAD --stat`) so the PR scope — and the review/verification surface — is
+   what you intend, not stale local commits.
+
 ## Project architecture
 
 ### Runtime path

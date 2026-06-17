@@ -231,6 +231,39 @@ def test_render_agent_body_plain_markdown_unchanged():
     assert "text" in out
 
 
+def test_space_aligned_agent_report_renders_nested_fields():
+    sample = (
+        "Deep Code Scan Analysis\n"
+        "═══════════════════════\n\n"
+        "1. Parity Matrix\n\n"
+        "• Spawn race guard (ENOENT → LspStartError)\n"
+        "    Reference line      LSPClient.ts:111-131\n"
+        "    Pythinker location  src/pythinker_code/lsp/client.py:65-73\n"
+        "    Status              ✓ exact\n\n"
+        "• Initialize handshake\n"
+        "    Reference line      LSPServerInstance.ts:167-272\n"
+        "    Pythinker location  src/pythinker_code/lsp/instance.py:200-252\n"
+        "    Status              ✓ exact\n"
+    )
+    out = _plain(render_agent_body(sample), width=100)
+    assert "Spawn race guard" in out
+    assert "Reference line" in out
+    assert "LSPClient.ts:111-131" in out
+    assert "Pythinker location" in out
+    assert "Reference line      LSPClient" not in out
+
+
+def test_report_markdown_only_h1_is_bold():
+    from pythinker_code.ui.theme.adapters.markdown import report_markdown_style_overrides
+
+    overrides = report_markdown_style_overrides()
+    assert overrides["markdown.h1"].bold is True
+    assert overrides["markdown.h2"].bold is False
+    assert overrides["markdown.h3"].bold is False
+    assert overrides["markdown.strong"].bold is False
+    assert overrides["markdown.item.bullet"].bold is False
+
+
 def test_render_agent_body_report_prose_gets_section_rhythm():
     text = (
         "Exit codes: both `0`. Only a vendored warning remains.\n"

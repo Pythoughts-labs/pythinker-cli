@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, cast, override
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pythinker_core.tooling import CallableTool2, ToolReturnValue
 
 from pythinker_code.session_state import TodoItemState
@@ -19,6 +19,44 @@ _STATUS_ALIASES: dict[str, TodoStatus] = {
     "finished": "done",
     "canceled": "cancelled",
 }
+
+
+def normalize_set_todo_list_args(args: dict[str, Any]) -> dict[str, Any]:
+    """Accept Cursor/Claude TodoWrite shape while keeping internal state canonical.
+
+    Supported external aliases:
+    - ``content`` -> ``title``, only when ``title`` is missing or blank
+
+    Deliberately does not:
+    - invent titles
+    - coerce invalid status values
+    - accept random aliases like text/name/label
+    - mutate the input dict
+    """
+    todos = args.get("todos")
+    if not isinstance(todos, list):
+        return args
+
+    normalized: list[Any] = []
+
+    for raw in cast("list[Any]", todos):
+        if not isinstance(raw, dict):
+            normalized.append(raw)
+            continue
+
+        item = dict(cast(dict[str, Any], raw))
+
+        title = item.get("title")
+        content = item.get("content")
+        title_missing = title is None or (isinstance(title, str) and not title.strip())
+
+        if title_missing and content is not None:
+            item["title"] = content
+
+        item.pop("content", None)
+        normalized.append(item)
+
+    return {**args, "todos": normalized}
 
 
 class Todo(BaseModel):
@@ -43,15 +81,24 @@ class Params(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_todo_write_args(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return normalize_set_todo_list_args(cast(dict[str, Any], data))
+
     @field_validator("todos", mode="before")
     @classmethod
     def _parse_todos_string(cls, v: Any) -> Any:
         # LLMs occasionally pass the list as a JSON-encoded string; parse it transparently.
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                parsed = json.loads(v)
             except json.JSONDecodeError:
-                pass
+                return v
+            normalized = normalize_set_todo_list_args({"todos": parsed})
+            return normalized.get("todos", parsed)
         return v
 
 

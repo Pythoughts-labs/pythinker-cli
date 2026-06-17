@@ -214,6 +214,43 @@ def test_card_style_finished_subagent_shows_compact_result(_force_card_style, mo
     assert "Agent finished" not in rendered
 
 
+def test_card_style_completed_subagent_has_blank_before_tools_rollup(_force_card_style):
+    import json
+
+    from pythinker_core.tooling import ToolOk
+
+    from pythinker_code.ui.shell.tool_renderers import register_builtin_renderers
+    from pythinker_code.wire.types import ToolResult
+
+    register_builtin_renderers()
+    block = _ToolCallBlock(
+        _make_tool_call(name="Agent", args='{"description":"Audit UI","prompt":"check"}')
+    )
+    long_result = "\n".join(f"detail line {index}" for index in range(40))
+    block.finish(_ok_result(long_result))
+    for index in range(3):
+        call = ToolCall(
+            id=f"sub-{index}",
+            function=ToolCall.FunctionBody(
+                name="Grep",
+                arguments=json.dumps({"pattern": f"term{index}"}),
+            ),
+        )
+        block.append_sub_tool_call(call)
+        block.finish_sub_tool_call(ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")))
+
+    rendered = render_plain(block.compose(), width=120)
+    lines = [line.rstrip() for line in rendered.splitlines()]
+    expand_idx = next(
+        index
+        for index, line in enumerate(lines)
+        if "expand" in line.lower() and "ctrl" in line.lower()
+    )
+    tools_idx = next(index for index, line in enumerate(lines) if "tools:" in line)
+    assert tools_idx > expand_idx
+    assert any(lines[j] == "" for j in range(expand_idx + 1, tools_idx))
+
+
 def test_card_style_running_task_output_uses_solid_circle(_force_card_style, monkeypatch):
     from pythinker_code.ui.shell.tool_renderers import register_builtin_renderers
 

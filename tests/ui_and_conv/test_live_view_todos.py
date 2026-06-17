@@ -230,11 +230,11 @@ def test_active_pinned_todo_row_uses_neutral_title_not_shimmer() -> None:
         elapsed_s=0.88,
     )
 
-    # Reference design: coral box; the title is bold in the terminal's
-    # default text color (white on dark) — no color override.
+    # Reference design: coral box; title uses explicit primary text on dark.
     coral = _color_hex(tui_rich_style("activity_verb").color)
+    primary = _color_hex(tui_rich_style("text").color)
     assert _span_colors_for(row, "■") == {coral}
-    assert _span_colors_for(row, "Implement pinned todos") == set()
+    assert _span_colors_for(row, "Implement pinned todos") == {primary}
 
 
 def test_secondary_in_progress_todo_rows_use_light_grey() -> None:
@@ -248,11 +248,11 @@ def test_secondary_in_progress_todo_rows_use_light_grey() -> None:
         elapsed_s=0.88,
     )
 
-    # Every in-progress row shares the same design: coral box, bold
-    # default-color (white) title.
+    # Every in-progress row shares the same design: coral box, primary text title.
     coral = _color_hex(tui_rich_style("activity_verb").color)
+    primary = _color_hex(tui_rich_style("text").color)
     assert _span_colors_for(row, "■") == {coral}
-    assert _span_colors_for(row, "Deep code review on diff") == set()
+    assert _span_colors_for(row, "Deep code review on diff") == {primary}
 
 
 def test_pinned_todo_rows_align_icons_and_titles() -> None:

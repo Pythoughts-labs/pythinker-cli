@@ -18,6 +18,7 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._render_utils import (
     as_str,
     fg,
+    fg_subject,
     format_lines_block,
     invalid_arg,
     missing_required_arg,
@@ -46,7 +47,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
                 has_result=ctx.has_result,
             )
     else:
-        summary = fg("accent", skill_name)
+        summary = fg_subject(skill_name)
 
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
     header = tool_call_header("Skill", summary, style_token=style_token)

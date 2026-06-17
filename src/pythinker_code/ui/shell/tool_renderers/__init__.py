@@ -162,6 +162,7 @@ def register_builtin_renderers() -> None:
         skill,
         think,
         todo,
+        tool_search,
         web,
         write,
     )
@@ -179,6 +180,7 @@ def register_builtin_renderers() -> None:
     register_tool_renderer(ask_user.ASK_USER_RENDERER)
     register_tool_renderer(think.THINK_RENDERER)
     register_tool_renderer(todo.TODO_RENDERER)
+    register_tool_renderer(tool_search.TOOL_SEARCH_RENDERER)
     register_tool_renderer(web.FETCH_RENDERER)
     register_tool_renderer(web.SEARCH_RENDERER)
     register_tool_renderer(background.TASK_LIST_RENDERER)

@@ -12,8 +12,10 @@ from pythinker_code.ui.shell.visualize import (
     _ContentBlock,
     _estimate_tokens,
     _find_committed_boundary,
+    _normalize_streaming_preview_text,
     _tail_lines,
     _truncate_to_display_width,
+    _wrap_preview_line,
 )
 from pythinker_code.ui.theme import tui_rich_style
 
@@ -286,6 +288,48 @@ def test_assert_blank_line_after_activity_reports_missing_following_line() -> No
         _assert_blank_line_after_activity("Composing\n", "Composing")
 
 
+def test_composing_committed_prose_has_gap_before_spinner() -> None:
+    """Staged paragraphs must not run flush into the Composing activity line."""
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph here.\n\nSecond paragraph here.\n\n")
+    block.append("Third still streaming")
+    assert block._committed_renderables
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    lines = [line.rstrip() for line in console.export_text().splitlines()]
+    first_idx = next(i for i, line in enumerate(lines) if "First paragraph" in line)
+    composing_idx = next(i for i, line in enumerate(lines) if "Composing" in line)
+    assert composing_idx > first_idx
+    assert composing_idx - first_idx >= 2
+    assert any(lines[j] == "" for j in range(first_idx + 1, composing_idx))
+
+
+def test_composing_preview_does_not_double_blank_after_commit_boundary() -> None:
+    """Pending text that starts with "\\n" after a commit boundary must not
+    produce a second blank row in the transient Live region.
+    """
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph here.\n\nSecond paragraph here.\n\n")
+    block.append("\nThird still streaming")
+    assert block._committed_renderables
+
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "Composing" in output
+    assert "Third still streaming" in output
+    lines = output.splitlines()
+    activity_index = next(i for i, line in enumerate(lines) if "Composing" in line)
+    assert activity_index + 1 < len(lines)
+    assert lines[activity_index + 1].strip() == ""
+    if activity_index + 2 < len(lines):
+        assert lines[activity_index + 2].strip() != "", (
+            "Second blank row after 'Composing' — leading '\\n' in pending "
+            "text is leaking through the preview path."
+        )
+
+
 def test_composing_preview_has_standard_gap_after_activity_line(monkeypatch):
     from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 
@@ -314,7 +358,8 @@ def test_paced_composing_preview_renders_complete_inline_markdown(monkeypatch):
     output = console.export_text()
 
     assert "Planning agent tasks" in output
-    assert "**Planning agent tasks**" not in output
+    # Live preview uses plain Text; delimiters stay visible until finalize.
+    assert "**Planning agent tasks**" in output
 
 
 def test_paced_composing_preview_keeps_incomplete_inline_markdown_plain(monkeypatch):
@@ -409,21 +454,14 @@ class TestContentBlockCommitment:
         output_console.print(block.compose_final())
         output = output_console.export_text()
 
-        assert output.startswith("\n")
         assert "Deep Code Scan Results" in output
 
-    def test_streamed_prose_blocks_match_single_pass_spacing(self, monkeypatch):
+    def test_streamed_prose_blocks_match_single_pass_spacing(self):
         """Regression: streamed multi-paragraph bodies used to render every
         paragraph crammed onto consecutive lines. Each committed block and the
         final tail must keep the one-row gap a single markdown pass puts
         between blocks."""
-        import importlib
-
-        # ``visualize`` re-exports a function of the same name that shadows the
-        # submodule for attribute walking, so resolve the module via sys.modules.
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
         rec = Console(record=True, width=80, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
 
         block = _ContentBlock(is_think=False)
         body = (
@@ -518,25 +556,13 @@ class TestProductionPathBoundaryContract:
             f"before data row arrived (data row ends at {table_data_end})"
         )
 
-    def test_unpaced_composing_block_does_not_commit_table_mid_row(self, monkeypatch):
-        import importlib
-
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
-        rec = Console(record=True, width=120, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
-
+    def test_unpaced_composing_block_does_not_commit_table_mid_row(self):
         block = _ContentBlock(is_think=False)
         for ch in self._FULL_TABLE:
             block.append(ch)
             self._assert_no_mid_table_commit(block)
 
-    def test_paced_composing_block_does_not_commit_table_mid_row(self, monkeypatch):
-        import importlib
-
-        blocks_mod = importlib.import_module("pythinker_code.ui.shell.visualize._blocks")
-        rec = Console(record=True, width=120, color_system=None)
-        monkeypatch.setattr(blocks_mod, "console", rec)
-
+    def test_paced_composing_block_does_not_commit_table_mid_row(self):
         block = _ContentBlock(is_think=False, paced=True)
         for ch in self._FULL_TABLE:
             block.append(ch)
@@ -664,3 +690,88 @@ class TestShowThinkingStream:
             block.append("hello\n\nworld")
         # Both should commit identically
         assert block_off._committed_len == block_on._committed_len
+
+
+# ---------------------------------------------------------------------------
+# Space-aligned report preview wrapping
+# ---------------------------------------------------------------------------
+
+_FINDINGS_PREVIEW_SAMPLE = (
+    "Findings\n\n"
+    "• 1\n"
+    "    Severity  medium\n"
+    "    Location  llm.py:58-60\n"
+    "    What      Host allowlist is a single-member frozenset; safe-by-default but "
+    "invisible on new genuine-Anthropic hosts (tool silently absent). Consider a "
+    "config-level list or docs pointer.\n\n"
+    "• 2\n"
+    "    Severity  medium\n"
+    "    Location  test_default_agent.py:312-341\n"
+    "    What      Root-tool snapshot omits ToolSearch — correctly, because the llm "
+    "fixture has provider_config=None (verified via conftest.py:94-101). But the "
+    "coupling is implicit.\n"
+)
+
+
+def _preview_orphan_lines(output: str) -> list[str]:
+    """Lines that look like wrap fragments stranded at column 0."""
+    orphans: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped or line.startswith((" ", "•", "⏺", "├", "└", "│", "-")):
+            continue
+        if stripped.split()[0].lower() in {
+            "but",
+            "llm",
+            "arrowly",
+            "cycle.",
+            "invisible",
+            "fixture",
+        }:
+            orphans.append(line)
+    return orphans
+
+
+class TestSpaceAlignedPreviewWrapping:
+    def test_normalize_preview_converts_space_columns_to_list_fields(self):
+        normalized = _normalize_streaming_preview_text(_FINDINGS_PREVIEW_SAMPLE)
+        assert "- Severity: medium" in normalized
+        assert "Severity  medium" not in normalized
+
+    def test_wrap_preview_line_hangs_continuation_indent(self):
+        line = (
+            "    What      Host allowlist is a single-member frozenset; safe-by-default but "
+            "invisible on new genuine-Anthropic hosts."
+        )
+        wrapped = _wrap_preview_line(line, 72)
+        assert wrapped.startswith("    What")
+        assert "\nbut invisible" not in wrapped
+        assert "\n    invisible" in wrapped or "\n    but invisible" in wrapped
+
+    def test_composing_preview_has_no_orphan_wrap_fragments(self, monkeypatch):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
+        block = _ContentBlock(is_think=False)
+        block.append(_FINDINGS_PREVIEW_SAMPLE)
+        console = Console(record=True, width=72, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+        assert _preview_orphan_lines(output) == []
+
+    def test_finalize_scrollback_uses_normalized_render_not_raw_columns(self, monkeypatch):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        monkeypatch.setattr(blocks_module, "current_console_width", lambda: 72)
+        block = _ContentBlock(is_think=False)
+        block.append(_FINDINGS_PREVIEW_SAMPLE)
+        block.reveal_all()
+        block._flush_committed()
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=72, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "Severity: medium" in output
+        assert "Severity  medium" not in output
+        assert _preview_orphan_lines(output) == []

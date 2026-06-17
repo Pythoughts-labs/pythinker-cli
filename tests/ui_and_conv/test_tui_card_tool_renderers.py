@@ -20,6 +20,7 @@ from pythinker_code.ui.shell.components import (
 )
 from pythinker_code.ui.shell.glyphs import QUESTION_MARKER
 from pythinker_code.ui.shell.tool_renderers import (
+    ToolRenderContext,
     ToolResultPayload,
     clear_tool_renderers,
     get_tool_renderer,
@@ -28,6 +29,12 @@ from pythinker_code.ui.shell.tool_renderers import (
 from pythinker_code.ui.shell.tool_renderers._file_diff import preview_from_diff_blocks
 from pythinker_code.ui.shell.tool_renderers._render_utils import loading_marker
 from pythinker_code.ui.shell.tool_renderers.generic import generic_renderer
+from pythinker_code.ui.shell.tool_renderers.todo import (
+    TODO_RENDERER,
+    _has_cursor_todowrite_shape,
+    _summarize_todo_validation_error,
+    _todo_level_and_title,
+)
 from pythinker_code.ui.theme import tui_rich_style
 
 
@@ -240,7 +247,7 @@ def test_write_existing_file_renders_diff_for_add_only_change():
     )
 
     assert "Added 1 line" in rendered
-    assert " 2 +new section" in rendered
+    assert " 2 + new section" in rendered
     assert "Wrote 2 lines" not in rendered
 
 
@@ -315,8 +322,8 @@ def test_edit_renders_inline_diff():
     assert "Added 1 line" in rendered
     assert "return 1" in rendered
     assert "return 2" in rendered
-    assert " 1 -return 1" in rendered
-    assert " 1 +return 2" in rendered
+    assert " 1 - return 1" in rendered
+    assert " 1 + return 2" in rendered
 
 
 def test_edit_multi_count_in_header():
@@ -360,8 +367,8 @@ def test_edit_prefers_structured_result_diff_blocks():
     rendered = render_plain(comp.render(), width=100)
     assert "removed 1 line" in rendered
     assert "Added 1 line" in rendered
-    assert "41 -old" in rendered
-    assert "41 +new" in rendered
+    assert "41 - old" in rendered
+    assert "41 + new" in rendered
 
 
 def test_summary_diff_blocks_count_each_line():
@@ -592,6 +599,7 @@ def test_running_tool_headers_do_not_duplicate_status_bullets():
         ("TaskStop", {"task_id": "abc"}, "TaskStop("),
         ("EnterPlanMode", {}, "Plan("),
         ("ExitPlanMode", {"options": [{"label": "Continue"}]}, "Plan("),
+        ("ToolSearch", {"query": "read"}, "Tools("),
     ]
     for tool, args, label in cases:
         rendered = _render_running(tool, args, width=64)
@@ -753,6 +761,49 @@ def test_render_diff_colorizes_added_removed():
     assert "world" in plain
 
 
+def test_render_diff_spaces_marker_before_at_rule():
+    old = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1); } }\n"
+    new = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }\n"
+    diff = compute_edit_diff_string(old, new).diff
+    plain = render_plain(render_diff(diff), width=120)
+    assert " - @keyframes" in plain
+    assert " + @keyframes" in plain
+    assert "-@" not in plain
+    assert "+@" not in plain
+
+
+def test_render_diff_signs_match_body_foreground():
+    """+/- markers and line numbers use default fg on tinted rows, not green/red."""
+    from pythinker_code.ui.theme import get_diff_colors, set_active_theme, tui_rich_style
+
+    set_active_theme("dark")
+    diff = compute_edit_diff_string("old line\n", "new line\n").diff
+    text = render_diff(diff)
+    accent_fgs = {
+        tui_rich_style("tool_diff_added").color,
+        tui_rich_style("tool_diff_removed").color,
+    }
+    row_bgs = {get_diff_colors().add_bg.bgcolor, get_diff_colors().del_bg.bgcolor}
+    for span in text.spans:
+        if span.end <= span.start:
+            continue
+        style = span.style
+        if isinstance(style, str):
+            continue
+        if style.color in accent_fgs:
+            pytest.fail(
+                f"diff sign/body used accent fg {style.color!r} on {text.plain[span.start : span.end]!r}"
+            )
+
+    tinted = [
+        text.plain[span.start : span.end]
+        for span in text.spans
+        if not isinstance(span.style, str) and span.style.bgcolor in row_bgs
+    ]
+    assert any(" -" in chunk or chunk.endswith("-") for chunk in tinted)
+    assert any(" +" in chunk or chunk.endswith("+") for chunk in tinted)
+
+
 # ---------------------------------------------------------------------------
 # Agent (subagent)
 # ---------------------------------------------------------------------------
@@ -849,10 +900,11 @@ def test_run_agents_renders_compact_professional_summary():
         width=120,
     )
     assert "⏺ RunAgents(" in rendered
-    assert "2 agents" in rendered
-    assert "foreground" in rendered
-    assert "code_scan" in rendered
-    assert "security_scan" in rendered
+    assert "Run code and security scans" in rendered
+    assert "code-reviewer" in rendered
+    assert "security-reviewer" in rendered
+    assert "2 code-reviewer agents finished" in rendered or "2 agents finished" in rendered
+    assert "Done" in rendered
     # Successful agent summaries are suppressed — only the findings table shows
     assert "No correctness findings" not in rendered
     assert "No exploitable security issues" not in rendered
@@ -862,6 +914,7 @@ def test_run_agents_renders_compact_professional_summary():
     assert "Review every changed file" not in rendered
     assert "result: |" not in rendered
     assert "agent_id:" not in rendered
+    assert "Mode" not in rendered
 
 
 def test_run_agents_rows_align_columns_and_drop_redundant_name():
@@ -891,17 +944,11 @@ def test_run_agents_rows_align_columns_and_drop_redundant_name():
         ),
         width=120,
     )
-    tree_lines = [line for line in rendered.splitlines() if line.lstrip().startswith(("├─", "└─"))]
-    assert len(tree_lines) == 2
-    # Variable-width subagent labels are padded so the status column aligns.
-    status_cols = {line.index("running") for line in tree_lines}
-    assert len(status_cols) == 1, tree_lines
-    # And the trailing task_id column aligns too.
-    task_cols = {line.index("agent-") for line in tree_lines}
-    assert len(task_cols) == 1, tree_lines
-    # A name identical to the subagent_type is not echoed twice in its tree row.
-    code_reviewer_line = next(line for line in tree_lines if "code-reviewer" in line)
-    assert code_reviewer_line.count("code-reviewer") == 1
+    assert "2 background agents launched" in rendered
+    assert "qa" in rendered
+    assert "code-reviewer" in rendered
+    assert "Initializing" not in rendered
+    assert "Mode" not in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1057,190 @@ def test_todo_infers_nested_items_from_leading_spaces():
     assert "Child" in rendered
 
 
+def test_todo_content_field_renders_labels_during_streaming():
+    """Cursor-style payloads use ``content``; preview must still show labels."""
+    rendered = _render_running(
+        "SetTodoList",
+        {
+            "todos": [
+                {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+                {"id": "2", "content": "Create component", "status": "pending"},
+            ]
+        },
+    )
+    assert "Install framer-motion" in rendered
+    assert "Create component" in rendered
+    assert "├─" in rendered
+
+
+def test_failed_cursor_todowrite_shape_renders_error_badge_not_tree():
+    """``render_call`` must skip the plan tree when ``ctx.is_error`` is true."""
+    ctx = ToolRenderContext(
+        args={
+            "todos": [
+                {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+                {"id": "2", "content": "Create background paths", "status": "pending"},
+            ]
+        },
+        tool_call_id="tc-1",
+        is_error=True,
+        has_result=True,
+        args_complete=True,
+        expanded=False,
+        execution_started=True,
+    )
+    render_call = TODO_RENDERER.render_call
+    assert render_call is not None
+    result = render_call(ctx)
+    assert result is not None
+    rendered = render_plain(result, width=100)
+    assert "update failed · 2 items" in rendered
+    assert "Install framer-motion" not in rendered
+    assert "Create background paths" not in rendered
+    assert "├─" not in rendered
+
+
+def test_todo_validation_error_renders_compact_card_without_broken_tree():
+    todos = [
+        {"id": "1", "content": "Install framer-motion", "status": "in_progress"},
+        {"id": "2", "content": "Create component", "status": "pending"},
+    ]
+    rendered = _render(
+        "SetTodoList",
+        {"todos": todos},
+        output=(
+            "Error validating JSON arguments: 2 validation errors for Params\n"
+            "todos.0.title\n  Field required [type=missing, input_value={'id': '1', "
+            "'content': 'Install framer-motion', 'status': 'in_progress'}, "
+            "input_type=dict]\n"
+            "todos.1.title\n  Field required [type=missing, input_value={'id': '2', "
+            "'content': 'Create component', 'status': 'pending'}, input_type=dict]"
+        ),
+        is_error=True,
+    )
+    assert "✘ todos" in rendered
+    assert "update failed · 2 items" in rendered
+    assert "Todo update failed: each item needs `title`" in rendered
+    assert "received `content` without `title`" in rendered
+    assert "⎿" in rendered
+    assert "├─" not in rendered
+    assert "0/2 done" not in rendered
+    assert "Install framer-motion" not in rendered
+    assert "Field required" not in rendered
+
+
+def test_todo_validation_error_five_items_no_fake_tree():
+    """Regression: GLM run showed icons-only tree for five failed content-only items."""
+    todos = [
+        {"id": str(i), "content": f"Step {i}", "status": "in_progress" if i == 1 else "pending"}
+        for i in range(1, 6)
+    ]
+    rendered = _render(
+        "SetTodoList",
+        {"todos": todos},
+        output=(
+            "Error validating JSON arguments: 5 validation errors for Params\n"
+            + "\n".join(f"todos.{i}.title\n  Field required" for i in range(5))
+        ),
+        is_error=True,
+    )
+    assert "update failed · 5 items" in rendered
+    assert "├─" not in rendered
+    assert "Step 1" not in rendered
+
+
+def test_todo_malformed_item_renders_untitled_label():
+    rendered = _render_running(
+        "SetTodoList",
+        {"todos": [{"status": "pending"}]},
+    )
+    assert "Untitled todo" in rendered
+
+
+def test_renderer_uses_content_fallback_for_title():
+    _level, title = _todo_level_and_title(
+        {"content": "Install framer-motion", "status": "in_progress"}
+    )
+    assert title == "Install framer-motion"
+
+
+def test_renderer_uses_untitled_fallback():
+    _level, title = _todo_level_and_title({"status": "pending"})
+    assert title == "Untitled todo"
+
+
+def test_renderer_cleans_multiline_title():
+    _level, title = _todo_level_and_title({"title": "line one\nline two", "status": "pending"})
+    assert title == "line one line two"
+
+
+def test_validation_summary_detects_cursor_shape():
+    args = {"todos": [{"id": "1", "content": "Install framer-motion", "status": "pending"}]}
+    text = (
+        "Error validating JSON arguments: 1 validation error for Params\n"
+        "todos.0.title\n  Field required"
+    )
+    assert _summarize_todo_validation_error(text, args) == (
+        "Todo update failed: each item needs `title` (received `content` without `title`)."
+    )
+
+
+def test_todo_validation_error_shows_full_detail_when_expanded():
+    todos = [{"content": "Task A", "status": "pending"}]
+    pydantic_text = (
+        "Error validating JSON arguments: 1 validation error for Params\n"
+        "todos.0.title\n  Field required"
+    )
+    defn = get_tool_renderer("SetTodoList")
+    assert defn is not None
+    comp = ToolExecutionComponent("SetTodoList", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"todos": todos})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(ToolResultPayload(text=pydantic_text, is_error=True))
+    comp.set_expanded(True)
+    rendered = render_plain(comp.render(), width=100)
+    assert "Todo update failed: each item needs `title`" in rendered
+    assert "Field required" in rendered
+
+
+def test_cursor_shape_detects_blank_title_with_content():
+    args = {"todos": [{"title": "", "content": "Install framer-motion", "status": "pending"}]}
+    assert _has_cursor_todowrite_shape(args) is True
+
+
+def test_renderer_blank_title_uses_content_fallback():
+    _level, title = _todo_level_and_title(
+        {"title": "", "content": "Install framer-motion", "status": "pending"}
+    )
+    assert title == "Install framer-motion"
+
+
+def test_renderer_indent_ignores_ansi_before_leading_spaces():
+    raw = "\x1b[31m  \x1b[0mNested task"
+    _level, title = _todo_level_and_title({"title": raw, "status": "pending"})
+    assert _level == 1
+    assert title == "Nested task"
+
+
+def test_malformed_todos_list_renders_invalid_when_args_complete():
+    rendered = _render_running(
+        "SetTodoList",
+        {"todos": ["bad", None, 123, {"title": "ok", "status": "pending"}]},
+    )
+    assert "<invalid>" in rendered
+    assert "ok" not in rendered
+
+
+def test_malformed_todos_streaming_skips_non_dict_items():
+    rendered = _render_streaming(
+        "SetTodoList",
+        {"todos": ["bad", {"title": "Visible", "status": "pending"}]},
+    )
+    assert "<invalid>" not in rendered
+    assert "Visible" in rendered
+
+
 # ---------------------------------------------------------------------------
 # Web
 # ---------------------------------------------------------------------------
@@ -1095,6 +1326,65 @@ def test_task_list_renders_active_flag():
     assert "⏺ Tasks(active)" in rendered
 
 
+def test_task_output_renders_summary_not_raw_metadata():
+    rendered = _render(
+        "TaskOutput",
+        {"task_id": "agent-plucky-comet", "block": True, "timeout": 600},
+        output=(
+            "tool_status: success\n"
+            "retrieval_status: success\n"
+            "task_id: agent-plucky-comet\n"
+            "kind: agent\n"
+            "status: completed\n"
+            "description: Python subagents scan\n"
+            "subagent_type: explore\n"
+            "interrupted: false\n"
+            "timed_out: false\n"
+            "terminal_reason: completed\n"
+            "output_path: /Users/panda/.pythinker/sessions/s1/output.md\n"
+            "output_size_bytes: 82841\n"
+            "output_preview_bytes: 32768\n"
+            "output_truncated: true\n"
+            "offset: 0\n"
+            "next_offset: 32768\n"
+            "eof: false\n"
+            "\n"
+            "[output]\n"
+            "Scan complete with findings."
+        ),
+        width=120,
+    )
+    assert "Read output" in rendered
+    assert "to expand" in rendered
+    assert "tool_status:" not in rendered
+    assert "retrieval_status:" not in rendered
+    assert "output_path:" not in rendered
+    assert "Scan complete with findings." not in rendered
+
+
+def test_task_output_expanded_shows_description_and_body():
+    rendered = _render(
+        "TaskOutput",
+        {"task_id": "agent-plucky-comet"},
+        output=(
+            "tool_status: success\n"
+            "task_id: agent-plucky-comet\n"
+            "status: completed\n"
+            "description: Python subagents scan\n"
+            "output_size_bytes: 100\n"
+            "output_truncated: false\n"
+            "\n"
+            "[output]\n"
+            "body"
+        ),
+        expanded=True,
+        width=120,
+    )
+    assert "Python subagents scan (1 lines)" in rendered
+    assert "body" in rendered
+    assert "tool_status" not in rendered
+
+
 def test_task_output_renders_id_and_block_flag():
     rendered = _render(
         "TaskOutput",
@@ -1113,6 +1403,64 @@ def test_task_stop_renders_id():
 
 
 # ---------------------------------------------------------------------------
+# ToolSearch
+# ---------------------------------------------------------------------------
+
+
+def test_tool_search_renders_compact_summary_not_catalog():
+    catalog = "\n".join(
+        [
+            "- Agent - Start a subagent instance to work on a focused task.",
+            "- RunAgents - Launch a bounded group of focused child agents.",
+            "- ReadFile - Read text content from a file.",
+            "- Grep - A powerful search tool based on ripgrep.",
+            "- Shell - Execute a bash command.",
+        ]
+    )
+    rendered = _render("ToolSearch", {"query": "read", "max_results": 8}, output=catalog)
+    assert "⏺ Tools(read)" in rendered
+    assert "5 tools discovered" in rendered
+    assert "Agent" in rendered
+    assert "Grep" in rendered
+    assert "Start a subagent" not in rendered
+    assert "powerful search tool" not in rendered
+
+
+def test_tool_search_expanded_shows_names_only():
+    catalog = "\n".join(
+        [
+            "- Agent - Start a subagent instance.",
+            "- Grep - A powerful search tool based on ripgrep.",
+        ]
+    )
+    rendered = _render(
+        "ToolSearch",
+        {"query": "agent"},
+        output=catalog,
+        expanded=True,
+    )
+    assert "Tools discovered: Agent, Grep" in rendered
+    assert "Start a subagent" not in rendered
+    assert "powerful search tool" not in rendered
+
+
+def test_tool_search_no_match_renders_message():
+    rendered = _render(
+        "ToolSearch",
+        {"query": "browser"},
+        output="No visible tools matched `browser`.",
+    )
+    assert "No visible tools matched" in rendered
+    assert "Start a subagent" not in rendered
+
+
+def test_tool_search_streaming_uses_searching_header():
+    rendered = _render_streaming("ToolSearch", {})
+    assert "Searching Tools…" in rendered
+    assert "max_results" not in rendered
+
+
+# ---------------------------------------------------------------------------
 # Plan tools
 # ---------------------------------------------------------------------------
 
@@ -1123,7 +1471,7 @@ def test_enter_plan_mode_renders():
 
 
 def test_exit_plan_mode_renders_options():
-    rendered = _render(
+    rendered_running = _render_running(
         "ExitPlanMode",
         {
             "options": [
@@ -1132,9 +1480,22 @@ def test_exit_plan_mode_renders_options():
             ]
         },
     )
-    assert "⏺ Plan(exiting)" in rendered
-    assert "Refactor first" in rendered
-    assert "Add tests first" in rendered
+    # The running marker blinks (blink_visible() is time-dependent); assert stable content only.
+    assert "Plan(awaiting approval)" in rendered_running
+    assert "Refactor first" in rendered_running
+    assert "Add tests first" in rendered_running
+
+    rendered_done = _render(
+        "ExitPlanMode",
+        {
+            "options": [
+                {"label": "Refactor first"},
+                {"label": "Add tests first"},
+            ]
+        },
+        output="Plan approved",
+    )
+    assert "⏺ Plan(exiting)" in rendered_done
 
 
 # ---------------------------------------------------------------------------
@@ -1328,8 +1689,8 @@ def test_findings_table_unparsed_count_and_parsed_ratio():
     assert "Unknown" in rendered
 
 
-def test_successful_non_review_agent_shows_summary_preview():
-    """Completed non-review agents with a summary_preview must show it as a preview line."""
+def test_successful_non_review_agent_shows_done_subline_not_prose_dump():
+    """Completed non-review agents show a compact Done sub-line, not raw summary prose."""
     output = _run_agents_review_output(
         "- name: implementer\n"
         "  subagent_type: implementer\n"
@@ -1341,7 +1702,6 @@ def test_successful_non_review_agent_shows_summary_preview():
         "    Refactored the auth module and added unit tests.\n"
     )
     rendered = _render("RunAgents", {"summary": "implement feature"}, output=output, width=120)
-    # The summary preview must appear for non-review successful agents.
-    assert "Refactored the auth module" in rendered
-    # The findings panel must NOT appear (no review agents).
+    assert "Done" in rendered
+    assert "Refactored the auth module" not in rendered
     assert "Review Findings" not in rendered

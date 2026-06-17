@@ -15,6 +15,18 @@ from pythinker_code.ui.shell.console import console
 from pythinker_code.ui.shell.slash import registry
 from pythinker_code.ui.shell.stats_collector import AllStats
 from pythinker_code.ui.shell.stats_collector import load_all_stats as _load_all_stats_raw
+from pythinker_code.ui.shell.usage_activity import (
+    TokenActivityView,
+)
+from pythinker_code.ui.shell.usage_activity import (
+    load_activity as _load_activity,
+)
+from pythinker_code.ui.shell.usage_activity import (
+    parse_view as _parse_activity_view,
+)
+from pythinker_code.ui.shell.usage_activity import (
+    render_activity as _render_activity,
+)
 from pythinker_code.ui.shell.usage_adapters import ADAPTERS
 from pythinker_code.ui.shell.usage_adapters.base import (
     UsageAdapter,
@@ -264,7 +276,9 @@ async def _maybe_print_cost_panel() -> None:
 async def usage(app: Shell, args: str):
     """Display usage for the current model's provider.
 
-    Pass `all` for every provider, or a provider key to filter.
+    Pass `all` for every provider, or a provider key to filter. Pass
+    `daily`, `weekly`, or `cumulative` to render the token activity card
+    driven by local session history.
     """
     assert isinstance(app.soul, PythinkerSoul)
     await _refresh_catalog()
@@ -278,6 +292,19 @@ async def usage(app: Shell, args: str):
 
     json_mode = "--json" in tokens
     positional = [token for token in tokens if token != "--json"]
+    # `daily|weekly|cumulative` is the token activity card; it is not a
+    # provider filter, so route to it before we try to interpret the argument
+    # as a managed provider key.
+    if positional and _parse_activity_view(positional[0]) is not None:
+        if len(positional) > 1:
+            extra = escape(" ".join(positional[1:]))
+            console.print(
+                f"[{_t.error}]Invalid usage arguments: the '{positional[0]}' activity "
+                f"card takes no extra arguments (got '{extra}')[/]"
+            )
+            return
+        await _print_activity_card(positional[0], json_mode=json_mode)
+        return
     scoped_to_active = False
     active_provider_key: str | None = None
     if positional:
@@ -358,3 +385,34 @@ async def usage(app: Shell, args: str):
         console.print(build_panel(report))
 
     await _maybe_print_cost_panel()
+
+
+async def _print_activity_card(arg: str, *, json_mode: bool) -> None:
+    """Render the token activity card.
+
+    Falls back to a single-line warning if the user asks for an activity
+    view but the rich console is unavailable (e.g. the JSON mode test path
+    that bypasses the live render). The chart itself is intentionally
+    text-only; structured JSON output is reserved for the per-provider
+    adapter reports and is not part of the activity card surface.
+    """
+
+    view = _parse_activity_view(arg) or TokenActivityView.DAILY
+    activity = await asyncio.to_thread(_load_activity)
+    if json_mode:
+        _print_json(
+            {
+                "view": view.label,
+                "summary": {
+                    "lifetime_tokens": activity.summary.lifetime_tokens,
+                    "peak_daily_tokens": activity.summary.peak_daily_tokens,
+                    "current_streak_days": activity.summary.current_streak_days,
+                    "longest_streak_days": activity.summary.longest_streak_days,
+                    "longest_task_seconds": activity.summary.longest_task_seconds,
+                },
+                "daily_values": list(activity.daily_values),
+            }
+        )
+        return
+    width = console.size.width
+    console.print(_render_activity(activity, view, width=width))

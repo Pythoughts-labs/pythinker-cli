@@ -97,6 +97,7 @@ agent:
     - "pythinker_code.tools.file:Glob"
     - "pythinker_code.tools.file:Grep"
     - "pythinker_code.tools.file:SmartSearch"
+    - "pythinker_code.tools.lsp:Lsp"
     - "pythinker_code.tools.file:WriteFile"
     - "pythinker_code.tools.file:StrReplaceFile"
     - "pythinker_code.tools.skill:ReadSkill"

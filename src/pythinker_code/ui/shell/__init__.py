@@ -90,8 +90,8 @@ from pythinker_code.ui.shell.visualize import (
     visualize,
 )
 from pythinker_code.ui.terminal_capabilities import ascii_glyphs_enabled, motion_disabled
+from pythinker_code.ui.theme import BRAND, BrandToken, tui_rich_style
 from pythinker_code.ui.theme import get_tui_tokens as _get_tui_tokens
-from pythinker_code.ui.theme import tui_rich_style
 from pythinker_code.update_policy import auto_update_enabled
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.utils.envvar import get_env_bool
@@ -2273,15 +2273,12 @@ class Shell:
         self._background_tasks.clear()
 
 
-# Fixed brand palette transferred from the animated SVG (pythinker_animated.svg).
-# These are the robot mark's identity colors and are intentionally
-# theme-independent — do NOT wire them to TuiTokens (the logo must look the same
-# in light/dark and must not shift with the accent).
-_LOGO_NAVY = "#213853"  # outline / chassis (head + body frame, mouth, neck)
-_LOGO_FACE = "#F9F2F5"  # face / chest interior (cream)
-_LOGO_CORAL = "#EE9983"  # antenna ball, ears, accent bits
-_LOGO_CORAL_LIT = "#FFB9A3"  # antenna ball "powered on" — lighter coral glow
-_LOGO_IRIS = "#AFE3F1"  # eye iris + chest button glow (brand cyan)
+# Fixed brand palette — theme-independent robot mark colors (see ui/theme/palettes.py).
+_LOGO_NAVY = BRAND[BrandToken.NAVY]
+_LOGO_FACE = BRAND[BrandToken.FACE]
+_LOGO_CORAL = BRAND[BrandToken.CORAL]
+_LOGO_CORAL_LIT = BRAND[BrandToken.CORAL_LIT]
+_LOGO_IRIS = BRAND[BrandToken.IRIS]
 
 # Head-only robot mark (antenna, ears, eyes, mouth). Only rendered when
 # ascii_glyphs_enabled() is false; ASCII terminals get the text-only banner
@@ -2401,15 +2398,13 @@ def _value_style_for_label(label: str, level: WelcomeInfoItem.Level) -> str:
     tokens = get_tui_tokens()
     label = label.strip()
     if label == "Directory":
-        return tokens.accent or "#B3B9F4"
+        return tokens.info or "#AFE3F1"
     if label == "Session":
         return tokens.dim or "grey39"
     if label == "Model":
-        return f"bold {tokens.text}" if tokens.text else "bold bright_white"
+        return tokens.warning or "#EAB85F"
     if label == "Branch":
-        from pythinker_code.ui.theme import get_statusline_colors
-
-        return get_statusline_colors().branch.removeprefix("fg:")
+        return tokens.thinking_text or "grey70"
     if label == "Auto-save":
         return tokens.muted or "grey50"
     return level.value
@@ -2430,7 +2425,7 @@ def _welcome_banner_chip() -> Text | None:
         if ascii_glyphs_enabled():
             markup = markup.translate(_WELCOME_ASCII_FALLBACKS)
         chip = Text.from_markup(markup)
-        chip.highlight_regex(r"/[A-Za-z][A-Za-z0-9_-]*", f"bold {style}")
+        chip.highlight_regex(r"/[A-Za-z][A-Za-z0-9_-]*", style)
         return chip
 
     if update_target:
@@ -2549,7 +2544,7 @@ def _print_welcome_info(
     head = _copy("[bold]Welcome to Pythinker — think first, then code.[/]")
     strapline = _copy(f"[{_t.muted}]Review · Secure · Diagnose · Build with confidence.[/]")
     help_text = _copy(f"[{_t.muted}]Type /help for commands.[/]")
-    help_text.highlight_regex(r"/help\b", f"bold {_LOGO_CORAL}")
+    help_text.highlight_regex(r"/help\b", _LOGO_CORAL)
 
     if ascii_mode:
         # Caller-provided values (tips, notices) may carry the same decorative
@@ -2598,7 +2593,7 @@ def _print_welcome_info(
             lines = _welcome_tip_lines(item.value, tip_width, ellipsis=ellipsis)
             for index, line in enumerate(lines):
                 tip_text = Text(line, style=item.level.value, no_wrap=True)
-                tip_text.highlight_regex(r"/[A-Za-z][A-Za-z0-9_-]*", f"bold {_LOGO_CORAL}")
+                tip_text.highlight_regex(r"/[A-Za-z][A-Za-z0-9_-]*", _LOGO_CORAL)
                 tips_table.add_row(bullet if index == 0 else "  ", tip_text)
         parts.append(tips_table)
         return Group(*parts)

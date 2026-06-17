@@ -451,6 +451,7 @@ async def test_wire_message_serde():
                         "body": "",
                         "other_label": "",
                         "other_description": "",
+                        "other_index": -1,
                     }
                 ],
             },

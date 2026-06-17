@@ -11,6 +11,7 @@ from pythinker_code.ui.shell.prompt import (
     InputHighlightLexer,
     _command_name_set,
 )
+from pythinker_code.ui.shell.slash import slash_command_arg_suggestions
 from pythinker_code.utils.slashcmd import SlashCommand
 
 
@@ -34,12 +35,17 @@ _KNOWN = _command_name_set(
         _make_command("clear"),
         _make_command("statusline", aliases=["sl"]),
         _make_command("skill:best-practices"),
+        _make_command("theme", aliases=["color"]),
     ]
 )
 
 
 def _lex_line(text: str, lineno: int = 0, *, agent_mode: bool = True) -> StyleAndTextTuples:
-    lexer = InputHighlightLexer(lambda: _KNOWN, agent_mode=lambda: agent_mode)
+    lexer = InputHighlightLexer(
+        lambda: _KNOWN,
+        agent_mode=lambda: agent_mode,
+        arg_suggestions=slash_command_arg_suggestions,
+    )
     return list(lexer.lex_document(Document(text))(lineno))
 
 
@@ -49,6 +55,10 @@ def _styled(fragments: StyleAndTextTuples, style: str) -> list[str]:
 
 def _highlighted(fragments: StyleAndTextTuples) -> list[str]:
     return _styled(fragments, "class:slash-command")
+
+
+def _arg_highlighted(fragments: StyleAndTextTuples) -> list[str]:
+    return _styled(fragments, "class:slash-arg")
 
 
 def test_known_command_highlighted_mid_text():
@@ -65,8 +75,9 @@ def test_unknown_command_not_highlighted():
     assert _highlighted(_lex_line("run deep review /best now")) == []
 
 
-def test_partial_name_not_highlighted():
-    assert _highlighted(_lex_line("/cle")) == []
+def test_partial_name_is_highlighted():
+    assert _highlighted(_lex_line("/cle")) == ["/cle"]
+    assert _highlighted(_lex_line("/skill:best")) == ["/skill:best"]
 
 
 def test_alias_and_namespaced_command_highlighted():
@@ -127,6 +138,18 @@ def test_slash_and_mention_compose_on_one_line():
     fragments = _lex_line("/clear then read @src/app.py")
     assert _highlighted(fragments) == ["/clear"]
     assert _mentions(fragments) == ["@src/app.py"]
+
+
+def test_theme_subcommand_argument_highlighted():
+    fragments = _lex_line("/theme cur")
+    assert _highlighted(fragments) == ["/theme"]
+    assert _arg_highlighted(fragments) == ["cur"]
+
+
+def test_theme_subcommand_full_argument_highlighted():
+    fragments = _lex_line("/theme current")
+    assert _highlighted(fragments) == ["/theme"]
+    assert _arg_highlighted(fragments) == ["current"]
 
 
 def _bash(fragments: StyleAndTextTuples) -> list[str]:

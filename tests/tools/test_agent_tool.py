@@ -2723,3 +2723,34 @@ async def test_run_agents_foreground_aggregates_child_risks_and_blockers(runtime
     assert result.output.count("Shared cache key may collide.") >= 1
     assert "reviewer-0, reviewer-1" in result.output
     assert "batch_blockers:" not in result.output
+
+
+def test_run_agents_params_drops_blank_string_entries() -> None:
+    """Models sometimes emit bare "\n" strings between agent objects in the array.
+
+    Those parse as valid JSON but are not AgentRunConfigs. The blank entries must be
+    dropped (the object entries are the unambiguous intent) while genuinely invalid
+    non-blank entries still fail validation loudly.
+    """
+    from pydantic import ValidationError
+
+    from pythinker_code.tools.agent import RunAgentsParams
+
+    params = RunAgentsParams.model_validate(
+        {
+            "summary": "map orchestration",
+            "agents": [
+                {"name": "a0", "prompt": "do x"},
+                "\n",
+                {"name": "a1", "prompt": "do y"},
+                "  ",
+                {"name": "a2", "prompt": "do z"},
+            ],
+        }
+    )
+    assert [a.name for a in params.agents] == ["a0", "a1", "a2"]
+
+    with pytest.raises(ValidationError):
+        RunAgentsParams.model_validate(
+            {"summary": "s", "agents": ["garbage", {"name": "a", "prompt": "p"}]}
+        )

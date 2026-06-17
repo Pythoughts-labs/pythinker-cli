@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pythinker_core.message import ToolCall
 from pythinker_core.tooling import ToolResult, ToolReturnValue
-from rich.console import Console
+from rich.console import Console, Group
 
 from pythinker_code.ui.shell.visualize import _LiveView
 from pythinker_code.wire.types import (
@@ -327,6 +327,73 @@ def test_action_spacer_between_parallel_tools_in_all_tui_styles(monkeypatch):
         if isinstance(block, Text) and block.plain.strip() == ""
     ]
     assert spacer_indices
+    assert any(0 < index < len(agent_blocks) - 1 for index in spacer_indices)
+
+
+def test_action_spacer_between_run_agents_and_task_output(monkeypatch):
+    """Background RunAgents stays live beside TaskOutput with a blank row between."""
+    from rich.text import Text
+
+    from pythinker_code.ui.shell.tool_renderers import register_builtin_renderers
+
+    monkeypatch.setenv("PYTHINKER_TUI_STYLE", "card")
+    register_builtin_renderers()
+    view = _LiveView(StatusUpdate())
+    view.dispatch_wire_message(TurnBegin(user_input="test"))
+    view.dispatch_wire_message(StepBegin(n=1))
+    view.dispatch_wire_message(
+        ToolCall(
+            id="run-agents-1",
+            function=ToolCall.FunctionBody(
+                name="RunAgents",
+                arguments=(
+                    '{"summary":"scan","run_in_background":true,'
+                    '"agents":[{"name":"scan-a","prompt":"look","subagent_type":"explore"}]}'
+                ),
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        ToolResult(
+            tool_call_id="run-agents-1",
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=(
+                    "tool_status: launched\n"
+                    "mode: background\n"
+                    "agent_count: 1\n"
+                    "agents:\n"
+                    "- name: scan-a\n"
+                    "  subagent_type: explore\n"
+                    "  status: starting\n"
+                    "  task_id: agent-abc\n"
+                ),
+                message="Agents launched.",
+                display=[],
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        ToolCall(
+            id="task-output-1",
+            function=ToolCall.FunctionBody(
+                name="TaskOutput",
+                arguments='{"task_id":"agent-abc","block":true,"timeout":600}',
+            ),
+        )
+    )
+
+    assert len(view._tool_call_blocks) == 2
+    agent_blocks = view.compose_agent_output(include_working_indicator=False)
+    rendered = _render(Group(*agent_blocks))
+    assert "RunAgents(" in rendered
+    assert "TaskOutput(" in rendered
+
+    spacer_indices = [
+        index
+        for index, block in enumerate(agent_blocks)
+        if isinstance(block, Text) and block.plain.strip() == ""
+    ]
     assert any(0 < index < len(agent_blocks) - 1 for index in spacer_indices)
 
 

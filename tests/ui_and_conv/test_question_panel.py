@@ -6,6 +6,7 @@ from io import StringIO
 
 from rich.console import Console
 
+from pythinker_code.ui.shell.glyphs import QUESTION_MARKER
 from pythinker_code.ui.shell.visualize import QuestionRequestPanel
 from pythinker_code.wire.types import QuestionItem, QuestionOption, QuestionRequest
 
@@ -703,3 +704,58 @@ def test_toggle_select_noop_in_single_select():
     all_done = panel.submit()
     assert all_done is True
     assert panel.get_answers() == {"Pick one?": "A"}
+
+
+def test_plan_approval_dialog_title_and_option_order():
+    request = QuestionRequest(
+        id="qr-plan",
+        tool_call_id="tc-plan",
+        questions=[
+            QuestionItem(
+                question="Approve this plan?",
+                header="Plan",
+                options=[
+                    QuestionOption(label="Approve", description="Start execution"),
+                    QuestionOption(label="Reject", description="Stay in plan mode"),
+                    QuestionOption(
+                        label="Reject and Exit",
+                        description="Leave plan mode",
+                    ),
+                ],
+                other_label="Revise",
+                other_description="Stay in plan mode and edit plan",
+                other_index=1,
+            )
+        ],
+    )
+    panel = QuestionRequestPanel(request)
+    rendered = _render_to_str(panel)
+
+    assert "Plan approval" in rendered
+    assert "Approve this plan?" in rendered
+    assert QUESTION_MARKER not in rendered.split("Approve this plan?")[1]
+    labels = [label for label, _ in panel._options]
+    assert labels == ["Approve", "Revise", "Reject", "Reject and Exit"]
+
+
+def test_other_index_inserts_free_text_option_before_trailing_choices():
+    request = QuestionRequest(
+        id="qr-other-index",
+        tool_call_id="tc-other-index",
+        questions=[
+            QuestionItem(
+                question="Pick?",
+                options=[
+                    QuestionOption(label="A", description=""),
+                    QuestionOption(label="Reject", description=""),
+                ],
+                other_label="Revise",
+                other_index=1,
+            )
+        ],
+    )
+    panel = QuestionRequestPanel(request)
+    assert [label for label, _ in panel._options] == ["A", "Revise", "Reject"]
+    assert panel.is_other_selected is False
+    panel.move_down()
+    assert panel.is_other_selected is True

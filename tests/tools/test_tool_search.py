@@ -77,3 +77,13 @@ async def test_tool_search_excludes_hidden_tools() -> None:
     assert not result.is_error
     assert "ReadProjectFiles" not in result.output
     assert result.output == "No visible tools matched `read files`."
+
+
+def test_description_does_not_claim_nonexistent_deferral() -> None:
+    """Guard the trigger of the GLM-5.2 loop: pythinker has no defer_loading, so
+    the ToolSearch description must not imply hidden/deferred tools exist or that
+    searching unlocks anything. See test_tool_search_gating + the toolset gate."""
+    desc = ToolSearch(PythinkerToolset()).description.lower()
+    assert "deferred" not in desc
+    assert "hidden" in desc and "does not" in desc  # explicitly says it unlocks nothing
+    assert "already callable" in desc

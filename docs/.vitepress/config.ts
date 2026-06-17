@@ -48,6 +48,7 @@ export default withMermaid(defineConfig({
               text: 'Customization',
               items: [
                 { text: 'Model Context Protocol', link: '/en/customization/mcp' },
+                { text: 'Language Server Protocol', link: '/en/customization/lsp' },
                 { text: 'Plugins (Beta)', link: '/en/customization/plugins' },
                 { text: 'Hooks (Beta)', link: '/en/customization/hooks' },
                 { text: 'Agent Skills', link: '/en/customization/skills' },

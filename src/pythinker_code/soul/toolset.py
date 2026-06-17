@@ -724,6 +724,19 @@ class PythinkerToolset:
         ):
             return False
 
+        # Hide ToolSearch unless the active model genuinely supports the deferred
+        # tool-search workflow. Compat proxies that declare type="anthropic"
+        # (z.ai/GLM, Kimi, MiniMax, opencode) and non-Anthropic providers do not
+        # forward the tool_reference/defer_loading beta, so ToolSearch is noise
+        # there and weaker tool-callers (e.g. GLM-5.2) loop on it forever instead
+        # of calling tools directly. See llm.supports_deferred_tool_search for the
+        # full rationale — this is deliberate, do not drop it.
+        if tool.name == "ToolSearch":
+            from pythinker_code.llm import supports_deferred_tool_search
+
+            if not supports_deferred_tool_search(runtime.llm):
+                return False
+
         if tool.name == "EnterPlanMode" and runtime.session.state.plan_mode:
             return False
         if tool.name == "ExitPlanMode" and not runtime.session.state.plan_mode:
@@ -822,6 +835,15 @@ class PythinkerToolset:
                 )
 
             tool = self._tool_dict[tool_call.function.name]
+
+            if tool_call.function.name == "ToolSearch" and self._runtime is not None:
+                from pythinker_code.llm import supports_deferred_tool_search
+
+                if not supports_deferred_tool_search(self._runtime.llm):
+                    return ToolResult(
+                        tool_call_id=tool_call.id,
+                        return_value=ToolNotFoundError(tool_call.function.name),
+                    )
 
             try:
                 arguments: JsonType = json.loads(tool_call.function.arguments or "{}", strict=False)

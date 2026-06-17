@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import time
 from collections import Counter, deque
 from typing import Any, NamedTuple, cast
@@ -30,13 +31,19 @@ from pythinker_code.ui.shell.components.markdown import (
 )
 from pythinker_code.ui.shell.components.render_utils import render_message_response, sanitize_ansi
 from pythinker_code.ui.shell.components.report import render_agent_body
-from pythinker_code.ui.shell.console import console, current_console_width
+from pythinker_code.ui.shell.components.report_update import (
+    ReportUpdateComponent,
+    looks_like_report_update,
+    parse_report_update,
+)
+from pythinker_code.ui.shell.console import current_console_width
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER, TRANSCRIPT_STATUS_MARKER
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
 from pythinker_code.ui.shell.motion import (
     ActivitySnapshot,
     activity_status_line,
-    blink_visible,
+    append_streaming_caret,
+    reduced_motion_enabled,
 )
 from pythinker_code.ui.shell.spacing import BLANK_ROW
 from pythinker_code.ui.shell.tips import FEATURE_TIPS
@@ -111,6 +118,7 @@ _MAX_SUBAGENT_CHANGED_FILES = 5
 # status must stay in the Live area so their spinner keeps animating.
 _AGENT_ACTIVE_STATUSES = frozenset({"created", "starting", "running", "awaiting_approval"})
 _TODO_TOOL_NAMES = frozenset({"SetTodoList", "TodoWrite"})
+_TOOL_SEARCH_NAME = "ToolSearch"
 _MUTATING_TOOL_NAMES = frozenset(
     {
         "applypatch",
@@ -123,16 +131,138 @@ _MUTATING_TOOL_NAMES = frozenset(
 )
 
 
-def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
-    """Return True when result_text represents a still-running background Agent."""
-    if tool_name != "Agent":
-        return False
-    values: dict[str, str] = {}
+def _parse_tool_result_top_fields(result_text: str) -> dict[str, str]:
+    """Parse top-level ``key: value`` lines before nested agent/task sections."""
+    top: dict[str, str] = {}
     for line in result_text.splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            values[k.strip()] = v.strip()
-    return values.get("kind") == "agent" and values.get("status") in _AGENT_ACTIVE_STATUSES
+        stripped = line.strip()
+        if not stripped or stripped.startswith("- ") or line.startswith("  "):
+            break
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if not key or " " in key:
+            continue
+        top[key] = value.strip()
+    return top
+
+
+def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
+    """Return True when a tool card should stay in the Live area after its result arrives."""
+    if tool_name == "Agent":
+        values = _parse_tool_result_top_fields(result_text)
+        return values.get("kind") == "agent" and values.get("status") in _AGENT_ACTIVE_STATUSES
+    if tool_name == "RunAgents":
+        values = _parse_tool_result_top_fields(result_text)
+        return values.get("mode") == "background" and values.get("tool_status") == "launched"
+    return False
+
+
+_PREVIEW_FIELD_LINE_RE = re.compile(r"^(\s*)-\s+([^:]+):\s*(.*)$")
+
+
+def _normalize_streaming_preview_text(text: str) -> str:
+    """Lightweight preview normalization: ANSI sanitize + space-aligned report rows.
+
+    Matches the space-column repair used by final ``render_agent_body`` output
+    without running the full markdown-it pipeline on every streaming tick.
+    """
+    from pythinker_code.ui.shell.markdown.normalizers import normalize_space_aligned_report_blocks
+
+    cleaned = sanitize_ansi(text)
+    return normalize_space_aligned_report_blocks(cleaned)
+
+
+def _preview_wrap_parts(line: str) -> tuple[str, str, str]:
+    """Return ``(first_prefix, hang_indent, content)`` for preview line wrapping."""
+    stripped = line.rstrip("\r\n")
+    match = _PREVIEW_FIELD_LINE_RE.match(stripped)
+    if match is not None:
+        leading, label, value = match.group(1), match.group(2), match.group(3)
+        return f"{leading}- {label}: ", f"{leading}  ", value
+    leading_match = re.match(r"^(\s*)(.*)$", stripped)
+    if leading_match is not None:
+        leading, content = leading_match.group(1), leading_match.group(2)
+        return leading, leading, content
+    return "", "", stripped
+
+
+def _wrap_preview_line(line: str, max_width: int) -> str:
+    """Wrap one preview line with a hanging continuation indent.
+
+    Prevents long space-aligned ``What`` rows from word-wrapping back to column 0
+    during the transient composing preview.
+    """
+    from rich.cells import cell_len
+
+    if not line:
+        return line
+    stripped = line.rstrip("\r\n")
+    if cell_len(stripped) <= max_width:
+        return stripped
+
+    first_prefix, hang_indent, content = _preview_wrap_parts(stripped)
+    words = content.split()
+    if not words:
+        return _truncate_to_display_width(stripped, max_width)
+
+    lines: list[str] = []
+    current_prefix = first_prefix
+    budget = max(1, max_width - cell_len(current_prefix))
+    current_words: list[str] = []
+    current_width = 0
+
+    def flush_current() -> None:
+        nonlocal current_prefix, budget, current_words, current_width
+        if not current_words:
+            return
+        lines.append(current_prefix + " ".join(current_words))
+        current_prefix = hang_indent
+        budget = max(1, max_width - cell_len(hang_indent))
+        current_words = []
+        current_width = 0
+
+    for word in words:
+        word_width = cell_len(word)
+        sep_width = 1 if current_words else 0
+        if current_words and current_width + sep_width + word_width <= budget:
+            current_width += sep_width + word_width
+            current_words.append(word)
+            continue
+        if not current_words:
+            if word_width <= budget:
+                current_words = [word]
+                current_width = word_width
+                continue
+            # Single overlong token: hard-split at display-cell boundary.
+            start = 0
+            while start < len(word):
+                chunk_end = _advance_by_display_cells(word, start, budget)
+                if chunk_end <= start:
+                    chunk_end = min(start + 1, len(word))
+                lines.append(current_prefix + word[start:chunk_end])
+                current_prefix = hang_indent
+                budget = max(1, max_width - cell_len(hang_indent))
+                start = chunk_end
+            continue
+        flush_current()
+        if word_width <= budget:
+            current_words = [word]
+            current_width = word_width
+        else:
+            start = 0
+            while start < len(word):
+                chunk_end = _advance_by_display_cells(word, start, budget)
+                if chunk_end <= start:
+                    chunk_end = min(start + 1, len(word))
+                lines.append(current_prefix + word[start:chunk_end])
+                current_prefix = hang_indent
+                budget = max(1, max_width - cell_len(hang_indent))
+                start = chunk_end
+
+    flush_current()
+    return "\n".join(lines)
 
 
 def _truncate_to_display_width(line: str, max_width: int) -> str:
@@ -211,77 +341,12 @@ def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
     return len(text)
 
 
-def _markdown_fence_marker(line: str) -> tuple[str, int] | None:
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3 or not stripped.startswith(("```", "~~~")):
-        return None
-    marker = stripped[0]
-    marker_length = len(stripped) - len(stripped.lstrip(marker))
-    if marker_length < 3:
-        return None
-    return marker, marker_length
-
-
-def _markdown_fence_is_open(text: str) -> bool:
-    active_marker: str | None = None
-    active_length = 0
-    for line in text.splitlines():
-        marker = _markdown_fence_marker(line)
-        if marker is None:
-            continue
-        fence_marker, fence_length = marker
-        if active_marker is None:
-            active_marker = fence_marker
-            active_length = fence_length
-        elif fence_marker == active_marker and fence_length >= active_length:
-            active_marker = None
-            active_length = 0
-    return active_marker is not None
-
-
-def _backtick_run_length(text: str, start: int) -> int:
-    end = start
-    while end < len(text) and text[end] == "`":
-        end += 1
-    return end - start
-
-
-def _inline_markdown_is_closed(text: str) -> bool:
-    inline_code_ticks = 0
-    strong_markers = 0
-    i = 0
-    while i < len(text):
-        char = text[i]
-        if char == "\\":
-            i += 2
-            continue
-        if char == "`":
-            tick_count = _backtick_run_length(text, i)
-            if inline_code_ticks == 0:
-                inline_code_ticks = tick_count
-            elif inline_code_ticks == tick_count:
-                inline_code_ticks = 0
-            i += tick_count
-            continue
-        if inline_code_ticks == 0 and text.startswith(("**", "__"), i):
-            strong_markers += 1
-            i += 2
-            continue
-        i += 1
-    return inline_code_ticks == 0 and strong_markers % 2 == 0
-
-
-def _paced_preview_markdown_is_stable(text: str) -> bool:
-    return not _markdown_fence_is_open(text) and _inline_markdown_is_closed(text)
-
-
 class _ContentBlock:
     """Streaming content block with incremental markdown commitment.
 
-    For **composing** (``is_think=False``), confirmed markdown blocks are flushed
-    to the terminal permanently via ``console.print()`` as they become complete,
-    giving users real-time streaming output.  Only the unconfirmed tail remains
-    in the transient Rich Live area.
+    For **composing** (``is_think=False``), confirmed markdown blocks are staged
+    in the Live compose cache as they become complete. Only the unconfirmed tail
+    remains as a plain-text preview in the transient Rich Live area.
 
     For **thinking** (``is_think=True``), the default behavior is to keep the
     raw reasoning text only for token accounting and never render it.  The
@@ -312,12 +377,34 @@ class _ContentBlock:
         # this equal to len(raw_text); paced blocks advance it via reveal_tick().
         self._revealed_len = 0
         self._has_printed_bullet = False
+        self._committed_renderables: list[RenderableType] = []
+        self._block_width = current_console_width()
         # Sliding window for smooth token-rate display: stores (timestamp, cumulative_tokens)
         # pairs to compute rate over the last ~1.5s. Float cumulative_tokens avoids
         # per-sample truncation.
         self._token_samples: deque[tuple[float, float]] = deque()
+        self._report_update: ReportUpdateComponent | None = None
 
     # -- Public API ----------------------------------------------------------
+
+    @property
+    def has_expandable_card(self) -> bool:
+        return self._report_update is not None and self._report_update.can_expand
+
+    def toggle_expanded(self) -> None:
+        if self._report_update is None:
+            return
+        self._report_update.toggle_expanded()
+
+    def render_expanded(self) -> RenderableType:
+        if self._report_update is None:
+            return self.promote_to_scrollback() or Text("")
+        was_expanded = self._report_update.expanded
+        self._report_update.set_expanded(True)
+        try:
+            return self._render_report_update_body() or Text("")
+        finally:
+            self._report_update.set_expanded(was_expanded)
 
     def append(self, content: str) -> None:
         self.raw_text += content
@@ -353,6 +440,8 @@ class _ContentBlock:
             _STREAM_REVEAL_MIN_CELLS,
             -(-backlog_cells // _STREAM_REVEAL_CATCHUP_TICKS),
         )
+        if reduced_motion_enabled():
+            step_cells = max(step_cells, -(-backlog_cells // 2))
         self._revealed_len = _advance_by_display_cells(
             self.raw_text,
             self._revealed_len,
@@ -410,13 +499,35 @@ class _ContentBlock:
         remaining = self._pending_text()
         if not remaining:
             return Text("")
-        rendered = self._wrap_bullet(render_agent_body(remaining))
+        rendered = self._render_body(remaining)
+        if self._committed_renderables:
+            return Group(*self._committed_renderables, BLANK_ROW, rendered)
         if self._has_printed_bullet:
-            # Re-create the one-row gap a single markdown pass puts between
-            # blocks: earlier slices already committed, so the tail needs a
-            # seam to avoid cramming against the previous block.
             return Group(BLANK_ROW, rendered)
         return rendered
+
+    def promote_to_scrollback(self) -> RenderableType | None:
+        """Build the full block renderable for one-shot scrollback promotion."""
+        report_body = self._render_report_update_body()
+        if report_body is not None:
+            return report_body
+        parts: list[RenderableType] = list(self._committed_renderables)
+        remaining = self._pending_text()
+        if remaining:
+            tail = self._render_body(remaining)
+            if parts:
+                parts.extend([BLANK_ROW, tail])
+            else:
+                parts = [tail]
+        if not parts:
+            return None
+        return Group(*parts) if len(parts) > 1 else parts[0]
+
+    def has_active_stream_preview(self) -> bool:
+        """Whether live preview animation (caret / paced drain) should keep ticking."""
+        if self.is_think:
+            return False
+        return bool(self._pending_text()) or self._revealed_len < len(self.raw_text)
 
     def has_pending(self) -> bool:
         """Whether there is uncommitted content to flush."""
@@ -450,11 +561,12 @@ class _ContentBlock:
         """
         if self._has_printed_bullet:
             return BulletColumns(renderable, bullet=Text(" "))
-        visible = blink_visible()
-        glyph = TRANSCRIPT_ASSISTANT_MARKER if visible else " "
         return BulletColumns(
             renderable,
-            bullet=Text(glyph, style=tui_rich_style("muted") + Style(bold=True)),
+            bullet=Text(
+                TRANSCRIPT_ASSISTANT_MARKER,
+                style=tui_rich_style("muted") + Style(bold=True),
+            ),
         )
 
     @property
@@ -463,7 +575,9 @@ class _ContentBlock:
         return self._has_printed_bullet
 
     def _flush_committed(self) -> None:
-        """Commit confirmed markdown blocks to permanent terminal output."""
+        """Stage confirmed markdown blocks for the next Live compose pass."""
+        if looks_like_report_update(self.raw_text):
+            return
         pending = self._pending_text()
         if not pending:
             return
@@ -471,13 +585,31 @@ class _ContentBlock:
         if boundary is None:
             return
         committed_text = pending[:boundary]
-        # A blank seam precedes every committed slice: on the first commit it
-        # separates this step from the previous block; on later commits it
-        # re-creates the one-row gap a single markdown pass puts between blocks
-        # (committing each slice with its own console.print() drops it).
-        console.print()
-        console.print(self._wrap_bullet(render_agent_body(committed_text)))
+        if self._committed_renderables:
+            self._committed_renderables.append(BLANK_ROW)
+        self._committed_renderables.append(self._wrap_bullet(render_agent_body(committed_text)))
         self._committed_len += boundary
+
+    def _render_report_update_body(self) -> RenderableType | None:
+        update = parse_report_update(self.raw_text)
+        if update is None:
+            return None
+        was_expanded = self._report_update.expanded if self._report_update is not None else False
+        self._report_update = ReportUpdateComponent(update)
+        self._report_update.set_expanded(was_expanded)
+        return self._report_update.render()
+
+    def _render_body(self, text: str) -> RenderableType:
+        if looks_like_report_update(text):
+            update = parse_report_update(text)
+            if update is not None:
+                was_expanded = (
+                    self._report_update.expanded if self._report_update is not None else False
+                )
+                self._report_update = ReportUpdateComponent(update)
+                self._report_update.set_expanded(was_expanded)
+                return self._report_update.render()
+        return self._wrap_bullet(render_agent_body(text))
 
     def _activity_snapshot(
         self, label: str, *, label_style: Style | None = None
@@ -519,22 +651,51 @@ class _ContentBlock:
     def _compose_composing(self) -> RenderableType:
         spinner = self._compose_spinner()
         pending = self._pending_text()
+        committed = list(self._committed_renderables)
         if not pending:
+            if committed:
+                return Group(*committed, BLANK_ROW, spinner)
             return spinner
-        preview = self._build_preview(pending, max_lines=_COMPOSING_PREVIEW_LINES)
-        if self._paced and not _paced_preview_markdown_is_stable(preview):
-            # At the fast reveal cadence, half-open inline spans or fences would
-            # render as raw delimiters and then restyle a frame later. Keep only
-            # those unstable previews plain; stable previews still use Markdown.
-            body: RenderableType = Text(sanitize_ansi(preview))
-        else:
-            body = Markdown(preview)
-        return Group(spinner, BLANK_ROW, self._wrap_preview_bullet(body))
+        preview = self._build_preview(
+            pending,
+            max_lines=_COMPOSING_PREVIEW_LINES,
+            reserve_caret=True,
+        )
+        body = self._render_preview_text(preview, caret=True)
+        preview_row = self._wrap_preview_bullet(body)
+        if committed:
+            return Group(*committed, BLANK_ROW, spinner, BLANK_ROW, preview_row)
+        return Group(spinner, BLANK_ROW, preview_row)
+
+    def _render_preview_text(self, preview: str, *, caret: bool) -> Text:
+        """Plain-text preview path shared by live compose and finalize.
+
+        Leading newline separators (typically ``\\n`` from a markdown commit
+        boundary landing at a paragraph separator) are stripped so they do not
+        produce a blank row in the transient Live region. The ``BLANK_ROW``
+        between the spinner and the preview row already provides the visual gap.
+        """
+        if not preview:
+            return Text("")
+        # Strip leading "\n" / "\r\n" — paragraph separator left over from the
+        # commit boundary; not whitespace-only lines.
+        stripped = preview.lstrip("\r\n")
+        if not stripped:
+            return Text("")
+        body = Text()
+        lines = stripped.split("\n")
+        for index, line in enumerate(lines):
+            if index:
+                body.append("\n")
+            body.append(sanitize_ansi(line))
+        if caret:
+            append_streaming_caret(body)
+        return body
 
     def _compose_spinner(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Composing", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
     def _compose_thinking_stream(self) -> RenderableType:
@@ -557,20 +718,33 @@ class _ContentBlock:
     def _compose_thinking_spinner(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
-    def _build_preview(self, text: str, *, max_lines: int) -> str:
-        """Tail-trim *text* to ``max_lines`` and clamp it to current terminal width."""
-        max_width = current_console_width() - 2
-        tail_text = _tail_lines(text, max_lines)
+    def _layout_width(self) -> int:
+        width = current_console_width()
+        if width != self._block_width:
+            self._block_width = width
+        return self._block_width
+
+    def _build_preview(self, text: str, *, max_lines: int, reserve_caret: bool = False) -> str:
+        """Tail-trim *text*, normalize report prose, and wrap with hang indents."""
+        max_width = self._layout_width() - 2
+        if reserve_caret:
+            max_width = max(1, max_width - 1)
+        normalized = _normalize_streaming_preview_text(text)
+        tail_text = _tail_lines(normalized, max_lines)
         lines = tail_text.split("\n")
-        return "\n".join(_truncate_to_display_width(line, max_width) for line in lines)
+        wrapped: list[str] = []
+        for line in lines:
+            wrapped_line = _wrap_preview_line(line, max_width)
+            wrapped.extend(wrapped_line.split("\n"))
+        return "\n".join(wrapped)
 
     def _compose_thinking(self) -> Text:
         return activity_status_line(
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
-            width=current_console_width(),
+            width=self._layout_width(),
         )
 
 
@@ -640,6 +814,10 @@ class _ToolCallBlock:
     @property
     def is_todo_list(self) -> bool:
         return self._tool_name in _TODO_TOOL_NAMES
+
+    @property
+    def is_tool_search(self) -> bool:
+        return self._tool_name == _TOOL_SEARCH_NAME
 
     @property
     def finished(self) -> bool:
@@ -982,8 +1160,6 @@ class _ToolCallBlock:
                 label=style.label,
                 target=self._argument,
                 state=WorkLogState.RUNNING,
-                icon=style.icon,
-                icon_style=style.style,
                 children=children,
             )
 
@@ -1007,8 +1183,6 @@ class _ToolCallBlock:
             target=self._argument,
             state=state,
             detail=error_message if self._result.is_error else None,
-            icon=style.icon,
-            icon_style=style.style,
             children=children,
         )
 
@@ -1085,7 +1259,7 @@ class _ToolCallBlock:
             )
         )
         if activity_children:
-            return Group(card_rendered, *activity_children)
+            return Group(card_rendered, BLANK_ROW, *activity_children)
         return card_rendered
 
     def _streamed_output_text(self) -> str:
@@ -1305,7 +1479,7 @@ class _QuestionAnsweredBlock:
             row = Text("· ", style=tui_rich_style("muted"))
             row.append(sanitize_ansi(question), style=tui_rich_style("muted"))
             row.append(" → ", style=tui_rich_style("dim"))
-            row.append(sanitize_ansi(answer), style=tui_rich_style("accent") + Style(bold=True))
+            row.append(sanitize_ansi(answer), style=tui_rich_style("info"))
             rows.append(row)
         return BulletColumns(
             Group(*rows),
@@ -1344,13 +1518,13 @@ class _SuggestionBlock:
     def compose(self) -> RenderableType:
         label = Text(
             f"Suggested: {sanitize_ansi(self.event.label).strip()}",
-            style=tui_rich_style("accent") + Style(bold=True),
+            style=tui_rich_style("info"),
         )
         prefill = sanitize_ansi(self.event.prefill).strip()
         if not prefill:
             return BulletColumns(
                 label,
-                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
+                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("info")),
             )
         hint = Text(
             f"→ {prefill}  (Alt+S to accept)",
@@ -1358,7 +1532,7 @@ class _SuggestionBlock:
         )
         return BulletColumns(
             Group(label, hint),
-            bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("accent")),
+            bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=tui_rich_style("info")),
         )
 
 

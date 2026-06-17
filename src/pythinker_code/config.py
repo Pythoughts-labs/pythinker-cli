@@ -11,6 +11,7 @@ import tomlkit
 from pydantic import (
     AliasChoices,
     BaseModel,
+    ConfigDict,
     Field,
     SecretStr,
     ValidationError,
@@ -1025,6 +1026,27 @@ class MCPConfig(BaseModel):
     )
 
 
+class LspServerConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    command: str
+    args: list[str] = Field(default_factory=list)
+    extension_to_language: dict[str, str] = Field(alias="extensionToLanguage")
+    env: dict[str, str] = Field(default_factory=dict)
+    initialization_options: dict[str, Any] | None = Field(
+        default=None, alias="initializationOptions"
+    )
+    startup_timeout: float = Field(default=30.0, alias="startupTimeout", gt=0)
+    max_restarts: int = Field(default=3, alias="maxRestarts", ge=0)
+
+
+class LspConfig(BaseModel):
+    enabled: bool = True
+    recommendation_disabled: bool = False
+    recommendation_never: list[str] = Field(default_factory=list)
+    recommendation_ignored_count: int = Field(default=0, ge=0)
+
+
 class PluginsConfig(BaseModel):
     """Plugin/marketplace activation policy.
 
@@ -1226,6 +1248,7 @@ class Config(BaseModel):
     plugins: PluginsConfig = Field(
         default_factory=PluginsConfig, description="Plugin/marketplace activation policy"
     )
+    lsp: LspConfig = Field(default_factory=LspConfig, description="LSP feature configuration")
     tui: TUIConfig = Field(default_factory=TUIConfig, description="TUI rendering configuration")
     hooks: list[HookDef] = Field(default_factory=list, description="Hook definitions")  # pyright: ignore[reportUnknownVariableType]
     disabled_project_hooks: list[str] = Field(

@@ -73,12 +73,12 @@ def test_set_and_get_active_theme():
 
 @pytest.mark.parametrize(
     ("theme", "expected_add_bg_fragment"),
-    [("dark", "#052e05"), ("light", "#dafbe1")],
+    [("dark", "#213A2B"), ("light", "#dafbe1")],
 )
 def test_diff_colors_by_theme(theme: str, expected_add_bg_fragment: str):
     set_active_theme(theme)  # type: ignore[arg-type]
     colors = get_diff_colors()
-    assert expected_add_bg_fragment in str(colors.add_bg)
+    assert expected_add_bg_fragment.lower() in str(colors.add_bg).lower()
 
 
 def test_all_getters_respond_to_theme_switch():

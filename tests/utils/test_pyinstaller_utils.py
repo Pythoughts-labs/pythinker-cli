@@ -220,6 +220,10 @@ def test_pyinstaller_datas():
             "pythinker_code/tools/goal",
         ),
         (
+            "src/pythinker_code/tools/lsp/tool.md",
+            "pythinker_code/tools/lsp",
+        ),
+        (
             "src/pythinker_code/tools/mcp_resource/list_description.md",
             "pythinker_code/tools/mcp_resource",
         ),
@@ -329,6 +333,11 @@ def test_pyinstaller_hiddenimports():
             "pythinker_code.tools.file.utils",
             "pythinker_code.tools.file.write",
             "pythinker_code.tools.goal",
+            "pythinker_code.tools.lsp",
+            "pythinker_code.tools.lsp.formatters",
+            "pythinker_code.tools.lsp.schemas",
+            "pythinker_code.tools.lsp.symbol_context",
+            "pythinker_code.tools.lsp.tool",
             "pythinker_code.tools.mcp_resource",
             "pythinker_code.tools.memory",
             "pythinker_code.tools.memory.routing_guard",

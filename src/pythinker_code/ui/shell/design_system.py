@@ -76,7 +76,7 @@ def status_icon(name: StatusName) -> Text:
 
 def keyboard_hint(key: str, label: str) -> Text:
     text = Text()
-    text.append(key, style=shell_style(ShellTone.ACCENT) + Style(bold=True))
+    text.append(key, style=shell_style(ShellTone.INFO))
     if label:
         text.append(f" {label}", style=shell_style(ShellTone.MUTED))
     return text

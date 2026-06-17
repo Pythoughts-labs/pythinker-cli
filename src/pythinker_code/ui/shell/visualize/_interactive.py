@@ -30,7 +30,10 @@ from pythinker_code.ui.shell.console import (
 )
 from pythinker_code.ui.shell.echo import render_user_echo_text
 from pythinker_code.ui.shell.keyboard import KeyEvent
-from pythinker_code.ui.shell.motion import reduced_motion_enabled
+from pythinker_code.ui.shell.motion import (
+    reduced_motion_enabled,
+    stream_reveal_interval_s,
+)
 from pythinker_code.ui.shell.prompt import (
     CustomPromptSession,
     UserInput,
@@ -74,9 +77,6 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
-# Fast tick while paced streamed text is actively revealing (~25 fps) so the
-# reveal animates smoothly; falls back to the status cadence when idle.
-_STREAM_REVEAL_INTERVAL_S = 0.04
 
 
 class _PromptLiveView(_LiveView):
@@ -222,9 +222,14 @@ class _PromptLiveView(_LiveView):
                 # commits. advance_stream_reveal() is a no-op unless a paced block
                 # has backlog, so reduced-motion / unpaced turns fall straight
                 # through to the calm status cadence below.
-                if self.advance_stream_reveal():
+                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                    self._dirty = True
+                if self._dirty or self._force_refresh:
                     self._prompt_session.invalidate()
-                    await asyncio.sleep(_STREAM_REVEAL_INTERVAL_S)
+                    self._dirty = False
+                    self._force_refresh = False
+                    self._need_recompose = False
+                    await asyncio.sleep(stream_reveal_interval_s())
                     continue
                 interval = (
                     _STATUS_REFRESH_REDUCED_INTERVAL_S
@@ -279,17 +284,26 @@ class _PromptLiveView(_LiveView):
             status_refresh_task = asyncio.create_task(self._status_refresh_loop())
             self._status_refresh_task = status_refresh_task
             while True:
+                from_external = False
                 try:
                     done, _ = await asyncio.wait(
-                        [wire_task, external_task],
+                        [wire_task, external_task, status_refresh_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if status_refresh_task in done:
+                        # The status loop is expected to run until cancelled at
+                        # shutdown. If it finished while the main loop is live it
+                        # raised — surface that instead of silently freezing the
+                        # prompt repaint clock.
+                        status_refresh_task.result()
+                        raise RuntimeError("prompt status refresh loop exited unexpectedly")
                     if wire_task in done:
                         msg = wire_task.result()
                         wire_task = asyncio.create_task(wire.receive())
                     else:
                         msg = external_task.result()
                         external_task = asyncio.create_task(self._external_messages.get())
+                        from_external = True
                 except QueueShutDown:
                     msg, external_task = await self._drain_external_message_after_wire_shutdown(
                         external_task
@@ -299,11 +313,13 @@ class _PromptLiveView(_LiveView):
                         self._flush_prompt_refresh()
                         continue
                     self.cleanup(is_interrupt=False)
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, StepInterrupted):
                     self.cleanup(is_interrupt=True)
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
@@ -313,10 +329,16 @@ class _PromptLiveView(_LiveView):
                     if self._turn_ended:
                         self._turn_start_time = None
                         self._pending_turn_recap = True
+                    self._force_refresh = True
                     self._flush_prompt_refresh()
                     continue
 
                 self.dispatch_wire_message(msg)
+                if from_external:
+                    # External (out-of-band) messages — approval requests, steer
+                    # input — are interactive and must repaint at once rather than
+                    # wait for the status refresh cadence.
+                    self._force_refresh = True
                 self._flush_prompt_refresh()
 
             # NOTE: btw dismiss waiting is handled by the shell layer
@@ -548,7 +570,12 @@ class _PromptLiveView(_LiveView):
     def render_pinned_status_tail(self, columns: int) -> ANSI:
         """Render the trailing verb spinner that the prompt keeps pinned below a
         (possibly clipped) agent stream, so it stays visible above the input."""
-        if self._turn_ended or self._active_turn_depth <= 0:
+        if (
+            self._turn_ended
+            or self._active_turn_depth <= 0
+            or self._current_question_panel is not None
+            or self._current_approval_request_panel is not None
+        ):
             return ANSI("")
         body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
         return ANSI(body if body else "")
@@ -621,10 +648,15 @@ class _PromptLiveView(_LiveView):
         if key in {"c-o", "c-e"}:
             if self._has_expandable_modal_panel() or (
                 self._expandable_tool_card() is None
-                and self._completed_expandable_tool_card() is not None
+                and self._expandable_content_block() is None
+                and (
+                    self._completed_expandable_tool_card() is not None
+                    or self._completed_expandable_content_block() is not None
+                )
             ):
                 event.app.create_background_task(self._show_panel_in_pager())
             elif self._toggle_latest_tool_card():
+                self._force_refresh = True
                 self._flush_prompt_refresh()
             return
 
@@ -641,6 +673,7 @@ class _PromptLiveView(_LiveView):
 
         if key == "c-t":
             self.toggle_pinned_todos()
+            self._force_refresh = True
             self._flush_prompt_refresh()
             return
 
@@ -696,9 +729,15 @@ class _PromptLiveView(_LiveView):
             buffer.document = Document(text="", cursor_position=0)
 
     def _flush_prompt_refresh(self) -> None:
-        if self._need_recompose:
-            self._prompt_session.invalidate()
+        if self._force_refresh:
+            if self._dirty or self._need_recompose:
+                self._prompt_session.invalidate()
+            self._dirty = False
+            self._force_refresh = False
             self._need_recompose = False
+            return
+        if self._need_recompose:
+            self._dirty = True
 
     def cleanup(self, is_interrupt: bool) -> None:
         super().cleanup(is_interrupt)

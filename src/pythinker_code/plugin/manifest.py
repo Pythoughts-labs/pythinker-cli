@@ -129,6 +129,10 @@ class PluginManifest(BaseModel):
     hooks: object = None
     # MCP servers: name -> server config (or a path/ref resolved later).
     mcp_servers: dict[str, object] = Field(default_factory=dict, alias="mcpServers")
+    # LSP servers: inline map, path to .lsp.json, or a mixed array of both.
+    lsp_servers: str | dict[str, object] | list[str | dict[str, object]] | None = Field(
+        default=None, alias="lspServers"
+    )
 
     # Plugin dependencies: "name" or "name@marketplace".
     dependencies: list[str] = Field(default_factory=list)
@@ -168,6 +172,9 @@ class MarketplaceEntry(BaseModel):
     category: str | None = None
     tags: list[str] = Field(default_factory=list)
     strict: bool = True
+    lsp_servers: str | dict[str, object] | list[str | dict[str, object]] | None = Field(
+        default=None, alias="lspServers"
+    )
 
     @field_validator("author", mode="before")
     @classmethod

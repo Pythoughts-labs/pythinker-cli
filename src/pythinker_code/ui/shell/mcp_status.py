@@ -80,7 +80,7 @@ def render_mcp_console(snapshot: MCPStatusSnapshot) -> RenderableType:
         return render_mcp_inventory_loading()
 
     renderables: list[RenderableType] = [
-        Text("/mcp", style=tui_rich_style("accent")),
+        Text("/mcp", style=tui_rich_style("info")),
         Text(""),
         Text.assemble("🔌  ", ("MCP Tools", "bold")),
         Text(""),

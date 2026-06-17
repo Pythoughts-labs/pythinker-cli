@@ -92,6 +92,7 @@ from pythinker_code.soul.dynamic_injections.auto_mode import AutoModeInjectionPr
 from pythinker_code.soul.dynamic_injections.git_status import GitStatusInjectionProvider
 from pythinker_code.soul.dynamic_injections.goal_mode import GoalModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.inline_commands import InlineCommandReminderProvider
+from pythinker_code.soul.dynamic_injections.lsp_diagnostics import LspDiagnosticsInjectionProvider
 from pythinker_code.soul.dynamic_injections.model_defense import ModelDefenseInjectionProvider
 from pythinker_code.soul.dynamic_injections.orchestration import OrchestrationInjectionProvider
 from pythinker_code.soul.dynamic_injections.permissions_state import PermissionsInjectionProvider
@@ -567,6 +568,8 @@ class PythinkerSoul:
             PermissionsInjectionProvider(),
             # Self-filtering: root-only; bounded git snapshot for working-tree orientation.
             GitStatusInjectionProvider(),
+            # Self-filtering: injects when LSP reports pending diagnostics after edits.
+            LspDiagnosticsInjectionProvider(self._runtime),
             # Self-filtering: root-only; keeps the model's subagent list current
             # without tying it to the static tool description cache.
             AgentListInjectionProvider(),
@@ -2098,9 +2101,9 @@ class PythinkerSoul:
                     role="user",
                     content=[
                         system_reminder(
-                            "Your previous response was cut off by the output token limit. "
-                            "Continue directly from where you stopped — no apology, no recap — "
-                            "and break the remaining work into smaller pieces."
+                            "Output token limit hit. Resume directly — no apology, no recap of "
+                            "what you were doing. Pick up mid-thought if that is where the cut "
+                            "happened. Break remaining work into smaller pieces."
                         )
                     ],
                 )

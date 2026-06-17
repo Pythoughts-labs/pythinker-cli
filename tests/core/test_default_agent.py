@@ -96,6 +96,7 @@ async def test_default_agent(runtime: Runtime):
                     "pythinker_code.tools.file:Glob",
                     "pythinker_code.tools.file:Grep",
                     "pythinker_code.tools.file:SmartSearch",
+                    "pythinker_code.tools.lsp:Lsp",
                     "pythinker_code.tools.file:WriteFile",
                     "pythinker_code.tools.file:StrReplaceFile",
                     "pythinker_code.tools.skill:ReadSkill",
@@ -301,6 +302,7 @@ async def test_default_agent_background_bash_guardrails(runtime: Runtime):
     assert "The only task-management slash command for users is `/task`" in agent.system_prompt
     assert "never invent subcommands like `/task list` or `/tasks`" in agent.system_prompt
 
+    # ToolSearch is absent because the `llm` fixture has no provider_config → supports_deferred_tool_search() → False.
     tool_names = [tool.name for tool in agent.toolset.tools]
     assert tool_names == snapshot(
         [
@@ -309,7 +311,6 @@ async def test_default_agent_background_bash_guardrails(runtime: Runtime):
             "ReadSkill",
             "AskUserQuestion",
             "SetTodoList",
-            "ToolSearch",
             "EnterWorktree",
             "ExitWorktree",
             "UpdateGoal",
@@ -350,7 +351,7 @@ instance can preserve previous findings and work.
 **Available Built-in Agent Types**
 
 - `mocker`: The mock agent for testing purposes. (Tools: *, Model: inherit, Background: yes).
-- `coder`: Good at general software engineering tasks. (Tools: Shell, SetTodoList, ReadFile, ReadMediaFile, Glob, Grep, SmartSearch, WriteFile, StrReplaceFile, ReadSkill, SearchWeb, FetchURL, mcp__context7__resolve-library-id, mcp__context7__query-docs, Model: inherit, Background: yes). When to use: Use this agent for non-trivial software engineering work that may require reading files, editing code, running commands, and returning a compact but technically complete summary to the parent agent. It delivers production-ready, idiomatic, verified changes in any language the project uses, with current-docs verification for third-party APIs, and never expands beyond its brief.
+- `coder`: Good at general software engineering tasks. (Tools: Shell, SetTodoList, ReadFile, ReadMediaFile, Glob, Grep, SmartSearch, Lsp, WriteFile, StrReplaceFile, ReadSkill, SearchWeb, FetchURL, mcp__context7__resolve-library-id, mcp__context7__query-docs, Model: inherit, Background: yes). When to use: Use this agent for non-trivial software engineering work that may require reading files, editing code, running commands, and returning a compact but technically complete summary to the parent agent. It delivers production-ready, idiomatic, verified changes in any language the project uses, with current-docs verification for third-party APIs, and never expands beyond its brief.
 - `code-reviewer`: Diff-focused code review with severity-scored findings. (Tools: Shell, SetTodoList, ReadFile, Glob, Grep, ReadSkill, Model: inherit, Background: yes). When to use: Use to run a read-only, diff-focused, professional code review — severity-scored findings across correctness, security, reliability, performance, maintainability, and standards compliance, in any programming language — or a code-reviewr-derived PR artifact workflow on the current branch. It runs offline by design and never modifies the repository; third-party API claims it cannot verify from the repository come back under RISKS as needs-verification items for the parent to check. For diffs above roughly 1,500 changed lines or 25 files, dispatch one instance per subsystem with an explicit file list and synthesize, instead of one instance for the whole diff.
 - `debugger`: Failure/log/stack-trace root-cause analysis with reproduction evidence. (Tools: Shell, SetTodoList, ReadFile, Glob, Grep, SmartSearch, Model: inherit, Background: yes). When to use: Use for failing tests, stack traces, runtime errors, flaky failures, regressions, or debugging requests where the root cause should be found before editing code. Read-only and safe to fan out in parallel — one focused failure per instance — it returns the named mechanism, confidence, evidence, the recommended minimal fix, and the verification that would prove it.
 - `explore`: Fast codebase exploration with prompt-enforced read-only behavior. (Tools: Shell, SetTodoList, ReadFile, ReadMediaFile, Glob, Grep, SmartSearch, ReadSkill, Model: inherit, Background: yes). When to use: Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (e.g. "src/**/*.yaml"), search code for keywords (e.g. "database connection"), or answer questions about the codebase (e.g. "how does the auth module work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "thorough" for comprehensive analysis across multiple locations and naming conventions. Use this agent for any read-only exploration that will clearly require more than 3 tool calls. Prefer launching multiple explore agents concurrently when investigating independent questions. Absence claims come with the searches that back them.

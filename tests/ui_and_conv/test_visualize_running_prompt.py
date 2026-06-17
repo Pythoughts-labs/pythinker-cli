@@ -126,6 +126,8 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     view._turn_ended = False
     view._active_turn_depth = 1
     view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
 
     out = view.render_pinned_status_tail(80)
     assert out.value.strip() != ""
@@ -141,6 +143,33 @@ def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
     view2._turn_ended = False
     view2._active_turn_depth = 0
     assert view2.render_pinned_status_tail(80).value == ""
+
+
+def test_render_pinned_status_tail_empty_while_question_panel_open() -> None:
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize import QuestionRequestPanel
+    from pythinker_code.wire.types import QuestionItem, QuestionOption, QuestionRequest
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    view._current_approval_request_panel = None
+    view._current_question_panel = QuestionRequestPanel(
+        QuestionRequest(
+            id="qr",
+            tool_call_id="tc",
+            questions=[
+                QuestionItem(
+                    question="Approve this plan?",
+                    options=[QuestionOption(label="Approve", description="")],
+                )
+            ],
+        )
+    )
+
+    assert view.render_pinned_status_tail(80).value == ""
 
 
 def test_pinned_tail_stays_visible_while_foreground_tool_executes() -> None:
@@ -160,6 +189,8 @@ def test_pinned_tail_stays_visible_while_foreground_tool_executes() -> None:
     view._turn_ended = False
     view._active_turn_depth = 1
     view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
 
     block = _ToolCallBlock(
         ToolCall(id="tc-1", function=ToolCall.FunctionBody(name="Shell", arguments="{}"))
