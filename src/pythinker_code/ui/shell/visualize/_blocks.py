@@ -8,10 +8,12 @@ They have no knowledge of the event loop or prompt_toolkit.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
 from collections import Counter, deque
+from enum import Enum
 from typing import Any, NamedTuple, cast
 
 import streamingjson  # type: ignore[reportMissingTypeStubs]
@@ -161,6 +163,138 @@ def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
 
 _PREVIEW_FIELD_LINE_RE = re.compile(r"^(\s*)-\s+([^:]+):\s*(.*)$")
 
+# An open ```report fence streams its findings JSON token-by-token. markdown
+# cannot commit an unterminated fence, so the raw JSON otherwise sits in the
+# preview's pending tail and leaks into the transient view. Suppress just that
+# open block behind a stable placeholder; a *closed* ```report block is left for
+# the commit/finalize path, which renders it as the clean report panel. Ordinary
+# code fences (```python, ```json …) get the same preview-only holdback below
+# via ``_suppress_unclosed_code_fence_preview`` — the open body is hidden in
+# the transient streaming view, the closed body is left for the final commit.
+_REPORT_FENCE_OPEN_RE = re.compile(r"(?m)^```report\b[^\n]*\n?")
+_FENCE_OPEN_RE = re.compile(r"(?m)^(```|~~~)([^\n]*)$")
+_FENCE_CLOSE_RE = re.compile(r"(?m)^(```|~~~)\s*$")
+_REPORT_PREVIEW_PLACEHOLDER = "  collecting findings…"
+_REPORT_FINAL_INTERRUPTED_NOTE = "Report generation was interrupted before findings finished."
+_FENCE_PREVIEW_PLACEHOLDER = "  … streaming code block; hidden until fence closes"
+# Box/tree panels streamed as plain text can be cut mid-draw when prompt_toolkit
+# crops the preamble. Hold back any still-open visual block in the preview tail
+# only; finalized scrollback still renders the full structure.
+_BOX_START_RE = re.compile(r"(?m)^[ \t]*[╭┌].*$")
+_BOX_END_RE = re.compile(r"(?m)^[ \t]*[╰└].*$")
+_VISUAL_BLOCK_PREVIEW_PLACEHOLDER = "  … formatting diagram…"
+# Paced transitions drain small backlogs immediately; larger ones use a bounded step.
+_TRANSITION_SMALL_BACKLOG_CELLS = 40
+_TRANSITION_DRAIN_MAX_RATIO = 0.35
+_STREAM_PACING_DEBUG = os.environ.get("PYTHINKER_DEBUG_STREAM_PACING", "") == "1"
+_STREAM_PACING_LOG = "/tmp/pythinker-stream-pacing.log"
+
+
+class FlushReason(Enum):
+    """Why a composing block is being finalized or flushed to scrollback."""
+
+    TURN_END = "turn_end"
+    TOOL_START = "tool_start"
+    THINK_TO_TEXT = "think_to_text"
+    TEXT_TO_THINK = "text_to_think"
+    CANCEL = "cancel"
+    ERROR = "error"
+
+
+def _suppress_unclosed_visual_block_preview(text: str) -> str:
+    """Replace a still-open box/tree panel in the preview tail with a placeholder.
+
+    Preview-only: keeps half-drawn ``╭…`` / ``┌…`` structures out of the
+    transient streaming view. Text before the block (e.g. a section heading) is
+    preserved. A closed box (matching ``╰`` / ``└`` after the last opener) is
+    left unchanged.
+    """
+    matches = list(_BOX_START_RE.finditer(text))
+    if not matches:
+        return text
+    match = matches[-1]
+    if _BOX_END_RE.search(text[match.start() :]):
+        return text
+    before = text[: match.start()].rstrip()
+    if before:
+        return f"{before}\n\n{_VISUAL_BLOCK_PREVIEW_PLACEHOLDER}"
+    return _VISUAL_BLOCK_PREVIEW_PLACEHOLDER
+
+
+def _suppress_unclosed_report_fence_preview(text: str) -> str:
+    """Replace a still-open ```report block's raw body with a placeholder.
+
+    Preview-only: keeps partial findings JSON out of the transient streaming
+    view. Text before the fence (e.g. a ``Findings:`` heading) is preserved. A
+    closed ```report block is returned unchanged so the finalized
+    ``render_agent_body`` path still renders the clean report panel.
+    """
+    matches = list(_REPORT_FENCE_OPEN_RE.finditer(text))
+    if not matches:
+        return text
+    match = matches[-1]
+    if _FENCE_CLOSE_RE.search(text[match.end() :]):
+        return text  # complete block — leave it for commit/finalize
+    before = text[: match.start()].rstrip()
+    if before:
+        return f"{before}\n\n{_REPORT_PREVIEW_PLACEHOLDER}"
+    return _REPORT_PREVIEW_PLACEHOLDER
+
+
+def _suppress_unclosed_code_fence_preview(text: str) -> str:
+    """Replace a still-open ordinary code fence's raw body with a placeholder.
+
+    Preview-only: a half-written ```` ```python ```` (or ```` ```ts ````,
+    ```` ```json ````, etc.) block lives in the pending tail because markdown
+    cannot commit an unterminated fence, so the raw code would otherwise
+    stream token-by-token into the transient view. Hold the open body back
+    behind a stable placeholder; once the matching closer arrives the helper
+    returns the text unchanged and the finalize path renders the full block.
+
+    The ```` ```report ```` opener is intentionally excluded here — it has its
+    own (more specific) suppression so the streaming findings JSON does not
+    flash a misleading "code block" placeholder mid-report.
+    """
+    for match in reversed(list(_FENCE_OPEN_RE.finditer(text))):
+        marker, info = match.group(1), match.group(2)
+        info = info.strip()
+        first_token = info.split(maxsplit=1)[0] if info else ""
+        if first_token.lower() == "report":
+            continue
+        # Distinguish an opener (carries a language tag, e.g. ```` ```python ````)
+        # from a closer (a bare ```` ``` ```` line). Without a tag the regex
+        # above cannot tell them apart, so a closer would otherwise be
+        # treated as a new opener.
+        if not info:
+            continue
+        close_pattern = re.compile(rf"(?m)^{re.escape(marker)}\s*$")
+        if close_pattern.search(text[match.end() :]):
+            return text  # complete block — leave it for commit/finalize
+        lang = first_token or "code"
+        before = text[: match.start()].rstrip()
+        if before:
+            return f"{before}\n\n{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
+        return f"{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
+    return text
+
+
+def _sanitize_unclosed_report_fence_for_final(text: str) -> str:
+    """Finalize-only sanitizer for interrupted internal ```report fences.
+
+    Unlike preview suppression, this replaces an open report body with a short
+    user-facing note and never includes partial JSON in scrollback.
+    """
+    matches = list(_REPORT_FENCE_OPEN_RE.finditer(text))
+    if not matches:
+        return text
+    match = matches[-1]
+    if _FENCE_CLOSE_RE.search(text[match.end() :]):
+        return text
+    before = text[: match.start()].rstrip()
+    if before:
+        return f"{before}\n\n{_REPORT_FINAL_INTERRUPTED_NOTE}"
+    return _REPORT_FINAL_INTERRUPTED_NOTE
+
 
 def _normalize_streaming_preview_text(text: str) -> str:
     """Lightweight preview normalization: ANSI sanitize + space-aligned report rows.
@@ -171,6 +305,9 @@ def _normalize_streaming_preview_text(text: str) -> str:
     from pythinker_code.ui.shell.markdown.normalizers import normalize_space_aligned_report_blocks
 
     cleaned = sanitize_ansi(text)
+    cleaned = _suppress_unclosed_report_fence_preview(cleaned)
+    cleaned = _suppress_unclosed_code_fence_preview(cleaned)
+    cleaned = _suppress_unclosed_visual_block_preview(cleaned)
     return normalize_space_aligned_report_blocks(cleaned)
 
 
@@ -384,8 +521,26 @@ class _ContentBlock:
         # per-sample truncation.
         self._token_samples: deque[tuple[float, float]] = deque()
         self._report_update: ReportUpdateComponent | None = None
+        self._promoted_to_scrollback = False
+        self._scrollback_renderable: RenderableType | None = None
+        self._preview_text_cache_key: tuple[int, int, int, bool, str] | None = None
+        self._preview_text_cache: str | None = None
+        # Interactive prompt preamble row budget (``None`` = no limit; Rich Live).
+        self._preview_row_budget: int | None = None
+        self._last_commit_scan_len = 0
 
     # -- Public API ----------------------------------------------------------
+
+    def set_preview_row_budget(self, rows: int | None) -> None:
+        """Cap transient compose height for the interactive prompt preamble."""
+        if rows == self._preview_row_budget:
+            return
+        self._preview_row_budget = rows
+        self._invalidate_preview_cache()
+
+    @property
+    def is_promoted(self) -> bool:
+        return self._promoted_to_scrollback
 
     @property
     def has_expandable_card(self) -> bool:
@@ -409,6 +564,8 @@ class _ContentBlock:
     def append(self, content: str) -> None:
         self.raw_text += content
         self._token_count += _estimate_tokens(content)
+        self._invalidate_preview_cache()
+        self._log_pacing_event("append", caller="append")
         if self._paced:
             # Reveal is paced by reveal_tick() for smooth streaming; just buffer
             # the raw text here. Commit happens as text is revealed.
@@ -448,6 +605,7 @@ class _ContentBlock:
             step_cells,
         )
         self._flush_committed()
+        self._log_pacing_event("reveal_tick", caller="reveal_tick")
         return True
 
     def reveal_all(self) -> bool:
@@ -457,11 +615,61 @@ class _ContentBlock:
         text is left to the finalize path (``compose_final``), matching the
         unpaced behavior so no block is committed twice.
         """
+        self._log_pacing_event("reveal_all", caller="reveal_all")
         changed = self._revealed_len < len(self.raw_text)
         self._revealed_len = len(self.raw_text)
         return changed
 
-    def compose(self) -> RenderableType:
+    def drain_for_transition(
+        self,
+        *,
+        max_ratio: float = _TRANSITION_DRAIN_MAX_RATIO,
+        max_cells: int | None = None,
+    ) -> bool:
+        """Reveal a bounded slice before a phase/tool transition.
+
+        Returns ``True`` when unrevealed backlog remains after the drain.
+        """
+        if not self._paced:
+            return False
+        from rich.cells import cell_len
+
+        hidden = self.raw_text[self._revealed_len :]
+        backlog_cells = cell_len(hidden)
+        if backlog_cells <= 0:
+            return False
+        if backlog_cells <= _TRANSITION_SMALL_BACKLOG_CELLS:
+            self.reveal_all()
+            self._flush_committed()
+            return False
+        if max_cells is None:
+            max_cells = max(
+                _STREAM_REVEAL_MIN_CELLS,
+                int(backlog_cells * max_ratio),
+            )
+        step_cells = min(backlog_cells, max_cells)
+        self._revealed_len = _advance_by_display_cells(
+            self.raw_text,
+            self._revealed_len,
+            step_cells,
+        )
+        self._flush_committed()
+        self._log_pacing_event("drain_for_transition", caller="drain_for_transition")
+        return self._revealed_len < len(self.raw_text)
+
+    def prepare_for_finalize(self, reason: FlushReason) -> None:
+        """Reveal buffered text according to the finalize/transition reason."""
+        self._log_pacing_event("prepare_for_finalize", reason=reason, caller="prepare_for_finalize")
+        if reason in {
+            FlushReason.TOOL_START,
+            FlushReason.TEXT_TO_THINK,
+            FlushReason.THINK_TO_TEXT,
+        }:
+            self.drain_for_transition()
+            return
+        self.reveal_all()
+
+    def compose(self, *, include_activity: bool = True) -> RenderableType:
         """Render the transient Live area content.
 
         Thinking mode shows the italic ``Thinking`` label with animated
@@ -474,7 +682,7 @@ class _ContentBlock:
             if self._show_thinking_stream:
                 return self._compose_thinking_stream()
             return self._compose_thinking()
-        return self._compose_composing()
+        return self._compose_composing(include_activity=include_activity)
 
     def compose_final(self) -> RenderableType:
         """Render the remaining uncommitted content when the block ends."""
@@ -508,20 +716,27 @@ class _ContentBlock:
 
     def promote_to_scrollback(self) -> RenderableType | None:
         """Build the full block renderable for one-shot scrollback promotion."""
+        if self._promoted_to_scrollback:
+            return None
         report_body = self._render_report_update_body()
         if report_body is not None:
+            self._promoted_to_scrollback = True
+            self._scrollback_renderable = report_body
             return report_body
         parts: list[RenderableType] = list(self._committed_renderables)
-        remaining = self._pending_text()
-        if remaining:
-            tail = self._render_body(remaining)
+        pending = self._pending_text_for_final()
+        if pending:
+            tail = self._render_body(pending)
             if parts:
                 parts.extend([BLANK_ROW, tail])
             else:
                 parts = [tail]
         if not parts:
             return None
-        return Group(*parts) if len(parts) > 1 else parts[0]
+        renderable = Group(*parts) if len(parts) > 1 else parts[0]
+        self._promoted_to_scrollback = True
+        self._scrollback_renderable = renderable
+        return renderable
 
     def has_active_stream_preview(self) -> bool:
         """Whether live preview animation (caret / paced drain) should keep ticking."""
@@ -537,10 +752,52 @@ class _ContentBlock:
             return bool(self.raw_text)
         return bool(self._pending_text())
 
+    def take_committed_renderables(self) -> list[RenderableType]:
+        """Remove and return stable committed renderables for scrollback emission."""
+        renderables = self._committed_renderables
+        self._committed_renderables = []
+        return renderables
+
     # -- Private -------------------------------------------------------------
 
     def _pending_text(self) -> str:
         return self.raw_text[self._committed_len : self._revealed_len]
+
+    def _pending_text_for_final(self) -> str:
+        """Full uncommitted tail for scrollback promotion (not reveal-capped)."""
+        pending = self.raw_text[self._committed_len :]
+        if not pending:
+            return ""
+        return _sanitize_unclosed_report_fence_for_final(pending)
+
+    def _invalidate_preview_cache(self) -> None:
+        self._preview_text_cache_key = None
+        self._preview_text_cache = None
+
+    def _log_pacing_event(
+        self,
+        event: str,
+        *,
+        reason: FlushReason | None = None,
+        caller: str = "",
+    ) -> None:
+        if not _STREAM_PACING_DEBUG:
+            return
+        raw_len = len(self.raw_text)
+        backlog_len = raw_len - self._revealed_len
+        line = (
+            f"{time.monotonic():.3f} block={id(self)} event={event}"
+            f" raw_len={raw_len} revealed_len={self._revealed_len}"
+            f" committed_len={self._committed_len} backlog_len={backlog_len}"
+            f" paced={self._paced} caller={caller}"
+        )
+        if reason is not None:
+            line += f" reason={reason.value}"
+        try:
+            with open(_STREAM_PACING_LOG, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
 
     def _wrap_bullet(self, renderable: RenderableType) -> BulletColumns:
         """First call gets the ``•`` bullet; subsequent calls get a space."""
@@ -581,14 +838,22 @@ class _ContentBlock:
         pending = self._pending_text()
         if not pending:
             return
+        if "\n" not in pending:
+            self._last_commit_scan_len = len(pending)
+            return
+        new_pending = pending[self._last_commit_scan_len :]
+        if self._last_commit_scan_len and "\n" not in new_pending:
+            return
         boundary = _find_committed_boundary(pending)
         if boundary is None:
+            self._last_commit_scan_len = len(pending)
             return
         committed_text = pending[:boundary]
         if self._committed_renderables:
             self._committed_renderables.append(BLANK_ROW)
         self._committed_renderables.append(self._wrap_bullet(render_agent_body(committed_text)))
         self._committed_len += boundary
+        self._last_commit_scan_len = 0
 
     def _render_report_update_body(self) -> RenderableType | None:
         update = parse_report_update(self.raw_text)
@@ -648,24 +913,83 @@ class _ContentBlock:
         rate = int(token_delta / elapsed)
         return rate if rate > 0 else None
 
-    def _compose_composing(self) -> RenderableType:
-        spinner = self._compose_spinner()
-        pending = self._pending_text()
-        committed = list(self._committed_renderables)
+    def _renderable_row_count(self, renderable: RenderableType) -> int:
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        text = render_to_ansi(renderable, columns=self._layout_width()).rstrip("\n")
+        if not text:
+            return 0
+        return len(text.splitlines())
+
+    def _assemble_composing(
+        self,
+        *,
+        spinner: Text | None,
+        committed: list[RenderableType],
+        pending: str,
+        max_preview_lines: int,
+    ) -> RenderableType:
         if not pending:
             if committed:
-                return Group(*committed, BLANK_ROW, spinner)
-            return spinner
-        preview = self._build_preview(
+                if spinner is not None:
+                    return Group(*committed, BLANK_ROW, spinner)
+                return Group(*committed)
+            return spinner if spinner is not None else Text("")
+        preview = self._build_preview_cached(
             pending,
-            max_lines=_COMPOSING_PREVIEW_LINES,
+            max_lines=max_preview_lines,
             reserve_caret=True,
         )
         body = self._render_preview_text(preview, caret=True)
         preview_row = self._wrap_preview_bullet(body)
         if committed:
-            return Group(*committed, BLANK_ROW, spinner, BLANK_ROW, preview_row)
-        return Group(spinner, BLANK_ROW, preview_row)
+            if spinner is not None:
+                return Group(*committed, BLANK_ROW, spinner, BLANK_ROW, preview_row)
+            return Group(*committed, BLANK_ROW, preview_row)
+        if spinner is not None:
+            return Group(spinner, BLANK_ROW, preview_row)
+        return preview_row
+
+    def _compose_composing(self, *, include_activity: bool = True) -> RenderableType:
+        spinner = self._compose_spinner() if include_activity else None
+        pending = self._pending_text()
+        committed = list(self._committed_renderables)
+        budget = self._preview_row_budget
+        if budget is None:
+            return self._assemble_composing(
+                spinner=spinner,
+                committed=committed,
+                pending=pending,
+                max_preview_lines=_COMPOSING_PREVIEW_LINES,
+            )
+
+        trimmed = list(committed)
+        preview_lines = _COMPOSING_PREVIEW_LINES
+        while True:
+            result = self._assemble_composing(
+                spinner=spinner,
+                committed=trimmed,
+                pending=pending,
+                max_preview_lines=preview_lines,
+            )
+            row_count = self._renderable_row_count(result)
+            if row_count <= budget:
+                return result
+            if preview_lines > 1:
+                preview_lines -= 1
+                continue
+            if trimmed:
+                trimmed.pop(0)
+                preview_lines = _COMPOSING_PREVIEW_LINES
+                continue
+            if pending:
+                return self._assemble_composing(
+                    spinner=spinner,
+                    committed=[],
+                    pending=pending,
+                    max_preview_lines=1,
+                )
+            return spinner or Text("")
 
     def _render_preview_text(self, preview: str, *, caret: bool) -> Text:
         """Plain-text preview path shared by live compose and finalize.
@@ -725,7 +1049,20 @@ class _ContentBlock:
         width = current_console_width()
         if width != self._block_width:
             self._block_width = width
+            self._invalidate_preview_cache()
         return self._block_width
+
+    def _build_preview_cached(
+        self, text: str, *, max_lines: int, reserve_caret: bool = False
+    ) -> str:
+        suffix = text[-64:] if len(text) > 64 else text
+        key = (len(text), self._layout_width(), max_lines, reserve_caret, suffix)
+        if key == self._preview_text_cache_key and self._preview_text_cache is not None:
+            return self._preview_text_cache
+        result = self._build_preview(text, max_lines=max_lines, reserve_caret=reserve_caret)
+        self._preview_text_cache_key = key
+        self._preview_text_cache = result
+        return result
 
     def _build_preview(self, text: str, *, max_lines: int, reserve_caret: bool = False) -> str:
         """Tail-trim *text*, normalize report prose, and wrap with hang indents."""

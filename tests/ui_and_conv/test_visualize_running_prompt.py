@@ -101,7 +101,11 @@ def test_render_agent_status_uses_compose_agent_output_not_compose() -> None:
     agent_calls: list[bool] = []
     compose_calls: list[bool] = []
 
-    def fake_compose_agent_output(*, include_working_indicator: bool = True):
+    def fake_compose_agent_output(
+        *,
+        include_working_indicator: bool = True,
+        include_content_activity: bool = True,
+    ):
         agent_calls.append(True)
         return [Text("agent-status")]
 
@@ -119,6 +123,83 @@ def test_render_agent_status_uses_compose_agent_output_not_compose() -> None:
     assert "agent-status" in rendered.value
 
 
+def test_prompt_final_scrollback_invalidates_after_transient_block_detached(monkeypatch) -> None:
+    """Prompt mode must clear the transient preamble before printing final scrollback."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    printed: list[object] = []
+    invalidation_saw_detached_block: list[bool] = []
+    view_holder: dict[str, _PromptLiveView] = {}
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidation_saw_detached_block.append(
+                view_holder["view"]._current_content_block is None
+            )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view_holder["view"] = view
+    view._current_content_block = _ContentBlock(is_think=False)
+    view._current_content_block.append("final prompt text")
+
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+
+    view.flush_content()
+
+    assert invalidation_saw_detached_block == [True]
+    assert len(printed) == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_incremental_scrollback_uses_terminal_handoff(monkeypatch) -> None:
+    """Committed prompt-path blocks must print while prompt_toolkit is suspended."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    invalidations: list[str] = []
+    printed: list[object] = []
+    terminal_handoffs: list[str] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidations.append("invalidate")
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        terminal_handoffs.append("run")
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph.\n\nMutable tail")
+    assert block._committed_renderables
+    view._current_content_block = block
+
+    emitted = await view._emit_incremental_content_commits()
+
+    assert emitted is True
+    assert terminal_handoffs == ["run"]
+    assert printed
+    assert invalidations == ["invalidate"]
+
+
 def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     import time as _time
 
@@ -131,6 +212,32 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
 
     out = view.render_pinned_status_tail(80)
     assert out.value.strip() != ""
+
+
+def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, object()),
+        steer=lambda _content: None,
+    )
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    block = _ContentBlock(is_think=False)
+    block.append("Evidence:\n\nThe live preview stays with the body")
+    view._current_content_block = block
+
+    body = view.render_agent_status(80).value
+    pinned_tail = view.render_pinned_status_tail(80).value
+
+    assert "Evidence:" in body
+    assert "The live preview stays with the body" in body
+    assert "Composing" not in body
+    assert "Composing" in pinned_tail
 
 
 def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
@@ -615,7 +722,11 @@ def test_live_view_flushes_current_output_before_printing_steer_input(monkeypatc
     view = _LiveView(StatusUpdate())
     order: list[object] = []
 
-    monkeypatch.setattr(view, "flush_content", lambda: order.append("flush_content"))
+    monkeypatch.setattr(
+        view,
+        "flush_content",
+        lambda reason=None: order.append("flush_content"),
+    )
     monkeypatch.setattr(view, "flush_finished_tool_calls", lambda: order.append("flush_tools"))
     monkeypatch.setattr(
         shell_visualize.console,
@@ -776,6 +887,57 @@ async def test_prompt_live_view_keeps_processing_external_approvals_after_turn_e
                 break
             await asyncio.sleep(0)
         assert view._current_approval_request_panel is not None
+        assert invalidations
+    finally:
+        gate.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkeypatch) -> None:
+    invalidations: list[str] = []
+    printed: list[object] = []
+    gate = asyncio.Event()
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidations.append("invalidate")
+
+    class _Wire:
+        def __init__(self) -> None:
+            self._messages = [
+                TurnBegin(user_input="summarize"),
+                TextPart(text="Final streamed answer."),
+                TurnEnd(),
+            ]
+
+        async def receive(self):
+            if self._messages:
+                return self._messages.pop(0)
+            await gate.wait()
+            raise shell_visualize.QueueShutDown
+
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    task = asyncio.create_task(view.visualize_loop(cast(Any, _Wire())))
+    try:
+        for _ in range(20):
+            if view._turn_ended:
+                break
+            await asyncio.sleep(0)
+
+        assert view._turn_ended is True
+        assert view._current_content_block is None
+        assert printed
         assert invalidations
     finally:
         gate.set()

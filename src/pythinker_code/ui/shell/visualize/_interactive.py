@@ -38,7 +38,9 @@ from pythinker_code.ui.shell.prompt import (
     CustomPromptSession,
     UserInput,
 )
-from pythinker_code.ui.shell.visualize._blocks import smooth_streaming_enabled
+from pythinker_code.ui.shell.visualize._blocks import (
+    FlushReason,
+)
 from pythinker_code.ui.shell.visualize._btw_panel import _BtwModalDelegate
 from pythinker_code.ui.shell.visualize._input_router import InputAction, classify_input
 from pythinker_code.ui.shell.visualize._live_view import _LiveView
@@ -55,10 +57,16 @@ from pythinker_code.wire.types import (
     BtwEnd,
     ContentPart,
     Notification,
+    PlanDisplay,
+    ProgressNote,
+    QuestionAnswered,
     StatusUpdate,
     SteerInput,
     StepInterrupted,
     Suggestion,
+    TextPart,
+    ThinkPart,
+    ToolCall,
     TurnEnd,
     WireMessage,
 )
@@ -77,6 +85,7 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
+_TRANSITION_DRAIN_MAX_TICKS = 12
 
 
 class _PromptLiveView(_LiveView):
@@ -110,10 +119,6 @@ class _PromptLiveView(_LiveView):
             show_thinking_stream=show_thinking_stream,
             show_turn_recaps=show_turn_recaps,
         )
-        # The interactive view owns the reveal tick (_status_refresh_loop), so it
-        # is the only view that paces streamed text. Disable pacing under reduced
-        # motion so motion-sensitive users get immediate reveal, not a typewriter.
-        self._stream_pacing = smooth_streaming_enabled() and not reduced_motion_enabled()
         self._prompt_session = prompt_session
         self._steer = steer
         self._btw_runner = btw_runner
@@ -138,6 +143,33 @@ class _PromptLiveView(_LiveView):
     @property
     def _btw_active(self) -> bool:
         return self._btw_modal is not None
+
+    def _debug_content_state(self) -> dict[str, object]:
+        block = self._current_content_block
+        state: dict[str, object] = {
+            "activeTurnDepth": self._active_turn_depth,
+            "turnEnded": self._turn_ended,
+            "forceRefresh": self._force_refresh,
+            "dirty": self._dirty,
+            "hasContentBlock": block is not None,
+        }
+        if block is None:
+            return state
+        state.update(
+            {
+                "block": id(block),
+                "isThink": block.is_think,
+                "rawLen": len(block.raw_text),
+                "revealedLen": block._revealed_len,
+                "committedLen": block._committed_len,
+                "pendingLen": len(block._pending_text()),
+                "unrevealedLen": len(block.raw_text) - block._revealed_len,
+                "committedRenderables": len(block._committed_renderables),
+                "hasActiveStreamPreview": block.has_active_stream_preview(),
+                "promoted": block.is_promoted,
+            }
+        )
+        return state
 
     def _dismiss_btw(self) -> None:
         if self._btw_modal is not None:
@@ -222,7 +254,10 @@ class _PromptLiveView(_LiveView):
                 # commits. advance_stream_reveal() is a no-op unless a paced block
                 # has backlog, so reduced-motion / unpaced turns fall straight
                 # through to the calm status cadence below.
-                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                advanced = self.advance_stream_reveal()
+                emitted = await self._emit_incremental_content_commits()
+                needs_animation = self._streaming_needs_animation_frame()
+                if advanced or emitted or needs_animation:
                     self._dirty = True
                 if self._dirty or self._force_refresh:
                     self._prompt_session.invalidate()
@@ -241,6 +276,62 @@ class _PromptLiveView(_LiveView):
                     self._prompt_session.invalidate()
         except asyncio.CancelledError:
             pass
+
+    def advance_stream_reveal(self) -> bool:
+        return super().advance_stream_reveal()
+
+    async def _emit_incremental_content_commits(self) -> bool:
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return False
+        committed = block.take_committed_renderables()
+        if not committed:
+            return False
+
+        # Stable markdown slices belong in real scrollback. Keeping them in the
+        # prompt preamble makes long streams clip and flicker while only the tail
+        # is still mutable.
+        def emit_committed() -> None:
+            for renderable in committed:
+                self._emit_incremental_scrollback(renderable)
+
+        await run_in_terminal(emit_committed)
+        self._prompt_session.invalidate()
+        return True
+
+    def _transition_flush_reason(self, msg: WireMessage) -> FlushReason | None:
+        if isinstance(msg, (ToolCall, QuestionAnswered, ProgressNote, Suggestion, PlanDisplay)):
+            return FlushReason.TOOL_START
+        block = self._current_content_block
+        if block is None:
+            return None
+        if isinstance(msg, ThinkPart) and not block.is_think:
+            return FlushReason.TEXT_TO_THINK
+        if isinstance(msg, TextPart) and block.is_think:
+            return FlushReason.THINK_TO_TEXT
+        return None
+
+    async def _drain_content_for_transition(self, reason: FlushReason) -> None:
+        if reason not in {
+            FlushReason.TOOL_START,
+            FlushReason.TEXT_TO_THINK,
+            FlushReason.THINK_TO_TEXT,
+        }:
+            return
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return
+        for _ in range(_TRANSITION_DRAIN_MAX_TICKS):
+            if self._current_content_block is not block:
+                return
+            has_more = block.drain_for_transition()
+            emitted = await self._emit_incremental_content_commits()
+            if emitted or block.has_active_stream_preview():
+                self._dirty = True
+                self._flush_prompt_refresh()
+            if not has_more:
+                return
+            await asyncio.sleep(stream_reveal_interval_s())
 
     # -- Public API: queued messages for the shell to drain ------------------
 
@@ -309,6 +400,8 @@ class _PromptLiveView(_LiveView):
                         external_task
                     )
                     if msg is not None:
+                        if reason := self._transition_flush_reason(msg):
+                            await self._drain_content_for_transition(reason)
                         self.dispatch_wire_message(msg)
                         self._flush_prompt_refresh()
                         continue
@@ -325,14 +418,20 @@ class _PromptLiveView(_LiveView):
 
                 if isinstance(msg, TurnEnd):
                     self._active_turn_depth = max(0, self._active_turn_depth - 1)
-                    self._turn_ended = self._active_turn_depth == 0
-                    if self._turn_ended:
+                    turn_ended = self._active_turn_depth == 0
+                    if turn_ended:
+                        self.flush_content(FlushReason.TURN_END)
+                        self._turn_ended = True
                         self._turn_start_time = None
                         self._pending_turn_recap = True
+                    else:
+                        self._turn_ended = False
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     continue
 
+                if reason := self._transition_flush_reason(msg):
+                    await self._drain_content_for_transition(reason)
                 self.dispatch_wire_message(msg)
                 if from_external:
                     # External (out-of-band) messages — approval requests, steer
@@ -559,13 +658,32 @@ class _PromptLiveView(_LiveView):
         """
         if self._turn_ended:
             return ANSI("")
-        # Exclude the trailing verb spinner — the prompt pins it separately via
-        # ``render_pinned_status_tail`` so a clipped agent stream cannot hide it.
-        blocks = self.compose_agent_output(include_working_indicator=False)
+        from prompt_toolkit.application import get_app_or_none
+
+        from pythinker_code.ui.shell.prompt import _prompt_preamble_max_rows
+
+        app = get_app_or_none()
+        terminal_rows = app.output.get_size().rows if app is not None else None
+        # Reserve one row for the pinned verb spinner rendered below the clip hint.
+        body_budget = max(1, _prompt_preamble_max_rows(terminal_rows) - 1)
+        content_block = getattr(self, "_current_content_block", None)
+        if content_block is not None:
+            content_block.set_preview_row_budget(body_budget)
+        # Exclude activity rows here — the prompt pins the active spinner
+        # separately via ``render_pinned_status_tail`` so a clipped agent stream
+        # cannot hide it or place it between committed prose and the live tail.
+        blocks = self.compose_agent_output(
+            include_working_indicator=False,
+            include_content_activity=False,
+        )
         if not blocks:
             return ANSI("")
         body = render_to_ansi(Group(*blocks), columns=columns).rstrip("\n")
         return ANSI(body if body else "")
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        self._prompt_session.invalidate()
+        super()._emit_final_scrollback(renderable)
 
     def render_pinned_status_tail(self, columns: int) -> ANSI:
         """Render the trailing verb spinner that the prompt keeps pinned below a
@@ -577,7 +695,11 @@ class _PromptLiveView(_LiveView):
             or self._current_approval_request_panel is not None
         ):
             return ANSI("")
-        body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
+        content_block = getattr(self, "_current_content_block", None)
+        if content_block is not None and not content_block.is_think:
+            body = render_to_ansi(content_block._compose_spinner(), columns=columns).rstrip("\n")
+        else:
+            body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
         return ANSI(body if body else "")
 
     def render_running_prompt_body(self, columns: int) -> ANSI:
@@ -612,6 +734,8 @@ class _PromptLiveView(_LiveView):
         if self._current_approval_request_panel is not None:
             return False
         if self._current_question_panel is not None:
+            return False
+        if self._turn_ended:
             return False
         return not self._turn_ended
 

@@ -64,6 +64,7 @@ from pythinker_code.ui.shell.visualize._approval_panel import (
 from pythinker_code.ui.shell.visualize._blocks import (
     _TOKEN_RATE_MIN_SAMPLES,
     _TOKEN_RATE_WINDOW_S,
+    FlushReason,
     Markdown,
     _CompactionBlock,
     _ContentBlock,
@@ -74,6 +75,7 @@ from pythinker_code.ui.shell.visualize._blocks import (
     _StatusBlock,
     _SuggestionBlock,
     _ToolCallBlock,
+    smooth_streaming_enabled,
 )
 from pythinker_code.ui.shell.visualize._question_panel import (
     QuestionRequestPanel,
@@ -213,10 +215,9 @@ class _LiveView:
         self._cancel_event = cancel_event
         self._show_thinking_stream = show_thinking_stream
         self._show_turn_recaps = show_turn_recaps
-        # Paced reveal of streamed composing text. Off by default; the
-        # interactive prompt view enables it (it owns the reveal tick), so the
-        # non-interactive Rich Live path stays byte-for-byte unchanged.
-        self._stream_pacing = False
+        # Paced reveal of streamed composing text. Disabled under reduced motion
+        # so motion-sensitive users get immediate reveal, not a typewriter.
+        self._stream_pacing = smooth_streaming_enabled() and not reduced_motion_enabled()
 
         self._active_turn_depth = 0
         self._turn_start_time: float | None = None
@@ -262,6 +263,7 @@ class _LiveView:
         self._dirty = False
         self._force_refresh = False
         self._external_messages: Queue[WireMessage] = Queue()
+        self._live: Live | None = None
 
     def _reset_live_shape(self, live: Live) -> None:
         # Rich doesn't expose a public API to clear Live's cached render height.
@@ -287,7 +289,9 @@ class _LiveView:
         try:
             while True:
                 await asyncio.sleep(STREAM_FRAME_INTERVAL_S)
-                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                advanced = self.advance_stream_reveal()
+                needs_animation = self._streaming_needs_animation_frame()
+                if advanced or needs_animation:
                     self._dirty = True
                 if not self._dirty and not self._force_refresh:
                     continue
@@ -325,6 +329,7 @@ class _LiveView:
             # approval panels, or streaming output overlapping the screen.
             vertical_overflow=_LIVE_VERTICAL_OVERFLOW,
         ) as live:
+            self._live = live
 
             async def keyboard_handler(listener: KeyboardListener, event: KeyEvent) -> None:
                 # Handle Ctrl+O specially - pause Live only while the pager is active.
@@ -450,6 +455,7 @@ class _LiveView:
                         _ = await wire_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
                         _ = await external_task
+            self._live = None
 
     def refresh_soon(self, force: bool = False) -> None:
         self._dirty = True
@@ -598,7 +604,10 @@ class _LiveView:
         return blocks
 
     def compose_agent_output(
-        self, *, include_working_indicator: bool = True
+        self,
+        *,
+        include_working_indicator: bool = True,
+        include_content_activity: bool = True,
     ) -> list[RenderableType]:
         """Spinners, content blocks, tool calls, notifications.
 
@@ -606,10 +615,12 @@ class _LiveView:
         Always safe to render regardless of modal state.
 
         ``include_working_indicator`` controls whether the trailing verb
-        spinner is emitted. The interactive prompt sets it ``False`` so it can
-        pin the spinner *below* a clipped agent stream (see
-        ``render_pinned_status_tail``), keeping it visible instead of letting
-        the clip hint cover it.
+        spinner is emitted. ``include_content_activity`` controls the composing
+        activity row inside the active content block. The interactive prompt
+        sets both ``False`` so it can pin the active spinner *below* a clipped
+        agent stream (see ``render_pinned_status_tail``), keeping it visible
+        instead of letting the clip hint cover it or split the body from the
+        mutable preview.
 
         Display priority (highest → lowest):
           1. MCP loading spinner (connecting to servers)
@@ -633,7 +644,11 @@ class _LiveView:
             if current_step_retry is not None:
                 _append_action_block(blocks, _format_step_retry(current_step_retry), leading=True)
             if self._current_content_block is not None:
-                _append_action_block(blocks, self._current_content_block.compose(), leading=True)
+                _append_action_block(
+                    blocks,
+                    self._current_content_block.compose(include_activity=include_content_activity),
+                    leading=True,
+                )
             # When an approval panel is on-screen for a specific tool call, the
             # panel already previews the same command/diff that the pending tool
             # card would show. Suppress the matching card to avoid the duplicate.
@@ -982,7 +997,7 @@ class _LiveView:
                     self._recap_files_modified.clear()
                     self._pending_turn_recap = False
                 self._active_turn_depth += 1
-                self.flush_content()
+                self.flush_content(FlushReason.TURN_END)
                 self.refresh_soon()
             case SteerInput(user_input=user_input):
                 self.cleanup(is_interrupt=False)
@@ -1234,7 +1249,7 @@ class _LiveView:
 
     def cleanup(self, is_interrupt: bool) -> None:
         """Cleanup the live view on step end or interruption."""
-        self.flush_content()
+        self.flush_content(FlushReason.CANCEL if is_interrupt else FlushReason.TURN_END)
 
         for block in self._tool_call_blocks.values():
             if not block.finished:
@@ -1293,28 +1308,36 @@ class _LiveView:
         self._held_tool_search_block = None
         self._current_step_retry = retry
 
-    def flush_content(self) -> None:
+    def flush_content(self, reason: FlushReason = FlushReason.TURN_END) -> None:
         """Flush the current content block."""
         if self._current_content_block is not None:
             block = self._current_content_block
-            # Finalize must show everything: reveal any still-buffered paced text
-            # so the committed block is complete (no text stranded behind the
-            # reveal cursor).
-            block.reveal_all()
-            block._flush_committed()
-            # A held ToolSearch must appear before the text that follows it.
-            self._flush_held_tool_search()
-            if block.is_think:
-                if block.has_pending():
-                    emit_scrollback_block(console, block.compose_final())
-            else:
-                renderable = block.promote_to_scrollback()
-                if renderable is not None:
-                    emit_scrollback_block(console, renderable)
-                if block.has_expandable_card:
-                    self._completed_expandable_content_blocks.append(block)
+            block.prepare_for_finalize(reason)
             self._current_content_block = None
+            self._finalize_content_block_once(block)
             self.refresh_soon()
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        live = self._live
+        if live is not None:
+            live.update(renderable, refresh=True)
+        emit_scrollback_block(console, renderable)
+
+    def _emit_incremental_scrollback(self, renderable: RenderableType) -> None:
+        emit_scrollback_block(console, renderable)
+
+    def _finalize_content_block_once(self, block: _ContentBlock) -> None:
+        """Promote one content block to scrollback exactly once."""
+        self._flush_held_tool_search()
+        if block.is_think:
+            if block.has_pending():
+                self._emit_final_scrollback(block.compose_final())
+            return
+        renderable = block.promote_to_scrollback()
+        if renderable is not None:
+            self._emit_final_scrollback(renderable)
+        if block.has_expandable_card:
+            self._completed_expandable_content_blocks.append(block)
 
     def _flush_held_tool_search(self) -> None:
         if self._held_tool_search_block is not None:
@@ -1381,7 +1404,10 @@ class _LiveView:
                     )
                     self.refresh_soon()
                 elif self._current_content_block.is_think != is_think:
-                    self.flush_content()
+                    transition = (
+                        FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT
+                    )
+                    self.flush_content(transition)
                     self._current_content_block = _ContentBlock(
                         is_think,
                         show_thinking_stream=self._show_thinking_stream,
@@ -1397,7 +1423,7 @@ class _LiveView:
 
     def append_tool_call(self, tool_call: ToolCall) -> None:
         self._current_step_retry = None
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self._tool_call_blocks[tool_call.id] = _ToolCallBlock(tool_call)
         self._last_tool_call_block = self._tool_call_blocks[tool_call.id]
         self.refresh_soon()
@@ -1472,20 +1498,20 @@ class _LiveView:
         self.refresh_soon()
 
     def display_question_answered(self, event: QuestionAnswered) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         block = _QuestionAnsweredBlock(event)
         _print_action_block(block.compose())
         self.refresh_soon()
 
     def display_progress_note(self, event: ProgressNote) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _ProgressNoteBlock(event)
         _print_action_block(block.compose())
         self.refresh_soon()
 
     def display_suggestion(self, event: Suggestion) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _SuggestionBlock(event)
         _print_action_block(block.compose())
@@ -1538,7 +1564,7 @@ class _LiveView:
 
     def display_plan(self, msg: PlanDisplay) -> None:
         """Render plan content inline in the chat with a bordered panel."""
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         plan_body = Markdown(msg.content)
         panel = render_worklog_card(

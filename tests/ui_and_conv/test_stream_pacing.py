@@ -7,9 +7,13 @@ fast model. Unpaced and thinking blocks reveal immediately (legacy behavior).
 
 from __future__ import annotations
 
+import builtins
+import io
+
 import pytest
 
 from pythinker_code.ui.shell.visualize._blocks import (
+    FlushReason,
     _ContentBlock,
     set_smooth_streaming,
     smooth_streaming_enabled,
@@ -107,3 +111,169 @@ def test_thinking_block_is_never_paced() -> None:
     block.append(_TEXT)
     assert block._revealed_len == len(_TEXT)
     assert block.reveal_tick() is False
+
+
+_LONG_TEXT = _TEXT * 12
+
+
+def test_tool_transition_drains_large_backlog_without_revealing_all() -> None:
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append(_LONG_TEXT)
+    block.reveal_tick()
+    assert block._revealed_len < len(block.raw_text)
+    revealed_before = block._revealed_len
+
+    block.prepare_for_finalize(FlushReason.TOOL_START)
+
+    assert revealed_before < block._revealed_len < len(block.raw_text)
+
+
+def test_turn_end_reveals_all_backlog() -> None:
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append(_LONG_TEXT)
+    block.reveal_tick()
+    block.prepare_for_finalize(FlushReason.TURN_END)
+    assert block._revealed_len == len(block.raw_text)
+
+
+def test_small_backlog_drains_on_tool_transition() -> None:
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append("short backlog")
+    block.prepare_for_finalize(FlushReason.TOOL_START)
+    assert block._revealed_len == len(block.raw_text)
+
+
+def test_reveal_tick_skips_markdown_boundary_scan_without_newline(monkeypatch) -> None:
+    from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+    calls = 0
+
+    def boundary_probe(_text: str) -> int | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    monkeypatch.setattr(blocks_module, "_find_committed_boundary", boundary_probe)
+
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append("word " * 400)
+
+    for _ in range(8):
+        block.reveal_tick()
+
+    assert calls == 0
+
+
+def test_flush_content_does_not_write_hidden_debug_log(monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from pythinker_code.ui.shell.visualize._live_view import _LiveView
+    from pythinker_code.wire.types import StatusUpdate
+
+    opened_paths: list[str] = []
+    original_open = builtins.open
+
+    def record_open(file, *args, **kwargs):  # noqa: ANN001
+        opened_paths.append(str(file))
+        if str(file).endswith(".log"):
+            return io.StringIO()
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.delenv("PYTHINKER_DEBUG_STREAM_PACING", raising=False)
+
+    view = _LiveView(StatusUpdate())
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append(_TEXT)
+    view._current_content_block = block
+
+    with (
+        monkeypatch.context() as ctx,
+        patch("pythinker_code.ui.shell.visualize._live_view.emit_scrollback_block"),
+    ):
+        ctx.setattr(builtins, "open", record_open)
+        view.flush_content(FlushReason.TURN_END)
+
+    assert not any("debug-e13c80.log" in path for path in opened_paths)
+
+
+def test_tool_flush_preserves_full_paced_backlog_in_scrollback() -> None:
+    """Transition flush must promote all raw text, not only the revealed slice."""
+    from unittest.mock import patch
+
+    from rich.console import Console
+
+    from pythinker_code.ui.shell.visualize._live_view import _LiveView
+    from pythinker_code.wire.types import StatusUpdate
+
+    view = _LiveView(StatusUpdate())
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append(_LONG_TEXT)
+    block.reveal_tick()
+    assert block._revealed_len < len(block.raw_text)
+    view._current_content_block = block
+
+    printed: list[object] = []
+    with patch(
+        "pythinker_code.ui.shell.visualize._live_view.emit_scrollback_block",
+        side_effect=lambda _console, renderable: printed.append(renderable),
+    ):
+        view.flush_content(FlushReason.TOOL_START)
+
+    assert view._current_content_block is None
+    assert block._revealed_len < len(block.raw_text)
+    assert len(printed) == 1
+    rec = Console(record=True, width=120, color_system=None)
+    rec.print(printed[0])
+    output = rec.export_text()
+    # Full raw text must appear (line wraps may insert newlines in export).
+    normalized = "".join(output.split())
+    assert "".join(_LONG_TEXT.split()) in normalized
+
+
+def test_flush_content_finalizes_without_reparsing_full_tail(monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+    from pythinker_code.ui.shell.visualize._live_view import _LiveView
+    from pythinker_code.wire.types import StatusUpdate
+
+    calls = 0
+
+    def boundary_probe(_text: str) -> int | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    view = _LiveView(StatusUpdate())
+    block = _ContentBlock(is_think=False, paced=True)
+    block.append("First paragraph.\n\nSecond paragraph still streaming.")
+    block.reveal_tick()
+    view._current_content_block = block
+
+    with (
+        monkeypatch.context() as ctx,
+        patch("pythinker_code.ui.shell.visualize._live_view.emit_scrollback_block"),
+    ):
+        ctx.setattr(blocks_module, "_find_committed_boundary", boundary_probe)
+        view.flush_content(FlushReason.TURN_END)
+
+    assert calls == 0
+
+
+def test_live_view_enables_pacing_from_smooth_streaming_flag(monkeypatch) -> None:
+    import importlib
+
+    live_view_module = importlib.import_module("pythinker_code.ui.shell.visualize._live_view")
+    _LiveView = live_view_module._LiveView
+    from pythinker_code.wire.types import StatusUpdate, TextPart
+
+    set_smooth_streaming(True)
+    monkeypatch.setattr(live_view_module, "reduced_motion_enabled", lambda: False)
+
+    view = _LiveView(StatusUpdate())
+    view.append_content(TextPart(text=_TEXT))
+
+    block = view._current_content_block
+    assert block is not None
+    assert block._paced is True
+    assert block._revealed_len == 0

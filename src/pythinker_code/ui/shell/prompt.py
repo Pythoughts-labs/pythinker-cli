@@ -795,6 +795,21 @@ def _fit_formatted_text_to_rows(
         tail_rows = tail_rows[: max(0, max_rows - 2)]
 
     content_rows = max(0, max_rows - 1 - len(tail_rows))
+    # region agent log
+    _agent_prompt_debug_log(
+        "H8",
+        "src/pythinker_code/ui/shell/prompt.py:_fit_formatted_text_to_rows",
+        "prompt preamble clipped to row budget",
+        {
+            "columns": columns,
+            "rowsBefore": len(rows),
+            "maxRows": max_rows,
+            "preserveTailRows": preserve_tail_rows,
+            "tailRows": len(tail_rows),
+            "contentRowsKeptFromHead": content_rows,
+        },
+    )
+    # endregion
     if content_rows == 0:
         return FormattedText(
             [("class:dim", _truncate_right("… output clipped to fit terminal", columns))]
@@ -1856,6 +1871,39 @@ class UserInput(BaseModel):
 
 _IDLE_REFRESH_INTERVAL = 1.0
 _RUNNING_REFRESH_INTERVAL = 0.1
+
+# region agent log
+_AGENT_PROMPT_DEBUG_LOG_PATH = (
+    "/Users/panda/Projects/active/Projects/pythinker-code-main/.cursor/debug-e13c80.log"
+)
+_AGENT_PROMPT_DEBUG_SESSION_ID = "e13c80"
+_AGENT_PROMPT_DEBUG_RUN_ID = "post-fix"
+
+
+def _agent_prompt_debug_log(
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any],
+) -> None:
+    payload = {
+        "sessionId": _AGENT_PROMPT_DEBUG_SESSION_ID,
+        "id": f"log_{time.time_ns()}_{random.randrange(1_000_000)}",
+        "timestamp": int(time.time() * 1000),
+        "runId": _AGENT_PROMPT_DEBUG_RUN_ID,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+    }
+    try:
+        with open(_AGENT_PROMPT_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+# endregion
 
 _GIT_BRANCH_TTL = 5.0
 _GIT_STATUS_TTL = 15.0
@@ -3228,6 +3276,16 @@ class CustomPromptSession:
         agent_status = self._render_agent_status(columns)
         body = self._render_interactive_body(columns)
         pinned = self._render_pinned_status_tail(columns)
+        agent_status_rows = (
+            len(_formatted_text_display_rows(agent_status, columns))
+            if agent_status and any(fragment for _, fragment, *_ in agent_status)
+            else 0
+        )
+        body_rows = (
+            len(_formatted_text_display_rows(body, columns))
+            if body and any(fragment for _, fragment, *_ in body)
+            else 0
+        )
         pinned_rows = (
             len(_formatted_text_display_rows(pinned, columns))
             if pinned and any(fragment for _, fragment, *_ in pinned)
@@ -3235,6 +3293,26 @@ class CustomPromptSession:
         )
         max_rows = _prompt_preamble_max_rows(getattr(size, "rows", None))
         modal_active = self._active_modal_delegate() is not None
+        # region agent log
+        if agent_status_rows or body_rows or pinned_rows:
+            _agent_prompt_debug_log(
+                "H8,H9",
+                "src/pythinker_code/ui/shell/prompt.py:CustomPromptSession._render_agent_prompt_message",
+                "agent prompt preamble row budget",
+                {
+                    "columns": columns,
+                    "terminalRows": getattr(size, "rows", None),
+                    "maxRows": max_rows,
+                    "agentStatusRows": agent_status_rows,
+                    "bodyRows": body_rows,
+                    "pinnedRows": pinned_rows,
+                    "modalActive": modal_active,
+                    "runningDelegate": self._running_prompt_delegate is not None,
+                    "activeModal": self._active_modal_delegate() is not None,
+                    "willClip": agent_status_rows + body_rows + pinned_rows > max_rows,
+                },
+            )
+        # endregion
 
         if getattr(self, "_shortcut_help_open", False) and not modal_active:
             fragments.extend(self._render_shortcut_help(columns))

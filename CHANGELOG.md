@@ -21,6 +21,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
   streaming preview now runs the same lightweight space-column normalizer used at
   finalize and wraps long `Severity`/`Location`/`What` rows with a hanging
   continuation indent, so wrapped fragments no longer orphan at column 0.
+- **TUI streaming finalize continuity and interrupt safety.** Content blocks
+  promote to scrollback once with a paint-before-print step in Rich Live mode;
+  interrupted open ` ```report ` fences show a short note instead of raw JSON in
+  scrollback; paced transitions use bounded reveal instead of dumping large
+  backlogs before tool cards.
 - **ToolSearch hidden from models that can't use it.** `ToolSearch` is now offered
   only when the active model genuinely supports the deferred tool-search workflow
   (Anthropic's `tool_reference`/`defer_loading` beta on `api.anthropic.com`). The

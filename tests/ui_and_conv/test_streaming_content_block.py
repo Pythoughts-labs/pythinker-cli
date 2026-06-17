@@ -17,6 +17,7 @@ from pythinker_code.ui.shell.visualize import (
     _truncate_to_display_width,
     _wrap_preview_line,
 )
+from pythinker_code.ui.shell.visualize._blocks import FlushReason
 from pythinker_code.ui.theme import tui_rich_style
 
 # ---------------------------------------------------------------------------
@@ -775,3 +776,655 @@ class TestSpaceAlignedPreviewWrapping:
         assert "Severity: medium" in output
         assert "Severity  medium" not in output
         assert _preview_orphan_lines(output) == []
+
+
+# ---------------------------------------------------------------------------
+# Incomplete ```report fence suppression in the active streaming preview
+# ---------------------------------------------------------------------------
+# Root cause: the transient preview renders the uncommitted pending tail as
+# plain text. An unterminated ```report fence is held in the pending buffer
+# (markdown can't commit an open fence), so the raw findings JSON would leak
+# token-by-token. The preview suppresses only the *open* report fence; ordinary
+# fences keep streaming and the finalized report panel is unchanged.
+# See tasks/streaming-render-rootcause.md.
+
+_PARTIAL_REPORT_STREAM = (
+    "Verification\n\n"
+    "Findings:\n\n"
+    "```report\n"
+    '{"title": "LSP module review", "findings": [\n'
+    '  {"title": "Diagnostic dedup", "severity": "low", '
+    '"location": "x.py:1", "body": "details'
+)
+
+_COMPLETE_REPORT_STREAM = (
+    "Findings:\n\n"
+    "```report\n"
+    '{"title": "LSP module review", "findings": '
+    '[{"title": "Diagnostic dedup", "severity": "low", '
+    '"location": "x.py:1", "body": "details"}]}\n'
+    "```\n\n"
+    "Overall the module is in good shape.\n"
+)
+
+_JSON_LEAK_TOKENS = ('"title"', '"severity"', '"location"', '"body"', "},", "{")
+
+
+class TestReportFenceSuppression:
+    def test_helper_replaces_open_report_body_with_placeholder(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_report_fence_preview(_PARTIAL_REPORT_STREAM)
+        assert "collecting findings" in out
+        assert "Findings:" in out
+        assert "```report" not in out
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in out, f"{token!r} leaked through suppression"
+
+    def test_helper_leaves_closed_report_block_untouched(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_report_fence_preview(_COMPLETE_REPORT_STREAM)
+        assert out == _COMPLETE_REPORT_STREAM
+
+    def test_helper_ignores_ordinary_code_fence(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        text = 'Example:\n\n```python\nprint("hello")'
+        assert blocks_module._suppress_unclosed_report_fence_preview(text) == text
+
+    def test_helper_no_report_fence_is_noop(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        text = "Just some prose with no fences at all."
+        assert blocks_module._suppress_unclosed_report_fence_preview(text) == text
+
+    def test_normalize_preview_suppresses_open_report_fence(self):
+        normalized = _normalize_streaming_preview_text(_PARTIAL_REPORT_STREAM)
+        assert "collecting findings" in normalized
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in normalized
+
+    def test_composing_preview_hides_partial_report_json(self):
+        block = _ContentBlock(is_think=False)
+        for i in range(0, len(_PARTIAL_REPORT_STREAM), 17):
+            block.append(_PARTIAL_REPORT_STREAM[i : i + 17])
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        assert "Composing" in output
+        assert "Findings:" in output  # streamed prose before the fence stays visible
+        assert "collecting findings" in output
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in output, f"{token!r} leaked into the active preview"
+
+    def test_paced_composing_preview_hides_partial_report_json(self):
+        block = _ContentBlock(is_think=False, paced=True)
+        for i in range(0, len(_PARTIAL_REPORT_STREAM), 13):
+            block.append(_PARTIAL_REPORT_STREAM[i : i + 13])
+        for _ in range(200):
+            if not block.reveal_tick():
+                break
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in output, f"{token!r} leaked into the paced preview"
+
+    def test_ordinary_code_fence_still_streams_in_preview(self):
+        """Closed ordinary fences stream through the preview untouched.
+
+        Only the *open* body is held back; a fully-closed ```` ```python ````
+        block must reach the preview verbatim because the finalize path will
+        commit the whole block in one go. (See ``TestCodeFenceSuppression``
+        for the open-fence contract.)
+        """
+        block = _ContentBlock(is_think=False)
+        text = 'Example:\n\n```python\nprint("hello")\n```'
+        for ch in text:
+            block.append(ch)
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        assert 'print("hello")' in console.export_text()
+
+    def test_completed_report_still_renders_clean_panel(self):
+        block = _ContentBlock(is_think=False)
+        for ch in _COMPLETE_REPORT_STREAM:
+            block.append(ch)
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=100, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        # Final scrollback is the clean panel: title + finding visible, raw JSON gone.
+        assert "LSP module review" in output
+        assert "Diagnostic dedup" in output
+        assert '"severity"' not in output
+        assert "collecting findings" not in output
+
+
+# ---------------------------------------------------------------------------
+# Open ```python / ```ts / ```json … fence suppression in the active preview
+# ---------------------------------------------------------------------------
+# Root cause (paired with ``tasks/streaming-render-rootcause.md``): the transient
+# composing preview renders the uncommitted pending tail as plain text. An
+# unterminated ```` ```python ```` fence is held in the pending buffer (markdown
+# can't commit an open fence), so the raw code — including long hard-coded
+# paths, the unclosed ```` ``` ```` marker, and the streaming caret — would
+# otherwise leak token-by-token and wrap badly inside the Live area. We hold
+# the open body back behind a stable placeholder; once the matching closer
+# arrives the helper returns the text unchanged so the finalize path commits
+# the full block. ```` ```report ```` is intentionally excluded — it has its
+# own, more specific suppression so streaming findings JSON does not flash a
+# misleading "code block" placeholder mid-report.
+
+_OPEN_PYTHON_FENCE_STREAM = (
+    "Evidence: The diff adds:\n\n"
+    "```python\n"
+    "_AGENT_DEBUG_LOG_PATH = '/Users/panda/Projects/active/Projects/pythinker-code-main/.cursor/debug-e13c80.log'\n"
+    "_FENCE_OPEN_RE = re.compile(r'(?m)^(```|~~~)([^\\n]*)$')\n"
+)
+
+_CLOSED_PYTHON_FENCE_STREAM = (
+    "Evidence: The diff adds:\n\n```python\n_PATH = '/tmp/example.log'\nprint(_PATH)\n```\n"
+)
+
+_TILDE_OPEN_FENCE_STREAM = "Intro:\n\n~~~ts\nconst x: number = 1;\n"
+_TILDE_CLOSED_FENCE_STREAM = "Intro:\n\n~~~ts\nconst x: number = 1;\n~~~\n"
+
+_NO_LANG_OPEN_FENCE_STREAM = "Intro:\n\n```\nplain text inside fence\n"
+
+_CODE_LEAK_TOKENS = (
+    "_AGENT_DEBUG_LOG_PATH",
+    "_FENCE_OPEN_RE",
+    "re.compile",
+    "/Users/panda/Projects",
+)
+
+
+class TestCodeFenceSuppression:
+    def test_helper_replaces_open_python_body_with_placeholder(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_code_fence_preview(_OPEN_PYTHON_FENCE_STREAM)
+        assert "Evidence: The diff adds:" in out
+        assert "streaming code block" in out
+        assert "python" in out  # language tag surfaces in the placeholder
+        assert "```python" not in out
+        for token in _CODE_LEAK_TOKENS:
+            assert token not in out, f"{token!r} leaked through suppression"
+
+    def test_helper_leaves_closed_code_block_untouched(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_code_fence_preview(_CLOSED_PYTHON_FENCE_STREAM)
+        assert out == _CLOSED_PYTHON_FENCE_STREAM
+        assert "_PATH" in out
+        assert "print(_PATH)" in out
+
+    def test_helper_supports_tilde_fence(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        open_out = blocks_module._suppress_unclosed_code_fence_preview(_TILDE_OPEN_FENCE_STREAM)
+        assert "const x" not in open_out
+        assert "streaming code block" in open_out
+        assert "ts" in open_out
+
+        closed_out = blocks_module._suppress_unclosed_code_fence_preview(_TILDE_CLOSED_FENCE_STREAM)
+        assert closed_out == _TILDE_CLOSED_FENCE_STREAM
+
+    def test_helper_leaves_bare_fence_line_untouched(self):
+        """A bare triple-backtick line is structurally a closer in this
+        codebase (``_FENCE_CLOSE_RE``), so an opener without a language tag
+        cannot be told apart from a closer. The helper intentionally
+        suppresses only fences that carry a language tag; otherwise it would
+        risk eating real closers. Confirms the conservative contract.
+        """
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_code_fence_preview(_NO_LANG_OPEN_FENCE_STREAM)
+        assert out == _NO_LANG_OPEN_FENCE_STREAM
+
+    def test_helper_does_not_touch_report_fence(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_code_fence_preview(_PARTIAL_REPORT_STREAM)
+        # ```report is excluded; raw JSON must reach the report-suppression stage.
+        assert "```report" in out
+
+    def test_helper_no_fence_is_noop(self):
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        text = "Just some prose with no fences at all."
+        assert blocks_module._suppress_unclosed_code_fence_preview(text) == text
+
+    def test_normalize_preview_suppresses_open_code_fence(self):
+        normalized = _normalize_streaming_preview_text(_OPEN_PYTHON_FENCE_STREAM)
+        assert "streaming code block" in normalized
+        for token in _CODE_LEAK_TOKENS:
+            assert token not in normalized
+
+    def test_composing_preview_hides_open_python_fence(self):
+        block = _ContentBlock(is_think=False)
+        block.append(_OPEN_PYTHON_FENCE_STREAM)
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        assert "Composing" in output
+        assert "Evidence: The diff adds:" in output
+        assert "streaming code block" in output
+        for token in _CODE_LEAK_TOKENS:
+            assert token not in output, f"{token!r} leaked into the active preview"
+        # The raw open fence marker must not be shown mid-stream.
+        assert "```python" not in output
+
+    def test_composing_preview_keeps_closed_python_fence_visible(self):
+        block = _ContentBlock(is_think=False)
+        for ch in _CLOSED_PYTHON_FENCE_STREAM:
+            block.append(ch)
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        assert "Composing" in output
+        assert "_PATH" in output
+        assert "print(_PATH)" in output
+        assert "```python" in output
+
+    def test_paced_composing_preview_hides_open_python_fence(self):
+        block = _ContentBlock(is_think=False, paced=True)
+        block.append(_OPEN_PYTHON_FENCE_STREAM)
+        for _ in range(200):
+            if not block.reveal_tick():
+                break
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        for token in _CODE_LEAK_TOKENS:
+            assert token not in output, f"{token!r} leaked into the paced preview"
+        assert "```python" not in output
+
+    def test_composing_status_is_not_in_committed_body(self):
+        """The Composing status row is pinned above the preview — it must never
+        become part of the committed markdown body that scrolls into history.
+        """
+        block = _ContentBlock(is_think=False)
+        for ch in _OPEN_PYTHON_FENCE_STREAM:
+            block.append(ch)
+        # Stage some committed prose before the fence.
+        block.append("Evidence: The diff adds:\n\n")
+        assert block._committed_renderables
+        # The Composing label is rendered by ``_compose_spinner``; verify it
+        # never appears inside the committed renderables.
+        for renderable in block._committed_renderables:
+            console = Console(record=True, width=100, color_system=None)
+            console.print(renderable)
+            assert "Composing" not in console.export_text()
+
+    def test_finalize_scrollback_still_contains_full_code_block(self):
+        block = _ContentBlock(is_think=False)
+        for ch in _CLOSED_PYTHON_FENCE_STREAM:
+            block.append(ch)
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=100, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "_PATH" in output
+        assert "print(_PATH)" in output
+        assert "streaming code block" not in output
+
+
+_PARTIAL_INTERRUPTED_REPORT = (
+    'Verification\n\nFindings:\n\n```report\n{"title": "LSP module review", "findings": [{"title":'
+)
+
+
+class TestFinalizeContinuity:
+    def test_promote_to_scrollback_is_idempotent(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append("Hello from the assistant.\n")
+        first = block.promote_to_scrollback()
+        second = block.promote_to_scrollback()
+        assert first is not None
+        assert second is None
+        assert block.is_promoted
+
+    def test_flush_content_uses_single_promotion(self) -> None:
+        from unittest.mock import patch
+
+        from pythinker_code.ui.shell.visualize._live_view import _LiveView
+        from pythinker_code.wire.types import StatusUpdate
+
+        view = _LiveView(StatusUpdate())
+        view._current_content_block = _ContentBlock(is_think=False)
+        view._current_content_block.append("one-shot promotion test")
+        with patch.object(
+            view._current_content_block,
+            "promote_to_scrollback",
+            wraps=view._current_content_block.promote_to_scrollback,
+        ) as promote:
+            view.flush_content()
+            assert promote.call_count == 1
+
+    def test_final_report_does_not_flash_raw_preview(self) -> None:
+        block = _ContentBlock(is_think=False)
+        for ch in _COMPLETE_REPORT_STREAM:
+            block.append(ch)
+        block.prepare_for_finalize(FlushReason.TURN_END)
+        block._flush_committed()
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=100, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "LSP module review" in output
+        assert "collecting findings" not in output
+        assert '"severity"' not in output
+
+
+class TestCancelMidReportFence:
+    def test_sanitize_final_replaces_open_report_body(self) -> None:
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._sanitize_unclosed_report_fence_for_final(_PARTIAL_INTERRUPTED_REPORT)
+        assert "Report generation was interrupted" in out
+        assert "Verification" in out
+        assert "Findings:" in out
+        assert "```report" not in out
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in out
+
+    def test_cancel_mid_report_fence_final_does_not_leak_json(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append(_PARTIAL_INTERRUPTED_REPORT)
+        block.prepare_for_finalize(FlushReason.CANCEL)
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=100, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "interrupted" in output.lower()
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in output
+
+    def test_closed_report_final_unchanged(self) -> None:
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._sanitize_unclosed_report_fence_for_final(_COMPLETE_REPORT_STREAM)
+        assert out == _COMPLETE_REPORT_STREAM
+
+    def test_unclosed_python_fence_final_unchanged(self) -> None:
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        text = 'Example:\n\n```python\nprint("hello")'
+        assert blocks_module._sanitize_unclosed_report_fence_for_final(text) == text
+
+    def test_interrupted_report_does_not_render_fake_panel(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append(_PARTIAL_INTERRUPTED_REPORT)
+        block.prepare_for_finalize(FlushReason.CANCEL)
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        console = Console(record=True, width=100, color_system=None)
+        console.print(renderable)
+        output = console.export_text()
+        assert "LSP module review" not in output
+        assert "interrupted" in output.lower()
+
+
+class TestPreviewCache:
+    def test_preview_cache_reuses_identical_frame(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append("cache me once")
+        pending = block._pending_text()
+        first = block._build_preview_cached(pending, max_lines=12, reserve_caret=True)
+        second = block._build_preview_cached(pending, max_lines=12, reserve_caret=True)
+        assert first == second
+        assert block._preview_text_cache_key is not None
+
+    def test_preview_cache_invalidates_on_append(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append("first")
+        pending = block._pending_text()
+        block._build_preview_cached(pending, max_lines=12, reserve_caret=True)
+        key_before = block._preview_text_cache_key
+        block.append(" second")
+        assert block._preview_text_cache_key is None or block._preview_text_cache_key != key_before
+
+    def test_preview_cache_preserves_report_suppression(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append(_PARTIAL_REPORT_STREAM)
+        pending = block._pending_text()
+        preview = block._build_preview_cached(pending, max_lines=12, reserve_caret=True)
+        assert "collecting findings" in preview
+        for token in _JSON_LEAK_TOKENS:
+            assert token not in preview
+
+
+# ---------------------------------------------------------------------------
+# Active preview row budget — prompt_toolkit preamble clipping
+# ---------------------------------------------------------------------------
+
+_TERMINAL_COLUMNS = 80
+_TERMINAL_ROWS = 24
+
+
+def _tui_design_report_stream() -> str:
+    """Long assistant TUI report with prose, a boxed layer map, and a trailing section."""
+    tree = "\n".join(
+        (
+            "╭────────────────────────────╮",
+            "│ ui/                        │",
+            "│ shell/                     │",
+            "│ visualize/                 │",
+            "│ _blocks.py                 │",
+            "│ _live_view.py              │",
+            "│ _interactive.py            │",
+            "│ prompt.py                  │",
+            "╰────────────────────────────╯",
+        )
+    )
+    return (
+        "Pythinker TUI Design & Render Subsystem\n\n"
+        "1. TUI Architecture\n\n"
+        "The interactive shell routes wire events through visualize and prompt_toolkit "
+        "layers. Committed markdown blocks accumulate in the transient preamble while "
+        "only the pending tail streams in the live preview.\n\n"
+        "2. Render Layer Map\n\n"
+        f"{tree}\n\n"
+        "3. More sections follow with additional streaming content here.\n"
+    )
+
+
+def _stream_tui_report_to_mid_box(block: _ContentBlock) -> str:
+    """Stream through section 2 until the box panel is partially pending."""
+    text = _tui_design_report_stream()
+    cut = text.index("│ _interactive.py")
+    for ch in text[:cut]:
+        block.append(ch)
+    return text
+
+
+def _fit_agent_status_like_prompt(
+    ansi: str,
+    *,
+    columns: int = _TERMINAL_COLUMNS,
+    terminal_rows: int = _TERMINAL_ROWS,
+    pinned: str = "Actioning…",
+) -> str:
+    from prompt_toolkit.formatted_text import FormattedText, to_formatted_text
+
+    from pythinker_code.ui.shell.prompt import CustomPromptSession, _prompt_preamble_max_rows
+
+    max_rows = _prompt_preamble_max_rows(terminal_rows)
+    clipped = CustomPromptSession._fit_preamble_with_pinned_tail(
+        to_formatted_text(ansi),
+        FormattedText([("", f"{pinned}\n")]),
+        columns,
+        max_rows,
+    )
+    return "".join(fragment for _, fragment, *_ in clipped)
+
+
+def _interactive_body_row_budget(terminal_rows: int = _TERMINAL_ROWS) -> int:
+    from pythinker_code.ui.shell.prompt import _prompt_preamble_max_rows
+
+    return max(1, _prompt_preamble_max_rows(terminal_rows) - 1)
+
+
+_PARTIAL_VISUAL_BOX_STREAM = (
+    "2. Render Layer Map\n\n"
+    "╭────────────────────────────╮\n"
+    "│ ui/                        │\n"
+    "│ shell/                     │\n"
+    "│ visualize/                 │\n"
+    "│ _blocks.py                 │\n"
+)
+
+_COMPLETE_VISUAL_BOX_STREAM = (
+    "2. Render Layer Map\n\n"
+    "╭────────────────────────────╮\n"
+    "│ ui/                        │\n"
+    "│ shell/                     │\n"
+    "╰────────────────────────────╯\n"
+)
+
+
+class TestVisualBlockHoldback:
+    def test_helper_replaces_open_box_with_placeholder(self) -> None:
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_visual_block_preview(_PARTIAL_VISUAL_BOX_STREAM)
+        assert "formatting diagram" in out
+        assert "Render Layer Map" in out
+        assert "╭" not in out
+        assert "│ ui/" not in out
+
+    def test_helper_leaves_closed_box_untouched(self) -> None:
+        from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+
+        out = blocks_module._suppress_unclosed_visual_block_preview(_COMPLETE_VISUAL_BOX_STREAM)
+        assert out == _COMPLETE_VISUAL_BOX_STREAM
+
+    def test_normalize_preview_suppresses_open_box(self) -> None:
+        normalized = _normalize_streaming_preview_text(_PARTIAL_VISUAL_BOX_STREAM)
+        assert "formatting diagram" in normalized
+        assert "╭" not in normalized
+
+    def test_composing_preview_hides_partial_box_lines(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append(_PARTIAL_VISUAL_BOX_STREAM)
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        assert "Render Layer Map" in output
+        assert "formatting diagram" in output
+        assert "╭" not in output
+        assert "│ ui/" not in output
+
+    def test_completed_box_still_streams_in_preview(self) -> None:
+        block = _ContentBlock(is_think=False)
+        block.append(_COMPLETE_VISUAL_BOX_STREAM)
+        console = Console(record=True, width=100, color_system=None)
+        console.print(block.compose())
+        output = console.export_text()
+
+        assert "╭" in output
+        assert "╰" in output
+
+
+class TestActivePreviewRowBudget:
+    """Active preview stays within the interactive prompt row budget."""
+
+    def test_compose_fits_preamble_body_budget_when_budget_set(self) -> None:
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        block = _ContentBlock(is_think=False)
+        _stream_tui_report_to_mid_box(block)
+        block.set_preview_row_budget(_interactive_body_row_budget())
+        ansi = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
+
+        assert len(ansi.splitlines()) <= _interactive_body_row_budget()
+
+    def test_prompt_fit_does_not_cut_box_panel_when_budget_set(self) -> None:
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        block = _ContentBlock(is_think=False)
+        _stream_tui_report_to_mid_box(block)
+        block.set_preview_row_budget(_interactive_body_row_budget())
+        ansi = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
+        clipped = _fit_agent_status_like_prompt(ansi)
+
+        assert "output clipped to fit terminal" not in clipped
+        assert "Render Layer Map" in clipped
+        assert "╭" not in clipped
+        assert "formatting diagram" in clipped
+
+    def test_unbudgeted_compose_can_still_exceed_preamble(self) -> None:
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        architecture = "\n\n".join(
+            f"Architecture note {i}: routes wire events through visualize and prompt_toolkit "
+            f"layers with enough prose to grow the transient preamble."
+            for i in range(1, 8)
+        )
+        tree = "\n".join(
+            (
+                "╭────────────────────────────╮",
+                "│ ui/                        │",
+                "│ shell/                     │",
+                "│ visualize/                 │",
+            )
+        )
+        text = (
+            "Pythinker TUI Design & Render Subsystem\n\n"
+            "1. TUI Architecture\n\n"
+            f"{architecture}\n\n"
+            "2. Render Layer Map\n\n"
+            f"{tree}\n"
+        )
+        block = _ContentBlock(is_think=False)
+        block.append(text[: text.index("│ visualize/")])
+        ansi = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
+
+        assert len(ansi.splitlines()) > _interactive_body_row_budget()
+
+    def test_finalize_scrollback_stays_full_while_preview_is_compact(self) -> None:
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        block = _ContentBlock(is_think=False)
+        text = _stream_tui_report_to_mid_box(block)
+        block.set_preview_row_budget(_interactive_body_row_budget())
+        mid_stream = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
+        clipped = _fit_agent_status_like_prompt(mid_stream)
+
+        assert "output clipped to fit terminal" not in clipped
+        assert "╭" not in clipped
+
+        for ch in text[len(block.raw_text) :]:
+            block.append(ch)
+        renderable = block.promote_to_scrollback()
+        assert renderable is not None
+        final = render_to_ansi(renderable, columns=_TERMINAL_COLUMNS)
+        assert "╰" in final
+        assert "More sections follow" in final
+
+
+class TestActivePreviewRowBudgetRepro:
+    """Legacy repro assertions — kept to guard Rich Live / unbudgeted paths."""
+
+    def test_unbudgeted_preview_can_still_show_partial_box_before_holdback_only(self) -> None:
+        """Holdback removes partial boxes even without a row budget."""
+        from pythinker_code.ui.shell.console import render_to_ansi
+
+        block = _ContentBlock(is_think=False)
+        _stream_tui_report_to_mid_box(block)
+        ansi = render_to_ansi(block.compose(), columns=_TERMINAL_COLUMNS)
+
+        assert "formatting diagram" in ansi
+        assert "╭" not in ansi
