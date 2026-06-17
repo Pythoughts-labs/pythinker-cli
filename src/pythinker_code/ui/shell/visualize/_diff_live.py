@@ -59,6 +59,7 @@ def _diff_live_trace(event: str) -> None:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"{time.monotonic():.3f}\t{event}\n")
     except OSError:
+        # Diagnostics-only: never let log I/O failures affect UI rendering.
         pass
 
 

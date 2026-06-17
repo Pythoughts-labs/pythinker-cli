@@ -61,18 +61,17 @@ def _scroll_bytes() -> str:
 
 
 @pytest.mark.parametrize(
-    ("origin", "height", "base_row", "target_row", "expect_cud", "expect_scroll"),
+    ("origin", "height", "target_row", "expect_cud", "expect_scroll"),
     [
-        (0, 40, 1, 5, True, False),
-        (35, 40, 1, 5, False, True),
-        (None, 40, 1, 5, False, True),
-        (0, 40, 1, 40, False, True),
+        (0, 40, 5, True, False),
+        (35, 40, 5, False, True),
+        (None, 40, 5, False, True),
+        (0, 40, 40, False, True),
     ],
 )
 def test_append_row_transition_geometry(
     origin: int | None,
     height: int,
-    base_row: int,
     target_row: int,
     *,
     expect_cud: bool,

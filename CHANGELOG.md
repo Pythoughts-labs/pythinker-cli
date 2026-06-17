@@ -15,6 +15,16 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Fix: tool outputs invisible on Anthropic-compatible proxies (GLM-5.2 via z.ai).**
+  `api.z.ai/api/anthropic` only surfaces the first content block of a multi-part
+  `tool_result`, so the leading `<system>` summary reached GLM-5.2 while the actual tool
+  payload was dropped — every Shell/ReadFile/Grep result read as a "success" summary with
+  no output (reproduced from a live GLM-5.2 session transcript). Tool results are now
+  flattened to a single text block for non-native hosts via a transport-keyed resolver
+  (`resolve_tool_result_mode`), while genuine `api.anthropic.com` keeps the rich
+  multi-part form. The same single-string mode is applied defensively to non-native
+  OpenAI-compatible hosts (lossless for text), most relevant to GLM served over z.ai's
+  OpenAI endpoint; genuine `api.openai.com` is unchanged.
 - **TUI: diff cards strip terminal control sequences.** Inline file-diff bodies
   (Update/Write cards, approval and pager diffs) now sanitize ANSI/control escapes
   from the untrusted file and model-supplied edit content before rendering, so a

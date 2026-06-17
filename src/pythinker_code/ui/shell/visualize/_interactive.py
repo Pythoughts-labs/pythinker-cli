@@ -51,6 +51,7 @@ from pythinker_code.ui.shell.visualize._question_panel import (
 )
 from pythinker_code.ui.theme import tui_rich_style
 from pythinker_code.utils.aioqueue import QueueShutDown
+from pythinker_code.utils.logging import logger
 from pythinker_code.utils.slashcmd import SlashCommandCall
 from pythinker_code.wire import WireUISide
 from pythinker_code.wire.types import (
@@ -159,6 +160,7 @@ class _PromptLiveView(_LiveView):
         self._status_refresh_task: asyncio.Task[None] | None = None
         self._pending_scrollback: list[tuple[RenderableType, bool]] = []
         self._scrollback_handoff_depth: int = 0
+        self._scrollback_flush_lock = asyncio.Lock()
         self._last_terminal_size: tuple[int, int] | None = None
         self._resize_recovery_remaining: int = 0
 
@@ -209,6 +211,7 @@ class _PromptLiveView(_LiveView):
             self._prompt_session.invalidate()
         except Exception as exc:  # noqa: BLE001 — invalidate must never abort handoff cleanup
             _handoff_trace(f"INVALIDATE_FAIL\t{type(exc).__name__}:{exc}")
+            logger.debug("Prompt invalidation failed during scrollback handoff: {}", exc)
 
     def _prompt_is_finalizing(self) -> bool:
         """True while scrollback is queued or being emitted above the prompt."""
@@ -399,26 +402,35 @@ class _PromptLiveView(_LiveView):
         while terminal geometry is settling after a resize unless ``force`` is set
         (e.g. outermost turn end must not leave completed prose stuck finalizing).
         """
-        if not self._pending_scrollback:
-            return
-        if not force and self._defer_scrollback_handoff():
-            _handoff_trace(f"HANDOFF_DEFER\tpending_scrollback({len(self._pending_scrollback)})")
-            return
-        batch = self._pending_scrollback[:]
+        async with self._scrollback_flush_lock:
+            if not self._pending_scrollback:
+                return
+            if not force and self._defer_scrollback_handoff():
+                _handoff_trace(
+                    f"HANDOFF_DEFER\tpending_scrollback({len(self._pending_scrollback)})"
+                )
+                return
+            batch = self._pending_scrollback[:]
 
-        def emit() -> None:
-            for renderable, blank_row in batch:
-                console.print(renderable)
-                if blank_row:
-                    console.print()
+            def emit() -> None:
+                for renderable, blank_row in batch:
+                    console.print(renderable)
+                    if blank_row:
+                        console.print()
 
-        try:
-            await self._run_scrollback_handoff(emit, reason=f"pending_scrollback({len(batch)})")
-        except Exception:
-            return
+            try:
+                await self._run_scrollback_handoff(
+                    emit, reason=f"pending_scrollback({len(batch)})"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to flush pending scrollback; retaining {} queued blocks",
+                    len(batch),
+                )
+                return
 
-        del self._pending_scrollback[: len(batch)]
-        self._safe_prompt_invalidate()
+            del self._pending_scrollback[: len(batch)]
+            self._safe_prompt_invalidate()
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))
@@ -517,14 +529,14 @@ class _PromptLiveView(_LiveView):
                         self._flush_prompt_refresh()
                         continue
                     self.cleanup(is_interrupt=False)
-                    await self._flush_pending_scrollback()
+                    await self._flush_pending_scrollback(force=True)
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, StepInterrupted):
                     self.cleanup(is_interrupt=True)
-                    await self._flush_pending_scrollback()
+                    await self._flush_pending_scrollback(force=True)
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
