@@ -119,6 +119,18 @@ class TestParamsJsonStringCoercion:
         assert params.todos[0].title == "Explore agent"
         assert params.todos[0].status == "pending"
 
+    def test_content_alias_in_json_string_normalizes_to_title(self):
+        """JSON-encoded todos must still run ``content`` → ``title`` normalization."""
+        import json
+
+        raw = json.dumps(
+            [{"id": "1", "content": "Map agent output handling", "status": "in_progress"}]
+        )
+        params = Params(todos=raw)  # type: ignore[arg-type]
+        assert params.todos is not None
+        assert params.todos[0].title == "Map agent output handling"
+        assert params.todos[0].status == "in_progress"
+
     def test_todos_as_normal_list_still_works(self):
         params = Params(todos=[Todo(title="Normal task", status="done")])
         assert params.todos is not None

@@ -394,6 +394,10 @@ async def _run_git_check_ignore(cwd: str, paths: list[str]) -> tuple[bool, str]:
             proc.stdout.read(-1),
             timeout=_GIT_CHECK_IGNORE_TIMEOUT,
         )
+        stderr_bytes = await asyncio.wait_for(
+            proc.stderr.read(-1),
+            timeout=_GIT_CHECK_IGNORE_TIMEOUT,
+        )
         exit_code = await asyncio.wait_for(proc.wait(), timeout=_GIT_CHECK_IGNORE_TIMEOUT)
         if exit_code == 0:
             return True, stdout_bytes.decode("utf-8", errors="replace")
@@ -401,7 +405,15 @@ async def _run_git_check_ignore(cwd: str, paths: list[str]) -> tuple[bool, str]:
             return True, ""
         # Outside a git work tree there is no ignore metadata to apply.
         if exit_code == 128:
-            return True, ""
+            stderr = stderr_bytes.decode("utf-8", errors="replace").strip().lower()
+            if "not a git repository" in stderr:
+                return True, ""
+            logger.debug(
+                "git check-ignore failed in {cwd} with fatal exit 128: {stderr}",
+                cwd=cwd,
+                stderr=stderr,
+            )
+            return False, ""
         logger.debug(
             "git check-ignore failed in {cwd} with exit code {code}",
             cwd=cwd,

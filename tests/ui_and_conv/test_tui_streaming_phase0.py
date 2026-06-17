@@ -40,11 +40,15 @@ async def test_frame_scheduler_coalesces_multiple_deltas(live_view: _LiveView) -
     live_view.refresh_soon()
     live_view.refresh_soon()
 
-    with patch.object(live_view, "compose", return_value=Text("composed")):
+    updated = asyncio.Event()
+
+    def _mark_updated(*_args: object, **_kwargs: object) -> Text:
+        updated.set()
+        return Text("composed")
+
+    with patch.object(live_view, "compose", side_effect=_mark_updated):
         task = asyncio.create_task(live_view._frame_refresh_loop(live))
-        deadline = asyncio.get_running_loop().time() + 0.25
-        while live.update.call_count == 0 and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(updated.wait(), timeout=0.25)
         task.cancel()
         with suppress(asyncio.CancelledError):
             _ = await task

@@ -31,7 +31,6 @@ from pythinker_code.ui.shell.console import (
 from pythinker_code.ui.shell.echo import render_user_echo_text
 from pythinker_code.ui.shell.keyboard import KeyEvent
 from pythinker_code.ui.shell.motion import (
-    STREAM_FRAME_INTERVAL_S,
     reduced_motion_enabled,
     stream_reveal_interval_s,
 )
@@ -78,9 +77,6 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
-# Fast tick while paced streamed text is actively revealing (~25 fps) so the
-# reveal animates smoothly; falls back to the status cadence when idle.
-_STREAM_REVEAL_INTERVAL_S = STREAM_FRAME_INTERVAL_S
 
 
 class _PromptLiveView(_LiveView):

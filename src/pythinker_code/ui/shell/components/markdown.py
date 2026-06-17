@@ -18,8 +18,13 @@ from pythinker_code.ui.shell.markdown import (
     pythinker_markdown,
     pythinker_report_markdown,
 )
-from pythinker_code.ui.shell.markdown.elements import _BorderedCodeBlock, _ReportTableElement
-from pythinker_code.ui.shell.markdown.normalizers import (
+
+# Private re-exports consumed by tests and characterization pins (F401: listed in __all__).
+from pythinker_code.ui.shell.markdown.elements import (  # noqa: F401
+    _BorderedCodeBlock,
+    _ReportTableElement,
+)
+from pythinker_code.ui.shell.markdown.normalizers import (  # noqa: F401
     _escape_code_span_pipes,
     _loosen_tight_ordered_lists,
     _normalize_markdown_tables,
@@ -38,8 +43,8 @@ from pythinker_code.ui.shell.markdown.normalizers import (
     simplify_markdown_report_icons,
     unwrap_fenced_markdown_tables,
 )
-from pythinker_code.ui.shell.markdown.renderer import _markdown_style_overrides
-from pythinker_code.ui.shell.markdown.streaming import (
+from pythinker_code.ui.shell.markdown.renderer import _markdown_style_overrides  # noqa: F401
+from pythinker_code.ui.shell.markdown.streaming import (  # noqa: F401
     _get_md_parser,
     _markdown_commit_boundary_cached,
 )

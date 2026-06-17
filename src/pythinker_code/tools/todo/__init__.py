@@ -94,9 +94,11 @@ class Params(BaseModel):
         # LLMs occasionally pass the list as a JSON-encoded string; parse it transparently.
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                parsed = json.loads(v)
             except json.JSONDecodeError:
-                pass
+                return v
+            normalized = normalize_set_todo_list_args({"todos": parsed})
+            return normalized.get("todos", parsed)
         return v
 
 

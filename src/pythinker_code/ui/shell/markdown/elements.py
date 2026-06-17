@@ -197,3 +197,10 @@ class BorderedCodeBlock(CodeBlock):
 # Backward-compatible aliases for tests importing private names.
 _ReportTableElement = ReportTableElement
 _BorderedCodeBlock = BorderedCodeBlock
+
+__all__ = [
+    "BorderedCodeBlock",
+    "ReportTableElement",
+    "_BorderedCodeBlock",
+    "_ReportTableElement",
+]
