@@ -2203,8 +2203,8 @@ class Shell:
         if not target:
             return None
         # A release already installed this session needs a restart, not /update —
-        # keep this line in agreement with the install toast instead of telling
-        # the user to re-run an update that has already landed.
+        # surface that here instead of telling the user to re-run an update that
+        # has already landed.
         status = read_update_status()
         installed = (
             status is not None
@@ -2223,12 +2223,12 @@ class Shell:
         """Pick the startup update behavior and schedule it (non-blocking).
 
         - env kill-switch set → nothing (cache filters already suppress the
-          toast, matching today's hard-disable behavior).
+          notice, matching today's hard-disable behavior).
         - enabled → silent background install.
-        - config-disabled OR source checkout → informational toast only
-          (`_auto_update`); self-suppresses for source checkouts because
+        - config-disabled OR source checkout → refresh the persistent notice
+          only (`_auto_update`); self-suppresses for source checkouts because
           `pending_update_notice()` returns None in that path.
-        - non-PythinkerSoul → same toast-only path (no runtime config to
+        - non-PythinkerSoul → same notice-refresh path (no runtime config to
           consult), matching the prior unconditional `_auto_update` behavior.
         """
         if get_env_bool("PYTHINKER_CLI_NO_AUTO_UPDATE"):
