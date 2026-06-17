@@ -46,6 +46,10 @@ def _render_enter_result(
 ) -> RenderableType | None:
     if not result.text:
         return None
+    # Errors must not be reported as a successful switch — surface the raw
+    # error text and skip the "Switched to worktree" header. C01.
+    if result.is_error:
+        return fg("error", result.text.rstrip("\n"))
     meta = _metadata(result.text)
     path = meta.get("worktree_path", "")
     header = Text("Switched to worktree", style=tui_rich_style("tool_output"))
@@ -59,6 +63,10 @@ def _render_exit_result(
 ) -> RenderableType | None:
     if not result.text:
         return None
+    # Errors must not be reported as a successful keep/remove — surface the
+    # raw error text and skip the keep/remove header. C01.
+    if result.is_error:
+        return fg("error", result.text.rstrip("\n"))
     meta = _metadata(result.text)
     retained = meta.get("retained", "").lower() == "true"
     label = "Kept worktree" if retained else "Removed worktree"

@@ -929,11 +929,12 @@ async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkey
         func()
 
     monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
-    monkeypatch.setattr(
-        _live_view_mod.console,
-        "print",
-        lambda *args, **kwargs: printed.extend(args) if args else None,
-    )
+
+    def _record_print(*args: object, **_kwargs: object) -> None:
+        if args:
+            printed.extend(args)
+
+    monkeypatch.setattr(_live_view_mod.console, "print", _record_print)
 
     view = _PromptLiveView(
         StatusUpdate(),
@@ -941,6 +942,9 @@ async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkey
         steer=lambda _content: None,
     )
     task = asyncio.create_task(view.visualize_loop(cast(Any, _Wire())))
+    # The task is consumed in the finally block; this reference keeps
+    # the assignment from being flagged as a no-op by static analysis.
+    assert task is not None
     try:
         for _ in range(20):
             if view._turn_ended:

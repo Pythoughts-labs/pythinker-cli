@@ -44,7 +44,6 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
 from pythinker_code.ui.shell.motion import (
-    STREAM_FPS,
     STREAM_FRAME_INTERVAL_S,
     ActivitySnapshot,
     active_marker_frame,
@@ -349,18 +348,64 @@ class _LiveView:
                 return
             await asyncio.sleep(stream_reveal_interval_s())
 
+    async def _dispatch_collected_messages(
+        self,
+        messages: list[WireMessage],
+        *,
+        from_external: bool,
+        live: DiffLive,
+    ) -> None:
+        """Dispatch messages already accumulated during a wire batch.
+
+        Used on the wire-shutdown path: ``_extend_wire_batch`` returns a
+        ``wire_closed`` flag, and the caller can then flush the buffered
+        messages through the same logic the normal loop uses (transition
+        drain, dispatch, refresh) before re-raising ``QueueShutDown`` to
+        run cleanup. The duplication of the dispatch loop here is
+        intentional — it keeps the shutdown path independent of the live
+        loop body and avoids dropping the final ``TurnEnd``/``ToolResult``.
+        """
+        for msg in messages:
+            if isinstance(msg, StepInterrupted):
+                self.cleanup(is_interrupt=True)
+                self._flush_live_refresh(live, force=True)
+                return
+            if reason := self._transition_flush_reason(msg):
+                await self._drain_content_for_transition(reason)
+            self.dispatch_wire_message(msg)
+            if from_external:
+                self._flush_live_refresh(live, force=True)
+
     async def _extend_wire_batch(
         self,
         wire: WireUISide,
         wire_task: asyncio.Task[WireMessage],
         messages: list[WireMessage],
-    ) -> asyncio.Task[WireMessage]:
-        """Coalesce bursty wire delivery before dispatch (short batch window)."""
+    ) -> tuple[asyncio.Task[WireMessage], bool]:
+        """Coalesce bursty wire delivery before dispatch (short batch window).
+
+        Returns the (possibly new) ``wire_task`` plus a ``wire_closed`` flag.
+        The flag is ``True`` when the wire is shut down before the batch
+        window closes so the caller can dispatch the accumulated ``messages``
+        before running shutdown cleanup. Without this guard, a final
+        ``TurnEnd``/``ToolResult`` arriving just before shutdown could be
+        dropped because the next ``wire.receive()`` raises ``QueueShutDown``
+        and unwinds out of this coroutine.
+        """
         deadline = time.monotonic() + _COMPOSE_BATCH_MAX_DURATION_S
         while time.monotonic() < deadline:
             if wire_task.done():
-                messages.append(wire_task.result())
-                wire_task = asyncio.create_task(wire.receive())
+                try:
+                    messages.append(wire_task.result())
+                except QueueShutDown:
+                    return wire_task, True
+                try:
+                    wire_task = asyncio.create_task(wire.receive())
+                except RuntimeError:
+                    # wire.receive() refused to create a new task because
+                    # the wire is already shut down — treat as a closed
+                    # wire so the caller dispatches ``messages`` and exits.
+                    return wire_task, True
                 continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -370,9 +415,15 @@ class _LiveView:
                 timeout=min(_COMPOSE_BATCH_PERIOD_S, remaining),
             )
             if wire_task in done:
-                messages.append(wire_task.result())
-                wire_task = asyncio.create_task(wire.receive())
-        return wire_task
+                try:
+                    messages.append(wire_task.result())
+                except QueueShutDown:
+                    return wire_task, True
+                try:
+                    wire_task = asyncio.create_task(wire.receive())
+                except RuntimeError:
+                    return wire_task, True
+        return wire_task, False
 
     async def _frame_refresh_loop(self, live: DiffLive) -> None:
         """Coalesce wire-driven repaints to the streaming frame budget."""
@@ -419,14 +470,13 @@ class _LiveView:
         return DiffLive(
             console=console,
             transient=True,
-            get_renderable=lambda: self.compose(),
+            get_renderable=self.compose,
         )
 
     async def visualize_loop(self, wire: WireUISide):
         live = self._open_live_region()
         with live:
-            if isinstance(live, DiffLive):
-                live.refresh()
+            live.refresh()
             self._live = live
 
             async def keyboard_handler(listener: KeyboardListener, event: KeyEvent) -> None:
@@ -513,7 +563,18 @@ class _LiveView:
                                 msg = wire_task.result()
                                 wire_task = asyncio.create_task(wire.receive())
                                 messages = [msg]
-                                wire_task = await self._extend_wire_batch(wire, wire_task, messages)
+                                wire_task, wire_closed = await self._extend_wire_batch(
+                                    wire, wire_task, messages
+                                )
+                                if wire_closed:
+                                    # Wire shut down mid-batch — dispatch the
+                                    # buffered messages and then run the
+                                    # standard shutdown path so nothing is
+                                    # dropped on the floor.
+                                    await self._dispatch_collected_messages(
+                                        messages, from_external=from_external, live=live
+                                    )
+                                    raise QueueShutDown
                             else:
                                 msg = external_task.result()
                                 external_task = asyncio.create_task(self._external_messages.get())

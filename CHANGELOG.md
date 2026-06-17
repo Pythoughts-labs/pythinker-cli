@@ -18,6 +18,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **TUI tool-card diffs use syntax highlighting.** Edit/Write inline diffs now share the
   approval/pager ``PythinkerSyntax`` pipeline (``tui.code_theme``, file-extension lexer) while
   keeping the compact boxless card layout.
+- **TUI tool-card diff wrap alignment.** Compact edit/write diffs now render in a three-column
+  grid (line number, ``+``/``-`` marker, code body) so wrapped continuation rows stay aligned
+  under the code column and repeat the diff sign instead of orphaning at column 0.
 
 - **TUI: fix fossilized pinned spinner in interactive mode.** All scrollback emissions in `_PromptLiveView` (content blocks, tool cards, notifications, steer echoes, turn recaps) now route through `run_in_terminal` instead of calling `console.print` directly, preventing prompt_toolkit's ephemeral preamble from being captured into permanent scrollback. `ty` type checker is now blocking for the `pythinker-code` package.
 

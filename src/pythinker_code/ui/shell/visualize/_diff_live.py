@@ -145,11 +145,15 @@ class DiffLive(RenderHook):
             self.console.print(renderable)
 
     def _stop_interactive(self) -> None:
-        self.console.clear_live()
+        # When nested we never owned ``console._live`` (set_live returned
+        # False), so calling clear_live would tear down the parent live
+        # region. Skip it for nested instances and fall through to the
+        # print-only path.
         if self._nested:
             if not self.transient:
                 self._print_current_renderable()
             return
+        self.console.clear_live()
         if self._lines:
             self._stop_drawn_frame()
 

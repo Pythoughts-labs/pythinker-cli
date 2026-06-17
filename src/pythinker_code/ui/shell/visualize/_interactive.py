@@ -292,7 +292,6 @@ class _PromptLiveView(_LiveView):
             emit()
         self._prompt_session.invalidate()
 
-
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))
 
@@ -837,8 +836,12 @@ class _PromptLiveView(_LiveView):
 
     def _flush_prompt_refresh(self) -> None:
         if self._force_refresh:
-            if self._dirty or self._need_recompose:
-                self._prompt_session.invalidate()
+            # Always invalidate when the caller explicitly asked for a
+            # forced refresh (e.g. TurnEnd on a contentless turn where
+            # neither _dirty nor _need_recompose has been set by the
+            # composition pipeline). Skipping the invalidate here left
+            # the prompt stale until the next composition tick.
+            self._prompt_session.invalidate()
             self._dirty = False
             self._force_refresh = False
             self._need_recompose = False

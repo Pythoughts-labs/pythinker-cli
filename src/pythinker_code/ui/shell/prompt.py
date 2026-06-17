@@ -3246,7 +3246,6 @@ class CustomPromptSession:
             ensure_prompt_newline(fragments)
 
         if modal_active and body:
-            body_rows = len(_formatted_text_display_rows(body, columns))
             status_budget = max(0, max_rows - body_rows - pinned_rows)
             if agent_status and status_budget > 0:
                 clipped_status = _fit_formatted_text_to_rows(

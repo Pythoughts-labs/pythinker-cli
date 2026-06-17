@@ -143,25 +143,22 @@ def test_small_backlog_drains_on_tool_transition() -> None:
     assert block._revealed_len == len(block.raw_text)
 
 
-def test_reveal_tick_skips_markdown_boundary_scan_without_newline(monkeypatch) -> None:
-    from pythinker_code.ui.shell.visualize import _blocks as blocks_module
-
-    calls = 0
-
-    def boundary_probe(_text: str) -> int | None:
-        nonlocal calls
-        calls += 1
-        return None
-
-    monkeypatch.setattr(blocks_module, "_find_committed_boundary", boundary_probe)
-
+def test_reveal_tick_advances_without_newline_boundary() -> None:
+    """Without a newline, reveal_tick must still advance the reveal cursor
+    but cannot commit a markdown block. The block stays paced and reveals a
+    bounded slice per tick — observable via the public ``_revealed_len``
+    and the absence of any committed prefix.
+    """
     block = _ContentBlock(is_think=False, paced=True)
     block.append("word " * 400)
 
     for _ in range(8):
         block.reveal_tick()
 
-    assert calls == 0
+    # Pacing advances without a markdown break — revealed cursor is between
+    # zero and the full backlog, and no prefix has been committed yet.
+    assert 0 < block._revealed_len < len(block.raw_text)
+    assert block._committed_len == 0
 
 
 def test_flush_content_does_not_write_hidden_debug_log(monkeypatch) -> None:
@@ -230,34 +227,43 @@ def test_tool_flush_preserves_full_paced_backlog_in_scrollback() -> None:
     assert "".join(_LONG_TEXT.split()) in normalized
 
 
-def test_flush_content_finalizes_without_reparsing_full_tail(monkeypatch) -> None:
+def test_flush_content_promotes_full_streaming_backlog_to_scrollback() -> None:
+    """Finalizing a paced block at TURN_END must surface the full raw text
+    to scrollback, not only the revealed slice, even when the second
+    paragraph is still being streamed.
+    """
     from unittest.mock import patch
 
-    from pythinker_code.ui.shell.visualize import _blocks as blocks_module
+    from rich.console import Console
+
     from pythinker_code.ui.shell.visualize._live_view import _LiveView
     from pythinker_code.wire.types import StatusUpdate
 
-    calls = 0
-
-    def boundary_probe(_text: str) -> int | None:
-        nonlocal calls
-        calls += 1
-        return None
+    raw = "First paragraph.\n\nSecond paragraph still streaming."
 
     view = _LiveView(StatusUpdate())
     block = _ContentBlock(is_think=False, paced=True)
-    block.append("First paragraph.\n\nSecond paragraph still streaming.")
+    block.append(raw)
     block.reveal_tick()
+    # Confirm the test pre-condition: only the first paragraph is revealed.
+    assert block._revealed_len < len(raw)
     view._current_content_block = block
 
-    with (
-        monkeypatch.context() as ctx,
-        patch("pythinker_code.ui.shell.visualize._live_view.emit_scrollback_block"),
+    printed: list[object] = []
+    with patch(
+        "pythinker_code.ui.shell.visualize._live_view.emit_scrollback_block",
+        side_effect=lambda _console, renderable: printed.append(renderable),
     ):
-        ctx.setattr(blocks_module, "_find_committed_boundary", boundary_probe)
         view.flush_content(FlushReason.TURN_END)
 
-    assert calls == 0
+    assert view._current_content_block is None
+    assert len(printed) == 1
+    rec = Console(record=True, width=120, color_system=None)
+    rec.print(printed[0])
+    output = rec.export_text()
+    # Full raw text must appear in the finalized scrollback.
+    normalized = "".join(output.split())
+    assert "".join(raw.split()) in normalized
 
 
 def test_live_view_enables_pacing_from_smooth_streaming_flag(monkeypatch) -> None:

@@ -178,13 +178,7 @@ def test_fenced_report_before_prose_uses_prose_renderer():
             "findings": [],
         }
     )
-    prose = (
-        "Critical issues\n\n"
-        "  • 1.1\n"
-        "    Issue   Something broken\n"
-        "    Anchor  x.py:1\n"
-        "\n"
-    )
+    prose = "Critical issues\n\n  • 1.1\n    Issue   Something broken\n    Anchor  x.py:1\n\n"
     full = prose + f"```report\n{report_json}\n```\n"
     out = _plain(render_agent_body(full), width=120)
     # The prose section must render the finding hierarchy (● dot), not raw columns

@@ -99,17 +99,20 @@ class Lsp(_tooling.CallableTool2[Params]):
 
             if params.operation == Operation.GO_TO_IMPLEMENTATION:
                 server = manager.server_for_file(absolute_path)
-                if (
-                    server is not None
-                    and server.capabilities is not None
-                    and not server.capabilities.implementationProvider
-                ):
-                    return builder.error(
-                        "LSP operation unsupported by current server: "
-                        f"operation: go_to_implementation, server: {server.name}, "
-                        "reason: server does not advertise implementationProvider",
-                        brief=self._brief(params),
-                    )
+                if server is not None and server.capabilities is not None:
+                    # Per the LSP spec, implementationProvider is
+                    # ``bool | ImplementationOptions | None``: an empty dict
+                    # means "supported with default options" and must not be
+                    # rejected by a truthiness check. Treat only explicit
+                    # ``False`` / ``None`` as unsupported.
+                    provider = server.capabilities.implementationProvider
+                    if provider is False or provider is None:
+                        return builder.error(
+                            "LSP operation unsupported by current server: "
+                            f"operation: go_to_implementation, server: {server.name}, "
+                            "reason: server does not advertise implementationProvider",
+                            brief=self._brief(params),
+                        )
 
             # A None result here means the server ran and returned an empty/null
             # response (e.g. definition not found) — distinct from "no server",

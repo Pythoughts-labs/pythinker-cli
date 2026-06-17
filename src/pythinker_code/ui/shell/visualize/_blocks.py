@@ -252,28 +252,34 @@ def _suppress_unclosed_code_fence_preview(text: str) -> str:
     own (more specific) suppression so the streaming findings JSON does not
     flash a misleading "code block" placeholder mid-report.
     """
-    matches = list(_FENCE_OPEN_RE.finditer(text))
-    for match in reversed(matches):
+    # Track the first open fence (and any closer that follows it) so bare
+    # ```` ``` ```` openers without a language tag are still suppressed until
+    # the matching closer arrives. A closer is a fence line whose marker
+    # matches the open fence's marker and whose info string is empty.
+    open_match: re.Match[str] | None = None
+    open_marker = ""
+    open_info = ""
+    open_is_report = False
+    for match in _FENCE_OPEN_RE.finditer(text):
         marker, info = match.group(1), match.group(2)
         info = info.strip()
         first_token = info.split(maxsplit=1)[0] if info else ""
-        if first_token.lower() == "report":
+        if open_match is None:
+            open_match = match
+            open_marker = marker
+            open_info = info
+            open_is_report = first_token.lower() == "report"
             continue
-        # Distinguish an opener (carries a language tag, e.g. ```` ```python ````)
-        # from a closer (a bare ```` ``` ```` line). Without a tag the regex
-        # above cannot tell them apart, so a closer would otherwise be
-        # treated as a new opener.
-        if not info:
-            continue
-        close_pattern = re.compile(rf"(?m)^{re.escape(marker)}\s*$")
-        if close_pattern.search(text[match.end() :]):
-            return text  # complete block — leave it for commit/finalize
-        lang = first_token or "code"
-        before = text[: match.start()].rstrip()
-        if before:
-            return f"{before}\n\n{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
-        return f"{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
-    return text
+        if marker == open_marker and not info:
+            # This fence closes the open one — nothing to suppress.
+            return text
+    if open_match is None or open_is_report:
+        return text
+    lang = open_info.split(maxsplit=1)[0] if open_info else "code"
+    before = text[: open_match.start()].rstrip()
+    if before:
+        return f"{before}\n\n{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
+    return f"{_FENCE_PREVIEW_PLACEHOLDER} ({lang})"
 
 
 def _sanitize_unclosed_report_fence_for_final(text: str) -> str:

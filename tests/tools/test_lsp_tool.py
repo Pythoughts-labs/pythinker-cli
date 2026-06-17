@@ -490,7 +490,7 @@ def test_format_result_document_symbol_fallback_counts_unique_files() -> None:
 async def test_go_to_implementation_unsupported_server(runtime, tmp_path: Path) -> None:
     # Server omits implementationProvider from its capabilities — guard must
     # return a structured error before sending the request.
-    service, _ = await _setup_lsp_runtime(runtime, tmp_path, no_impl=True)
+    service, log_file = await _setup_lsp_runtime(runtime, tmp_path, no_impl=True)
     _sample_file(tmp_path)
     tool = Lsp(runtime)
 
@@ -504,4 +504,19 @@ async def test_go_to_implementation_unsupported_server(runtime, tmp_path: Path) 
     assert "go_to_implementation" in result.message
     assert "implementationProvider" in result.message
     assert "fake" in result.message
+    # C14: the guard must short-circuit before dispatching the request.
+    # The fake server logs every received method; assert no implementation
+    # request was ever sent.
+    logged_methods: list[str] = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        method = entry.get("method")
+        if isinstance(method, str):
+            logged_methods.append(method)
+    assert "textDocument/implementation" not in logged_methods
     await service.shutdown()

@@ -67,7 +67,9 @@ def _operation_detail(details: dict[str, object], ctx: ToolRenderContext) -> str
         value = source.get("operation")
         if isinstance(value, str) and value:
             return value
-    return as_str(ctx.args.get("operation")) or "result"
+    # ctx.args may be None in the result-only render path; fall back to an
+    # empty dict so the .get call never raises AttributeError.
+    return as_str((ctx.args or {}).get("operation")) or "result"
 
 
 def _render_call(ctx: ToolRenderContext) -> RenderableType | None:

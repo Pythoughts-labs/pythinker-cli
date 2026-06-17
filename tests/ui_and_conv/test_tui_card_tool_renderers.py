@@ -9,7 +9,12 @@ remain visible.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from rich.text import Text
 
 from pythinker_code.tools.display import DiffDisplayBlock
 from pythinker_code.ui.shell.components import (
@@ -938,6 +943,48 @@ def test_read_skill_renders_as_skill_with_name_only():
 # ---------------------------------------------------------------------------
 
 
+def _render_diff_text(*args: object, **kwargs: object) -> Text:
+    """Flatten :func:`render_diff` grid output into ``Text`` for span assertions."""
+    from rich.console import Console
+    from rich.text import Text
+
+    renderable = render_diff(*args, **kwargs)  # type: ignore[arg-type]
+    console = Console(
+        width=120,
+        record=True,
+        force_terminal=True,
+        _environ={"TERM": "xterm-256color"},
+    )
+    segments = list(console.render(renderable, console.options.update_width(120)))
+    text = Text()
+    for segment in segments:
+        if segment.control:
+            if segment.text in {"\n", "\r\n"} and (not text.plain or not text.plain.endswith("\n")):
+                text.append("\n")
+            continue
+        text.append(segment.text, style=segment.style or "")
+    return text
+
+
+def _render_diff_with_gutter(*args, width: int = 70, **kwargs) -> str:
+    """Render a tool-card-shaped diff (gutter + body) at *width*."""
+    from pythinker_code.ui.shell.components.render_utils import render_message_response
+
+    return render_plain(render_message_response(render_diff(*args, **kwargs)), width=width)
+
+
+def _assert_wrap_fragment_aligned(output: str, fragment: str) -> None:
+    """Wrap fragments must not start a line (orphan at column 0)."""
+    for line in output.splitlines():
+        if fragment not in line:
+            continue
+        assert not line.lstrip().startswith(fragment), (
+            f"wrap fragment {fragment!r} orphaned at column 0: {line!r}"
+        )
+        return
+    raise AssertionError(f"fragment {fragment!r} not found in diff output")
+
+
 def test_compute_edit_diff_string_basic():
     result = compute_edit_diff_string("a\nb\nc\n", "a\nB\nc\n")
     assert "-" in result.diff
@@ -969,7 +1016,7 @@ def test_render_diff_signs_match_body_foreground():
 
     set_active_theme("dark")
     diff = compute_edit_diff_string("old line\n", "new line\n").diff
-    text = render_diff(diff)
+    text = _render_diff_text(diff)
     accent_fgs = {
         tui_rich_style("tool_diff_added").color,
         tui_rich_style("tool_diff_removed").color,
@@ -1061,7 +1108,7 @@ def test_render_diff_syntax_highlights_context_lines_when_path_given():
         "line one\nunchanged ctx\n",
         "line ONE\nunchanged ctx\n",
     ).diff
-    text = render_diff(diff, path="module.py")
+    text = _render_diff_text(diff, path="module.py")
     needle = "unchanged ctx"
     start = text.plain.index(needle)
     end = start + len(needle)
@@ -1086,7 +1133,7 @@ def test_render_diff_inline_pair_preserves_syntax_foreground_and_add_hl():
     old = "async def run_old(value: str) -> None:\n"
     new = "async def run_new(value: str) -> None:\n"
     diff = compute_edit_diff_string(old, new).diff
-    text = render_diff(diff, path="module.py")
+    text = _render_diff_text(diff, path="module.py")
     colors = get_diff_colors()
 
     minus_start = text.plain.index("run_old")
@@ -1121,7 +1168,7 @@ def test_render_diff_tabbed_inline_pair_maps_highlight_offsets():
     set_active_theme("dark")
     set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
     diff = compute_edit_diff_string("if\told_name:\n", "if\tnew_name:\n").diff
-    text = render_diff(diff, path="module.py")
+    text = _render_diff_text(diff, path="module.py")
     colors = get_diff_colors()
 
     old_start = text.plain.index("old_name")
@@ -1145,7 +1192,7 @@ def test_render_diff_tabbed_inline_pair_maps_highlight_offsets():
 
 def test_render_diff_unknown_extension_falls_back_to_text_without_crash():
     diff = compute_edit_diff_string("alpha beta\n", "alpha delta\n").diff
-    text = render_diff(diff, path="Makefile")
+    text = _render_diff_text(diff, path="Makefile")
     assert "alpha" in text.plain
     assert "beta" in text.plain
     assert "delta" in text.plain
@@ -1156,7 +1203,7 @@ def test_render_diff_colors_disabled_does_not_emit_background_styles(monkeypatch
 
     monkeypatch.setenv("NO_COLOR", "1")
     diff = compute_edit_diff_string("old line\n", "new line\n").diff
-    text = render_diff(diff, path="module.py")
+    text = _render_diff_text(diff, path="module.py")
     colors = get_diff_colors()
     diff_bgs = {
         colors.add_bg.bgcolor,
@@ -1164,10 +1211,75 @@ def test_render_diff_colors_disabled_does_not_emit_background_styles(monkeypatch
         colors.add_hl.bgcolor,
         colors.del_hl.bgcolor,
     }
+    diff_bgs = {bg for bg in diff_bgs if bg is not None}
     for span in text.spans:
         if isinstance(span.style, str):
             continue
-        assert span.style.bgcolor not in diff_bgs
+        if span.style.bgcolor is not None:
+            assert span.style.bgcolor not in diff_bgs
+
+
+def test_render_diff_wraps_removed_line_under_code_column():
+    old = (
+        '    monkeypatch.setattr(_interactive_mod, "run_in_terminal",\n'
+        "        lambda *args, **kwargs: printed.extend(args) if args else None,\n"
+        "    )"
+    )
+    new = '    monkeypatch.setattr(_live_view_mod.console, "print",\n        _record_print)\n    )'
+    diff = compute_edit_diff_string(old, new, old_start=935, new_start=935).diff
+    output = _render_diff_with_gutter(diff, width=70)
+    _assert_wrap_fragment_aligned(output, "else None,")
+    assert "935" in output
+    assert "- lambda" in output.replace("\n", " ") or "-         lambda" in output
+
+
+def test_render_diff_wraps_added_line_under_code_column():
+    old = "    pass\n"
+    new = "            # Always invalidate when the caller explicitly asked for a forced refresh\n"
+    diff = compute_edit_diff_string(old, new, old_start=840, new_start=840).diff
+    output = _render_diff_with_gutter(diff, width=65)
+    _assert_wrap_fragment_aligned(output, "forced refresh")
+
+
+def test_render_diff_wraps_context_line_under_code_column():
+    long_line = (
+        "where the wire is shut down before the batch window closes so the caller can dispatch"
+    )
+    old = f"before\n{long_line}\nafter old\n"
+    new = f"before\n{long_line}\nafter new\n"
+    diff = compute_edit_diff_string(old, new, old_start=10, new_start=10).diff
+    output = _render_diff_with_gutter(diff, width=60)
+    _assert_wrap_fragment_aligned(output, "can dispatch")
+
+
+def test_render_diff_wraps_syntax_highlighted_line_under_code_column():
+    long_line = (
+        '    print(f"DEBUG emit_scrollback_block called type={type(block).__name__}", '
+        "file=sys.stdout, flush=True)"
+    )
+    old = f"{long_line}\n"
+    new = '    print("ok")\n'
+    diff = compute_edit_diff_string(old, new, old_start=81, new_start=81).diff
+    output = _render_diff_with_gutter(diff, path="module.py", width=55)
+    _assert_wrap_fragment_aligned(output, "block).__name__")
+
+
+def test_render_diff_wrap_continuation_repeats_sign_marker():
+    old = (
+        '    print(f"DEBUG emit_scrollback_block called type={type(block).__name__}", '
+        "file=sys.stdout, flush=True)\n"
+    )
+    new = '    print("ok")\n'
+    diff = compute_edit_diff_string(old, new, old_start=81, new_start=81).diff
+    output = _render_diff_with_gutter(diff, width=50)
+    continuation_lines = [
+        line
+        for line in output.splitlines()
+        if ("type=" in line or "block)" in line or "file=sys" in line)
+        and line.lstrip().startswith("-")
+    ]
+    assert len(continuation_lines) >= 2
+    assert all(line.lstrip().startswith("-") for line in continuation_lines[1:])
 
 
 def test_make_diff_highlighter_caches_by_lexer_and_theme():

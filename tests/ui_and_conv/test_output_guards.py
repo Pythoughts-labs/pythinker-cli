@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rich.text import Text
 
 import pytest
 
@@ -110,22 +114,43 @@ def test_expanded_tool_output_is_never_truncated() -> None:
     assert "line 137" in out
 
 
+def _render_diff_text(*args: object, **kwargs: object) -> Text:
+    """Flatten render_diff output into Rich Text for span assertions."""
+    from rich.console import Console
+    from rich.text import Text
+
+    from pythinker_code.ui.shell.components.diff import render_diff
+
+    renderable = render_diff(*args, **kwargs)  # type: ignore[arg-type]
+    cons = Console(
+        width=120,
+        record=True,
+        force_terminal=True,
+        _environ={"TERM": "xterm-256color"},
+    )
+    segments = list(cons.render(renderable, cons.options.update_width(120)))
+    text = Text()
+    for seg in segments:
+        if seg.text not in {"\n", "\r\n"}:
+            text.append(seg.text, style=seg.style)
+    return text
+
+
 def test_word_level_diff_highlight_gated_on_similarity() -> None:
     """Mostly-similar single-line edits get word-level highlight tints; heavy
     rewrites render as plain rows so the row palette stays consistent."""
-    from pythinker_code.ui.shell.components.diff import render_diff
     from pythinker_code.ui.theme import get_diff_colors, set_active_theme
 
     set_active_theme("dark")
     hl_bg = get_diff_colors().add_hl.bgcolor
 
-    similar = render_diff("-1 alpha beta gamma\n+1 alpha beta delta")
+    similar = _render_diff_text("-1 alpha beta gamma\n+1 alpha beta delta")
     similar_bgs = {
         (span.style.bgcolor if not isinstance(span.style, str) else None) for span in similar.spans
     }
     assert hl_bg in similar_bgs
 
-    rewrite = render_diff("-1 alpha beta gamma\n+1 zzz qqq xxx yyy www vvv")
+    rewrite = _render_diff_text("-1 alpha beta gamma\n+1 zzz qqq xxx yyy www vvv")
     rewrite_bgs = {
         (span.style.bgcolor if not isinstance(span.style, str) else None) for span in rewrite.spans
     }
