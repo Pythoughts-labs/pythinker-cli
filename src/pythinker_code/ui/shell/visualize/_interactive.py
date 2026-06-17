@@ -80,6 +80,9 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
+# Redraw ticks after a terminal resize before tips return — old wrapped rows may
+# not be fully erased until prompt_toolkit settles at the new geometry.
+_RESIZE_RECOVERY_FRAMES = 3
 
 
 def _handoff_trace(event: str) -> None:
@@ -156,8 +159,58 @@ class _PromptLiveView(_LiveView):
         self._status_refresh_task: asyncio.Task[None] | None = None
         self._pending_scrollback: list[tuple[RenderableType, bool]] = []
         self._scrollback_handoff_depth: int = 0
+        self._last_terminal_size: tuple[int, int] | None = None
+        self._resize_recovery_remaining: int = 0
 
     # -- Helpers -------------------------------------------------------------
+
+    @property
+    def _suppress_transient_preamble(self) -> bool:
+        """True while scrollback handoff must not paint height-varying preamble."""
+        return getattr(self, "_scrollback_handoff_depth", 0) > 0
+
+    @property
+    def _hide_working_tips(self) -> bool:
+        """True while resize recovery is settling — tips are multi-row and ghost easily."""
+        return getattr(self, "_resize_recovery_remaining", 0) > 0
+
+    def _current_terminal_size(self) -> tuple[int, int] | None:
+        from prompt_toolkit.application import get_app_or_none
+
+        app = get_app_or_none()
+        if app is None:
+            return None
+        size = app.output.get_size()
+        return (size.columns, size.rows)
+
+    def _tick_resize_recovery(self) -> None:
+        """Detect terminal geometry changes and force a hard preamble invalidation."""
+        size = self._current_terminal_size()
+        if size is None:
+            return
+        columns, rows = size
+        if columns < 1 or rows < 1:
+            _handoff_trace(f"RESIZE_IGNORE\t{columns}x{rows}")
+            return
+        if self._last_terminal_size != size:
+            self._last_terminal_size = size
+            self._resize_recovery_remaining = _RESIZE_RECOVERY_FRAMES
+            self._force_refresh = True
+            _handoff_trace(f"RESIZE\t{columns}x{rows}")
+            return
+        if self._resize_recovery_remaining > 0:
+            self._resize_recovery_remaining -= 1
+
+    def _defer_scrollback_handoff(self) -> bool:
+        """Backpressure: defer permanent scrollback while preamble geometry is unstable."""
+        return self._resize_recovery_remaining > 0
+
+    def _safe_prompt_invalidate(self) -> None:
+        """Invalidate the prompt without letting teardown races take down the UI loop."""
+        try:
+            self._prompt_session.invalidate()
+        except Exception as exc:  # noqa: BLE001 — invalidate must never abort handoff cleanup
+            _handoff_trace(f"INVALIDATE_FAIL\t{type(exc).__name__}:{exc}")
 
     def _prompt_is_finalizing(self) -> bool:
         """True while scrollback is queued or being emitted above the prompt."""
@@ -182,15 +235,18 @@ class _PromptLiveView(_LiveView):
     async def _run_scrollback_handoff(self, emit: Callable[[], None], *, reason: str = "?") -> None:
         _handoff_trace(f"HANDOFF\t{reason}")
         self._scrollback_handoff_depth += 1
-        self._prompt_session.invalidate()
+        self._safe_prompt_invalidate()
         try:
             if console.is_terminal:
                 await run_in_terminal(emit)
             else:
                 emit()
+        except Exception as exc:
+            _handoff_trace(f"HANDOFF_FAIL\t{reason}\t{type(exc).__name__}:{exc}")
+            raise
         finally:
             self._scrollback_handoff_depth -= 1
-            self._prompt_session.invalidate()
+            self._safe_prompt_invalidate()
 
     @property
     def _btw_active(self) -> bool:
@@ -274,6 +330,7 @@ class _PromptLiveView(_LiveView):
         """
         try:
             while True:
+                self._tick_resize_recovery()
                 # Drain buffered paced text smoothly, even past TurnEnd, so the
                 # tail flows out instead of popping when the block finally
                 # commits. advance_stream_reveal() is a no-op unless a paced block
@@ -338,20 +395,33 @@ class _PromptLiveView(_LiveView):
         is not fossilized into permanent transcript output.  In piped/non-terminal
         mode run_in_terminal does not write to the captured stdout, so fall back to
         direct console.print() which matches the pre-preamble base-class behavior.
+
+        Scrollback is removed from the queue only after a successful handoff emit.
+        Failed emits leave the queue intact for a later retry; handoffs are deferred
+        while terminal geometry is settling after a resize.
         """
         if not self._pending_scrollback:
             return
-        to_print = self._pending_scrollback[:]
-        self._pending_scrollback.clear()
+        if self._defer_scrollback_handoff():
+            _handoff_trace(f"HANDOFF_DEFER\tpending_scrollback({len(self._pending_scrollback)})")
+            return
+        batch = self._pending_scrollback[:]
 
         def emit() -> None:
-            for renderable, blank_row in to_print:
+            for renderable, blank_row in batch:
                 console.print(renderable)
                 if blank_row:
                     console.print()
 
-        await self._run_scrollback_handoff(emit, reason=f"pending_scrollback({len(to_print)})")
-        self._prompt_session.invalidate()
+        try:
+            await self._run_scrollback_handoff(
+                emit, reason=f"pending_scrollback({len(batch)})"
+            )
+        except Exception:
+            return
+
+        del self._pending_scrollback[: len(batch)]
+        self._safe_prompt_invalidate()
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))
@@ -707,6 +777,15 @@ class _PromptLiveView(_LiveView):
         """
         if self._turn_ended and not self._prompt_is_finalizing():
             return ANSI("")
+        # During a scrollback handoff the prompt app is torn down and redrawn
+        # around run_in_terminal (every tool transition / turn end). Re-rendering
+        # the multi-row live stream in that window is what gets left behind as
+        # fossilized scrollback when the teardown erase height drifts. The
+        # committed prose is emitted by the handoff itself, and the remaining
+        # tail is re-rendered once the handoff completes — so suppress the
+        # transient body for the duration of the handoff.
+        if self._suppress_transient_preamble:
+            return ANSI("")
         from prompt_toolkit.application import get_app_or_none
 
         from pythinker_code.ui.shell.prompt import _prompt_preamble_max_rows
@@ -744,6 +823,13 @@ class _PromptLiveView(_LiveView):
         if not turn_active and not finalizing:
             return ANSI("")
 
+        # During scrollback handoff the prompt app is torn down around
+        # run_in_terminal. Any pinned spinner/tip row rendered in that window can
+        # be fossilized into permanent scrollback — suppress all transient tail
+        # content for the handoff duration.
+        if self._suppress_transient_preamble:
+            return ANSI("")
+
         if finalizing and not turn_active:
             body = render_to_ansi(self._finalizing_indicator(), columns=columns).rstrip("\n")
             return ANSI(body if body else "")
@@ -752,8 +838,14 @@ class _PromptLiveView(_LiveView):
         if content_block is not None and not content_block.is_think:
             body = render_to_ansi(content_block._compose_spinner(), columns=columns).rstrip("\n")
         else:
-            body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
+            body = render_to_ansi(
+                self._working_indicator(hide_tips=self._hide_working_tips),
+                columns=columns,
+            ).rstrip("\n")
         return ANSI(body if body else "")
+
+    def _working_indicator(self, *, hide_tips: bool = False) -> RenderableType:
+        return super()._working_indicator(hide_tips=hide_tips)
 
     def render_running_prompt_body(self, columns: int) -> ANSI:
         """Render the interactive part — transient command output + queued messages."""

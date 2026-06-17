@@ -896,7 +896,7 @@ class _LiveView:
         console.print(block)
         console.print()
 
-    def _working_indicator(self) -> RenderableType:
+    def _working_indicator(self, *, hide_tips: bool = False) -> RenderableType:
         now = time.monotonic()
         elapsed = 0.0 if self._turn_start_time is None else now - self._turn_start_time
         width = current_console_width()
@@ -930,7 +930,7 @@ class _LiveView:
             width=width,
         )
         # During longer waits, surface a rotating CLI-feature tip under the verb.
-        if elapsed < _WORKING_TIP_MIN_ELAPSED_S:
+        if hide_tips or elapsed < _WORKING_TIP_MIN_ELAPSED_S:
             return line
         tip_content = Text("Tip: ", style=tui_rich_style("dim"))
         tip_content.append(current_tip(now), style=tui_rich_style("dim"))

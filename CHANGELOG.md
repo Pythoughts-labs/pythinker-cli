@@ -15,6 +15,23 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI: interactive resize/handoff ghosting.** Scrollback handoffs in prompt mode
+  now fully suppress the transient preamble (agent stream body, verb spinner, and
+  tips) while ``run_in_terminal`` emits permanent scrollback, so stacked
+  ``Vibing…`` rows and duplicate tips no longer fossilize during tool transitions.
+  Terminal resize triggers a hard preamble invalidation and briefly hides tips
+  while prompt_toolkit settles at the new geometry. Handoffs defer during resize
+  recovery; failed emits leave scrollback queued for retry instead of dropping it.
+- **DiffLive streaming scroll geometry.** Non-interactive live streaming now uses
+  cursor-down only when the next row provably fits the visible terminal region
+  (frame origin + target row vs height); otherwise it falls back to newline scroll,
+  preventing mid-viewport overwrite when the live frame starts below the top of the
+  screen. Set `PYTHINKER_DIFF_LIVE_LOG` to trace DiffLive refresh/growth ticks.
+- **TUI: clearer collapsed ReadFile cards.** Collapsed reads now show a line-count
+  summary with the file name (e.g. `Read 140 lines from console.py`) plus a short,
+  width-capped preview of the leading lines, instead of the generic `Read 1 file`
+  that made it look like no content was returned. Empty/unknown reads stay truthful
+  (`Read 0 lines` / `Read file content`), and expanded mode still shows the full file.
 - **Cleaner terminal report rendering.** Structured ` ```report ` outputs now suppress duplicated trailing summaries, keep only artifact footers after the report, compact long finding locations, and switch large reports to a borderless dashboard layout for faster terminal scanning.
 - **Unknown subagent-type recovery hints.** Invalid types still fail loudly, but
   `Agent`/`RunAgents` errors now include best-effort suggestions for common

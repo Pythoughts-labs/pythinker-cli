@@ -358,7 +358,274 @@ def test_render_pinned_status_tail_finalizing_during_scrollback_handoff() -> Non
     view._scrollback_handoff_depth = 1
     view._current_content_block = None
 
-    assert "Finalizing" in view.render_pinned_status_tail(80).value
+    assert view.render_pinned_status_tail(80).value == ""
+
+
+def test_render_pinned_status_tail_no_elapsed_spinner_during_midturn_handoff() -> None:
+    """Mid-turn tool-transition handoffs (turn still active) must not render the
+    elapsed-time verb spinner or tips — they stack as fossilized scrollback when
+    the teardown erase drifts.
+    """
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1  # turn IS active (mid-turn transition)
+    view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 1  # ...inside a scrollback handoff
+    block = _ContentBlock(is_think=False)
+    block.append("Streaming body.\n\ntail")
+    view._current_content_block = block
+
+    out = view.render_pinned_status_tail(80).value
+    assert out == ""
+    assert "Composing" not in out
+
+
+@pytest.mark.asyncio
+async def test_transient_preamble_suppressed_inside_handoff_window(monkeypatch) -> None:
+    """The real proof: sample the preamble renderers from inside the emit window
+    of an actual ``_run_scrollback_handoff``. With the turn active and a content
+    block present, the agent-status body and the elapsed verb spinner must both
+    be suppressed while the handoff is in flight, so nothing height-varying is
+    rendered during the prompt-app teardown.
+    """
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    block = _ContentBlock(is_think=False)
+    block.append("Live stream body.\n\ntail")
+    view._current_content_block = block
+
+    # Sanity: outside any handoff, the body and a live spinner are rendered.
+    assert "Live stream body" in view.render_agent_status(80).value
+    assert "Composing" in view.render_pinned_status_tail(80).value
+
+    samples: dict[str, str] = {}
+
+    def _emit() -> None:
+        # In tests console.is_terminal is False, so emit() runs with the handoff
+        # depth already incremented — exactly the teardown window.
+        samples["body"] = view.render_agent_status(80).value
+        samples["tail"] = view.render_pinned_status_tail(80).value
+
+    await view._run_scrollback_handoff(_emit, reason="test")
+
+    assert samples["body"] == ""  # multi-row stream suppressed during handoff
+    assert samples["tail"] == ""  # no spinner/tips during handoff emit window
+
+    # After the handoff completes the transient preamble comes back.
+    assert "Live stream body" in view.render_agent_status(80).value
+    assert "Composing" in view.render_pinned_status_tail(80).value
+
+
+@pytest.mark.asyncio
+async def test_multiple_handoffs_leave_no_transient_tail_snapshots(monkeypatch) -> None:
+    """Each handoff emit window must see an empty pinned tail — no stacked verbs."""
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic() - 30.0
+    view._current_content_block = _ContentBlock(is_think=False)
+    view._current_content_block.append("body\n\ntail")
+
+    tails: list[str] = []
+
+    async def _emit(_label: str) -> None:
+        def _inner() -> None:
+            tails.append(view.render_pinned_status_tail(80).value)
+
+        await view._run_scrollback_handoff(_inner, reason=_label)
+
+    await _emit("first")
+    await _emit("second")
+    await _emit("third")
+
+    assert tails == ["", "", ""]
+
+
+def test_handoff_suppresses_working_tips(monkeypatch) -> None:
+    """Long-running turns show tips normally, but not during scrollback handoff."""
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._live_view import _WORKING_TIP_MIN_ELAPSED_S
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic() - _WORKING_TIP_MIN_ELAPSED_S - 5.0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 0
+    view._current_content_block = None
+    view._pinned_todos_visible = True
+    view._latest_todos = ()
+    view._resize_recovery_remaining = 0
+
+    monkeypatch.setattr(_live_view_mod, "current_tip", lambda _now: "do the thing")
+
+    normal = view.render_pinned_status_tail(80).value
+    assert "Tip:" in normal
+
+    view._scrollback_handoff_depth = 1
+    during_handoff = view.render_pinned_status_tail(80).value
+    assert during_handoff == ""
+
+
+def test_resize_triggers_recovery_and_hides_tips(monkeypatch) -> None:
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._live_view import _WORKING_TIP_MIN_ELAPSED_S
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic() - _WORKING_TIP_MIN_ELAPSED_S - 5.0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 0
+    view._current_content_block = None
+    view._pinned_todos_visible = True
+    view._latest_todos = ()
+    view._last_terminal_size = (80, 24)
+    view._resize_recovery_remaining = 0
+    view._force_refresh = False
+
+    monkeypatch.setattr(_live_view_mod, "current_tip", lambda _now: "resize tip")
+
+    current_size = [80, 24]
+
+    def _size() -> tuple[int, int]:
+        return (current_size[0], current_size[1])
+
+    monkeypatch.setattr(view, "_current_terminal_size", _size)
+
+    current_size[:] = [100, 30]
+    view._tick_resize_recovery()
+    assert view._force_refresh is True
+    assert view._resize_recovery_remaining == _interactive_mod._RESIZE_RECOVERY_FRAMES
+    assert "Tip:" not in view.render_pinned_status_tail(80).value
+
+    view._force_refresh = False
+    for expected in (
+        _interactive_mod._RESIZE_RECOVERY_FRAMES - 1,
+        _interactive_mod._RESIZE_RECOVERY_FRAMES - 2,
+        0,
+    ):
+        view._tick_resize_recovery()
+        assert view._resize_recovery_remaining == expected
+
+    assert "Tip:" in view.render_pinned_status_tail(80).value
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_scrollback_deferred_during_resize_recovery(monkeypatch) -> None:
+    printed: list[object] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._pending_scrollback.append((Text("queued block"), True))
+    view._resize_recovery_remaining = 2
+
+    await view._flush_pending_scrollback()
+
+    assert printed == []
+    assert len(view._pending_scrollback) == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_scrollback_retains_queue_on_handoff_failure(monkeypatch) -> None:
+    printed: list[object] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise RuntimeError("terminal suspended")
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "_force_terminal", True)
+    monkeypatch.setattr(
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._pending_scrollback.append((Text("must survive"), True))
+
+    await view._flush_pending_scrollback()
+
+    assert printed == []
+    assert len(view._pending_scrollback) == 1
+    assert view._pending_scrollback[0][0].plain == "must survive"
+
+
+def test_tick_resize_recovery_ignores_invalid_geometry() -> None:
+    view = object.__new__(_PromptLiveView)
+    view._last_terminal_size = (80, 24)
+    view._resize_recovery_remaining = 0
+    view._force_refresh = False
+
+    view._current_terminal_size = lambda: (0, 24)  # type: ignore[method-assign]
+    view._tick_resize_recovery()
+    assert view._last_terminal_size == (80, 24)
+    assert view._resize_recovery_remaining == 0
+    assert view._force_refresh is False
 
 
 def test_render_pinned_status_tail_finalizing_when_committed_blocks_pending() -> None:
