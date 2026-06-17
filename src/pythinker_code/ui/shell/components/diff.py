@@ -25,7 +25,14 @@ from pythinker_code.ui.shell.render_constants import (
     DIFF_CONTEXT_LINES,
     DIFF_LINE_NUMBER_MIN_WIDTH,
 )
+from pythinker_code.ui.terminal_capabilities import colors_disabled
 from pythinker_code.ui.theme import get_diff_colors, tui_rich_style
+from pythinker_code.utils.rich.diff_render import (
+    apply_inline_diff_highlights,
+    highlight_diff_code,
+    make_diff_highlighter,
+)
+from pythinker_code.utils.rich.syntax import PythinkerSyntax
 
 __all__ = [
     "EditDiffResult",
@@ -235,12 +242,34 @@ def _intra_line_diff(old_content: str, new_content: str) -> tuple[Text, Text]:
     return removed, added
 
 
-def render_diff(diff_text: str) -> Text:
+def _similarity_ratio(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(None, left, right, autojunk=False).ratio()
+
+
+def _render_diff_content(
+    content: str,
+    row_style: object,
+    *,
+    highlighter: PythinkerSyntax | None,
+) -> Text:
+    """Render one diff body line with optional syntax highlighting."""
+    normalized = _replace_tabs(content)
+    if highlighter is None:
+        return Text(normalized, style=row_style)
+    inner = highlight_diff_code(highlighter, normalized)
+    inner.stylize_before(row_style)
+    return inner
+
+
+def render_diff(diff_text: str, *, path: str | None = None) -> Text:
     """Colorize a Pythinker-format diff string.
 
     ``diff_text`` is whatever :func:`compute_edit_diff_string` produced (or
     any string in the same format). Lines that don't match the prefix
     pattern are rendered as dim context.
+
+    When *path* is provided, code lines are syntax-highlighted with the
+    active ``tui.code_theme`` (same pipeline as approval/pager diffs).
     """
     if not diff_text:
         return Text("")
@@ -255,6 +284,7 @@ def render_diff(diff_text: str) -> Text:
     added_body = colors.add_bg
     removed_body = colors.del_bg
     context_style = tui_rich_style("tool_diff_context")
+    highlighter = make_diff_highlighter(path) if path and not colors_disabled() else None
 
     out = Text()
     lines = diff_text.split("\n")
@@ -295,16 +325,33 @@ def render_diff(diff_text: str) -> Text:
 
             use_word_level = False
             if len(removed_block) == 1 and len(added_block) == 1:
+                rcontent = removed_block[0][1]
+                acontent = added_block[0][1]
+                if highlighter is not None:
+                    rln, _ = removed_block[0]
+                    aln, _ = added_block[0]
+                    rtab = _replace_tabs(rcontent)
+                    atab = _replace_tabs(acontent)
+                    rem_inner = highlight_diff_code(highlighter, rtab)
+                    add_inner = highlight_diff_code(highlighter, atab)
+                    # Row tint under syntax; inline word marks on top.
+                    rem_inner.stylize_before(removed_body)
+                    add_inner.stylize_before(added_body)
+                    apply_inline_diff_highlights(highlighter, rtab, atab, rem_inner, add_inner)
+                    _newline()
+                    row = Text(f"{rln} - ", style=removed_sign)
+                    row.append_text(rem_inner)
+                    out.append_text(row)
+                    _newline()
+                    row = Text(f"{aln} + ", style=added_sign)
+                    row.append_text(add_inner)
+                    out.append_text(row)
+                    continue
                 # Word-level emphasis only helps when the lines are mostly
                 # similar; on heavy rewrites it would flood the row with the
                 # brighter highlight tint and read as a different palette
                 # from plain added/removed rows.
-                use_word_level = (
-                    difflib.SequenceMatcher(
-                        None, removed_block[0][1], added_block[0][1], autojunk=False
-                    ).ratio()
-                    >= 0.5
-                )
+                use_word_level = _similarity_ratio(rcontent, acontent) >= 0.5
             if use_word_level:
                 rln, rcontent = removed_block[0]
                 aln, acontent = added_block[0]
@@ -327,19 +374,27 @@ def render_diff(diff_text: str) -> Text:
                 for ln, content in removed_block:
                     _newline()
                     out.append(f"{ln} - ", style=removed_sign)
-                    out.append(_replace_tabs(content), style=removed_body)
+                    out.append_text(
+                        _render_diff_content(content, removed_body, highlighter=highlighter)
+                    )
                 for ln, content in added_block:
                     _newline()
                     out.append(f"{ln} + ", style=added_sign)
-                    out.append(_replace_tabs(content), style=added_body)
+                    out.append_text(
+                        _render_diff_content(content, added_body, highlighter=highlighter)
+                    )
         elif prefix == "+":
             _newline()
             out.append(f"{line_num} + ", style=added_sign)
-            out.append(_replace_tabs(content), style=added_body)
+            out.append_text(_render_diff_content(content, added_body, highlighter=highlighter))
             i += 1
         else:
             _newline()
-            out.append(f"{line_num}  {_replace_tabs(content)}", style=context_style)
+            if highlighter is None:
+                out.append(f"{line_num}  {_replace_tabs(content)}", style=context_style)
+            else:
+                out.append(f"{line_num}  ", style="dim")
+                out.append_text(highlight_diff_code(highlighter, _replace_tabs(content)))
             i += 1
 
     return out

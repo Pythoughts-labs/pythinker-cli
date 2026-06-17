@@ -128,6 +128,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
     preview = preview_from_diff_blocks(diff_blocks)
     mode = ctx.args.get("mode")
     raw_content = as_str(ctx.args.get("content")) or ""
+    raw_path = as_str(ctx.args.get("path"))
 
     if (
         preview is not None
@@ -142,6 +143,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
                 width=ctx.width or 80,
                 expanded=ctx.expanded,
                 state=ctx.state,
+                path=raw_path,
             ),
         )
 

@@ -15,6 +15,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI tool-card diffs use syntax highlighting.** Edit/Write inline diffs now share the
+  approval/pager ``PythinkerSyntax`` pipeline (``tui.code_theme``, file-extension lexer) while
+  keeping the compact boxless card layout.
+
 - **TUI: fix fossilized pinned spinner in interactive mode.** All scrollback emissions in `_PromptLiveView` (content blocks, tool cards, notifications, steer echoes, turn recaps) now route through `run_in_terminal` instead of calling `console.print` directly, preventing prompt_toolkit's ephemeral preamble from being captured into permanent scrollback. `ty` type checker is now blocking for the `pythinker-code` package.
 
 - **TUI report prose blocks:** Agent summaries with a parent bullet plus aligned field rows (`Issue` / `Anchor`, `Finding` / `Severity`, etc.) now render as structured blocks with preserved hierarchy, per-block label columns, and correct continuation wrap indent instead of flattening into sibling markdown bullets.

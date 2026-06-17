@@ -268,7 +268,13 @@ class _PromptLiveView(_LiveView):
         self._prompt_session.invalidate()
 
     async def _flush_pending_scrollback(self) -> None:
-        """Drain queued scrollback via run_in_terminal to avoid fossilizing the preamble."""
+        """Drain queued scrollback to scrollback.
+
+        In a real terminal, route through run_in_terminal so the prompt preamble
+        is not fossilized into permanent transcript output.  In piped/non-terminal
+        mode run_in_terminal does not write to the captured stdout, so fall back to
+        direct console.print() which matches the pre-preamble base-class behavior.
+        """
         if not self._pending_scrollback:
             return
         to_print = self._pending_scrollback[:]
@@ -280,8 +286,12 @@ class _PromptLiveView(_LiveView):
                 if blank_row:
                     console.print()
 
-        await run_in_terminal(emit)
+        if console.is_terminal:
+            await run_in_terminal(emit)
+        else:
+            emit()
         self._prompt_session.invalidate()
+
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))

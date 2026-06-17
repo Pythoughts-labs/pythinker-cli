@@ -19,7 +19,6 @@ from pythinker_core.message import Message
 from pythinker_core.tooling import ToolError, ToolOk, ToolReturnValue
 from rich import box
 from rich.console import Group, RenderableType
-from rich.live import Live
 from rich.markup import escape as rich_escape
 from rich.padding import Padding
 from rich.panel import Panel
@@ -269,9 +268,9 @@ class _LiveView:
         self._dirty = False
         self._force_refresh = False
         self._external_messages: Queue[WireMessage] = Queue()
-        self._live: Live | DiffLive | None = None
+        self._live: DiffLive | None = None
 
-    def _reset_live_shape(self, live: Live | DiffLive) -> None:
+    def _reset_live_shape(self, live: DiffLive) -> None:
         # Rich doesn't expose a public API to clear Live's cached render height.
         # After leaving the pager, stale height causes cursor restores to jump,
         # so we reset the private _shape to re-anchor the next refresh.
@@ -375,7 +374,7 @@ class _LiveView:
                 wire_task = asyncio.create_task(wire.receive())
         return wire_task
 
-    async def _frame_refresh_loop(self, live: Live | DiffLive) -> None:
+    async def _frame_refresh_loop(self, live: DiffLive) -> None:
         """Coalesce wire-driven repaints to the streaming frame budget."""
         try:
             while True:
@@ -400,7 +399,7 @@ class _LiveView:
             return False
         return block.has_active_stream_preview()
 
-    def _flush_live_refresh(self, live: Live | DiffLive, *, force: bool = False) -> None:
+    def _flush_live_refresh(self, live: DiffLive, *, force: bool = False) -> None:
         """Paint immediately; use for user-initiated repaints only."""
         if not force and not self._dirty and not self._force_refresh:
             return
@@ -409,20 +408,18 @@ class _LiveView:
         self._force_refresh = False
         self._need_recompose = False
 
-    def _open_live_region(self) -> Live | DiffLive:
-        """Return a live-region driver: diff-based on terminals, Rich Live otherwise."""
-        if console.is_terminal:
-            return DiffLive(
-                console=console,
-                transient=True,
-                get_renderable=lambda: self.compose(),
-            )
-        return Live(
-            self.compose(),
+    def _open_live_region(self) -> DiffLive:
+        """Return a live-region driver (DiffLive for both TTY and non-TTY).
+
+        DiffLive's non-interactive path is a no-op wrapper that never registers
+        render hooks, so console.print() calls reach stdout directly.  Rich's
+        Live registers a render hook that intercepts prints and swallows them
+        when running with a piped (non-TTY) stdout.
+        """
+        return DiffLive(
             console=console,
-            refresh_per_second=STREAM_FPS,
             transient=True,
-            vertical_overflow=_LIVE_VERTICAL_OVERFLOW,
+            get_renderable=lambda: self.compose(),
         )
 
     async def visualize_loop(self, wire: WireUISide):

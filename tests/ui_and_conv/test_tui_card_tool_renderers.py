@@ -995,6 +995,199 @@ def test_render_diff_signs_match_body_foreground():
     assert any(" +" in chunk or chunk.endswith("+") for chunk in tinted)
 
 
+def test_render_diff_syntax_highlights_python_when_path_given():
+    import re
+
+    from rich.console import Console
+
+    from pythinker_code.utils.rich.syntax import (
+        CATPPUCCIN_ADAPTIVE_THEME_NAME,
+        set_active_code_theme,
+    )
+
+    set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
+    diff = compute_edit_diff_string(
+        "def old():\n    pass\n",
+        "def new():\n    pass\n",
+    ).diff
+
+    def _ansi(text) -> str:
+        console = Console(width=120, record=True, force_terminal=True)
+        console.print(text)
+        return console.export_text(styles=True)
+
+    highlighted = _ansi(render_diff(diff, path="module.py"))
+    plain = _ansi(render_diff(diff))
+    style_seqs = len(re.findall(r"\x1b\[[^m]*m", highlighted))
+    plain_seqs = len(re.findall(r"\x1b\[[^m]*m", plain))
+    assert style_seqs > plain_seqs
+
+
+def test_render_diff_without_path_stays_plain_foreground():
+    from rich.console import Console
+
+    diff = compute_edit_diff_string("def old():\n", "def new():\n").diff
+    console = Console(width=120, record=True, force_terminal=True)
+    console.print(render_diff(diff))
+    ansi = console.export_text(styles=True)
+    assert "38;2;" not in ansi
+
+
+def test_render_diff_without_path_does_not_construct_highlighter(monkeypatch):
+    from pythinker_code.utils.rich import diff_render
+
+    def _boom(_path: str):
+        raise AssertionError("make_diff_highlighter must not run when path is omitted")
+
+    monkeypatch.setattr(diff_render, "make_diff_highlighter", _boom)
+    diff = compute_edit_diff_string("a\n", "b\n").diff
+    render_diff(diff)
+
+
+def _spans_covering(text, start: int, end: int):
+    return [span for span in text.spans if span.start < end and span.end > start]
+
+
+def test_render_diff_syntax_highlights_context_lines_when_path_given():
+    from pythinker_code.ui.theme import get_diff_colors, set_active_theme
+    from pythinker_code.utils.rich.syntax import (
+        CATPPUCCIN_ADAPTIVE_THEME_NAME,
+        set_active_code_theme,
+    )
+
+    set_active_theme("dark")
+    set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
+    diff = compute_edit_diff_string(
+        "line one\nunchanged ctx\n",
+        "line ONE\nunchanged ctx\n",
+    ).diff
+    text = render_diff(diff, path="module.py")
+    needle = "unchanged ctx"
+    start = text.plain.index(needle)
+    end = start + len(needle)
+    row_bgs = {get_diff_colors().add_bg.bgcolor, get_diff_colors().del_bg.bgcolor}
+    overlapping = _spans_covering(text, start, end)
+    assert overlapping
+    assert any(
+        not isinstance(span.style, str) and span.style.color and span.style.bgcolor not in row_bgs
+        for span in overlapping
+    )
+
+
+def test_render_diff_inline_pair_preserves_syntax_foreground_and_add_hl():
+    from pythinker_code.ui.theme import get_diff_colors, set_active_theme
+    from pythinker_code.utils.rich.syntax import (
+        CATPPUCCIN_ADAPTIVE_THEME_NAME,
+        set_active_code_theme,
+    )
+
+    set_active_theme("dark")
+    set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
+    old = "async def run_old(value: str) -> None:\n"
+    new = "async def run_new(value: str) -> None:\n"
+    diff = compute_edit_diff_string(old, new).diff
+    text = render_diff(diff, path="module.py")
+    colors = get_diff_colors()
+
+    minus_start = text.plain.index("run_old")
+    minus_spans = _spans_covering(text, minus_start, minus_start + len("run_old"))
+    assert any(
+        not isinstance(span.style, str) and span.style.bgcolor == colors.del_hl.bgcolor
+        for span in minus_spans
+    )
+
+    plus_start = text.plain.index("run_new")
+    plus_spans = _spans_covering(text, plus_start, plus_start + len("run_new"))
+    assert any(
+        not isinstance(span.style, str) and span.style.bgcolor == colors.add_hl.bgcolor
+        for span in plus_spans
+    )
+
+    async_start = text.plain.index("async")
+    async_spans = _spans_covering(text, async_start, async_start + len("async"))
+    assert any(
+        not isinstance(span.style, str) and span.style.color and span.style.color != "default"
+        for span in async_spans
+    )
+
+
+def test_render_diff_tabbed_inline_pair_maps_highlight_offsets():
+    from pythinker_code.ui.theme import get_diff_colors, set_active_theme
+    from pythinker_code.utils.rich.syntax import (
+        CATPPUCCIN_ADAPTIVE_THEME_NAME,
+        set_active_code_theme,
+    )
+
+    set_active_theme("dark")
+    set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
+    diff = compute_edit_diff_string("if\told_name:\n", "if\tnew_name:\n").diff
+    text = render_diff(diff, path="module.py")
+    colors = get_diff_colors()
+
+    old_start = text.plain.index("old_name")
+    old_spans = _spans_covering(text, old_start, old_start + len("old_name"))
+    old_highlighted = "".join(
+        text.plain[span.start : span.end]
+        for span in old_spans
+        if not isinstance(span.style, str) and span.style.bgcolor == colors.del_hl.bgcolor
+    )
+    assert "old" in old_highlighted
+
+    new_start = text.plain.index("new_name")
+    new_spans = _spans_covering(text, new_start, new_start + len("new_name"))
+    new_highlighted = "".join(
+        text.plain[span.start : span.end]
+        for span in new_spans
+        if not isinstance(span.style, str) and span.style.bgcolor == colors.add_hl.bgcolor
+    )
+    assert "new" in new_highlighted
+
+
+def test_render_diff_unknown_extension_falls_back_to_text_without_crash():
+    diff = compute_edit_diff_string("alpha beta\n", "alpha delta\n").diff
+    text = render_diff(diff, path="Makefile")
+    assert "alpha" in text.plain
+    assert "beta" in text.plain
+    assert "delta" in text.plain
+
+
+def test_render_diff_colors_disabled_does_not_emit_background_styles(monkeypatch):
+    from pythinker_code.ui.theme import get_diff_colors
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    diff = compute_edit_diff_string("old line\n", "new line\n").diff
+    text = render_diff(diff, path="module.py")
+    colors = get_diff_colors()
+    diff_bgs = {
+        colors.add_bg.bgcolor,
+        colors.del_bg.bgcolor,
+        colors.add_hl.bgcolor,
+        colors.del_hl.bgcolor,
+    }
+    for span in text.spans:
+        if isinstance(span.style, str):
+            continue
+        assert span.style.bgcolor not in diff_bgs
+
+
+def test_make_diff_highlighter_caches_by_lexer_and_theme():
+    from pythinker_code.utils.rich.diff_render import (
+        _cached_diff_highlighter,
+        make_diff_highlighter,
+    )
+    from pythinker_code.utils.rich.syntax import (
+        CATPPUCCIN_ADAPTIVE_THEME_NAME,
+        set_active_code_theme,
+    )
+
+    _cached_diff_highlighter.cache_clear()
+    set_active_code_theme(CATPPUCCIN_ADAPTIVE_THEME_NAME)
+    first = make_diff_highlighter("a.py")
+    second = make_diff_highlighter("b.py")
+    third = make_diff_highlighter("nested/c.py")
+    assert first is second is third
+
+
 # ---------------------------------------------------------------------------
 # Agent (subagent)
 # ---------------------------------------------------------------------------

@@ -146,6 +146,7 @@ def diff_frame(
     expanded: bool = True,
     collapsed_max_lines: int = 16,
     state: dict[str, object] | None = None,
+    path: str | None = None,
 ) -> RenderableType:
     """Render the inline diff body for a file tool card.
 
@@ -161,7 +162,7 @@ def diff_frame(
             state["__suppress_generic_expand_hint__"] = True
         shown = "\n".join(lines[:collapsed_max_lines])
         remaining = len(lines) - collapsed_max_lines
-        return Group(render_diff(shown), fg("muted", expand_hint(remaining)))
+        return Group(render_diff(shown, path=path), fg("muted", expand_hint(remaining)))
     if len(lines) > DIFF_EXPANDED_MAX_LINES:
         # Guard against pathological diffs: even expanded, cap the rendered
         # body at head + tail with an explicit omitted-line count so one huge
@@ -170,8 +171,8 @@ def diff_frame(
         tail_count = DIFF_EXPANDED_MAX_LINES - head_count
         omitted = len(lines) - head_count - tail_count
         return Group(
-            render_diff("\n".join(lines[:head_count])),
+            render_diff("\n".join(lines[:head_count]), path=path),
             fg("muted", f"… {omitted} middle lines omitted (diff too large to render fully)"),
-            render_diff("\n".join(lines[-tail_count:])),
+            render_diff("\n".join(lines[-tail_count:]), path=path),
         )
-    return render_diff(diff_text)
+    return render_diff(diff_text, path=path)

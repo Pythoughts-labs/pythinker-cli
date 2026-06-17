@@ -126,6 +126,7 @@ def _render_call(ctx: ToolRenderContext) -> RenderableType:
             width=ctx.width or 80,
             expanded=ctx.expanded,
             state=ctx.state,
+            path=raw_path,
         ),
     )
     return Group(head, render_message_response(body))
@@ -156,6 +157,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
     if result.is_error:
         return fg("error", _friendly_error(result.text))
 
+    raw_path = as_str((ctx.args or {}).get("path"))
     preview = preview_from_result(result)
     if preview is None:
         edits = _normalize_edits(ctx.args.get("edit"))
@@ -177,6 +179,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
             width=ctx.width or 80,
             expanded=ctx.expanded,
             state=ctx.state,
+            path=raw_path,
         ),
     )
 

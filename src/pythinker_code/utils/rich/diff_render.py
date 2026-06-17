@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from enum import Enum, auto
+from functools import lru_cache
 
 from rich.console import RenderableType
 from rich.panel import Panel
@@ -20,7 +21,11 @@ from rich.text import Text
 
 from pythinker_code.tools.display import DiffDisplayBlock
 from pythinker_code.ui.theme import get_diff_colors, tui_rich_style
-from pythinker_code.utils.rich.syntax import PythinkerSyntax
+from pythinker_code.utils.rich.syntax import (
+    PythinkerSyntax,
+    get_active_code_theme,
+    resolve_code_theme,
+)
 
 _INLINE_DIFF_MIN_RATIO = 0.5  # skip inline diff when lines are too dissimilar
 
@@ -140,23 +145,97 @@ def _build_diff_lines(
 
 
 # ---------------------------------------------------------------------------
-# Syntax highlighting & inline diff
+# Syntax highlighting & inline diff (shared by approval panels and tool cards)
 # ---------------------------------------------------------------------------
 
 
-def _make_highlighter(path: str) -> PythinkerSyntax:
-    """Create a PythinkerSyntax instance for highlighting code by file extension."""
+def make_diff_highlighter(path: str) -> PythinkerSyntax:
+    """Create a :class:`PythinkerSyntax` highlighter for *path*'s file extension."""
     ext = path.rsplit(".", 1)[-1] if "." in path else ""
-    return PythinkerSyntax("", ext if ext else "text")
+    lexer = ext if ext else "text"
+    return _cached_diff_highlighter(lexer, get_active_code_theme())
 
 
-def _highlight(highlighter: PythinkerSyntax, code: str) -> Text:
+@lru_cache(maxsize=64)
+def _cached_diff_highlighter(lexer: str, theme: str) -> PythinkerSyntax:
+    return PythinkerSyntax("", lexer, theme=resolve_code_theme(theme))
+
+
+def highlight_diff_code(highlighter: PythinkerSyntax, code: str) -> Text:
+    """Syntax-highlight a single diff code line (no row/inline diff styling)."""
     t = highlighter.highlight(code)
     # Pygments appends a trailing newline (ensurenl=True); strip only that,
     # not trailing whitespace which may be meaningful in diffs.
     if t.plain.endswith("\n"):
         t.right_crop(1)
     return t
+
+
+def apply_inline_diff_highlights(
+    highlighter: PythinkerSyntax,
+    old_code: str,
+    new_code: str,
+    old_text: Text,
+    new_text: Text,
+    *,
+    min_ratio: float = _INLINE_DIFF_MIN_RATIO,
+) -> bool:
+    """Mark changed spans with del_hl/add_hl on syntax-highlighted text.
+
+    Callers should apply row backgrounds with ``stylize_before`` *before*
+    invoking this helper so the stack is: row tint, syntax foreground, inline
+    highlight backgrounds on top.
+    """
+    sm = SequenceMatcher(None, old_code, new_code)
+    if sm.ratio() < min_ratio:
+        return False
+    colors = get_diff_colors()
+    tab_size = highlighter.tab_size
+    old_map = _build_offset_map(old_code, old_text.plain, tab_size)
+    new_map = _build_offset_map(new_code, new_text.plain, tab_size)
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op in ("delete", "replace"):
+            old_text.stylize(colors.del_hl, old_map[i1], old_map[i2])
+        if op in ("insert", "replace"):
+            new_text.stylize(colors.add_hl, new_map[j1], new_map[j2])
+    return True
+
+
+def highlight_diff_inline_pair(
+    highlighter: PythinkerSyntax,
+    old_code: str,
+    new_code: str,
+    *,
+    min_ratio: float = _INLINE_DIFF_MIN_RATIO,
+) -> tuple[Text, Text, bool]:
+    """Highlight a delete/add pair and optionally mark changed spans inline.
+
+    Returns ``(removed_text, added_text, inline_paired)``. *inline_paired* is
+    ``True`` when the lines were similar enough for word-level emphasis.
+
+    Row backgrounds are *not* applied here; approval panels attach them at
+    table render time. Tool cards should ``stylize_before`` row tints before
+    calling :func:`apply_inline_diff_highlights`.
+    """
+    old_text = highlight_diff_code(highlighter, old_code)
+    new_text = highlight_diff_code(highlighter, new_code)
+    inline_paired = apply_inline_diff_highlights(
+        highlighter,
+        old_code,
+        new_code,
+        old_text,
+        new_text,
+        min_ratio=min_ratio,
+    )
+    return old_text, new_text, inline_paired
+
+
+def _make_highlighter(path: str) -> PythinkerSyntax:
+    return make_diff_highlighter(path)
+
+
+def _highlight(highlighter: PythinkerSyntax, code: str) -> Text:
+    return highlight_diff_code(highlighter, code)
 
 
 def _build_offset_map(raw: str, rendered: str, tab_size: int) -> list[int]:
@@ -203,32 +282,18 @@ def _apply_inline_diff(
 
     Modifies DiffLine.content in place for paired lines.
     """
-    colors = get_diff_colors()
-    tab_size = highlighter.tab_size
     paired = min(len(del_lines), len(add_lines))
     for j in range(paired):
         old_code = del_lines[j].code
         new_code = add_lines[j].code
-        old_text = _highlight(highlighter, old_code)
-        new_text = _highlight(highlighter, new_code)
-        # Store highlighted content even when skipping inline pairing,
-        # so _highlight_hunk's second pass doesn't re-highlight these lines.
+        old_text, new_text, inline_paired = highlight_diff_inline_pair(
+            highlighter, old_code, new_code
+        )
         del_lines[j].content = old_text
         add_lines[j].content = new_text
-        sm = SequenceMatcher(None, old_code, new_code)
-        if sm.ratio() < _INLINE_DIFF_MIN_RATIO:
-            continue
-        old_map = _build_offset_map(old_code, old_text.plain, tab_size)
-        new_map = _build_offset_map(new_code, new_text.plain, tab_size)
-        for op, i1, i2, j1, j2 in sm.get_opcodes():
-            if op in ("delete", "replace"):
-                old_text.stylize(colors.del_hl, old_map[i1], old_map[i2])
-            if op in ("insert", "replace"):
-                new_text.stylize(colors.add_hl, new_map[j1], new_map[j2])
-        del_lines[j].content = old_text
-        del_lines[j].is_inline_paired = True
-        add_lines[j].content = new_text
-        add_lines[j].is_inline_paired = True
+        if inline_paired:
+            del_lines[j].is_inline_paired = True
+            add_lines[j].is_inline_paired = True
 
 
 def _highlight_hunk(highlighter: PythinkerSyntax, hunk: list[DiffLine]) -> None:
