@@ -17,6 +17,67 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.48.0 (2026-06-17)
+
+- **Fix: tool outputs invisible on Anthropic-compatible proxies (GLM-5.2 via z.ai).**
+  `api.z.ai/api/anthropic` only surfaces the first content block of a multi-part
+  `tool_result`, so the leading `<system>` summary reached GLM-5.2 while the actual tool
+  payload was dropped — every Shell/ReadFile/Grep result read as a "success" summary with
+  no output (reproduced from a live GLM-5.2 session transcript). Tool results are now
+  flattened to a single text block for non-native hosts via a transport-keyed resolver
+  (`resolve_tool_result_mode`), while genuine `api.anthropic.com` keeps the rich
+  multi-part form. The same single-string mode is applied defensively to non-native
+  OpenAI-compatible hosts (lossless for text), most relevant to GLM served over z.ai's
+  OpenAI endpoint; genuine `api.openai.com` is unchanged.
+- **TUI: diff cards strip terminal control sequences.** Inline file-diff bodies
+  (Update/Write cards, approval and pager diffs) now sanitize ANSI/control escapes
+  from the untrusted file and model-supplied edit content before rendering, so a
+  crafted edit can no longer smuggle cursor-movement or color escapes into the
+  terminal through a diff card. Visible text is preserved.
+- **TUI: interactive resize/handoff ghosting.** Scrollback handoffs in prompt mode
+  now fully suppress the transient preamble (agent stream body, verb spinner, and
+  tips) while ``run_in_terminal`` emits permanent scrollback, so stacked
+  ``Vibing…`` rows and duplicate tips no longer fossilize during tool transitions.
+  Terminal resize triggers a hard preamble invalidation and briefly hides tips
+  while prompt_toolkit settles at the new geometry. Handoffs defer during resize
+  recovery; failed emits leave scrollback queued for retry instead of dropping it.
+  Outermost turn end always flushes completed prose even when recovery is active,
+  so PTY sessions no longer stall on ``Finalizing…`` without emitting the response.
+- **DiffLive streaming scroll geometry.** Non-interactive live streaming now uses
+  cursor-down only when the next row provably fits the visible terminal region
+  (frame origin + target row vs height); otherwise it falls back to newline scroll,
+  preventing mid-viewport overwrite when the live frame starts below the top of the
+  screen. Set `PYTHINKER_DIFF_LIVE_LOG` to trace DiffLive refresh/growth ticks.
+- **TUI: clearer collapsed ReadFile cards.** Collapsed reads now show a line-count
+  summary with the file name (e.g. `Read 140 lines from console.py`) plus a short,
+  width-capped preview of the leading lines, instead of the generic `Read 1 file`
+  that made it look like no content was returned. Empty/unknown reads stay truthful
+  (`Read 0 lines` / `Read file content`), and expanded mode still shows the full file.
+- **Cleaner terminal report rendering.** Structured ` ```report ` outputs now suppress duplicated trailing summaries, keep only artifact footers after the report, compact long finding locations, and switch large reports to a borderless dashboard layout for faster terminal scanning.
+- **Unknown subagent-type recovery hints.** Invalid types still fail loudly, but
+  `Agent`/`RunAgents` errors now include best-effort suggestions for common
+  cross-harness aliases (e.g. `general-purpose` → `coder`) and close typos when the
+  suggested subagent exists in the current session. No silent substitution; the full
+  valid-type list is unchanged.
+- **TUI: smoother agent-working streaming.** Buffered text now reveals at an even,
+  bounded rate instead of backlog-proportional lurches, and completed prose is no
+  longer committed to scrollback mid-stream — it stays in the in-place live preview
+  and is flushed once at a tool transition or turn end, so the prompt no longer
+  pops/flickers on every paragraph boundary during a stream. The prompt stays in a
+  **Finalizing** state (not a false idle `❯`) while scrollback is pending, and clipped
+  live output shows an **earlier output hidden · Ctrl+O expand** marker instead of
+  silently dropping rows.
+
+- **TUI tool-card diffs use syntax highlighting.** Edit/Write inline diffs now share the
+  approval/pager ``PythinkerSyntax`` pipeline (``tui.code_theme``, file-extension lexer) while
+  keeping the compact boxless card layout.
+- **TUI tool-card diff wrap alignment.** Compact edit/write diffs now render in a three-column
+  grid (line number, ``+``/``-`` marker, code body) so wrapped continuation rows stay aligned
+  under the code column and repeat the diff sign instead of orphaning at column 0.
+
+- **TUI: fix fossilized pinned spinner in interactive mode.** All scrollback emissions in `_PromptLiveView` (content blocks, tool cards, notifications, steer echoes, turn recaps) now route through `run_in_terminal` instead of calling `console.print` directly, preventing prompt_toolkit's ephemeral preamble from being captured into permanent scrollback. `ty` type checker is now blocking for the `pythinker-code` package.
+
+- **TUI report prose blocks:** Agent summaries with a parent bullet plus aligned field rows (`Issue` / `Anchor`, `Finding` / `Severity`, etc.) now render as structured blocks with preserved hierarchy, per-block label columns, and correct continuation wrap indent instead of flattening into sibling markdown bullets.
 - **LSP `go_to_implementation` now returns a structured error when the server does not advertise `implementationProvider`** instead of surfacing a raw exception. The client also advertises `implementation` capability during the LSP handshake so servers like Pyright enable the provider automatically.
 - **TUI Rich Live streaming matches interactive smoothness.** Non-interactive
   shell mode now emits stable markdown to scrollback during streams, drains paced
@@ -108,6 +169,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **LSP robustness.** Bounded JSON-RPC frame size and graceful-shutdown timeout, document
   version tracking for `didChange`, open-document state cleared on server restart, empty
   diagnostics payloads clear stale entries, and tightened `/usage` activity-argument validation.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.48.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.47.0 (2026-06-16)
 

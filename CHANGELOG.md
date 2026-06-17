@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.48.0 (2026-06-17)
+
 - **Fix: tool outputs invisible on Anthropic-compatible proxies (GLM-5.2 via z.ai).**
   `api.z.ai/api/anthropic` only surfaces the first content block of a multi-part
   `tool_result`, so the leading `<system>` summary reached GLM-5.2 while the actual tool
@@ -165,6 +167,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **LSP robustness.** Bounded JSON-RPC frame size and graceful-shutdown timeout, document
   version tracking for `didChange`, open-document state cleared on server restart, empty
   diagnostics payloads clear stale entries, and tightened `/usage` activity-argument validation.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.48.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.47.0 (2026-06-16)
 

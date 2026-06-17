@@ -1,6 +1,6 @@
 [project]
 name = "pythinker-code"
-version = "0.47.0"
+version = "0.48.0"
 description = "Pythinker — an agentic CLI developed by Pythoughts-labs."
 readme = "README.md"
 requires-python = ">=3.12"
