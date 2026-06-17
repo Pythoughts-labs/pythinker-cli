@@ -335,3 +335,28 @@ def test_composing_preview_shows_hidden_rows_marker_when_budget_trims() -> None:
 
     assert PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT in ansi
     assert "live tail" in ansi
+
+
+def test_handoff_trace_noop_when_env_unset(tmp_path, monkeypatch) -> None:
+    """The diagnostic tracer writes nothing (and never raises) when disabled."""
+    from pythinker_code.ui.shell.visualize._interactive import _handoff_trace
+
+    monkeypatch.delenv("PYTHINKER_TUI_HANDOFF_LOG", raising=False)
+    _handoff_trace("HANDOFF\tprose_commit(1)")  # must be a no-op, no file created
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_handoff_trace_appends_events_when_enabled(tmp_path, monkeypatch) -> None:
+    """When enabled, each call appends one tab-delimited timeline line."""
+    from pythinker_code.ui.shell.visualize._interactive import _handoff_trace
+
+    log = tmp_path / "handoff.log"
+    monkeypatch.setenv("PYTHINKER_TUI_HANDOFF_LOG", str(log))
+    _handoff_trace("TRANSITION\tTOOL_START")
+    _handoff_trace("HANDOFF\tprose_commit(2)")
+    _handoff_trace("TURN_END")
+
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    events = [line.split("\t", 1)[1] for line in lines]
+    assert events == ["TRANSITION\tTOOL_START", "HANDOFF\tprose_commit(2)", "TURN_END"]

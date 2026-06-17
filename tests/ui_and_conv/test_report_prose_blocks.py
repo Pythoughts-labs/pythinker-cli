@@ -184,3 +184,27 @@ def test_fenced_report_before_prose_uses_prose_renderer():
     # The prose section must render the finding hierarchy (● dot), not raw columns
     assert "● 1.1" in out or "1.1" in out
     assert "● Issue:" not in out
+
+
+def test_report_prose_blocks_does_not_promote_wrapped_inline_code_sentence():
+    sample = (
+        "Findings\n\n"
+        "• 1\n"
+        "    Severity  low\n"
+        "    Location  syntax.py:280\n"
+        "    What      Docstring cleanup.\n\n"
+        "Quick-win follow-ups (all Minor / Nit, 8 items)\n\n"
+        "Docstring in `syntax.py 280–293, hyphen guard in normalizers.py:476–477, "
+        "Ctrl+S echo assertion in test_btw.py:882–904.\n"
+    )
+
+    out = _plain(render_report_prose_blocks(sample) or "", width=80)
+
+    assert "Docstring in `syntax.py" in out
+    assert "Docstring in `syntax.py\n" not in out
+    lines = out.splitlines()
+    quick_win_index = next(
+        index for index, line in enumerate(lines) if "Quick-win follow-ups" in line
+    )
+    assert quick_win_index + 1 < len(lines)
+    assert set(lines[quick_win_index + 1].strip()) != {"─"}

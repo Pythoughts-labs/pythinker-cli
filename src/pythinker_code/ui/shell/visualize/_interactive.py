@@ -9,6 +9,7 @@ input routing (queue/steer/btw), modal management, and key handling.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -79,6 +80,27 @@ _TRANSIENT_COMMAND_PANEL_MAX_LINES = 30
 
 _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
+
+
+def _handoff_trace(event: str) -> None:
+    """Append a timeline event to the handoff-debug log when enabled.
+
+    Diagnostic only. Set ``PYTHINKER_TUI_HANDOFF_LOG=/path/to/file`` to record
+    every scrollback handoff (each is a ``run_in_terminal`` prompt-app teardown —
+    the visible "pop"), every tool/think transition, and every turn end. A recorded
+    session can then be replayed against the log to count per-turn pops and their
+    cause (count ``HANDOFF`` lines between ``TURN_END`` markers; compare a
+    text-only turn against a many-tool turn). No-op (one env lookup) when unset, so
+    it is safe to leave in place. Never raises: diagnostics must not break the UI.
+    """
+    path = os.environ.get("PYTHINKER_TUI_HANDOFF_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.monotonic():.3f}\t{event}\n")
+    except OSError:
+        pass
 
 
 class _PromptLiveView(_LiveView):
@@ -155,7 +177,8 @@ class _PromptLiveView(_LiveView):
             width=current_console_width(),
         )
 
-    async def _run_scrollback_handoff(self, emit: Callable[[], None]) -> None:
+    async def _run_scrollback_handoff(self, emit: Callable[[], None], *, reason: str = "?") -> None:
+        _handoff_trace(f"HANDOFF\t{reason}")
         self._scrollback_handoff_depth += 1
         self._prompt_session.invalidate()
         try:
@@ -299,7 +322,7 @@ class _PromptLiveView(_LiveView):
             for renderable in committed:
                 self._emit_incremental_scrollback(renderable)
 
-        await self._run_scrollback_handoff(emit_committed)
+        await self._run_scrollback_handoff(emit_committed, reason=f"prose_commit({len(committed)})")
         await self._after_incremental_scrollback_emitted()
         return True
 
@@ -325,7 +348,7 @@ class _PromptLiveView(_LiveView):
                 if blank_row:
                     console.print()
 
-        await self._run_scrollback_handoff(emit)
+        await self._run_scrollback_handoff(emit, reason=f"pending_scrollback({len(to_print)})")
         self._prompt_session.invalidate()
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
@@ -346,6 +369,7 @@ class _PromptLiveView(_LiveView):
         self._pending_scrollback.append((Text(""), False))
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
+        _handoff_trace(f"TRANSITION\t{reason.name}")
         await super()._drain_content_for_transition(reason)
         if self._dirty:
             self._flush_prompt_refresh()
@@ -440,6 +464,7 @@ class _PromptLiveView(_LiveView):
                     self._active_turn_depth = max(0, self._active_turn_depth - 1)
                     turn_ended = self._active_turn_depth == 0
                     if turn_ended:
+                        _handoff_trace("TURN_END")
                         self.flush_content(FlushReason.TURN_END)
                         self._turn_ended = True
                         self._turn_start_time = None

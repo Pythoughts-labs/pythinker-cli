@@ -2521,6 +2521,31 @@ def test_worktree_renderers_parse_tool_output_metadata():
     assert "Returned to /repo" in exited
 
 
+def test_worktree_enter_error_does_not_render_success_label():
+    # C01: a failed EnterWorktree must surface the error, never a success switch.
+    rendered = _render(
+        "EnterWorktree",
+        {"name": "fix-ui"},
+        output="failed to create worktree",
+        is_error=True,
+    )
+    assert "Switched to worktree" not in rendered
+    assert "failed to create worktree" in rendered
+
+
+def test_worktree_exit_error_does_not_render_success_label():
+    # C01: a failed ExitWorktree must surface the error, never keep/remove.
+    rendered = _render(
+        "ExitWorktree",
+        {},
+        output="failed to restore working directory",
+        is_error=True,
+    )
+    assert "Kept worktree" not in rendered
+    assert "Removed worktree" not in rendered
+    assert "failed to restore working directory" in rendered
+
+
 # ---------------------------------------------------------------------------
 # Plan tools
 # ---------------------------------------------------------------------------

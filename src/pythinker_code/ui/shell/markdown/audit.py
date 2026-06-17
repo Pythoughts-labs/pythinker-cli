@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 
+from pythinker_code.share import get_share_dir
 from pythinker_code.ui.shell.markdown.fences import FENCE_RE, FenceState
 from pythinker_code.ui.shell.markdown.normalizers import (
     UNICODE_RULE_LINE_RE as _UNICODE_RULE_LINE_RE,
@@ -129,10 +131,28 @@ def detect_audit_report(markup: str) -> bool:
 
 
 def compact_known_paths(text: str) -> str:
-    """Shorten common repo prefixes for terminal readability."""
+    """Shorten common repo/session prefixes for terminal readability.
+
+    Absolute prefixes are resolved at runtime (the working directory and the
+    share dir) rather than hardcoded, so this works for any user/home/OS and in
+    any repo pythinker runs in — never a machine-local path baked into source.
+    """
+    # Strip the absolute project root (wherever pythinker is running) so paths
+    # render relative. Guard against cwd == "/" turning every slash into a strip.
+    cwd = os.getcwd().rstrip(os.sep)
+    if cwd:
+        text = text.replace(f"{cwd}{os.sep}", "")
     for prefix in PROJECT_PATH_PREFIXES:
         if prefix in text:
             text = text.replace(prefix, "")
+    # Collapse absolute session tool-output paths to a stable, home-agnostic form.
+    sessions_root = f"{get_share_dir(create=False) / 'sessions'}{os.sep}"
+    if sessions_root in text:
+        text = re.sub(
+            re.escape(sessions_root) + r"(?:[^/\s]+/)+(?P<tail>tool-output/?)",
+            r"~/.pythinker/sessions/.../\g<tail>",
+            text,
+        )
     return text
 
 

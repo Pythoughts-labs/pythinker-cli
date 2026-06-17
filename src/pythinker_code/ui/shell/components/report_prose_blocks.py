@@ -66,6 +66,13 @@ class ProseChunk:
 ParsedFindingBlock = tuple[AlignedFindingBlock, int]
 
 
+def _next_nonblank_index(lines: list[str], start: int) -> int | None:
+    for index in range(start, len(lines)):
+        if lines[index].strip():
+            return index
+    return None
+
+
 def parse_parent_bullet(line: str) -> tuple[str, str] | None:
     """Return ``(indent, title)`` for ``• title`` or ``- title`` parent bullets."""
     stripped = line.rstrip("\r\n")
@@ -78,9 +85,15 @@ def parse_parent_bullet(line: str) -> tuple[str, str] | None:
     return indent, title
 
 
+def _has_unmatched_backtick(line: str) -> bool:
+    return line.count("`") % 2 == 1
+
+
 def looks_like_report_section_heading(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
+        return False
+    if _has_unmatched_backtick(stripped):
         return False
     if parse_parent_bullet(line) is not None:
         return False
@@ -185,9 +198,8 @@ def split_report_prose(text: str) -> list[ProseChunk]:
         # Unicode underlined heading: "Title\n═════" — detect before blank-line guard
         stripped = body.strip()
         if (
-            stripped
+            looks_like_report_section_heading(line)
             and index + 1 < len(lines)
-            and not stripped.startswith(("-", "*", "+", "#", "|", ">", "`", "•"))
             and _UNICODE_HEADING_RULE_RE.match(lines[index + 1].rstrip("\r\n"))
         ):
             flush_markdown()
@@ -207,7 +219,11 @@ def split_report_prose(text: str) -> list[ProseChunk]:
             continue
 
         prev_blank = index == 0 or not lines[index - 1].strip()
-        if prev_blank and looks_like_report_section_heading(line):
+        next_index = _next_nonblank_index(lines, index + 1)
+        has_structured_child = next_index is not None and (
+            _try_parse_aligned_finding_block(lines, next_index) is not None
+        )
+        if prev_blank and has_structured_child and looks_like_report_section_heading(line):
             flush_markdown()
             chunks.append(
                 ProseChunk(

@@ -50,6 +50,20 @@ def test_compact_known_paths_strips_common_terminal_prefixes() -> None:
     )
 
 
+def test_compact_known_paths_strips_runtime_cwd(tmp_path, monkeypatch) -> None:
+    """The absolute project root is stripped dynamically, not via a baked-in path."""
+    monkeypatch.chdir(tmp_path)
+    absolute = f"{tmp_path}/src/pythinker_code/lsp/client.py:65"
+    assert compact_known_paths(absolute) == "lsp/client.py:65"
+
+
+def test_compact_known_paths_collapses_session_tool_output(tmp_path, monkeypatch) -> None:
+    """Session tool-output paths collapse home-agnostically via the real share dir."""
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    path = f"{tmp_path}/sessions/proj-abc/2026-06-17/tool-output/"
+    assert compact_known_paths(path) == "~/.pythinker/sessions/.../tool-output/"
+
+
 def test_small_parity_report_renders_field_tables() -> None:
     sample = (
         "Deep Code Scan Analysis\n"

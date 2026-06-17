@@ -1062,6 +1062,23 @@ async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkey
         prompt_session=cast(Any, _PromptSession()),
         steer=lambda _content: None,
     )
+
+    # Prove the ordering contract, not just the end state: the turn-end
+    # flush_content() must run while _turn_ended is still False, before
+    # visualize_loop marks the turn ended (_interactive.py flushes, then sets
+    # the flag). Recording only end-state cannot distinguish flush-before-set
+    # from set-before-flush.
+    flush_turn_ended_states: list[bool] = []
+    original_flush_content = view.flush_content
+
+    def _tracking_flush_content(reason=None):  # noqa: ANN001, ANN202
+        flush_turn_ended_states.append(view._turn_ended)
+        if reason is None:
+            return original_flush_content()
+        return original_flush_content(reason)
+
+    monkeypatch.setattr(view, "flush_content", _tracking_flush_content)
+
     task = asyncio.create_task(view.visualize_loop(cast(Any, _Wire())))
     # The task is consumed in the finally block; this reference keeps
     # the assignment from being flagged as a no-op by static analysis.
@@ -1076,6 +1093,10 @@ async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkey
         assert view._current_content_block is None
         assert printed
         assert invalidations
+        # The final flush is the turn-end flush; it must have observed
+        # _turn_ended still False, proving flush precedes the flag flip.
+        assert flush_turn_ended_states, "flush_content was never called"
+        assert flush_turn_ended_states[-1] is False
     finally:
         gate.set()
         await task

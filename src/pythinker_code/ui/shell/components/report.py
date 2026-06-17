@@ -178,7 +178,7 @@ _REDUNDANT_REPORT_PREAMBLE_RE = re.compile(
     re.I,
 )
 _REDUNDANT_REPORT_TRAILER_HEADING_RE = re.compile(
-    r"^\s*(?:#{1,6}\s*)?(?:Summary|Top\s+\d+\s+actions?):?\s*$",
+    r"^\s*(?:#{1,6}\s*)?(?:Summary|Headline\s+summary|Top\s+\d+\s+actions?):?\s*$",
     re.I,
 )
 _ARTIFACT_FOOTER_RE = re.compile(
@@ -375,14 +375,16 @@ _COMPACT_REPORT_BODY_CHAR_THRESHOLD = 800
 _COMPACT_REPORT_LOCATION_CHAR_THRESHOLD = 240
 
 
-def _should_render_compact_report(report: Report) -> bool:
+def _report_layout_mode(report: Report) -> Literal["panel", "compact"]:
     body_chars = sum(len(finding.body) for finding in report.findings)
     location_chars = sum(len(finding.location or "") for finding in report.findings)
-    return (
-        len(report.findings) >= _COMPACT_REPORT_FINDING_THRESHOLD
-        or body_chars >= _COMPACT_REPORT_BODY_CHAR_THRESHOLD
-        or location_chars >= _COMPACT_REPORT_LOCATION_CHAR_THRESHOLD
-    )
+    if len(report.findings) <= 4 and body_chars < 400 and location_chars < 250:
+        return "panel"
+    return "compact"
+
+
+def _should_render_compact_report(report: Report) -> bool:
+    return _report_layout_mode(report) == "compact"
 
 
 def _summary_line(counts: dict[Severity, int], theme: ThemeName | None) -> Text:
@@ -513,15 +515,38 @@ def _render_compact_report(
         rows.append(Text(""))
         rows.append(Text(report.note, style=_secondary_style(theme)))
 
+    visible_severities: set[Severity] = {"critical", "high"}
+    medium_findings = [f for f in report.findings if f.severity == "medium"]
+    medium_body_chars = sum(len(finding.body) for finding in medium_findings)
+    if len(medium_findings) <= 3 and medium_body_chars < 500:
+        visible_severities.add("medium")
+
     for severity in _SEVERITY_ORDER:
         group = [f for f in report.findings if f.severity == severity]
-        if not group:
+        if not group or severity not in visible_severities:
             continue
         rows.append(Text(""))
         rows.append(_render_section_header(severity, theme))
         for index, finding in enumerate(group, start=1):
             rows.append(Text(""))
             rows.append(_render_compact_finding(index, finding, theme))
+
+    collapsed: list[Severity] = [
+        severity
+        for severity in _SEVERITY_ORDER
+        if counts[severity] and severity not in visible_severities
+    ]
+    if collapsed:
+        rows.append(Text(""))
+        rows.append(Text("Other findings", style=tui_rich_style("tool_title", theme=theme)))
+        for severity in collapsed:
+            rows.append(
+                Text(
+                    f"{severity.capitalize()}: {counts[severity]}",
+                    style=_secondary_style(theme),
+                )
+            )
+        rows.append(Text("See saved report for full inventory.", style=_secondary_style(theme)))
 
     return Group(*rows)
 
@@ -648,17 +673,19 @@ def _filter_report_preamble(text: str, report: Report) -> str:
     return text
 
 
-def _filter_report_trailer(text: str, report: Report | None) -> str:
-    """Keep artifact footers and short nonredundant prose; drop duplicated summaries."""
-    if not text.strip():
+def _compact_artifact_footer(line: str) -> str:
+    return compact_known_paths(line)
+
+
+def strip_redundant_report_trailer(rest: str, report: Report) -> str:
+    """Keep useful post-report prose while dropping duplicate report summaries."""
+    if not rest.strip():
         return ""
-    if report is None:
-        return text
 
     kept: list[str] = []
     skipping_redundant_block = False
 
-    for line in text.splitlines():
+    for line in rest.splitlines():
         stripped = line.strip()
 
         if not stripped:
@@ -667,7 +694,7 @@ def _filter_report_trailer(text: str, report: Report | None) -> str:
             continue
 
         if _ARTIFACT_FOOTER_RE.match(stripped):
-            kept.append(line)
+            kept.append(_compact_artifact_footer(line))
             skipping_redundant_block = False
             continue
 
@@ -678,12 +705,27 @@ def _filter_report_trailer(text: str, report: Report | None) -> str:
         if skipping_redundant_block:
             continue
 
+        if _REDUNDANT_REPORT_PREAMBLE_RE.match(stripped):
+            continue
+
+        if _parse_aligned_field_line(line) is not None:
+            continue
+
         if report.note and _NUMBERED_ACTION_RE.match(stripped):
             continue
 
         kept.append(line)
 
     return "\n".join(kept).strip("\n")
+
+
+def _filter_report_trailer(text: str, report: Report | None) -> str:
+    """Keep artifact footers and short nonredundant prose; drop duplicated summaries."""
+    if not text.strip():
+        return ""
+    if report is None:
+        return text
+    return strip_redundant_report_trailer(text, report)
 
 
 def _render_agent_segment(text: str, *, theme: ThemeName | None = None) -> RenderableType:
