@@ -1082,6 +1082,16 @@ def test_render_diff_colorizes_added_removed():
     assert "world" in plain
 
 
+def test_render_diff_strips_ansi_control_sequences():
+    """Diff bodies carry untrusted file/model content; a crafted edit must not
+    smuggle ANSI/control escapes into the terminal through the diff card."""
+    diff = "- safe\n+ \x1b[31mRED\x1b[0m\x07evil"
+    plain = render_plain(render_diff(diff, path="/x.py"), width=80)
+    assert "\x1b" not in plain  # CSI escape stripped
+    assert "\x07" not in plain  # BEL stripped
+    assert "RED" in plain and "evil" in plain  # visible text preserved
+
+
 def test_render_diff_spaces_marker_before_at_rule():
     old = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1); } }\n"
     new = "@keyframes drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }\n"

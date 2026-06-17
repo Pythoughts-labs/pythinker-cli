@@ -15,6 +15,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **TUI: diff cards strip terminal control sequences.** Inline file-diff bodies
+  (Update/Write cards, approval and pager diffs) now sanitize ANSI/control escapes
+  from the untrusted file and model-supplied edit content before rendering, so a
+  crafted edit can no longer smuggle cursor-movement or color escapes into the
+  terminal through a diff card. Visible text is preserved.
 - **TUI: interactive resize/handoff ghosting.** Scrollback handoffs in prompt mode
   now fully suppress the transient preamble (agent stream body, verb spinner, and
   tips) while ``run_in_terminal`` emits permanent scrollback, so stacked
