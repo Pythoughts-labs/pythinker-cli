@@ -16,7 +16,7 @@ from pythinker_host import Host
 from pythinker_code.config import LspServerConfig
 from pythinker_code.lsp.client import LspClient
 from pythinker_code.lsp.framing import LspProtocolError
-from pythinker_code.lsp.protocol import InitializeParams
+from pythinker_code.lsp.protocol import InitializeParams, ServerCapabilities
 
 LSP_ERROR_CONTENT_MODIFIED = -32801
 MAX_RETRIES_FOR_TRANSIENT_ERRORS = 3
@@ -61,6 +61,10 @@ class LspServerInstance:
     @property
     def state(self) -> LspState:
         return self._state
+
+    @property
+    def capabilities(self) -> ServerCapabilities | None:
+        return self._client.capabilities
 
     def is_healthy(self) -> bool:
         return self._state == LspState.RUNNING and self._client.is_initialized
@@ -240,6 +244,7 @@ def _build_initialize_params(config: LspServerConfig, workspace_folder: str) -> 
                     "dynamicRegistration": False,
                     "linkSupport": True,
                 },
+                "implementation": {"dynamicRegistration": False},
                 "references": {"dynamicRegistration": False},
                 "documentSymbol": {
                     "dynamicRegistration": False,

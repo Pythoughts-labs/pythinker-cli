@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **LSP `go_to_implementation` now returns a structured error when the server does not advertise `implementationProvider`** instead of surfacing a raw exception. The client also advertises `implementation` capability during the LSP handshake so servers like Pyright enable the provider automatically.
+
 - **TUI composing preview wraps space-aligned report prose cleanly.** The
   streaming preview now runs the same lightweight space-column normalizer used at
   finalize and wraps long `Severity`/`Location`/`What` rows with a hanging

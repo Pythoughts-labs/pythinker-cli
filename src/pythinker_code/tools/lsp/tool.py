@@ -96,6 +96,21 @@ class Lsp(_tooling.CallableTool2[Params]):
                     return size_error
 
             method, request_params = _method_and_params(params, absolute_path)
+
+            if params.operation == Operation.GO_TO_IMPLEMENTATION:
+                server = manager.server_for_file(absolute_path)
+                if (
+                    server is not None
+                    and server.capabilities is not None
+                    and not server.capabilities.implementationProvider
+                ):
+                    return builder.error(
+                        "LSP operation unsupported by current server: "
+                        f"operation: go_to_implementation, server: {server.name}, "
+                        "reason: server does not advertise implementationProvider",
+                        brief=self._brief(params),
+                    )
+
             # A None result here means the server ran and returned an empty/null
             # response (e.g. definition not found) — distinct from "no server",
             # which is handled above. format_result() renders empty as guidance.

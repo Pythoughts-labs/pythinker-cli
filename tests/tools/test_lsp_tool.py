@@ -29,6 +29,7 @@ from pathlib import Path
 LOG = os.environ.get("LSP_TEST_LOG")
 WORKSPACE = os.environ.get("LSP_WORKSPACE", "")
 EMPTY = os.environ.get("LSP_EMPTY") == "1"
+NO_IMPL = os.environ.get("LSP_NO_IMPL") == "1"
 
 
 def sample_uri():
@@ -135,7 +136,8 @@ while True:
         method = msg["method"]
         params = msg.get("params", {})
         if method == "initialize":
-            write_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": {}}})
+            caps = {} if NO_IMPL else {"implementationProvider": True}
+            write_msg({"jsonrpc": "2.0", "id": req_id, "result": {"capabilities": caps}})
         elif method == "shutdown":
             write_msg({"jsonrpc": "2.0", "id": req_id, "result": None})
         elif method == "textDocument/definition":
@@ -184,13 +186,17 @@ def _tool_output_text(result: ToolReturnValue) -> str:
     return result.output
 
 
-def _server_config(*, log_file: Path, workspace: Path, empty: bool = False) -> LspServerConfig:
+def _server_config(
+    *, log_file: Path, workspace: Path, empty: bool = False, no_impl: bool = False
+) -> LspServerConfig:
     env = {
         "LSP_TEST_LOG": str(log_file),
         "LSP_WORKSPACE": str(workspace),
     }
     if empty:
         env["LSP_EMPTY"] = "1"
+    if no_impl:
+        env["LSP_NO_IMPL"] = "1"
     return LspServerConfig.model_validate(
         {
             "command": sys.executable,
@@ -202,13 +208,19 @@ def _server_config(*, log_file: Path, workspace: Path, empty: bool = False) -> L
     )
 
 
-async def _setup_lsp_runtime(runtime, tmp_path: Path, *, empty: bool = False):
+async def _setup_lsp_runtime(
+    runtime, tmp_path: Path, *, empty: bool = False, no_impl: bool = False
+):
     log_file = tmp_path / "lsp.log"
     runtime.config.lsp.enabled = True
     runtime.session.work_dir = HostPath(str(tmp_path))
     service = LspService.create(
         runtime,
-        servers={"fake": _server_config(log_file=log_file, workspace=tmp_path, empty=empty)},
+        servers={
+            "fake": _server_config(
+                log_file=log_file, workspace=tmp_path, empty=empty, no_impl=no_impl
+            )
+        },
     )
     runtime.lsp = service
     await service.wait_for_init()
@@ -472,3 +484,24 @@ def test_format_result_document_symbol_fallback_counts_unique_files() -> None:
     _formatted, count, file_count = format_result("documentSymbol", symbols, None)
     assert count == 2
     assert file_count == 2
+
+
+@pytest.mark.asyncio
+async def test_go_to_implementation_unsupported_server(runtime, tmp_path: Path) -> None:
+    # Server omits implementationProvider from its capabilities — guard must
+    # return a structured error before sending the request.
+    service, _ = await _setup_lsp_runtime(runtime, tmp_path, no_impl=True)
+    _sample_file(tmp_path)
+    tool = Lsp(runtime)
+
+    result = await tool(
+        Params(
+            operation=Operation.GO_TO_IMPLEMENTATION, file_path="sample.py", line=2, character=5
+        ),
+    )
+
+    assert result.is_error
+    assert "go_to_implementation" in result.message
+    assert "implementationProvider" in result.message
+    assert "fake" in result.message
+    await service.shutdown()
