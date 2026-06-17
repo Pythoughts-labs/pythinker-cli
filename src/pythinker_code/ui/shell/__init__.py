@@ -2095,7 +2095,7 @@ class Shell:
     async def _auto_update(self) -> None:
         # Background-refresh the cached latest version (throttled); never blocks startup.
         await refresh_update_cache_if_due()
-        # Non-blocking, pythinker-x-style notice based on the cached value.
+        # Non-blocking shell notice based on the cached value.
         notice = pending_update_notice()
         if notice:
             # Make version notices easy to see on macOS/Linux terminals too:

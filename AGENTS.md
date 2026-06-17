@@ -355,6 +355,11 @@ see `docs/en/customization/architecture.md`. This list is a quick orientation on
 - Side-effecting tools must respect approval/runtime policy. Read-only helpers should be clearly
   documented as read-only.
 - Tool results should be concise, structured, and safe to replay into model context.
+- **Prefer `LSP` when available.** The `LSP` tool (default agent + `coder` subagent) uses
+  plugin-backed language servers for semantic code intelligence. When `config.lsp.enabled` is true
+  and a server covers the file type, use it for go-to-definition, references, hover, symbols, and
+  call hierarchy instead of brute-force `Grep`/`ReadFile` scanning. Fall back to text search when LSP
+  is unavailable, still initializing, or returns no results. See `docs/en/customization/lsp.md`.
 
 ### Context, compaction, and session longevity
 
@@ -428,7 +433,9 @@ Pythinker agents should behave like coordinated specialists, not one long-runnin
 everything sequentially.
 
 - **Preview before deep work**: for non-trivial tasks, scan the tree, file headers, relevant docs,
-  and nearby tests before choosing an implementation path.
+  and nearby tests before choosing an implementation path. When the `LSP` tool is available, prefer
+  it for symbol navigation (definitions, references, call hierarchy, hover) over manual grep/read
+  sweeps; fall back to `Grep`/`ReadFile` when no language server covers the file type.
 - **Keep work visible**: use todo/plan tooling for multi-step root-agent work and update it as
   evidence changes the plan.
 - **Parallelize independent work**: batch unrelated reads/searches/checks in one turn. If an
@@ -452,8 +459,8 @@ everything sequentially.
   default. Include goal, scope, paths, constraints, success criteria, and expected output.
 - **Use map-reduce workflows**: scout -> plan -> implement -> review -> fix -> verify -> judge.
 - **Verify evidence**: after reads, confirm exact paths/line ranges; after grep, confirm relevance;
-  after shell, inspect stdout/stderr; after subagent reports, cross-check at least one load-bearing
-  finding directly.
+  after LSP, spot-check one cited definition/reference in source; after shell, inspect
+  stdout/stderr; after subagent reports, cross-check at least one load-bearing finding directly.
 - **Subagent final reports** should include `SUMMARY`, `EVIDENCE`, `CHANGES`, `RISKS`, and
   `BLOCKERS`. `EVIDENCE` should cite concrete file paths, line ranges, commands, or search hits.
 
@@ -513,7 +520,7 @@ everything sequentially.
 - Line length is 100.
 - Ruff handles lint and format (`E`, `F`, `UP`, `B`, `SIM`, `I`).
 - Pyright runs in standard mode with strict coverage for `src/pythinker_code/**/*.py`.
-- `ty` is run but currently non-blocking in Makefile targets.
+- `ty` is run and **blocking** in `check-pythinker-code`; other package targets still use `|| true` due to third-party type stubs. Keep `pythinker-code` ty-clean.
 - Tests use `pytest` and `pytest-asyncio`; unit tests are `tests/test_*.py`.
 - Prefer explicit async boundaries; avoid blocking calls in async runtime paths.
 - Keep exceptions actionable. User-facing CLI errors should explain what to do next.

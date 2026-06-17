@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BLANK_ROW",
+    "PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT",
     "STREAM_GAP_ROWS",
     "SECTION_GAP_ROWS",
     "CARD_PADDING",
@@ -45,6 +46,9 @@ __all__ = [
 
 #: Canonical blank renderable. Shared instance — Rich re-renders it per use.
 BLANK_ROW: Final = Text("")
+
+#: Shown when the interactive prompt preamble or live preview row budget hides top rows.
+PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT: Final = "earlier output hidden · Ctrl+O expand"
 
 #: Rows the live stream inserts between successive action blocks.
 STREAM_GAP_ROWS: Final = 1

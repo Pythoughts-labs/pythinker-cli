@@ -4,11 +4,14 @@ import json
 
 import pytest
 from pythinker_core.message import ToolCall
-from pythinker_core.tooling import ToolError, ToolOk
+from pythinker_core.tooling import ToolError, ToolOk, ToolReturnValue
 from rich.console import Console
 
 from pythinker_code.ui.shell.tool_renderers import (
+    ToolRenderContext,
+    ToolResultPayload,
     clear_tool_renderers,
+    get_tool_renderer,
     register_builtin_renderers,
 )
 from pythinker_code.ui.shell.visualize import _ToolCallBlock, _worklog
@@ -450,3 +453,40 @@ def test_run_agents_foreground_completion_is_not_background_pending():
     )
     assert block.finished
     assert not block.is_background_pending
+
+
+def test_lsp_card_boundary_passes_nested_count_extras_to_renderer(
+    _card_style_with_builtin_renderers,
+):
+    result = ToolReturnValue(
+        is_error=False,
+        output="src/foo.py:12:8\nsrc/foo.py:20:4",
+        message="",
+        display=[],
+        extras={"operation": "findReferences", "result_count": 2, "file_count": 1},
+    )
+    details = _ToolCallBlock._card_result_details(result)
+    payload = ToolResultPayload(
+        text=_ToolCallBlock._card_result_text(result),
+        is_error=result.is_error,
+        details=details,
+    )
+    ctx = ToolRenderContext(
+        args={"operation": "hover"},
+        tool_call_id="tc-lsp",
+        has_result=True,
+    )
+    renderer = get_tool_renderer("LSP")
+
+    assert renderer is not None
+    assert renderer.render_result is not None
+    rendered = _plain(renderer.render_result(ctx, payload))
+
+    assert details["extras"] == {
+        "operation": "findReferences",
+        "result_count": 2,
+        "file_count": 1,
+    }
+    assert "Found 2 references" in rendered
+    assert "Hover info available" not in rendered
+    assert "src/foo.py:12:8" not in rendered

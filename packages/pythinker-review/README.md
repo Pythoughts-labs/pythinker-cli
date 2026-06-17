@@ -99,9 +99,9 @@ The stateful Reviewflow workflow writes `.pythinker-review-flow/` by default:
 
 `.gitignore` is auto-patched idempotently on first diff save if a `.gitignore` file already exists.
 
-## Blackbox parity hardening
+## Reference parity hardening
 
-Phase 1 now ports the highest-value behavior from the mounted blackbox repos:
+Phase 1 now ports the highest-value behavior from the upstream review packages:
 
 - Reviewflow-style evidence validation uses line-numbered prompt manifests and rejects findings
   outside the reviewed chunk/feature, unsafe paths, omitted/truncated line ranges, or non-matching

@@ -594,3 +594,19 @@ def test_refresh_resumed_legacy_prompt_inserts_guard():
 
     assert guard in refreshed
     assert refreshed.index(guard) < refreshed.index("Before every tool response")
+
+
+def test_default_system_prompt_prevents_duplicate_report_prose() -> None:
+    from pathlib import Path
+
+    prompt = Path("src/pythinker_code/agents/default/system.md").read_text(encoding="utf-8")
+
+    assert (
+        "either one fenced ` ```report ` JSON block or prose — never both as separate full summaries"
+        in prompt
+    )
+    assert "only a compact artifact footer is allowed" in prompt
+    assert (
+        "Do not repeat counts, headline summaries, top actions, findings, or severity "
+        "summaries outside the report block" in prompt
+    )

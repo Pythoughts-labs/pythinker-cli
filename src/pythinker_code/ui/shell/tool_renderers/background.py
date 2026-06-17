@@ -1,11 +1,13 @@
 """Pythinker renderers for Pythinker's background-task tools.
 
-Covers ``TaskList``, ``TaskOutput``, and ``TaskStop``.
+Covers ``TaskList``, ``TaskOutput``, ``TaskInput``, ``TaskHandoff``, and ``TaskStop``.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from typing import cast
 
 from rich.console import Group, RenderableType
 from rich.text import Text
@@ -29,9 +31,15 @@ from pythinker_code.ui.shell.tool_renderers._render_utils import (
     normalize_agent_status,
     pending_tool_call_header,
     running_spinner,
+    shorten_path,
     tool_call_header,
 )
 from pythinker_code.ui.theme import tui_rich_style
+
+_SECRET_LIKE_INPUT_RE = re.compile(
+    r"(?i)(api[_-]?key|auth|bearer|credential|passwd|password|secret|token)"
+)
+_TASK_INPUT_PREVIEW_LIMIT = 120
 
 # Process-wide resolver: task_id -> human description. Registered by the shell
 # from the runtime's background-task store so a TaskOutput/TaskStop header can
@@ -137,6 +145,64 @@ def _parse_task_output(text: str) -> tuple[dict[str, str], str, bool]:
         if rest:
             body = rest.strip()
     return meta, body, saw_output_marker
+
+
+def _parse_task_metadata(text: str) -> dict[str, str]:
+    """Parse simple ``key: value`` metadata emitted by background tools."""
+    meta: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        if ":" not in raw_line:
+            continue
+        key, _, value = raw_line.partition(":")
+        key = key.strip()
+        if key and " " not in key:
+            meta[key] = value.strip()
+    return meta
+
+
+def _result_extras(result: ToolResultPayload) -> dict[str, object]:
+    extras = result.details.get("extras")
+    return cast("dict[str, object]", extras) if isinstance(extras, dict) else {}
+
+
+def _tool_status_from_result(result: ToolResultPayload, meta: dict[str, str]) -> str:
+    status = _result_extras(result).get("status")
+    if isinstance(status, str) and status:
+        return status
+    return meta.get("tool_status") or meta.get("status", "")
+
+
+def _status_display(status: str) -> str:
+    return status.replace("_", " ").strip()
+
+
+def _safe_task_input_preview(text: str) -> str:
+    if _SECRET_LIKE_INPUT_RE.search(text):
+        return "[redacted: input looks secret-like]"
+    single_line = " ".join(text.splitlines())
+    if len(single_line) > _TASK_INPUT_PREVIEW_LIMIT:
+        return single_line[: _TASK_INPUT_PREVIEW_LIMIT - 3] + "..."
+    return single_line
+
+
+def _render_expanded_metadata(
+    summary: Text,
+    text: str,
+    *,
+    collapsed_lines: int = 12,
+) -> RenderableType:
+    body, remaining = format_lines_block(
+        text,
+        expanded=True,
+        collapsed_max_lines=collapsed_lines,
+        style_token="tool_output",
+    )
+    children: list[RenderableType] = [summary]
+    if body.plain:
+        children.append(body)
+    if remaining > 0:
+        children.append(fg("muted", f"… ({remaining} more lines)"))
+    return Group(*children)
 
 
 def _read_output_collapsed_hint() -> Text:
@@ -281,6 +347,113 @@ TASK_OUTPUT_RENDERER = ToolRenderDefinition(
     render_shell="default",
     render_call=_render_task_output_call,
     render_result=lambda ctx, r: _render_task_output_result(ctx, r, collapsed_lines=20),
+)
+
+
+# ---------------------------------------------------------------------------
+# TaskInput
+# ---------------------------------------------------------------------------
+
+
+def _render_task_input_call(ctx: ToolRenderContext) -> RenderableType:
+    args = ctx.args or {}
+    extras: list[str] = []
+    text = as_str(args.get("text"))
+    if text is None:
+        if "text" in args:
+            extras.append("<invalid input>")
+        elif ctx.has_result:
+            extras.append("<missing text>")
+    else:
+        extras.append(_safe_task_input_preview(text))
+    if args.get("newline") is False:
+        extras.append("no newline")
+    return _render_call_with_id("TaskInput", ctx, extras=extras)
+
+
+def _render_task_input_result(
+    ctx: ToolRenderContext,
+    result: ToolResultPayload,
+) -> RenderableType | None:
+    _stash_task_label(ctx, result)
+    if not result.text:
+        return None
+    if result.is_error:
+        return _render_block_result(ctx, result)
+
+    meta = _parse_task_metadata(result.text)
+    if not meta:
+        return _render_block_result(ctx, result)
+
+    summary = Text("Input queued", style=tui_rich_style("tool_output"))
+    if status := _status_display(_tool_status_from_result(result, meta)):
+        summary.append_text(fg("muted", f" · {status}"))
+    if newline := meta.get("newline"):
+        summary.append_text(fg("muted", f" · newline {newline}"))
+
+    if ctx.expanded:
+        return _render_expanded_metadata(summary, result.text)
+
+    ctx.state["__has_expandable_payload__"] = True
+    return summary
+
+
+TASK_INPUT_RENDERER = ToolRenderDefinition(
+    name="TaskInput",
+    label="task input",
+    render_shell="default",
+    render_call=_render_task_input_call,
+    render_result=_render_task_input_result,
+)
+
+
+# ---------------------------------------------------------------------------
+# TaskHandoff
+# ---------------------------------------------------------------------------
+
+
+def _render_task_handoff_call(ctx: ToolRenderContext) -> RenderableType:
+    return _render_call_with_id("TaskHandoff", ctx, extras=[])
+
+
+def _render_task_handoff_result(
+    ctx: ToolRenderContext,
+    result: ToolResultPayload,
+) -> RenderableType | None:
+    _stash_task_label(ctx, result)
+    if not result.text:
+        return None
+    if result.is_error:
+        return _render_block_result(ctx, result)
+
+    meta = _parse_task_metadata(result.text)
+    if not meta:
+        return _render_block_result(ctx, result)
+
+    summary = Text("Handoff details", style=tui_rich_style("tool_output"))
+    for value in (
+        _status_display(_tool_status_from_result(result, meta)),
+        normalize_agent_status(meta.get("status", "")),
+        meta.get("description", ""),
+    ):
+        if value:
+            summary.append_text(fg("muted", f" · {value}"))
+    if output_path := meta.get("output_path"):
+        summary.append_text(fg("muted", f" · {shorten_path(output_path, cwd=ctx.cwd)}"))
+
+    if ctx.expanded:
+        return _render_expanded_metadata(summary, result.text)
+
+    ctx.state["__has_expandable_payload__"] = True
+    return summary
+
+
+TASK_HANDOFF_RENDERER = ToolRenderDefinition(
+    name="TaskHandoff",
+    label="task handoff",
+    render_shell="default",
+    render_call=_render_task_handoff_call,
+    render_result=_render_task_handoff_result,
 )
 
 

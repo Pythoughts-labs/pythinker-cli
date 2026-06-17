@@ -55,7 +55,7 @@
       session notes 2026-06-12; permission tokenization is POSIX-blind for
       PowerShell syntax (gate review needed before shipping).
 - [ ] Live MCP reconnect / `tools/list_changed` — the one real remnant left
-      from the (now-deleted) blackbox-port and agent-enhancement plans. Today
+      from the (now-deleted) reference-port and agent-enhancement plans. Today
       `cli/mcp.py` has list/remove/auth/reset-auth/test only and
       `toolset.py:1435` is just a forward-looking comment. Add
       `/mcp reconnect|disconnect|refresh` verbs + a `tools/list_changed`

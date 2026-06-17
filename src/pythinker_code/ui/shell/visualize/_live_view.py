@@ -19,7 +19,6 @@ from pythinker_core.message import Message
 from pythinker_core.tooling import ToolError, ToolOk, ToolReturnValue
 from rich import box
 from rich.console import Group, RenderableType
-from rich.live import Live
 from rich.markup import escape as rich_escape
 from rich.padding import Padding
 from rich.panel import Panel
@@ -45,7 +44,6 @@ from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
 from pythinker_code.ui.shell.motion import (
-    STREAM_FPS,
     STREAM_FRAME_INTERVAL_S,
     ActivitySnapshot,
     active_marker_frame,
@@ -53,6 +51,7 @@ from pythinker_code.ui.shell.motion import (
     blink_visible,
     reduced_motion_enabled,
     shimmer_text,
+    stream_reveal_interval_s,
 )
 from pythinker_code.ui.shell.spacing import BLANK_ROW, emit_scrollback_block
 from pythinker_code.ui.shell.spinner_words import spinner_message
@@ -64,6 +63,7 @@ from pythinker_code.ui.shell.visualize._approval_panel import (
 from pythinker_code.ui.shell.visualize._blocks import (
     _TOKEN_RATE_MIN_SAMPLES,
     _TOKEN_RATE_WINDOW_S,
+    FlushReason,
     Markdown,
     _CompactionBlock,
     _ContentBlock,
@@ -74,7 +74,9 @@ from pythinker_code.ui.shell.visualize._blocks import (
     _StatusBlock,
     _SuggestionBlock,
     _ToolCallBlock,
+    smooth_streaming_enabled,
 )
+from pythinker_code.ui.shell.visualize._diff_live import DiffLive
 from pythinker_code.ui.shell.visualize._question_panel import (
     QuestionRequestPanel,
     prompt_other_input,
@@ -125,6 +127,10 @@ from pythinker_code.wire.types import (
 
 MAX_LIVE_NOTIFICATIONS = 4
 EXTERNAL_MESSAGE_GRACE_S = 0.1
+_TRANSITION_DRAIN_MAX_TICKS = 12
+_COMPOSE_BATCH_PERIOD_S = 0.01
+_COMPOSE_BATCH_MAX_DURATION_S = 1 / 60
+_SCROLLED_COMPOSE_FPS = 16
 _LIVE_VERTICAL_OVERFLOW: Literal["crop", "ellipsis", "visible"] = "ellipsis"
 # Canonical inter-block spacer. The live stream owns the gaps *between* action
 # blocks; cards/panels must not add external top/bottom spacing (see spacing.py).
@@ -213,10 +219,9 @@ class _LiveView:
         self._cancel_event = cancel_event
         self._show_thinking_stream = show_thinking_stream
         self._show_turn_recaps = show_turn_recaps
-        # Paced reveal of streamed composing text. Off by default; the
-        # interactive prompt view enables it (it owns the reveal tick), so the
-        # non-interactive Rich Live path stays byte-for-byte unchanged.
-        self._stream_pacing = False
+        # Paced reveal of streamed composing text. Disabled under reduced motion
+        # so motion-sensitive users get immediate reveal, not a typewriter.
+        self._stream_pacing = smooth_streaming_enabled() and not reduced_motion_enabled()
 
         self._active_turn_depth = 0
         self._turn_start_time: float | None = None
@@ -262,12 +267,15 @@ class _LiveView:
         self._dirty = False
         self._force_refresh = False
         self._external_messages: Queue[WireMessage] = Queue()
+        self._live: DiffLive | None = None
 
-    def _reset_live_shape(self, live: Live) -> None:
+    def _reset_live_shape(self, live: DiffLive) -> None:
         # Rich doesn't expose a public API to clear Live's cached render height.
         # After leaving the pager, stale height causes cursor restores to jump,
         # so we reset the private _shape to re-anchor the next refresh.
-        live._live_render._shape = None  # type: ignore[reportPrivateUsage]
+        live_render = getattr(live, "_live_render", None)
+        if live_render is not None:
+            live_render._shape = None  # type: ignore[reportPrivateUsage]
 
     async def _drain_external_message_after_wire_shutdown(
         self,
@@ -282,12 +290,150 @@ class _LiveView:
             return None, external_task
         return msg, asyncio.create_task(self._external_messages.get())
 
-    async def _frame_refresh_loop(self, live: Live) -> None:
+    def _stream_compose_interval_s(self) -> float:
+        """Adaptive compose cadence: throttle when the live tail is long."""
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return STREAM_FRAME_INTERVAL_S
+        if block._committed_renderables or len(block._pending_text()) > 1500:
+            return 1 / _SCROLLED_COMPOSE_FPS
+        return STREAM_FRAME_INTERVAL_S
+
+    async def _emit_incremental_content_commits(self) -> bool:
+        """Emit stable markdown slices to scrollback during an active stream."""
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return False
+        committed = block.take_committed_renderables()
+        if not committed:
+            return False
+        for renderable in committed:
+            self._emit_incremental_scrollback(renderable)
+        await self._after_incremental_scrollback_emitted()
+        return True
+
+    async def _after_incremental_scrollback_emitted(self) -> None:
+        """Hook for subclasses (prompt_toolkit invalidate) after scrollback emit."""
+
+    def _transition_flush_reason(self, msg: WireMessage) -> FlushReason | None:
+        if isinstance(msg, (ToolCall, QuestionAnswered, ProgressNote, Suggestion, PlanDisplay)):
+            return FlushReason.TOOL_START
+        block = self._current_content_block
+        if block is None:
+            return None
+        if isinstance(msg, ThinkPart) and not block.is_think:
+            return FlushReason.TEXT_TO_THINK
+        if isinstance(msg, TextPart) and block.is_think:
+            return FlushReason.THINK_TO_TEXT
+        return None
+
+    async def _drain_content_for_transition(self, reason: FlushReason) -> None:
+        if reason not in {
+            FlushReason.TOOL_START,
+            FlushReason.TEXT_TO_THINK,
+            FlushReason.THINK_TO_TEXT,
+        }:
+            return
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return
+        for _ in range(_TRANSITION_DRAIN_MAX_TICKS):
+            if self._current_content_block is not block:
+                return
+            has_more = block.drain_for_transition()
+            emitted = await self._emit_incremental_content_commits()
+            if emitted or block.has_active_stream_preview():
+                self._dirty = True
+            if not has_more:
+                return
+            await asyncio.sleep(stream_reveal_interval_s())
+
+    async def _dispatch_collected_messages(
+        self,
+        messages: list[WireMessage],
+        *,
+        from_external: bool,
+        live: DiffLive,
+    ) -> None:
+        """Dispatch messages already accumulated during a wire batch.
+
+        Used on the wire-shutdown path: ``_extend_wire_batch`` returns a
+        ``wire_closed`` flag, and the caller can then flush the buffered
+        messages through the same logic the normal loop uses (transition
+        drain, dispatch, refresh) before re-raising ``QueueShutDown`` to
+        run cleanup. The duplication of the dispatch loop here is
+        intentional — it keeps the shutdown path independent of the live
+        loop body and avoids dropping the final ``TurnEnd``/``ToolResult``.
+        """
+        for msg in messages:
+            if isinstance(msg, StepInterrupted):
+                self.cleanup(is_interrupt=True)
+                self._flush_live_refresh(live, force=True)
+                return
+            if reason := self._transition_flush_reason(msg):
+                await self._drain_content_for_transition(reason)
+            self.dispatch_wire_message(msg)
+            if from_external:
+                self._flush_live_refresh(live, force=True)
+
+    async def _extend_wire_batch(
+        self,
+        wire: WireUISide,
+        wire_task: asyncio.Task[WireMessage],
+        messages: list[WireMessage],
+    ) -> tuple[asyncio.Task[WireMessage], bool]:
+        """Coalesce bursty wire delivery before dispatch (short batch window).
+
+        Returns the (possibly new) ``wire_task`` plus a ``wire_closed`` flag.
+        The flag is ``True`` when the wire is shut down before the batch
+        window closes so the caller can dispatch the accumulated ``messages``
+        before running shutdown cleanup. Without this guard, a final
+        ``TurnEnd``/``ToolResult`` arriving just before shutdown could be
+        dropped because the next ``wire.receive()`` raises ``QueueShutDown``
+        and unwinds out of this coroutine.
+        """
+        deadline = time.monotonic() + _COMPOSE_BATCH_MAX_DURATION_S
+        while time.monotonic() < deadline:
+            if wire_task.done():
+                try:
+                    messages.append(wire_task.result())
+                except QueueShutDown:
+                    return wire_task, True
+                try:
+                    wire_task = asyncio.create_task(wire.receive())
+                except RuntimeError:
+                    # wire.receive() refused to create a new task because
+                    # the wire is already shut down — treat as a closed
+                    # wire so the caller dispatches ``messages`` and exits.
+                    return wire_task, True
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, _ = await asyncio.wait(
+                [wire_task],
+                timeout=min(_COMPOSE_BATCH_PERIOD_S, remaining),
+            )
+            if wire_task in done:
+                try:
+                    messages.append(wire_task.result())
+                except QueueShutDown:
+                    return wire_task, True
+                try:
+                    wire_task = asyncio.create_task(wire.receive())
+                except RuntimeError:
+                    return wire_task, True
+        return wire_task, False
+
+    async def _frame_refresh_loop(self, live: DiffLive) -> None:
         """Coalesce wire-driven repaints to the streaming frame budget."""
         try:
             while True:
-                await asyncio.sleep(STREAM_FRAME_INTERVAL_S)
-                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                await asyncio.sleep(self._stream_compose_interval_s())
+                advanced = self.advance_stream_reveal()
+                emitted = await self._emit_incremental_content_commits()
+                needs_animation = self._streaming_needs_animation_frame()
+                if advanced or emitted or needs_animation:
                     self._dirty = True
                 if not self._dirty and not self._force_refresh:
                     continue
@@ -304,7 +450,7 @@ class _LiveView:
             return False
         return block.has_active_stream_preview()
 
-    def _flush_live_refresh(self, live: Live, *, force: bool = False) -> None:
+    def _flush_live_refresh(self, live: DiffLive, *, force: bool = False) -> None:
         """Paint immediately; use for user-initiated repaints only."""
         if not force and not self._dirty and not self._force_refresh:
             return
@@ -313,18 +459,25 @@ class _LiveView:
         self._force_refresh = False
         self._need_recompose = False
 
-    async def visualize_loop(self, wire: WireUISide):
-        with Live(
-            self.compose(),
+    def _open_live_region(self) -> DiffLive:
+        """Return a live-region driver (DiffLive for both TTY and non-TTY).
+
+        DiffLive's non-interactive path is a no-op wrapper that never registers
+        render hooks, so console.print() calls reach stdout directly.  Rich's
+        Live registers a render hook that intercepts prints and swallows them
+        when running with a piped (non-TTY) stdout.
+        """
+        return DiffLive(
             console=console,
-            refresh_per_second=STREAM_FPS,
             transient=True,
-            # Never let the transient Live region paint beyond the terminal
-            # viewport.  Interactive prompt mode has its own row budget; this
-            # protects non-interactive Rich Live mode from tall tool cards,
-            # approval panels, or streaming output overlapping the screen.
-            vertical_overflow=_LIVE_VERTICAL_OVERFLOW,
-        ) as live:
+            get_renderable=self.compose,
+        )
+
+    async def visualize_loop(self, wire: WireUISide):
+        live = self._open_live_region()
+        with live:
+            live.refresh()
+            self._live = live
 
             async def keyboard_handler(listener: KeyboardListener, event: KeyEvent) -> None:
                 # Handle Ctrl+O specially - pause Live only while the pager is active.
@@ -409,10 +562,24 @@ class _LiveView:
                             if wire_task in done:
                                 msg = wire_task.result()
                                 wire_task = asyncio.create_task(wire.receive())
+                                messages = [msg]
+                                wire_task, wire_closed = await self._extend_wire_batch(
+                                    wire, wire_task, messages
+                                )
+                                if wire_closed:
+                                    # Wire shut down mid-batch — dispatch the
+                                    # buffered messages and then run the
+                                    # standard shutdown path so nothing is
+                                    # dropped on the floor.
+                                    await self._dispatch_collected_messages(
+                                        messages, from_external=from_external, live=live
+                                    )
+                                    raise QueueShutDown
                             else:
                                 msg = external_task.result()
                                 external_task = asyncio.create_task(self._external_messages.get())
                                 from_external = True
+                                messages = [msg]
                         except QueueShutDown:
                             (
                                 msg,
@@ -421,6 +588,8 @@ class _LiveView:
                                 external_task
                             )
                             if msg is not None:
+                                if reason := self._transition_flush_reason(msg):
+                                    await self._drain_content_for_transition(reason)
                                 self.dispatch_wire_message(msg)
                                 self._flush_live_refresh(live, force=True)
                                 continue
@@ -428,17 +597,24 @@ class _LiveView:
                             self._flush_live_refresh(live, force=True)
                             break
 
-                        if isinstance(msg, StepInterrupted):
-                            self.cleanup(is_interrupt=True)
-                            self._flush_live_refresh(live, force=True)
-                            break
+                        interrupted = False
+                        for msg in messages:
+                            if isinstance(msg, StepInterrupted):
+                                self.cleanup(is_interrupt=True)
+                                self._flush_live_refresh(live, force=True)
+                                interrupted = True
+                                break
 
-                        self.dispatch_wire_message(msg)
-                        if from_external:
-                            # External (out-of-band) messages — approval requests,
-                            # steer input — are interactive and must paint at once
-                            # rather than wait for the streaming frame budget.
-                            self._flush_live_refresh(live, force=True)
+                            if reason := self._transition_flush_reason(msg):
+                                await self._drain_content_for_transition(reason)
+                            self.dispatch_wire_message(msg)
+                            if from_external:
+                                # External (out-of-band) messages — approval requests,
+                                # steer input — are interactive and must paint at once
+                                # rather than wait for the streaming frame budget.
+                                self._flush_live_refresh(live, force=True)
+                        if interrupted:
+                            break
                 finally:
                     frame_task.cancel()
                     wire_task.cancel()
@@ -450,6 +626,7 @@ class _LiveView:
                         _ = await wire_task
                     with suppress(asyncio.CancelledError, QueueShutDown):
                         _ = await external_task
+            self._live = None
 
     def refresh_soon(self, force: bool = False) -> None:
         self._dirty = True
@@ -598,7 +775,10 @@ class _LiveView:
         return blocks
 
     def compose_agent_output(
-        self, *, include_working_indicator: bool = True
+        self,
+        *,
+        include_working_indicator: bool = True,
+        include_content_activity: bool = True,
     ) -> list[RenderableType]:
         """Spinners, content blocks, tool calls, notifications.
 
@@ -606,10 +786,12 @@ class _LiveView:
         Always safe to render regardless of modal state.
 
         ``include_working_indicator`` controls whether the trailing verb
-        spinner is emitted. The interactive prompt sets it ``False`` so it can
-        pin the spinner *below* a clipped agent stream (see
-        ``render_pinned_status_tail``), keeping it visible instead of letting
-        the clip hint cover it.
+        spinner is emitted. ``include_content_activity`` controls the composing
+        activity row inside the active content block. The interactive prompt
+        sets both ``False`` so it can pin the active spinner *below* a clipped
+        agent stream (see ``render_pinned_status_tail``), keeping it visible
+        instead of letting the clip hint cover it or split the body from the
+        mutable preview.
 
         Display priority (highest → lowest):
           1. MCP loading spinner (connecting to servers)
@@ -633,7 +815,11 @@ class _LiveView:
             if current_step_retry is not None:
                 _append_action_block(blocks, _format_step_retry(current_step_retry), leading=True)
             if self._current_content_block is not None:
-                _append_action_block(blocks, self._current_content_block.compose(), leading=True)
+                _append_action_block(
+                    blocks,
+                    self._current_content_block.compose(include_activity=include_content_activity),
+                    leading=True,
+                )
             # When an approval panel is on-screen for a specific tool call, the
             # panel already previews the same command/diff that the pending tool
             # card would show. Suppress the matching card to avoid the duplicate.
@@ -680,9 +866,9 @@ class _LiveView:
             if isinstance(block, DiffDisplayBlock) and block.path:
                 self._recap_files_modified.add(block.path)
 
-    def _print_turn_recap(self) -> None:
+    def _build_turn_recap_block(self) -> RenderableType | None:
         if not self._show_turn_recaps:
-            return
+            return None
         # TextPart values are streaming deltas, not paragraphs. Concatenate them
         # directly; joining with spaces/newlines can split BPE-sized chunks into
         # unreadable recap text such as `. py think er /re ports ...`.
@@ -694,16 +880,20 @@ class _LiveView:
             files_changed=len(self._recap_files_modified),
         )
         if not line:
+            return None
+        return Padding(
+            Markdown(sanitize_ansi(line), style=tui_rich_style("muted") + Style(italic=True)),
+            (0, 1),
+        )
+
+    def _print_turn_recap(self) -> None:
+        block = self._build_turn_recap_block()
+        if block is None:
             return
         console.print()
         # Pad the recap to the same horizontal inset as message/tool cards so
         # it stays aligned with the transcript instead of spanning edge-to-edge.
-        console.print(
-            Padding(
-                Markdown(sanitize_ansi(line), style=tui_rich_style("muted") + Style(italic=True)),
-                (0, 1),
-            )
-        )
+        console.print(block)
         console.print()
 
     def _working_indicator(self) -> RenderableType:
@@ -982,7 +1172,7 @@ class _LiveView:
                     self._recap_files_modified.clear()
                     self._pending_turn_recap = False
                 self._active_turn_depth += 1
-                self.flush_content()
+                self.flush_content(FlushReason.TURN_END)
                 self.refresh_soon()
             case SteerInput(user_input=user_input):
                 self.cleanup(is_interrupt=False)
@@ -991,7 +1181,7 @@ class _LiveView:
                     content = list(user_input)
                 else:
                     content = [TextPart(text=user_input)]
-                console.print(render_user_echo(Message(role="user", content=content)))
+                self._emit_steer_echo(render_user_echo(Message(role="user", content=content)))
             case TurnEnd():
                 self._active_turn_depth = max(0, self._active_turn_depth - 1)
                 if self._active_turn_depth == 0:
@@ -1033,7 +1223,7 @@ class _LiveView:
                 truncated_q = (q[:50] + "...") if len(q) > 50 else q
                 self._btw_question = None
                 if response:
-                    _print_action_block(
+                    self._emit_action_block(
                         Panel(
                             Markdown(response),
                             title=f"[dim]btw: {rich_escape(truncated_q)}[/dim]",
@@ -1043,7 +1233,7 @@ class _LiveView:
                         )
                     )
                 elif error:
-                    _print_action_block(
+                    self._emit_action_block(
                         Panel(
                             Text(error, style=tui_rich_style("error")),
                             title="[dim]btw (error)[/dim]",
@@ -1234,7 +1424,7 @@ class _LiveView:
 
     def cleanup(self, is_interrupt: bool) -> None:
         """Cleanup the live view on step end or interruption."""
-        self.flush_content()
+        self.flush_content(FlushReason.CANCEL if is_interrupt else FlushReason.TURN_END)
 
         for block in self._tool_call_blocks.values():
             if not block.finished:
@@ -1252,7 +1442,7 @@ class _LiveView:
         for tool_call_id in list(self._tool_call_blocks.keys()):
             block = self._tool_call_blocks.pop(tool_call_id)
             self._archive_completed_tool_card(block)
-            _print_action_block(block.compose())
+            self._emit_action_block(block.compose())
             self.refresh_soon()
         self.flush_notifications()
         if not is_interrupt and self._active_turn_depth == 0 and self._pending_turn_recap:
@@ -1293,34 +1483,48 @@ class _LiveView:
         self._held_tool_search_block = None
         self._current_step_retry = retry
 
-    def flush_content(self) -> None:
+    def flush_content(self, reason: FlushReason = FlushReason.TURN_END) -> None:
         """Flush the current content block."""
         if self._current_content_block is not None:
             block = self._current_content_block
-            # Finalize must show everything: reveal any still-buffered paced text
-            # so the committed block is complete (no text stranded behind the
-            # reveal cursor).
-            block.reveal_all()
-            block._flush_committed()
-            # A held ToolSearch must appear before the text that follows it.
-            self._flush_held_tool_search()
-            if block.is_think:
-                if block.has_pending():
-                    emit_scrollback_block(console, block.compose_final())
-            else:
-                renderable = block.promote_to_scrollback()
-                if renderable is not None:
-                    emit_scrollback_block(console, renderable)
-                if block.has_expandable_card:
-                    self._completed_expandable_content_blocks.append(block)
+            block.prepare_for_finalize(reason)
             self._current_content_block = None
+            self._finalize_content_block_once(block)
             self.refresh_soon()
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        live = self._live
+        if live is not None:
+            live.update(renderable, refresh=True)
+        emit_scrollback_block(console, renderable)
+
+    def _emit_incremental_scrollback(self, renderable: RenderableType) -> None:
+        emit_scrollback_block(console, renderable)
+
+    def _emit_action_block(self, renderable: RenderableType) -> None:
+        _print_action_block(renderable)
+
+    def _emit_steer_echo(self, renderable: RenderableType) -> None:
+        console.print(renderable)
+
+    def _finalize_content_block_once(self, block: _ContentBlock) -> None:
+        """Promote one content block to scrollback exactly once."""
+        self._flush_held_tool_search()
+        if block.is_think:
+            if block.has_pending():
+                self._emit_final_scrollback(block.compose_final())
+            return
+        renderable = block.promote_to_scrollback()
+        if renderable is not None:
+            self._emit_final_scrollback(renderable)
+        if block.has_expandable_card:
+            self._completed_expandable_content_blocks.append(block)
 
     def _flush_held_tool_search(self) -> None:
         if self._held_tool_search_block is not None:
             block = self._held_tool_search_block
             self._held_tool_search_block = None
-            _print_action_block(block.compose())
+            self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_finished_tool_calls(self) -> None:
@@ -1332,8 +1536,8 @@ class _LiveView:
         blocks can still flush past them because background agents are async.
 
         ToolSearch blocks are absorbed silently — only the last one in a
-        consecutive run is shown, mirroring the blackbox ``isAbsorbedSilently``
-        contract.  A non-ToolSearch block triggers the held ToolSearch to flush
+        consecutive run is shown (``isAbsorbedSilently`` contract).  A
+        non-ToolSearch block triggers the held ToolSearch to flush
         first so ordering is preserved.
         """
         tool_call_ids = list(self._tool_call_blocks.keys())
@@ -1353,14 +1557,14 @@ class _LiveView:
                 self._held_tool_search_block = block
             else:
                 self._flush_held_tool_search()
-                _print_action_block(block.compose())
+                self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
         self._live_notification_blocks.clear()
         while self._notification_blocks:
-            _print_action_block(self._notification_blocks.popleft().compose())
+            self._emit_action_block(self._notification_blocks.popleft().compose())
             self.refresh_soon()
 
     def append_content(self, part: ContentPart) -> None:
@@ -1381,7 +1585,10 @@ class _LiveView:
                     )
                     self.refresh_soon()
                 elif self._current_content_block.is_think != is_think:
-                    self.flush_content()
+                    transition = (
+                        FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT
+                    )
+                    self.flush_content(transition)
                     self._current_content_block = _ContentBlock(
                         is_think,
                         show_thinking_stream=self._show_thinking_stream,
@@ -1397,7 +1604,7 @@ class _LiveView:
 
     def append_tool_call(self, tool_call: ToolCall) -> None:
         self._current_step_retry = None
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self._tool_call_blocks[tool_call.id] = _ToolCallBlock(tool_call)
         self._last_tool_call_block = self._tool_call_blocks[tool_call.id]
         self.refresh_soon()
@@ -1468,27 +1675,27 @@ class _LiveView:
                 )
             )
         block.resolve(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_question_answered(self, event: QuestionAnswered) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         block = _QuestionAnsweredBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_progress_note(self, event: ProgressNote) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _ProgressNoteBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def display_suggestion(self, event: Suggestion) -> None:
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         block = _SuggestionBlock(event)
-        _print_action_block(block.compose())
+        self._emit_action_block(block.compose())
         self.refresh_soon()
 
     def request_approval(self, request: ApprovalRequest) -> None:
@@ -1538,7 +1745,7 @@ class _LiveView:
 
     def display_plan(self, msg: PlanDisplay) -> None:
         """Render plan content inline in the chat with a bordered panel."""
-        self.flush_content()
+        self.flush_content(FlushReason.TOOL_START)
         self.flush_finished_tool_calls()
         plan_body = Markdown(msg.content)
         panel = render_worklog_card(
@@ -1547,7 +1754,7 @@ class _LiveView:
             subtitle=msg.file_path,
             border_style=tui_rich_style("border"),
         )
-        _print_action_block(panel)
+        self._emit_action_block(panel)
 
     def request_question(self, request: QuestionRequest) -> None:
         self._question_request_queue.append(request)

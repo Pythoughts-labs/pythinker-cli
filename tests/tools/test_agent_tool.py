@@ -1513,6 +1513,99 @@ async def test_agent_tool_background_rejects_invalid_subagent_type(agent_tool, r
     assert "Builtin subagent type not found: does-not-exist" in result.message
 
 
+def test_suggest_subagent_type_maps_cross_harness_defaults_and_typos() -> None:
+    from pythinker_code.tools.agent import _did_you_mean, _suggest_subagent_type
+
+    valid = ["coder", "explore", "review", "code-reviewer", "planner"]
+    # Cross-harness default names fuzzy-match nothing here -> explicit alias to coder.
+    assert _suggest_subagent_type("general-purpose", valid) == "coder"
+    assert _suggest_subagent_type("general", valid) == "coder"
+    # Typos / near-misses resolve via fuzzy match.
+    assert _suggest_subagent_type("reviewr", valid) == "review"
+    assert _suggest_subagent_type("explorer", valid) == "explore"
+    # Nothing close -> no suggestion; the fail-loud message stays type-list only.
+    assert _suggest_subagent_type("does-not-exist", valid) is None
+    # Fragment renderer is empty when there is no suggestion.
+    assert _did_you_mean("general-purpose", valid) == " Did you mean 'coder'?"
+    assert _did_you_mean("does-not-exist", valid) == ""
+
+
+def test_suggest_subagent_type_never_suggests_unavailable_type() -> None:
+    """Safety guarantee: a suggestion is always a type the session can actually run.
+
+    An alias (or fuzzy match) only fires when its target exists in the current
+    valid-type set, so the model is never steered toward a type that would itself
+    be rejected on retry.
+    """
+    from pythinker_code.tools.agent import _did_you_mean, _suggest_subagent_type
+
+    # `coder` is the alias target but is absent here -> no suggestion.
+    assert _suggest_subagent_type("general-purpose", ["explore", "review"]) is None
+    assert _did_you_mean("general-purpose", ["explore", "review"]) == ""
+    # A fuzzy match is likewise withheld when the closest name is unavailable.
+    assert _suggest_subagent_type("reviewr", ["explore", "coder"]) is None
+
+
+async def test_agent_tool_background_suggests_type_for_cross_harness_default(
+    agent_tool, runtime
+) -> None:
+    runtime.labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name="coder",
+            description="Good at general software engineering tasks.",
+            agent_file=runtime.subagent_store.root / "coder.yaml",
+            tool_policy=ToolPolicy(mode="inherit"),
+        )
+    )
+    with tool_call_context("Agent"):
+        result = await agent_tool(
+            agent_tool.params(
+                description="invalid type",
+                prompt="do work",
+                subagent_type="general-purpose",
+                run_in_background=True,
+            )
+        )
+
+    assert result.is_error
+    assert result.brief == "Invalid subagent type"
+    assert "Did you mean 'coder'?" in result.message
+
+
+async def test_run_agents_suggests_type_for_cross_harness_default(runtime) -> None:
+    runtime.labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name="coder",
+            description="Good at general software engineering tasks.",
+            agent_file=runtime.subagent_store.root / "coder.yaml",
+            tool_policy=ToolPolicy(mode="inherit"),
+        )
+    )
+    tool = RunAgents(runtime)
+
+    with tool_call_context("RunAgents"):
+        result = await tool(
+            tool.params(
+                summary="parallel fetch",
+                agents=[
+                    AgentRunConfig(
+                        name="fetch-prs-1",
+                        subagent_type="general-purpose",
+                        prompt="Fetch PRs",
+                    ),
+                ],
+            )
+        )
+
+    assert result.is_error
+    assert result.brief == "Invalid subagent type"
+    # Lock the ordered, single-spaced fragment so the message stays parseable.
+    assert (
+        "Unknown subagent type 'general-purpose' for agent 'fetch-prs-1'. "
+        "Did you mean 'coder'? Available types: "
+    ) in result.message
+
+
 async def test_agent_tool_background_rejects_invalid_model_alias_before_start(
     agent_tool, runtime, monkeypatch
 ):

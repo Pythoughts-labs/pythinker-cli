@@ -8,9 +8,8 @@ Status: Proposed
 
 ## Summary
 
-Port the reference LSP subsystem (`blackbox/pythinker-src/src/services/lsp`,
-`src/tools/LSPTool`, `src/utils/plugins/lsp*`) to pythinker-code as a first-class Python
-subsystem. The end state gives the agent real code intelligence — go-to-definition,
+Port the LSP subsystem (`src/pythinker_code/tools/lsp/`, `LSPTool`, plugin-based
+server discovery) to pythinker-code as a first-class Python subsystem. The end state gives the agent real code intelligence — go-to-definition,
 find-references, hover, document/workspace symbols, go-to-implementation, and the full call
 hierarchy (prepare / incoming / outgoing) — backed by long-lived language-server processes, plus
 a **passive diagnostics** stream that surfaces compiler/linter errors into the conversation after
@@ -34,7 +33,7 @@ CLI notification + dynamic-injection systems.
 
 ## Verification status & corrections (2026-06-16)
 
-Fact-checked against `blackbox/pythinker-src` (reference behaviour) and the live Python tree
+Fact-checked against the planned TypeScript LSP reference behavior and the live Python tree
 (integration points). Findings folded into the phases below.
 
 **Reference behaviour — verified exact (kept as-is):** crash cap default 3
@@ -146,7 +145,7 @@ framing half of `lsp/client.py` and leave everything else unchanged.
 
 ## Reference architecture (what we are porting)
 
-Source tree (`blackbox/pythinker-src/`), ~5,400 lines of TypeScript:
+Reference TypeScript LSP tree (~5,400 lines), used only during port planning:
 
 ```
 src/services/lsp/

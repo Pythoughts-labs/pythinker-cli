@@ -17,10 +17,21 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **LSP `go_to_implementation` now returns a structured error when the server does not advertise `implementationProvider`** instead of surfacing a raw exception. The client also advertises `implementation` capability during the LSP handshake so servers like Pyright enable the provider automatically.
+- **TUI Rich Live streaming matches interactive smoothness.** Non-interactive
+  shell mode now emits stable markdown to scrollback during streams, drains paced
+  text before tool/think transitions, batches wire delivery, and uses diff-based
+  live refresh on terminals to reduce flicker.
+
 - **TUI composing preview wraps space-aligned report prose cleanly.** The
   streaming preview now runs the same lightweight space-column normalizer used at
   finalize and wraps long `Severity`/`Location`/`What` rows with a hanging
   continuation indent, so wrapped fragments no longer orphan at column 0.
+- **TUI streaming finalize continuity and interrupt safety.** Content blocks
+  promote to scrollback once with a paint-before-print step in Rich Live mode;
+  interrupted open ` ```report ` fences show a short note instead of raw JSON in
+  scrollback; paced transitions use bounded reveal instead of dumping large
+  backlogs before tool cards.
 - **ToolSearch hidden from models that can't use it.** `ToolSearch` is now offered
   only when the active model genuinely supports the deferred tool-search workflow
   (Anthropic's `tool_reference`/`defer_loading` beta on `api.anthropic.com`). The
@@ -30,10 +41,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
   with `ENABLE_TOOL_SEARCH=true|false`. The tool's description no longer claims that
   hidden/deferred tools exist (pythinker loads no tools lazily), removing the prompt
   that primed the loop in the first place.
-- **Output-token-limit nudge text aligned with reference.** The system-reminder injected when a response is cut off by the output token limit now matches the reference byte-exactly: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
+- **Output-token-limit nudge text.** The system-reminder injected when a response is cut off by the output token limit now reads: "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
 - **`SetTodoList` accepts Cursor-style todo payloads.** Todo items sent with `content` instead of `title` (the shape models learn from Cursor/Claude `TodoWrite`) are normalized at the validation boundary (`content` → `title` when `title` is absent; canonical `title` wins; `content` is dropped) and persist as title-only session state instead of failing with missing-`title` errors.
 - **Failed `SetTodoList` cards stay compact.** Validation failures no longer render a broken todo tree with blank labels plus a raw Pydantic dump; the card shows a short actionable summary (with full detail only when expanded).
-- **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript, mirroring the blackbox `isAbsorbedSilently` contract. Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
+- **ToolSearch scrollback suppression.** Consecutive `ToolSearch` probes during deferred tool discovery are now collapsed: only the last probe in each run is shown in the transcript (`isAbsorbedSilently` contract). Intermediate discovery calls no longer produce repeated "Tools(…)" lines.
 - **Bare skill/flow slash names.** The slash menu now matches `skill:`/`flow:`
   commands on their bare segment, so typing `/designer` (or `/design`) surfaces
   `/skill:designer-skill`; accepting inserts the canonical command name. When no
@@ -50,7 +61,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **Tool header highlights.** Read/Write/Edit/Grep and similar tool-call subjects
   now use the brand periwinkle `accent` token instead of cyan `info`; line ranges
   stay on the yellow `warning` token.
-- **pythinker-x theme port.** Diff palette, 32 bundled syntax theme names, Catppuccin
+- **Bundled TUI theme pack.** Diff palette, 32 bundled syntax theme names, Catppuccin
   Frappe/Macchiato styles, and `/theme code` syntax picker aligned with the Pythinker-X TUI.
 - **TUI inline code color.** Inline `` `code` `` highlights and the `pythinker-ansi`
   syntax theme now use brand periwinkle/accent and blue ANSI roles instead of cyan.
@@ -184,7 +195,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
   `budget_exhausted` stop.
 - **The Agent tool description now gives clearer prompt-briefing guidance.** Fresh subagents should
   receive the goal, scope, expected output contract, and verification criteria; the Haiku-style
-  tool-use summary from the blackbox reference was deliberately not ported.
+  tool-use summary from the upstream reference was deliberately not ported.
 
 Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.47.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
@@ -715,11 +726,11 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.12.0`,
 ### What changed in this release
 
 - **Fixed PyPI install conflict (was failing on Windows and every other platform).** `pip install pythinker-code==0.10.0` failed with `fastmcp 3.2.0 depends on mcp<2.0 and >=1.24.0` vs `pythinker-core 1.1.0 depends on mcp<1.17 and >=1`. 0.11.0 pins the republished `pythinker-core 1.1.1`, whose widened `mcp>=1.23,<2` constraint lets the resolver pick a single `mcp` version compatible with `fastmcp==3.2.0`.
-- **Blackbox-style TUI port — phase 1.** Shell design primitives, compact transcript activity rows, blackbox-style motion status, standardized shell dialogs, aligned footer status styling, and a restyled tool-result surface land together. The TUI now shares a coherent visual language across rows, dialogs, and motion.
+- **Reference TUI port — phase 1.** Shell design primitives, compact transcript activity rows, reference motion status, standardized shell dialogs, aligned footer status styling, and a restyled tool-result surface land together. The TUI now shares a coherent visual language across rows, dialogs, and motion.
 - **Refreshed TUI accent palette.** Dark/light theme accent retuned to a cleaner sky-blue (`#7dd3fc` dark, `#0284c7` light) for better contrast against the new tool-result surfaces.
 - **Markdown + report polish.** Report spacing and markdown code blocks render with improved breathing room and consistent fences.
 - **Rotating thinking-word indicator restored** with a leading space before the live stream status so the spinner no longer abuts surrounding text.
-- **Internal audit + smoke evaluation.** A blackbox TUI scope map, prompt/agent audit, and a recorded visual smoke evaluation join the repo to govern future TUI work.
+- **Internal audit + smoke evaluation.** A TUI scope map, prompt/agent audit, and a recorded visual smoke evaluation join the repo to govern future TUI work.
 
 Upgrade with `pythinker update` or `pip install --upgrade pythinker-code==0.11.0`.
 
@@ -733,7 +744,7 @@ Upgrade with `pythinker update` or `pip install --upgrade pythinker-code==0.11.0
 - **Shell command enhancements.** New shell slash-command plumbing improves discoverability and keeps interactive workflows smoother.
 - **TUI renderer polish.** Tool cards now share more consistent status glyphs, truncation behavior, and result summaries across bash, read, write, edit, grep, find, web, subagent, background, ask-user, and think renderers.
 - **Clipboard handling hardening.** Clipboard helpers now degrade more cleanly when platform clipboard access is unavailable.
-- **Release and TUI specs.** The repository now includes the blackbox TUI port design and a visual smoke-test criterion for future terminal UI work.
+- **Release and TUI specs.** The repository now includes the reference TUI port design and a visual smoke-test criterion for future terminal UI work.
 
 Upgrade with `pythinker update` or `pip install --upgrade pythinker-code==0.10.0`.
 

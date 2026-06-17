@@ -416,6 +416,61 @@ def parse_aligned_field_line(line: str) -> tuple[str, str, str] | None:
     return indent, label, value
 
 
+_KNOWN_FIELD_LABELS: frozenset[str] = frozenset(
+    {
+        "issue",
+        "anchor",
+        "finding",
+        "severity",
+        "fix",
+        "evidence",
+        "risk",
+        "status",
+        "location",
+        "what",
+        "reference",
+        "pythinker",
+        "verdict",
+        "command",
+        "expected",
+        "result",
+    }
+)
+
+
+def is_known_field_label(label: str) -> bool:
+    return label.strip().lower() in _KNOWN_FIELD_LABELS
+
+
+def is_field_continuation_line(line: str) -> bool:
+    """Whether *line* continues a space-aligned field value on the next visual row."""
+    return bool(re.match(r"^\s{6,}\S", line.rstrip("\r\n")))
+
+
+def _count_known_field_rows_after(lines: list[str], start: int) -> int:
+    """Count consecutive known-label field rows after a parent bullet at *start*."""
+    count = 0
+    index = start + 1
+    while index < len(lines):
+        body = lines[index].rstrip("\r\n")
+        if not body.strip():
+            break
+        field = parse_aligned_field_line(body)
+        if field is None:
+            if count > 0 and is_field_continuation_line(body):
+                index += 1
+                continue
+            break
+        _, label, _ = field
+        if not is_known_field_label(label):
+            break
+        count += 1
+        index += 1
+        while index < len(lines) and is_field_continuation_line(lines[index].rstrip("\r\n")):
+            index += 1
+    return count
+
+
 def normalize_space_aligned_report_blocks(markup: str) -> str:
     """Convert LLM space-column report rows into nested Markdown lists."""
     if "•" not in markup:
@@ -428,6 +483,7 @@ def normalize_space_aligned_report_blocks(markup: str) -> str:
     out: list[str] = []
     state = FenceState()
     last_field_idx: int | None = None
+    active_parent_indent: str | None = None
 
     index = 0
     while index < len(lines):
@@ -437,6 +493,7 @@ def normalize_space_aligned_report_blocks(markup: str) -> str:
             out.append(line)
             state.feed(body)
             last_field_idx = None
+            active_parent_indent = None
             index += 1
             continue
         fence_match = FENCE_RE.match(body)
@@ -444,24 +501,32 @@ def normalize_space_aligned_report_blocks(markup: str) -> str:
             state.feed(body)
             out.append(line)
             last_field_idx = None
+            active_parent_indent = None
             index += 1
             continue
 
-        bullet_match = re.match(r"^(\s*)•\s+(.+)$", body)
+        bullet_match = re.match(r"^(\s*)[-•]\s+(.+)$", body)
         if bullet_match is not None:
             indent, text = bullet_match.groups()
-            out.append(f"{indent}- {text}")
-            last_field_idx = None
+            if _count_known_field_rows_after(lines, index) >= 2:
+                out.append(f"{indent}- {text}")
+                active_parent_indent = indent
+                last_field_idx = None
+            else:
+                out.append(f"{indent}- {text}")
+                active_parent_indent = None
+                last_field_idx = None
             index += 1
             continue
 
         if (
             index + 1 < len(lines)
             and body.strip()
-            and not body.lstrip().startswith("•")
+            and not body.lstrip().startswith(("•", "-"))
             and _UNICODE_RULE_LINE_RE.match(lines[index + 1].strip())
         ):
             out.append(f"# {body.strip()}")
+            active_parent_indent = None
             index += 2
             last_field_idx = None
             continue
@@ -470,12 +535,14 @@ def normalize_space_aligned_report_blocks(markup: str) -> str:
         if section_match is not None:
             _, number, title = section_match.groups()
             out.append(f"## {number}. {title}")
+            active_parent_indent = None
             last_field_idx = None
             index += 1
             continue
 
         if _UNICODE_RULE_LINE_RE.match(body.strip()):
             out.append("---")
+            active_parent_indent = None
             last_field_idx = None
             index += 1
             continue
@@ -483,19 +550,27 @@ def normalize_space_aligned_report_blocks(markup: str) -> str:
         field = parse_aligned_field_line(body)
         if field is not None:
             indent, label, value = field
-            nest = "  " if len(indent) >= 2 else ""
-            out.append(f"{nest}- {label}: {value}")
+            if active_parent_indent is not None and is_known_field_label(label):
+                out.append(f"{active_parent_indent}  - {label}: {value}")
+            else:
+                nest = "  " if len(indent) >= 2 else ""
+                out.append(f"{nest}- {label}: {value}")
+                active_parent_indent = None
             last_field_idx = len(out) - 1
             index += 1
             continue
 
-        if last_field_idx is not None and re.match(r"^\s{6,}\S", body):
+        if last_field_idx is not None and is_field_continuation_line(body):
             out[last_field_idx] = f"{out[last_field_idx]} {body.strip()}"
             index += 1
             continue
 
+        if not body.strip():
+            active_parent_indent = None
+
         out.append(line)
         last_field_idx = None
+        active_parent_indent = None
         index += 1
 
     result = "\n".join(out)
@@ -665,6 +740,8 @@ __all__ = [
     "normalize_space_aligned_report_blocks",
     "normalize_table_block",
     "parse_aligned_field_line",
+    "is_field_continuation_line",
+    "is_known_field_label",
     "repair_crammed_markdown_tables",
     "simplify_markdown_report_icons",
     "unwrap_fenced_markdown_tables",

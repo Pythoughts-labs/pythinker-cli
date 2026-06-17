@@ -81,7 +81,10 @@ from pythinker_code.ui.shell.placeholders import (
     normalize_pasted_text,
     sanitize_surrogates,
 )
-from pythinker_code.ui.shell.spacing import ensure_prompt_newline
+from pythinker_code.ui.shell.spacing import (
+    PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
+    ensure_prompt_newline,
+)
 from pythinker_code.ui.shell.spinner_words import spinner_message
 from pythinker_code.ui.shell.sync_output import install_synchronized_output
 from pythinker_code.ui.terminal_capabilities import synchronized_output_enabled
@@ -797,14 +800,19 @@ def _fit_formatted_text_to_rows(
     content_rows = max(0, max_rows - 1 - len(tail_rows))
     if content_rows == 0:
         return FormattedText(
-            [("class:dim", _truncate_right("… output clipped to fit terminal", columns))]
+            [
+                (
+                    "class:dim",
+                    _truncate_right(PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT, columns),
+                )
+            ]
         )
 
     out: FormattedText = FormattedText()
     _extend_rows(out, rows[:content_rows])
     if out and not out[-1][1].endswith("\n"):
         out.append(("", "\n"))
-    clip_hint = _truncate_right("… output clipped to fit terminal", columns)
+    clip_hint = _truncate_right(PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT, columns)
     out.append(("class:dim", clip_hint))
     if tail_rows:
         out.append(("", "\n"))
@@ -3228,6 +3236,11 @@ class CustomPromptSession:
         agent_status = self._render_agent_status(columns)
         body = self._render_interactive_body(columns)
         pinned = self._render_pinned_status_tail(columns)
+        body_rows = (
+            len(_formatted_text_display_rows(body, columns))
+            if body and any(fragment for _, fragment, *_ in body)
+            else 0
+        )
         pinned_rows = (
             len(_formatted_text_display_rows(pinned, columns))
             if pinned and any(fragment for _, fragment, *_ in pinned)
@@ -3241,7 +3254,6 @@ class CustomPromptSession:
             ensure_prompt_newline(fragments)
 
         if modal_active and body:
-            body_rows = len(_formatted_text_display_rows(body, columns))
             status_budget = max(0, max_rows - body_rows - pinned_rows)
             if agent_status and status_budget > 0:
                 clipped_status = _fit_formatted_text_to_rows(
@@ -3290,7 +3302,7 @@ class CustomPromptSession:
         return fragments
 
     def _render_shortcut_help(self, columns: int) -> FormattedText:
-        """Render a small Blackbox-style shortcuts popup above the prompt."""
+        """Render a small keyboard-shortcuts popup above the prompt."""
         from pythinker_code.ui.shell.keymap import keybinding_help
 
         side_padding = min(_card_side_padding(), max(0, (columns - 2) // 2))

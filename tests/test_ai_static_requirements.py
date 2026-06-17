@@ -84,6 +84,15 @@ def test_tool_decoding_replaces_malformed_utf8() -> None:
     assert violations == []
 
 
+def test_no_machine_local_debug_paths_in_sources() -> None:
+    violations: list[str] = []
+    for path in _python_files(SRC):
+        text = path.read_text(encoding="utf-8")
+        if "/Users/" in text:
+            violations.append(f"{_relative(path)} contains a machine-local /Users/ path")
+    assert violations == []
+
+
 def _has_keyword(node: ast.Call, keyword: str) -> bool:
     return any(kw.arg == keyword for kw in node.keywords)
 

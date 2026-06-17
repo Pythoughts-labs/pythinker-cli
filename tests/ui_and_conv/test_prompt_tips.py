@@ -1068,7 +1068,7 @@ def test_running_prompt_preamble_is_clipped_on_short_terminals(monkeypatch: Any)
     rendered_message = prompt_session._render_agent_prompt_message()
     plain_message = "".join(fragment[1] for fragment in rendered_message)
 
-    assert "output clipped to fit terminal" in plain_message
+    assert "earlier output hidden · Ctrl+O expand" in plain_message
     assert "Ctrl+E expand" not in plain_message
     assert len(plain_message.splitlines()) <= rows - 3
     assert plain_message.endswith("\n  ❯ ")
@@ -1109,9 +1109,9 @@ def test_clipped_agent_status_preserves_thinking_indicator(monkeypatch: Any) -> 
     rendered_message = prompt_session._render_agent_prompt_message()
     plain_message = "".join(fragment[1] for fragment in rendered_message)
 
-    assert "output clipped to fit terminal" in plain_message
+    assert "earlier output hidden · Ctrl+O expand" in plain_message
     assert "Prestigitating…" in plain_message
-    assert plain_message.index("output clipped to fit terminal") < plain_message.index(
+    assert plain_message.index("earlier output hidden · Ctrl+O expand") < plain_message.index(
         "Prestigitating…"
     )
     assert len(plain_message.splitlines()) <= rows - 3
@@ -1181,7 +1181,7 @@ def test_modal_prompt_preserves_modal_body_when_agent_status_is_tall(monkeypatch
     assert "approval body" in plain_message
     assert "[1] Approve" in plain_message
     assert "[2] Reject" in plain_message
-    assert "output clipped to fit terminal" in plain_message
+    assert "earlier output hidden · Ctrl+O expand" in plain_message
     assert f"\n{'─' * width}\n" not in plain_message
 
 

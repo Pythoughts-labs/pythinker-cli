@@ -1,8 +1,8 @@
 """Tests for ToolSearch scrollback suppression.
 
 Multiple ToolSearch calls in a single turn must produce at most one scrollback
-entry — the last one. Intermediate probes are discarded silently, mirroring the
-blackbox reference's ``isAbsorbedSilently`` behaviour for ToolSearch.
+entry — the last one. Intermediate probes are discarded silently (the
+``isAbsorbedSilently`` contract for ToolSearch).
 """
 
 from __future__ import annotations

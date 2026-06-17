@@ -1,4 +1,4 @@
-"""pythinker-x (TUI) theme constants — ported verbatim where possible."""
+"""Bundled TUI theme constants for the interactive shell."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def discover_custom_syntax_themes(share_dir: Path | None) -> list[str]:
 
 
 def list_syntax_theme_names(share_dir: Path | None = None) -> list[str]:
-    """Bundled + custom theme names, sorted case-insensitively like pythinker-x."""
+    """Bundled + custom theme names, sorted case-insensitively."""
     custom = discover_custom_syntax_themes(share_dir)
     merged = sorted(set(BUNDLED_SYNTAX_THEME_NAMES) | set(custom), key=str.casefold)
     return merged

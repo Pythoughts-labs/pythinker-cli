@@ -8,8 +8,8 @@ from pythinker_code.ui.shell.spinner_words import (
 )
 
 
-def test_spinner_verbs_match_blackbox_word_bank() -> None:
-    """The shell spinner carries the full Blackbox loading-word bank."""
+def test_spinner_verbs_match_loading_word_bank() -> None:
+    """The shell spinner carries the full loading-word bank."""
     assert len(SPINNER_VERBS) == 187
     assert SPINNER_VERBS[:3] == ("Accomplishing", "Actioning", "Actualizing")
     assert "Pythinking" in SPINNER_VERBS

@@ -66,6 +66,7 @@ static/
 !.claude/hooks/**
 .pythinker/
 .worktrees/
+reference-scan/
 blackbox/
 
 # pythinker-review
@@ -82,3 +83,6 @@ htmlcov/
 
 .playwright-mcp/
 .playwright/
+
+# Cursor debug-mode session logs (machine-local NDJSON)
+.cursor/debug-*.log

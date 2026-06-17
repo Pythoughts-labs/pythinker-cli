@@ -278,7 +278,7 @@ def resolve_code_theme(theme: str | SyntaxTheme) -> str | SyntaxTheme:
 
 
 def available_code_themes() -> list[str]:
-    """Accepted ``code_theme`` values: pythinker-x bundled names, sentinels, custom, Pygments."""
+    """Accepted ``code_theme`` values: bundled Pythinker names, sentinels, custom, Pygments."""
     from pygments.styles import get_all_styles
 
     from pythinker_code.ui.theme.pythinker_themes import list_syntax_theme_names

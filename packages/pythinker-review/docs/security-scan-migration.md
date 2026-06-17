@@ -1,7 +1,7 @@
 # Pythinker Security Scan Python-native migration
 
 This document records the production migration of the source TypeScript scanner at
-`blackbox/deepsec-main` into Pythinker's Python architecture and user-facing Pythinker Security
+`upstream review package` into Pythinker's Python architecture and user-facing Pythinker Security
 Scan branding.
 
 ## Source audit

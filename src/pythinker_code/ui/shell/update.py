@@ -271,7 +271,7 @@ def _mark_auto_update_check_attempt() -> None:
 
 
 async def prompt_pre_start_update(update_runner: UpdateRunner | None = None) -> None:
-    """pythinker-x-style blocking update prompt for the interactive shell.
+    """Blocking update prompt for the interactive shell.
 
     Runs once at startup, before the agent loop. When a newer native release
     exists, asks the user whether to update now. Accepting runs the native

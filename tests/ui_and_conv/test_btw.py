@@ -881,19 +881,16 @@ class TestHandleImmediateSteer:
 
     def test_normal_text_via_ctrl_s_steers_normally(self, monkeypatch):
         """Ctrl+S with normal text should steer, not btw."""
-        from pythinker_code.ui.shell.console import console
-
         view = object.__new__(_PromptLiveView)
         view._turn_ended = False
         view._btw_modal = None
         view._btw_runner = lambda q, cb=None: None  # pyright: ignore[reportAttributeAccessIssue]
         view._flush_prompt_refresh = lambda: None
         view._pending_local_steer_count = 0
+        view._pending_scrollback = []
 
         steered = []
         view._steer = lambda content: steered.append(content)
-
-        monkeypatch.setattr(console, "print", lambda *a, **kw: None)
 
         view.handle_immediate_steer(
             UserInput(
@@ -987,6 +984,7 @@ class TestCtrlSFromQueue:
 
         steered_contents = []
         view._steer = lambda content: steered_contents.append(content)
+        view._pending_scrollback = []
         monkeypatch.setattr(console, "print", lambda *a, **kw: None)
 
         q1 = UserInput(
@@ -1054,6 +1052,7 @@ class TestCtrlSFromQueue:
         view._flush_prompt_refresh = lambda: None
         view._pending_local_steer_count = 0
         view._steer = lambda content: None
+        view._pending_scrollback = []
         monkeypatch.setattr(console, "print", lambda *a, **kw: None)
 
         view.handle_immediate_steer(

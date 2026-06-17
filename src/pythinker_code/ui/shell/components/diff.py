@@ -8,9 +8,9 @@ Two entry points:
 * :func:`compute_edit_diff_string` — given ``old_text`` / ``new_text``,
   produce Pythinker's per-line diff format (``+123 content``, ``-123 content``,
   `` 123 content``, with `` ... `` skip markers).
-* :func:`render_diff` — colorize a Pythinker-format diff string into a Rich
-  ``Text`` (red removed, green added, dim context, with intra-line word
-  highlighting on single-line edits).
+* :func:`render_diff` — colorize a Pythinker-format diff string into a column-
+  split Rich table (line number, ``+``/``-`` marker, code body) with intra-line
+  word highlighting on single-line edits and correct wrap alignment.
 """
 
 from __future__ import annotations
@@ -19,13 +19,24 @@ import difflib
 import re
 from dataclasses import dataclass
 
+from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
+from rich.measure import Measurement
+from rich.style import StyleType
+from rich.table import Table
 from rich.text import Text
 
 from pythinker_code.ui.shell.render_constants import (
     DIFF_CONTEXT_LINES,
     DIFF_LINE_NUMBER_MIN_WIDTH,
 )
+from pythinker_code.ui.terminal_capabilities import colors_disabled
 from pythinker_code.ui.theme import get_diff_colors, tui_rich_style
+from pythinker_code.utils.rich.diff_render import (
+    apply_inline_diff_highlights,
+    highlight_diff_code,
+    make_diff_highlighter,
+)
+from pythinker_code.utils.rich.syntax import PythinkerSyntax
 
 __all__ = [
     "EditDiffResult",
@@ -36,6 +47,7 @@ __all__ = [
 _DEFAULT_CONTEXT_LINES = DIFF_CONTEXT_LINES
 _TAB_REPLACEMENT = "   "
 _DIFF_LINE_RE = re.compile(r"^([+\-\s])(\s*\d*)\s(.*)$")
+_SIGN_COL_WIDTH = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +56,81 @@ class EditDiffResult:
 
     diff: str
     first_changed_line: int | None
+
+
+@dataclass(slots=True)
+class _LogicalDiffRow:
+    line_num: str
+    sign: str
+    body: Text
+    row_style: StyleType
+    sign_style: StyleType
+    line_num_style: StyleType = "dim"
+
+
+def _wrap_body_chunks(body: Text, console: Console, width: int) -> list[Text]:
+    """Wrap *body* to *width*, preserving syntax/inline styles on each chunk.
+
+    Rich's ``Text.wrap`` does not split Pygments-highlighted text reliably, so
+    wrap the plain string and slice styled spans for each visual chunk.
+    """
+    if not body.plain:
+        return [Text("")]
+    plain_chunks = list(Text(body.plain).wrap(console, max(1, width)))
+    if not plain_chunks:
+        return [Text("")]
+    if len(plain_chunks) == 1 and len(plain_chunks[0].plain) >= len(body.plain):
+        return [body]
+    chunks: list[Text] = []
+    offset = 0
+    for plain_chunk in plain_chunks:
+        chunk_len = len(plain_chunk.plain)
+        chunks.append(body[offset : offset + chunk_len])
+        offset += chunk_len
+    return chunks
+
+
+class _CompactDiffGrid:
+    """Three-column diff layout: line number | sign | code body.
+
+    Long code bodies are pre-wrapped at render time so continuation rows repeat
+    the ``+``/``-`` sign while the line-number column stays blank.
+    """
+
+    def __init__(self, rows: list[_LogicalDiffRow], *, line_num_width: int) -> None:
+        self._rows = rows
+        self._line_num_width = line_num_width
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement(0, options.max_width or console.width or 80)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        max_width = options.max_width or console.width or 80
+        fixed = self._line_num_width + _SIGN_COL_WIDTH
+        content_width = max(1, max_width - fixed)
+
+        table = Table.grid(padding=0, expand=True)
+        table.add_column(width=self._line_num_width, no_wrap=True, justify="right")
+        table.add_column(width=_SIGN_COL_WIDTH, no_wrap=True)
+        table.add_column(ratio=1, no_wrap=True)
+
+        blank_ln = " " * self._line_num_width
+        for row in self._rows:
+            chunks = _wrap_body_chunks(row.body, console, content_width)
+            for index, chunk in enumerate(chunks):
+                if index == 0 and row.line_num:
+                    ln_cell = Text(
+                        row.line_num.rjust(self._line_num_width), style=row.line_num_style
+                    )
+                else:
+                    ln_cell = Text(blank_ln, style=row.line_num_style)
+                sign_cell = Text(
+                    {"+": " + ", "-": " - ", " ": "   "}.get(row.sign, "   "),
+                    style=row.sign_style,
+                )
+                table.add_row(ln_cell, sign_cell, chunk, style=row.row_style)
+
+        yield from console.render(table, options)
 
 
 def _replace_tabs(text: str) -> str:
@@ -173,6 +260,25 @@ def _parse_diff_line(line: str) -> tuple[str, str, str] | None:
     return match.group(1), match.group(2), match.group(3)
 
 
+def _line_number_width(lines: list[str]) -> int:
+    max_val = 0
+    for line in lines:
+        parsed = _parse_diff_line(line)
+        if parsed is None:
+            continue
+        raw = parsed[1].strip()
+        if raw.isdigit():
+            max_val = max(max_val, int(raw))
+    if max_val:
+        return max(DIFF_LINE_NUMBER_MIN_WIDTH, len(str(max_val)))
+    return DIFF_LINE_NUMBER_MIN_WIDTH
+
+
+def _display_line_num(raw: str) -> str:
+    stripped = raw.strip()
+    return stripped if stripped else ""
+
+
 def _intra_line_diff(old_content: str, new_content: str) -> tuple[Text, Text]:
     """Word-level highlighting on changed tokens.
 
@@ -235,12 +341,64 @@ def _intra_line_diff(old_content: str, new_content: str) -> tuple[Text, Text]:
     return removed, added
 
 
-def render_diff(diff_text: str) -> Text:
+def _similarity_ratio(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(None, left, right, autojunk=False).ratio()
+
+
+def _render_diff_content(
+    content: str,
+    row_style: StyleType,
+    *,
+    highlighter: PythinkerSyntax | None,
+) -> Text:
+    """Render one diff body line with optional syntax highlighting."""
+    normalized = _replace_tabs(content)
+    if highlighter is None:
+        return Text(normalized, style=row_style)
+    inner = highlight_diff_code(highlighter, normalized)
+    inner.stylize_before(row_style)
+    return inner
+
+
+def _append_row(
+    rows: list[_LogicalDiffRow],
+    *,
+    line_num: str,
+    sign: str,
+    body: Text,
+    row_style: StyleType,
+    sign_style: StyleType,
+    line_num_style: StyleType = "dim",
+) -> None:
+    rows.append(
+        _LogicalDiffRow(
+            line_num=line_num,
+            sign=sign,
+            body=body,
+            row_style=row_style,
+            sign_style=sign_style,
+            line_num_style=line_num_style,
+        )
+    )
+
+
+def render_diff(diff_text: str, *, path: str | None = None) -> RenderableType:
     """Colorize a Pythinker-format diff string.
 
     ``diff_text`` is whatever :func:`compute_edit_diff_string` produced (or
     any string in the same format). Lines that don't match the prefix
     pattern are rendered as dim context.
+
+    Output uses a three-column grid (line number | ``+``/``-`` | code body)
+    so wrapped continuation rows stay aligned under the code column and
+    repeat the diff sign.
+
+    When *path* is provided, code lines are syntax-highlighted with the
+    active ``tui.code_theme`` (same pipeline as approval/pager diffs). Style
+    layering per changed line is: syntax foreground, row ``add_bg``/``del_bg``
+    underneath via ``stylize_before``, then inline ``add_hl``/``del_hl`` on
+    top. Syntax highlighting is skipped when terminal colors are disabled
+    (``NO_COLOR``, ``PYTHINKER_NO_COLOR``, ``TERM=dumb``, etc.).
     """
     if not diff_text:
         return Text("")
@@ -255,27 +413,30 @@ def render_diff(diff_text: str) -> Text:
     added_body = colors.add_bg
     removed_body = colors.del_bg
     context_style = tui_rich_style("tool_diff_context")
+    highlighter = make_diff_highlighter(path) if path and not colors_disabled() else None
 
-    out = Text()
     lines = diff_text.split("\n")
+    line_num_width = _line_number_width(lines)
+    rows: list[_LogicalDiffRow] = []
     i = 0
-    first = True
-
-    def _newline() -> None:
-        nonlocal first
-        if not first:
-            out.append("\n")
-        first = False
 
     while i < len(lines):
         line = lines[i]
         parsed = _parse_diff_line(line)
         if parsed is None:
-            _newline()
-            out.append(line, style=context_style)
+            _append_row(
+                rows,
+                line_num="",
+                sign=" ",
+                body=Text(line, style=context_style),
+                row_style=context_style,
+                sign_style=context_style,
+                line_num_style=context_style,
+            )
             i += 1
             continue
         prefix, line_num, content = parsed
+        display_ln = _display_line_num(line_num)
 
         if prefix == "-":
             removed_block: list[tuple[str, str]] = []
@@ -295,16 +456,36 @@ def render_diff(diff_text: str) -> Text:
 
             use_word_level = False
             if len(removed_block) == 1 and len(added_block) == 1:
-                # Word-level emphasis only helps when the lines are mostly
-                # similar; on heavy rewrites it would flood the row with the
-                # brighter highlight tint and read as a different palette
-                # from plain added/removed rows.
-                use_word_level = (
-                    difflib.SequenceMatcher(
-                        None, removed_block[0][1], added_block[0][1], autojunk=False
-                    ).ratio()
-                    >= 0.5
-                )
+                rcontent = removed_block[0][1]
+                acontent = added_block[0][1]
+                if highlighter is not None:
+                    rln, _ = removed_block[0]
+                    aln, _ = added_block[0]
+                    rtab = _replace_tabs(rcontent)
+                    atab = _replace_tabs(acontent)
+                    rem_inner = highlight_diff_code(highlighter, rtab)
+                    add_inner = highlight_diff_code(highlighter, atab)
+                    rem_inner.stylize_before(removed_body)
+                    add_inner.stylize_before(added_body)
+                    apply_inline_diff_highlights(highlighter, rtab, atab, rem_inner, add_inner)
+                    _append_row(
+                        rows,
+                        line_num=_display_line_num(rln),
+                        sign="-",
+                        body=rem_inner,
+                        row_style=removed_body,
+                        sign_style=removed_sign,
+                    )
+                    _append_row(
+                        rows,
+                        line_num=_display_line_num(aln),
+                        sign="+",
+                        body=add_inner,
+                        row_style=added_body,
+                        sign_style=added_sign,
+                    )
+                    continue
+                use_word_level = _similarity_ratio(rcontent, acontent) >= 0.5
             if use_word_level:
                 rln, rcontent = removed_block[0]
                 aln, acontent = added_block[0]
@@ -312,34 +493,88 @@ def render_diff(diff_text: str) -> Text:
                     _replace_tabs(rcontent),
                     _replace_tabs(acontent),
                 )
-                _newline()
-                row = Text(f"{rln} - ", style=removed_sign)
-                # Underlay the row tint so word-level highlight spans stay on top.
                 rem_inner.stylize_before(removed_body)
-                row.append_text(rem_inner)
-                out.append_text(row)
-                _newline()
-                row = Text(f"{aln} + ", style=added_sign)
                 add_inner.stylize_before(added_body)
-                row.append_text(add_inner)
-                out.append_text(row)
+                _append_row(
+                    rows,
+                    line_num=_display_line_num(rln),
+                    sign="-",
+                    body=rem_inner,
+                    row_style=removed_body,
+                    sign_style=removed_sign,
+                )
+                _append_row(
+                    rows,
+                    line_num=_display_line_num(aln),
+                    sign="+",
+                    body=add_inner,
+                    row_style=added_body,
+                    sign_style=added_sign,
+                )
             else:
-                for ln, content in removed_block:
-                    _newline()
-                    out.append(f"{ln} - ", style=removed_sign)
-                    out.append(_replace_tabs(content), style=removed_body)
-                for ln, content in added_block:
-                    _newline()
-                    out.append(f"{ln} + ", style=added_sign)
-                    out.append(_replace_tabs(content), style=added_body)
+                for ln, block_content in removed_block:
+                    _append_row(
+                        rows,
+                        line_num=_display_line_num(ln),
+                        sign="-",
+                        body=_render_diff_content(
+                            block_content, removed_body, highlighter=highlighter
+                        ),
+                        row_style=removed_body,
+                        sign_style=removed_sign,
+                    )
+                for ln, block_content in added_block:
+                    _append_row(
+                        rows,
+                        line_num=_display_line_num(ln),
+                        sign="+",
+                        body=_render_diff_content(
+                            block_content, added_body, highlighter=highlighter
+                        ),
+                        row_style=added_body,
+                        sign_style=added_sign,
+                    )
         elif prefix == "+":
-            _newline()
-            out.append(f"{line_num} + ", style=added_sign)
-            out.append(_replace_tabs(content), style=added_body)
+            _append_row(
+                rows,
+                line_num=display_ln,
+                sign="+",
+                body=_render_diff_content(content, added_body, highlighter=highlighter),
+                row_style=added_body,
+                sign_style=added_sign,
+            )
             i += 1
         else:
-            _newline()
-            out.append(f"{line_num}  {_replace_tabs(content)}", style=context_style)
+            if content == "...":
+                _append_row(
+                    rows,
+                    line_num="",
+                    sign=" ",
+                    body=Text("...", style="dim"),
+                    row_style=context_style,
+                    sign_style=context_style,
+                    line_num_style=context_style,
+                )
+            elif highlighter is None:
+                _append_row(
+                    rows,
+                    line_num=display_ln,
+                    sign=" ",
+                    body=Text(_replace_tabs(content), style=context_style),
+                    row_style=context_style,
+                    sign_style=context_style,
+                    line_num_style="dim",
+                )
+            else:
+                _append_row(
+                    rows,
+                    line_num=display_ln,
+                    sign=" ",
+                    body=highlight_diff_code(highlighter, _replace_tabs(content)),
+                    row_style="",
+                    sign_style="dim",
+                    line_num_style="dim",
+                )
             i += 1
 
-    return out
+    return _CompactDiffGrid(rows, line_num_width=line_num_width)

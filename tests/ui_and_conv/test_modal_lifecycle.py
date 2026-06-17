@@ -89,7 +89,9 @@ def _make_question_request(
 
 
 def test_approval_panel_truncates_long_diff_preview_rows_to_terminal_width() -> None:
-    long_path = "/home/ai/Projects/pythinker-code-main/blackbox/pythinker-x/very/deep/path/file.py"
+    long_path = (
+        "/home/user/Projects/pythinker-code-main/src/pythinker_code/ui/shell/very/deep/path/file.py"
+    )
     request = _make_approval_request(
         action="edit file",
         display=[

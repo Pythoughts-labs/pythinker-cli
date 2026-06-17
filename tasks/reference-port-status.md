@@ -1,8 +1,8 @@
-# Blackbox Reference Port — Live Status Ledger
+# Pythinker Reference Port — Live Status Ledger
 
 > Reactivated 2026-06-15 on `feat/agent-behaviour-tweaks`. Source plan:
 > `docs/superpowers/plans/agent_enhancment.md`. Reference tree (read-only):
-> `blackbox/pythinker-src/`.
+> `external reference/` (gitignored local clone, not part of shipped code).
 
 ## Legend
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | `gap_id` | Roadmap gap or task id |
 | `phase` | Roadmap phase |
-| `reference_path` | Blackbox source (or `missing-reference`) |
+| `reference_path` | Pythinker source (or `missing-reference`) |
 | `target_paths` | Pythinker modules |
 | `status` | `todo`, `verify-existing`, `in_progress`, `done`, `skipped`, `future-approved-only` |
 | `test_gate` | Focused test command or phase gate |
@@ -54,8 +54,8 @@
 
 | artifact | status | substitute |
 | --- | --- | --- |
-| `blackbox/pythinker-src/src/query/transitions.ts` | missing-reference | `query/stopHooks.ts`, `query/tokenBudget.ts`, `query.ts` |
-| `blackbox/pythinker-src/src/skills/mcpSkills.js` | missing-reference | Do not infer; audit `skill/__init__.py` only |
+| `external TS reference/src/query/transitions.ts` | missing-reference | `query/stopHooks.ts`, `query/tokenBudget.ts`, `query.ts` |
+| `external TS reference/src/skills/mcpSkills.js` | missing-reference | Do not infer; audit `skill/__init__.py` only |
 
 ## Roadmap Task Status (61 tasks)
 
@@ -133,7 +133,7 @@
 | Output styles directory | skip | Use dynamic injections only if approved |
 | CCR remote bridge | skip | ACP/wire cover IDE integration |
 | Pi-TUI engine replacement | skip | Phase 7.3 explicit |
-| Blackbox skill-only frontmatter (`allowed-tools`, `disable-model-invocation`, hooks/context/path/shell metadata) | skip | Pythinker skill loader intentionally keeps skills as instructional resources; agent/tool execution fields live in agent specs, hooks, and config |
+| Pythinker skill-only frontmatter (`allowed-tools`, `disable-model-invocation`, hooks/context/path/shell metadata) | skip | Pythinker skill loader intentionally keeps skills as instructional resources; agent/tool execution fields live in agent specs, hooks, and config |
 | Plugin marketplace, plugin agents, plugin MCP expansion, plugin output styles | skip | Current Pythinker plugin scope is local tools/config plus skill-root discovery; expansion needs product approval |
 
 ## Phase Exit Gates

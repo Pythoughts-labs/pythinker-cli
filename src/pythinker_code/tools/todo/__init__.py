@@ -80,6 +80,11 @@ class Params(BaseModel):
             "If not provided, returns the current todo list without making changes."
         ),
     )
+    merge: bool | None = Field(
+        default=None,
+        exclude=True,
+        description="Accepted for compatibility with some LLM providers; silently ignored.",
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -392,7 +392,7 @@ def format_numbered_lines_block(
     start_line: int = 1,
     style_token: str = "tool_output",
 ) -> tuple[Text, int, int]:
-    """Render source text with dim line numbers, capped like Blackbox code previews.
+    """Render source text with dim line numbers, capped like shell code previews.
 
     Returns ``(rendered, remaining, total_lines)``.  A trailing newline is a
     terminator, not an extra empty source line, matching editor line numbering.

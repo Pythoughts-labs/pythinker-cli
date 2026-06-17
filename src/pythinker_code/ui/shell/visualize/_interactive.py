@@ -9,6 +9,7 @@ input routing (queue/steer/btw), modal management, and key handling.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -38,7 +39,9 @@ from pythinker_code.ui.shell.prompt import (
     CustomPromptSession,
     UserInput,
 )
-from pythinker_code.ui.shell.visualize._blocks import smooth_streaming_enabled
+from pythinker_code.ui.shell.visualize._blocks import (
+    FlushReason,
+)
 from pythinker_code.ui.shell.visualize._btw_panel import _BtwModalDelegate
 from pythinker_code.ui.shell.visualize._input_router import InputAction, classify_input
 from pythinker_code.ui.shell.visualize._live_view import _LiveView
@@ -79,6 +82,29 @@ _STATUS_REFRESH_INTERVAL_S = 0.22
 _STATUS_REFRESH_REDUCED_INTERVAL_S = 1.0
 
 
+def _handoff_trace(event: str) -> None:
+    """Append a timeline event to the handoff-debug log when enabled.
+
+    Diagnostic only. Set ``PYTHINKER_TUI_HANDOFF_LOG=/path/to/file`` to record
+    every scrollback handoff (each is a ``run_in_terminal`` prompt-app teardown —
+    the visible "pop"), every tool/think transition, and every turn end. A recorded
+    session can then be replayed against the log to count per-turn pops and their
+    cause (count ``HANDOFF`` lines between ``TURN_END`` markers; compare a
+    text-only turn against a many-tool turn). No-op (one env lookup) when unset, so
+    it is safe to leave in place. Never raises: diagnostics must not break the UI.
+    """
+    path = os.environ.get("PYTHINKER_TUI_HANDOFF_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.monotonic():.3f}\t{event}\n")
+    except OSError:
+        # Intentional: handoff diagnostics are best-effort and must never
+        # disrupt the interactive UI if the log path is unwritable.
+        pass
+
+
 class _PromptLiveView(_LiveView):
     """Interactive prompt view: renders agent output above the input buffer.
 
@@ -110,10 +136,6 @@ class _PromptLiveView(_LiveView):
             show_thinking_stream=show_thinking_stream,
             show_turn_recaps=show_turn_recaps,
         )
-        # The interactive view owns the reveal tick (_status_refresh_loop), so it
-        # is the only view that paces streamed text. Disable pacing under reduced
-        # motion so motion-sensitive users get immediate reveal, not a typewriter.
-        self._stream_pacing = smooth_streaming_enabled() and not reduced_motion_enabled()
         self._prompt_session = prompt_session
         self._steer = steer
         self._btw_runner = btw_runner
@@ -132,8 +154,43 @@ class _PromptLiveView(_LiveView):
         self._btw_refresh_task: asyncio.Task[None] | None = None
         self._btw_run_task: asyncio.Task[None] | None = None
         self._status_refresh_task: asyncio.Task[None] | None = None
+        self._pending_scrollback: list[tuple[RenderableType, bool]] = []
+        self._scrollback_handoff_depth: int = 0
 
     # -- Helpers -------------------------------------------------------------
+
+    def _prompt_is_finalizing(self) -> bool:
+        """True while scrollback is queued or being emitted above the prompt."""
+        if (
+            getattr(self, "_pending_scrollback", None)
+            or getattr(self, "_scrollback_handoff_depth", 0) > 0
+        ):
+            return True
+        block = getattr(self, "_current_content_block", None)
+        if block is None or block.is_think:
+            return False
+        return bool(block._committed_renderables or block.has_active_stream_preview())
+
+    def _finalizing_indicator(self) -> RenderableType:
+        from pythinker_code.ui.shell.motion import ActivitySnapshot, activity_status_line
+
+        return activity_status_line(
+            ActivitySnapshot(label="Finalizing", elapsed_s=0.0, spinner="shape"),
+            width=current_console_width(),
+        )
+
+    async def _run_scrollback_handoff(self, emit: Callable[[], None], *, reason: str = "?") -> None:
+        _handoff_trace(f"HANDOFF\t{reason}")
+        self._scrollback_handoff_depth += 1
+        self._prompt_session.invalidate()
+        try:
+            if console.is_terminal:
+                await run_in_terminal(emit)
+            else:
+                emit()
+        finally:
+            self._scrollback_handoff_depth -= 1
+            self._prompt_session.invalidate()
 
     @property
     def _btw_active(self) -> bool:
@@ -222,7 +279,17 @@ class _PromptLiveView(_LiveView):
                 # commits. advance_stream_reveal() is a no-op unless a paced block
                 # has backlog, so reduced-motion / unpaced turns fall straight
                 # through to the calm status cadence below.
-                if self.advance_stream_reveal() or self._streaming_needs_animation_frame():
+                advanced = self.advance_stream_reveal()
+                # No mid-stream scrollback commit here: each commit is a
+                # run_in_terminal prompt-app teardown (the visible "jump"). Completed
+                # prose stays in the in-place live preview (clamped to a tail window
+                # by _compose_composing) and is flushed to scrollback exactly once at
+                # a tool transition or turn end (_drain_content_for_transition /
+                # flush_content). _flush_pending_scrollback below drains only that
+                # once-per-event queue, never per-paragraph mid-stream pops.
+                await self._flush_pending_scrollback()
+                needs_animation = self._streaming_needs_animation_frame()
+                if advanced or needs_animation:
                     self._dirty = True
                 if self._dirty or self._force_refresh:
                     self._prompt_session.invalidate()
@@ -241,6 +308,73 @@ class _PromptLiveView(_LiveView):
                     self._prompt_session.invalidate()
         except asyncio.CancelledError:
             pass
+
+    def advance_stream_reveal(self) -> bool:
+        return super().advance_stream_reveal()
+
+    async def _emit_incremental_content_commits(self) -> bool:
+        block = self._current_content_block
+        if block is None or block.is_think:
+            return False
+        committed = block.take_committed_renderables()
+        if not committed:
+            return False
+
+        def emit_committed() -> None:
+            for renderable in committed:
+                self._emit_incremental_scrollback(renderable)
+
+        await self._run_scrollback_handoff(emit_committed, reason=f"prose_commit({len(committed)})")
+        await self._after_incremental_scrollback_emitted()
+        return True
+
+    async def _after_incremental_scrollback_emitted(self) -> None:
+        self._prompt_session.invalidate()
+
+    async def _flush_pending_scrollback(self) -> None:
+        """Drain queued scrollback to scrollback.
+
+        In a real terminal, route through run_in_terminal so the prompt preamble
+        is not fossilized into permanent transcript output.  In piped/non-terminal
+        mode run_in_terminal does not write to the captured stdout, so fall back to
+        direct console.print() which matches the pre-preamble base-class behavior.
+        """
+        if not self._pending_scrollback:
+            return
+        to_print = self._pending_scrollback[:]
+        self._pending_scrollback.clear()
+
+        def emit() -> None:
+            for renderable, blank_row in to_print:
+                console.print(renderable)
+                if blank_row:
+                    console.print()
+
+        await self._run_scrollback_handoff(emit, reason=f"pending_scrollback({len(to_print)})")
+        self._prompt_session.invalidate()
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, True))
+
+    def _emit_action_block(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, True))
+
+    def _emit_steer_echo(self, renderable: RenderableType) -> None:
+        self._pending_scrollback.append((renderable, False))
+
+    def _print_turn_recap(self) -> None:
+        block = self._build_turn_recap_block()
+        if block is None:
+            return
+        self._pending_scrollback.append((Text(""), False))
+        self._pending_scrollback.append((block, False))
+        self._pending_scrollback.append((Text(""), False))
+
+    async def _drain_content_for_transition(self, reason: FlushReason) -> None:
+        _handoff_trace(f"TRANSITION\t{reason.name}")
+        await super()._drain_content_for_transition(reason)
+        if self._dirty:
+            self._flush_prompt_refresh()
 
     # -- Public API: queued messages for the shell to drain ------------------
 
@@ -309,36 +443,50 @@ class _PromptLiveView(_LiveView):
                         external_task
                     )
                     if msg is not None:
+                        if reason := self._transition_flush_reason(msg):
+                            await self._drain_content_for_transition(reason)
                         self.dispatch_wire_message(msg)
+                        await self._flush_pending_scrollback()
                         self._flush_prompt_refresh()
                         continue
                     self.cleanup(is_interrupt=False)
+                    await self._flush_pending_scrollback()
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, StepInterrupted):
                     self.cleanup(is_interrupt=True)
+                    await self._flush_pending_scrollback()
                     self._force_refresh = True
                     self._flush_prompt_refresh()
                     break
 
                 if isinstance(msg, TurnEnd):
                     self._active_turn_depth = max(0, self._active_turn_depth - 1)
-                    self._turn_ended = self._active_turn_depth == 0
-                    if self._turn_ended:
+                    turn_ended = self._active_turn_depth == 0
+                    if turn_ended:
+                        _handoff_trace("TURN_END")
+                        self.flush_content(FlushReason.TURN_END)
+                        self._turn_ended = True
                         self._turn_start_time = None
                         self._pending_turn_recap = True
+                    else:
+                        self._turn_ended = False
                     self._force_refresh = True
+                    await self._flush_pending_scrollback()
                     self._flush_prompt_refresh()
                     continue
 
+                if reason := self._transition_flush_reason(msg):
+                    await self._drain_content_for_transition(reason)
                 self.dispatch_wire_message(msg)
                 if from_external:
                     # External (out-of-band) messages — approval requests, steer
                     # input — are interactive and must repaint at once rather than
                     # wait for the status refresh cadence.
                     self._force_refresh = True
+                await self._flush_pending_scrollback()
                 self._flush_prompt_refresh()
 
             # NOTE: btw dismiss waiting is handled by the shell layer
@@ -505,8 +653,8 @@ class _PromptLiveView(_LiveView):
         # Intercept shell-only commands — same handling as the Enter/queue path
         if self._intercept_shell_command(user_input):
             return
-        # Print permanently in conversation flow with UI-only text placeholders expanded.
-        console.print(render_user_echo_text(user_input.resolved_command))
+        # Queue permanently in conversation flow with UI-only text placeholders expanded.
+        self._emit_steer_echo(render_user_echo_text(user_input.resolved_command))
         from pythinker_code.telemetry import track
 
         track("input_steer")
@@ -557,11 +705,26 @@ class _PromptLiveView(_LiveView):
         approval/question panels here.  Those panels are rendered by their
         respective modal delegates in Layer 2.
         """
-        if self._turn_ended:
+        if self._turn_ended and not self._prompt_is_finalizing():
             return ANSI("")
-        # Exclude the trailing verb spinner — the prompt pins it separately via
-        # ``render_pinned_status_tail`` so a clipped agent stream cannot hide it.
-        blocks = self.compose_agent_output(include_working_indicator=False)
+        from prompt_toolkit.application import get_app_or_none
+
+        from pythinker_code.ui.shell.prompt import _prompt_preamble_max_rows
+
+        app = get_app_or_none()
+        terminal_rows = app.output.get_size().rows if app is not None else None
+        # Reserve one row for the pinned verb spinner rendered below the clip hint.
+        body_budget = max(1, _prompt_preamble_max_rows(terminal_rows) - 1)
+        content_block = getattr(self, "_current_content_block", None)
+        if content_block is not None:
+            content_block.set_preview_row_budget(body_budget)
+        # Exclude activity rows here — the prompt pins the active spinner
+        # separately via ``render_pinned_status_tail`` so a clipped agent stream
+        # cannot hide it or place it between committed prose and the live tail.
+        blocks = self.compose_agent_output(
+            include_working_indicator=False,
+            include_content_activity=False,
+        )
         if not blocks:
             return ANSI("")
         body = render_to_ansi(Group(*blocks), columns=columns).rstrip("\n")
@@ -571,13 +734,25 @@ class _PromptLiveView(_LiveView):
         """Render the trailing verb spinner that the prompt keeps pinned below a
         (possibly clipped) agent stream, so it stays visible above the input."""
         if (
-            self._turn_ended
-            or self._active_turn_depth <= 0
-            or self._current_question_panel is not None
+            self._current_question_panel is not None
             or self._current_approval_request_panel is not None
         ):
             return ANSI("")
-        body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
+
+        finalizing = self._prompt_is_finalizing()
+        turn_active = self._active_turn_depth > 0 and not self._turn_ended
+        if not turn_active and not finalizing:
+            return ANSI("")
+
+        if finalizing and not turn_active:
+            body = render_to_ansi(self._finalizing_indicator(), columns=columns).rstrip("\n")
+            return ANSI(body if body else "")
+
+        content_block = getattr(self, "_current_content_block", None)
+        if content_block is not None and not content_block.is_think:
+            body = render_to_ansi(content_block._compose_spinner(), columns=columns).rstrip("\n")
+        else:
+            body = render_to_ansi(self._working_indicator(), columns=columns).rstrip("\n")
         return ANSI(body if body else "")
 
     def render_running_prompt_body(self, columns: int) -> ANSI:
@@ -612,6 +787,8 @@ class _PromptLiveView(_LiveView):
         if self._current_approval_request_panel is not None:
             return False
         if self._current_question_panel is not None:
+            return False
+        if self._turn_ended:
             return False
         return not self._turn_ended
 
@@ -730,8 +907,12 @@ class _PromptLiveView(_LiveView):
 
     def _flush_prompt_refresh(self) -> None:
         if self._force_refresh:
-            if self._dirty or self._need_recompose:
-                self._prompt_session.invalidate()
+            # Always invalidate when the caller explicitly asked for a
+            # forced refresh (e.g. TurnEnd on a contentless turn where
+            # neither _dirty nor _need_recompose has been set by the
+            # composition pipeline). Skipping the invalidate here left
+            # the prompt stale until the next composition tick.
+            self._prompt_session.invalidate()
             self._dirty = False
             self._force_refresh = False
             self._need_recompose = False

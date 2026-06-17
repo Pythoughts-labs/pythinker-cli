@@ -28,6 +28,18 @@ async def test_publish_nowait():
     assert await queue.get() == "fast_message"
 
 
+async def test_publish_nowait_buffers_for_slow_subscriber():
+    """Slow subscribers retain messages; publish_nowait does not drop them."""
+    broadcast = BroadcastQueue()
+    queue = broadcast.subscribe()
+
+    for index in range(100):
+        broadcast.publish_nowait(index)
+
+    assert queue.qsize() == 100
+    assert [await queue.get() for _ in range(100)] == list(range(100))
+
+
 async def test_unsubscribe():
     """Test that unsubscribed queues don't receive messages."""
     broadcast = BroadcastQueue()

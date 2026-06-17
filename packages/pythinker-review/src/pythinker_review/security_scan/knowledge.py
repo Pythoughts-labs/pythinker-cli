@@ -1,7 +1,7 @@
 """Shared security-review knowledge for prompts and advisor context.
 
 Most framework highlights and slug notes are ported from the TypeScript
-``blackbox/pythinker-security-scanner`` prompt tables. Keep entries short: these are
+Pythinker Review security-scan prompt tables. Keep entries short: these are
 reviewer instincts and false-positive checks, not tutorials.
 """
 

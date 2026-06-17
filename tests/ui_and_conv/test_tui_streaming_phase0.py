@@ -152,12 +152,17 @@ def test_long_code_block_does_not_reparse_per_tick() -> None:
 
 
 def test_live_paint_rate_matches_reveal_scheduler() -> None:
-    """Live auto-refresh must use the same rate constant as the reveal scheduler."""
+    """Live frame-refresh interval must match the reveal-scheduler constant.
+
+    _LiveView uses DiffLive for both TTY and non-TTY; the frame loop sleeps by
+    STREAM_FRAME_INTERVAL_S.  STREAM_FPS is no longer referenced there directly
+    (it drove the old Rich Live refresh_per_second= argument), but the identity
+    between the two motion-module constants is still meaningful.
+    """
     from pythinker_code.ui.shell import motion
     from pythinker_code.ui.shell.visualize import _live_view as live_view_module
 
     assert pytest.approx(1.0 / motion.STREAM_FPS) == motion.STREAM_FRAME_INTERVAL_S
-    assert live_view_module.STREAM_FPS is motion.STREAM_FPS
     assert live_view_module.STREAM_FRAME_INTERVAL_S is motion.STREAM_FRAME_INTERVAL_S
 
 

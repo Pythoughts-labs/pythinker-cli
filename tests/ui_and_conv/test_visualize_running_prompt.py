@@ -11,6 +11,7 @@ from rich.text import Text
 from pythinker_code.tools.display import TodoDisplayItem
 from pythinker_code.ui.shell.motion import _SHIMMER_BASE, _SHIMMER_HIGHLIGHT, _SHIMMER_MID
 from pythinker_code.ui.shell.prompt import BgTaskCounts, CustomPromptSession, PromptMode, UserInput
+from pythinker_code.ui.shell.spacing import PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT
 from pythinker_code.wire.types import (
     ApprovalRequest,
     StatusUpdate,
@@ -101,7 +102,11 @@ def test_render_agent_status_uses_compose_agent_output_not_compose() -> None:
     agent_calls: list[bool] = []
     compose_calls: list[bool] = []
 
-    def fake_compose_agent_output(*, include_working_indicator: bool = True):
+    def fake_compose_agent_output(
+        *,
+        include_working_indicator: bool = True,
+        include_content_activity: bool = True,
+    ):
         agent_calls.append(True)
         return [Text("agent-status")]
 
@@ -119,6 +124,153 @@ def test_render_agent_status_uses_compose_agent_output_not_compose() -> None:
     assert "agent-status" in rendered.value
 
 
+@pytest.mark.asyncio
+async def test_prompt_final_scrollback_invalidates_after_transient_block_detached(
+    monkeypatch,
+) -> None:
+    """Prompt mode must detach the content block and flush it via run_in_terminal."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    printed: list[object] = []
+    invalidation_saw_detached_block: list[bool] = []
+    view_holder: dict[str, _PromptLiveView] = {}
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidation_saw_detached_block.append(
+                view_holder["view"]._current_content_block is None
+            )
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "_force_terminal", True)
+    monkeypatch.setattr(
+        _live_view_mod.console,
+        "print",
+        lambda *args, **kwargs: printed.extend(args) if args else None,
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view_holder["view"] = view
+    view._current_content_block = _ContentBlock(is_think=False)
+    view._current_content_block.append("final prompt text")
+
+    view.flush_content()
+    await view._flush_pending_scrollback()
+
+    # The handoff invalidates around the run_in_terminal teardown; every
+    # invalidation must observe the block already detached (no torn live frame).
+    assert invalidation_saw_detached_block
+    assert all(invalidation_saw_detached_block)
+    assert len(printed) == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_incremental_scrollback_uses_terminal_handoff(monkeypatch) -> None:
+    """Committed prompt-path blocks must print while prompt_toolkit is suspended."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    invalidations: list[str] = []
+    printed: list[object] = []
+    terminal_handoffs: list[str] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidations.append("invalidate")
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        terminal_handoffs.append("run")
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "_force_terminal", True)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph.\n\nMutable tail")
+    assert block._committed_renderables
+    view._current_content_block = block
+
+    emitted = await view._emit_incremental_content_commits()
+
+    assert emitted is True
+    assert terminal_handoffs == ["run"]
+    assert printed
+    assert invalidations  # prompt is invalidated around the terminal handoff
+
+
+def test_status_loop_has_no_midstream_commit_throttle() -> None:
+    """Regression guard: the per-tick mid-stream commit (the source of the
+    run_in_terminal "jump") must not come back. Completed prose stays in the
+    in-place live preview and flushes once at a transition / turn end."""
+    assert not hasattr(_PromptLiveView, "_maybe_emit_incremental_commits")
+
+
+@pytest.mark.asyncio
+async def test_streaming_does_not_commit_to_scrollback_until_turn_end(monkeypatch) -> None:
+    """During an active stream, completed paragraphs are NOT handed to scrollback
+    (no run_in_terminal teardown / jump); the whole block flushes exactly once at
+    turn end."""
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    printed: list[object] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: printed.append(renderable),
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    block = _ContentBlock(is_think=False)
+    block.append("Paragraph one.\n\nParagraph two.\n\ntail")
+    assert block._committed_renderables  # paragraph boundaries are committable
+    view._current_content_block = block
+
+    # The status-loop body (reveal + pending-scrollback drain) commits nothing
+    # mid-stream: the incremental scrollback path never fires, prose stays in the
+    # live preview, and nothing is queued for handoff.
+    view.advance_stream_reveal()
+    await view._flush_pending_scrollback()
+    assert printed == []  # _emit_incremental_scrollback (mid-stream path) never ran
+    assert view._pending_scrollback == []
+    assert block._committed_renderables  # retained in the in-place preview
+
+    # Turn end detaches the block and queues the whole thing for a single handoff.
+    view.flush_content()
+    assert view._current_content_block is None
+    assert view._pending_scrollback  # full block queued exactly once
+    await view._flush_pending_scrollback()
+    assert view._pending_scrollback == []  # drained
+
+
 def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     import time as _time
 
@@ -133,16 +285,97 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     assert out.value.strip() != ""
 
 
+def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
+    import time as _time
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, object()),
+        steer=lambda _content: None,
+    )
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    block = _ContentBlock(is_think=False)
+    block.append("Evidence:\n\nThe live preview stays with the body")
+    view._current_content_block = block
+
+    body = view.render_agent_status(80).value
+    pinned_tail = view.render_pinned_status_tail(80).value
+
+    assert "Evidence:" in body
+    assert "The live preview stays with the body" in body
+    assert "Composing" not in body
+    assert "Composing" in pinned_tail
+
+
 def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
     view = object.__new__(_PromptLiveView)
     view._turn_ended = True
-    view._active_turn_depth = 1
+    view._active_turn_depth = 0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 0
+    view._current_content_block = None
     assert view.render_pinned_status_tail(80).value == ""
 
     view2 = object.__new__(_PromptLiveView)
     view2._turn_ended = False
     view2._active_turn_depth = 0
+    view2._current_question_panel = None
+    view2._current_approval_request_panel = None
+    view2._pending_scrollback = []
+    view2._scrollback_handoff_depth = 0
+    view2._current_content_block = None
     assert view2.render_pinned_status_tail(80).value == ""
+
+
+def test_render_pinned_status_tail_finalizing_when_pending_scrollback() -> None:
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = True
+    view._active_turn_depth = 0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = [(Text("queued"), True)]
+    view._scrollback_handoff_depth = 0
+    view._current_content_block = None
+
+    pinned = view.render_pinned_status_tail(80).value
+    assert pinned.strip() != ""
+    assert "Finalizing" in pinned
+
+
+def test_render_pinned_status_tail_finalizing_during_scrollback_handoff() -> None:
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = True
+    view._active_turn_depth = 0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 1
+    view._current_content_block = None
+
+    assert "Finalizing" in view.render_pinned_status_tail(80).value
+
+
+def test_render_pinned_status_tail_finalizing_when_committed_blocks_pending() -> None:
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = True
+    view._active_turn_depth = 0
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._pending_scrollback = []
+    view._scrollback_handoff_depth = 0
+    block = _ContentBlock(is_think=False)
+    block.append("Done paragraph.\n\ntail")
+    view._current_content_block = block
+
+    assert "Finalizing" in view.render_pinned_status_tail(80).value
 
 
 def test_render_pinned_status_tail_empty_while_question_panel_open() -> None:
@@ -276,10 +509,10 @@ def test_pinned_tail_survives_preamble_clip() -> None:
     )
     text = "".join(fragment for _, fragment, *_ in out)
 
-    assert "output clipped to fit terminal" in text
+    assert PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT in text
     assert "Pondering…" in text
     # The spinner is pinned below the clip hint, never clipped away above it.
-    assert text.index("output clipped") < text.index("Pondering…")
+    assert text.index("earlier output hidden") < text.index("Pondering…")
 
 
 def test_pinned_tail_absent_falls_back_to_plain_clip() -> None:
@@ -290,7 +523,7 @@ def test_pinned_tail_absent_falls_back_to_plain_clip() -> None:
         preamble, FormattedText(), columns=80, max_rows=6
     )
     text = "".join(fragment for _, fragment, *_ in out)
-    assert "output clipped to fit terminal" in text
+    assert PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT in text
 
 
 def test_pinned_tail_has_blank_row_after_preamble() -> None:
@@ -615,7 +848,11 @@ def test_live_view_flushes_current_output_before_printing_steer_input(monkeypatc
     view = _LiveView(StatusUpdate())
     order: list[object] = []
 
-    monkeypatch.setattr(view, "flush_content", lambda: order.append("flush_content"))
+    monkeypatch.setattr(
+        view,
+        "flush_content",
+        lambda reason=None: order.append("flush_content"),
+    )
     monkeypatch.setattr(view, "flush_finished_tool_calls", lambda: order.append("flush_tools"))
     monkeypatch.setattr(
         shell_visualize.console,
@@ -646,6 +883,9 @@ async def test_live_view_processes_external_approval_messages(monkeypatch) -> No
         def update(self, renderable, refresh: bool = True) -> None:
             updates.append(renderable)
 
+        def refresh(self) -> None:
+            return None
+
         def stop(self) -> None:
             return None
 
@@ -660,7 +900,7 @@ async def test_live_view_processes_external_approval_messages(monkeypatch) -> No
     async def _no_keyboard_listener(*args, **kwargs):
         yield
 
-    monkeypatch.setattr(_live_view_mod, "Live", _FakeLive)
+    monkeypatch.setattr(_live_view_mod, "DiffLive", _FakeLive)
     monkeypatch.setattr(_live_view_mod, "_keyboard_listener", _no_keyboard_listener)
 
     view = _LiveView(StatusUpdate())
@@ -777,6 +1017,86 @@ async def test_prompt_live_view_keeps_processing_external_approvals_after_turn_e
             await asyncio.sleep(0)
         assert view._current_approval_request_panel is not None
         assert invalidations
+    finally:
+        gate.set()
+        await task
+
+
+@pytest.mark.asyncio
+async def test_prompt_live_view_flushes_content_before_marking_turn_ended(monkeypatch) -> None:
+    invalidations: list[str] = []
+    printed: list[object] = []
+    gate = asyncio.Event()
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            invalidations.append("invalidate")
+
+    class _Wire:
+        def __init__(self) -> None:
+            self._messages = [
+                TurnBegin(user_input="summarize"),
+                TextPart(text="Final streamed answer."),
+                TurnEnd(),
+            ]
+
+        async def receive(self):
+            if self._messages:
+                return self._messages.pop(0)
+            await gate.wait()
+            raise shell_visualize.QueueShutDown
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+
+    def _record_print(*args: object, **_kwargs: object) -> None:
+        if args:
+            printed.extend(args)
+
+    monkeypatch.setattr(_live_view_mod.console, "print", _record_print)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    # Prove the ordering contract, not just the end state: the turn-end
+    # flush_content() must run while _turn_ended is still False, before
+    # visualize_loop marks the turn ended (_interactive.py flushes, then sets
+    # the flag). Recording only end-state cannot distinguish flush-before-set
+    # from set-before-flush.
+    flush_turn_ended_states: list[bool] = []
+    original_flush_content = view.flush_content
+
+    def _tracking_flush_content(reason=None):  # noqa: ANN001, ANN202
+        flush_turn_ended_states.append(view._turn_ended)
+        if reason is None:
+            return original_flush_content()
+        return original_flush_content(reason)
+
+    monkeypatch.setattr(view, "flush_content", _tracking_flush_content)
+
+    task = asyncio.create_task(view.visualize_loop(cast(Any, _Wire())))
+    # The task is consumed in the finally block; this reference keeps
+    # the assignment from being flagged as a no-op by static analysis.
+    assert task is not None
+    try:
+        for _ in range(20):
+            if view._turn_ended:
+                break
+            await asyncio.sleep(0)
+
+        assert view._turn_ended is True
+        assert view._current_content_block is None
+        assert printed
+        assert invalidations
+        # The final flush is the turn-end flush; it must have observed
+        # _turn_ended still False, proving flush precedes the flag flip.
+        assert flush_turn_ended_states, "flush_content was never called"
+        assert flush_turn_ended_states[-1] is False
     finally:
         gate.set()
         await task

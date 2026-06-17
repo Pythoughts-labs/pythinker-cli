@@ -185,11 +185,10 @@ class _TrimmedTrailingSpace:
 
 
 def render_message_response(renderable: RenderableType) -> RenderableType:
-    """Render a Blackbox-style indented response gutter for tool details.
+    """Render an indented response gutter for tool card details.
 
-    Mirrors the reference message-response layout: result/progress
-    content sits under a dim ``⎿`` marker so the call header and response are
-    visually distinct without a heavy border.
+    Result and progress content sits under a dim ``⎿`` marker so the call header
+    and response are visually distinct without a heavy border.
     """
     table = Table.grid(padding=0)
     table.add_column(width=5, no_wrap=True)

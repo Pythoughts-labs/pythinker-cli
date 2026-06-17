@@ -68,7 +68,7 @@ Format: trigger → rule.
   usage only, after the delta is established. Verify "feature X added in
   version Y" claims against release notes before asserting them.
 - **When recommending an upgrade**, first grep direct imports with
-  `--include="*.py"` (excluding `blackbox/` and `__pycache__`) — a dep with
+  `--include="*.py"` (excluding `external reference ` and `__pycache__`) — a dep with
   zero direct imports gets no API-migration advice — and read pin-reason
   comments / git blame before calling a pin an "upgrade opportunity".
 - **Never claim an artifact was persisted** ("report saved", "todo updated")

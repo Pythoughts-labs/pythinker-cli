@@ -1,9 +1,8 @@
-"""Blackbox-style renderer for Pythinker's ``WriteFile`` tool.
+"""Pythinker renderer for Pythinker's ``WriteFile`` tool.
 
-The tool-use row stays compact (``write path`` / ``append path``). Success
-results render like the reference file-write UI: created files
-show ``Wrote N lines to path`` plus a capped content preview, while updates
-prefer the real diff display blocks returned by the Python tool.
+The call row stays compact (``write path`` / ``append path``). Success results
+show ``Wrote N lines to path`` plus a capped content preview for creates; updates
+prefer the diff display blocks returned by the tool.
 """
 
 from __future__ import annotations
@@ -129,6 +128,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
     preview = preview_from_diff_blocks(diff_blocks)
     mode = ctx.args.get("mode")
     raw_content = as_str(ctx.args.get("content")) or ""
+    raw_path = as_str(ctx.args.get("path"))
 
     if (
         preview is not None
@@ -143,6 +143,7 @@ def _render_result(ctx: ToolRenderContext, result: ToolResultPayload) -> Rendera
                 width=ctx.width or 80,
                 expanded=ctx.expanded,
                 state=ctx.state,
+                path=raw_path,
             ),
         )
 

@@ -9,6 +9,7 @@ from pythinker_code.ui.shell.components.render_utils import sanitize_ansi
 from pythinker_code.ui.shell.components.report import (
     Report,
     ReportFinding,
+    Severity,
     parse_report_block,
     render_agent_body,
     render_report,
@@ -97,8 +98,9 @@ def test_render_report_hanging_indents_wrapped_locations():
     out = _plain(render_report(report), width=120)
     location_lines = [line for line in out.splitlines() if "pythinker.py" in line]
 
-    assert len(location_lines) >= 2
-    assert location_lines[0].index("packages") == location_lines[1].index("packages")
+    assert len(location_lines) >= 1
+    assert "pythinker.py:138-148" in out
+    assert "pythinker.py:198-209" in out
 
 
 def test_render_report_hang_indents_wrapped_finding_title():
@@ -127,7 +129,7 @@ def test_render_report_hang_indents_wrapped_finding_title():
     # The wrapped title and the location start at the title column, both deeper
     # than the marker — an unambiguous, cohesive finding block.
     assert wrap_line.index("overwrites") == title_col
-    assert location_line.index("src/pythinker") == title_col
+    assert location_line.index("toolset.py") == title_col
     assert title_col > marker_col
 
 
@@ -200,6 +202,87 @@ def test_parse_report_block_malformed_returns_none(payload):
 # ---------------------------------------------------------------------------
 # render_agent_body — the fenced-block bridge
 # ---------------------------------------------------------------------------
+
+
+def test_report_block_suppresses_redundant_trailing_summary() -> None:
+    text = (
+        "Report is complete. All 10 open PRs audited.\n\n"
+        "```report\n"
+        '{"title":"Open PR Audit","scope":"All 10 open PRs",'
+        '"findings":['
+        '{"title":"PR #159: mechanical fixes","severity":"high",'
+        '"location":"src/pythinker_code/ui/shell/prompt.py:3231",'
+        '"body":"Action: land one cleanup commit."}'
+        '],"note":"Most actionable: fix PR #159 first."}'
+        "\n```\n\n"
+        "Summary\n\n"
+        "• Total open PRs\n"
+        "  Count    10\n"
+        "  Details  1 feature, 9 dependabot\n\n"
+        "Headline summary\n\n"
+        "Open issues: 0 · Open PRs: 10 · Codecov 69.66%\n\n"
+        "Top 3 actions:\n\n"
+        "1. PR #159 HIGH — Land mechanical cleanups.\n"
+        "2. PR #154/#108 HIGH — Add changelog entries.\n\n"
+        "Saved: .pythinker/reports/open-pr-audit.md\n"
+        "Raw: /tmp/pr_audit/pr_<N>.log\n"
+    )
+
+    out = _plain(render_agent_body(text), width=120)
+
+    assert "Open PR Audit" in out
+    assert "1 high" in out
+    assert "Most actionable: fix PR #159 first." in out
+    assert "Summary" not in out
+    assert "Total open PRs" not in out
+    assert "Headline summary" not in out
+    assert "Open issues: 0" not in out
+    assert "Top 3 actions" not in out
+    assert "Land mechanical cleanups" not in out
+    assert "Saved: .pythinker/reports/open-pr-audit.md" in out
+    assert "Raw: /tmp/pr_audit/pr_<N>.log" in out
+    assert "Report is complete" not in out
+
+
+def test_render_agent_body_suppresses_redundant_summary_after_report() -> None:
+    test_report_block_suppresses_redundant_trailing_summary()
+
+
+def test_report_block_preserves_short_non_redundant_trailing_text() -> None:
+    text = (
+        "Here is the review.\n\n"
+        "```report\n"
+        '{"title":"Tiny Review","findings":[{"title":"bug","severity":"medium"}]}\n'
+        "```\n\n"
+        "Done."
+    )
+
+    out = _plain(render_agent_body(text), width=100)
+
+    assert "Here is the review." in out
+    assert "Tiny Review" in out
+    assert "1 medium" in out
+    assert "Done." in out
+
+
+def test_render_agent_body_keeps_short_nonredundant_trailing_prose() -> None:
+    test_report_block_preserves_short_non_redundant_trailing_text()
+
+
+def test_report_block_preserves_artifact_footer() -> None:
+    text = (
+        "```report\n"
+        '{"title":"Artifact Report","findings":[{"title":"bug","severity":"high"}]}\n'
+        "```\n\n"
+        "Saved: .pythinker/reports/foo.md\n"
+        "Raw evidence: /Users/panda/.pythinker/sessions/project-hash/session-id/tool-output/\n"
+    )
+
+    out = _plain(render_agent_body(text), width=120)
+
+    assert "Saved: .pythinker/reports/foo.md" in out
+    assert "Raw evidence: ~/.pythinker/sessions/.../tool-output/" in out
+    assert "/Users/panda/.pythinker/sessions" not in out
 
 
 def test_render_agent_body_promotes_report_fence():
@@ -291,6 +374,116 @@ def test_render_agent_body_report_prose_gets_section_rhythm():
 def test_render_agent_body_single_label_stays_plain_markdown():
     out = _plain(render_agent_body("Note: keep this as ordinary prose."), width=100)
     assert "Note: keep this as ordinary prose." in out
+
+
+def test_report_locations_are_compacted_for_terminal() -> None:
+    report = Report(
+        title="Location report",
+        findings=(
+            ReportFinding(
+                title="Many files",
+                severity="high",
+                location=(
+                    "/Users/panda/Projects/active/Projects/pythinker-code-main/"
+                    "src/pythinker_code/ui/shell/prompt.py:3231, "
+                    "tests/ui_and_conv/test_visualize_running_prompt.py:1214, "
+                    "src/pythinker_code/ui/shell/visualize/_diff_live.py:12, "
+                    "src/pythinker_code/ui/shell/visualize/_live_view.py"
+                ),
+                body="compact these paths",
+            ),
+        ),
+    )
+
+    out = _plain(render_report(report), width=120)
+
+    assert "/Users/panda/Projects/active/Projects/pythinker-code-main" not in out
+    assert "src/pythinker_code/" not in out
+    assert "tests/ui_and_conv/" not in out
+    assert "prompt.py:3231" in out
+    assert "test_visualize_running_prompt.py:1214" in out
+    assert "visualize/_diff_live.py:12" in out
+    assert "visualize/_live_view.py" in out
+
+
+def test_render_report_compacts_long_locations_for_terminal() -> None:
+    test_report_locations_are_compacted_for_terminal()
+
+
+def test_render_report_summarizes_many_locations() -> None:
+    report = Report(
+        title="Many locations",
+        findings=(
+            ReportFinding(
+                title="Many files",
+                severity="medium",
+                location=(
+                    "src/pythinker_code/a/one.py:1, "
+                    "src/pythinker_code/a/two.py:2, "
+                    "src/pythinker_code/a/three.py:3, "
+                    "src/pythinker_code/a/four.py:4, "
+                    "src/pythinker_code/a/five.py:5"
+                ),
+            ),
+        ),
+    )
+
+    out = _plain(render_report(report), width=120)
+
+    assert "5 files affected" in out
+    assert "one.py:1" in out
+    assert "two.py:2" in out
+    assert "three.py:3" in out
+    assert "four.py:4" not in out
+    assert "five.py:5" not in out
+
+
+def test_large_report_uses_compact_terminal_layout() -> None:
+    severities: tuple[Severity, ...] = (
+        "high",
+        "high",
+        "medium",
+        "medium",
+        "low",
+        "low",
+        "low",
+        "info",
+        "info",
+    )
+    report = Report(
+        title="Open PR Audit",
+        scope="All 10 open PRs reviewed",
+        findings=tuple(
+            ReportFinding(
+                title=f"PR #{index}: finding {index}",
+                severity=severity,
+                location=f"src/pythinker_code/ui/shell/file_{index}.py:{index}",
+                body="Action: keep this compact.",
+            )
+            for index, severity in enumerate(severities, start=1)
+        ),
+        note="Most actionable: fix PR #159 first.",
+    )
+
+    out = _plain(render_report(report), width=120)
+
+    assert "Open PR Audit" in out
+    assert "All 10 open PRs reviewed" in out
+    assert "2 high" in out
+    assert "2 medium" in out
+    assert "Low: 3" in out
+    assert "Info: 2" in out
+    assert "PR #1: finding 1" in out
+    assert "PR #5: finding 5" not in out
+    assert "PR #8: finding 8" not in out
+    assert "See saved report for full inventory." in out
+    assert "Most actionable: fix PR #159 first." in out
+    assert "╭" not in out
+    assert "╰" not in out
+
+
+def test_large_report_uses_compact_dashboard_layout() -> None:
+    test_large_report_uses_compact_terminal_layout()
 
 
 def test_streaming_commit_keeps_report_fence_atomic_and_renders():

@@ -1,8 +1,7 @@
 """Width-aware horizontal border primitive for shell components.
 
-This is the Rich equivalent of Blackbox's ``DynamicBorder`` component: a
-single horizontal rule that reflows to the available terminal width and uses a
-semantic Pythinker theme token for its color.
+Width-aware horizontal rule for shell cards: reflows to the available terminal
+width and uses a semantic Pythinker theme token for its color.
 """
 
 from __future__ import annotations
