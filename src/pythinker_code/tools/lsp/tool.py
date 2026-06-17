@@ -399,6 +399,9 @@ async def _run_git_check_ignore(cwd: str, paths: list[str]) -> tuple[bool, str]:
             return True, stdout_bytes.decode("utf-8", errors="replace")
         if exit_code == 1:
             return True, ""
+        # Outside a git work tree there is no ignore metadata to apply.
+        if exit_code == 128:
+            return True, ""
         logger.debug(
             "git check-ignore failed in {cwd} with exit code {code}",
             cwd=cwd,

@@ -580,6 +580,8 @@ class SlashCommandCompleter(Completer):
                 tier, label = result
                 matched.append((tier, len(cmd.name), cmd.name, label, cmd))
         matched.sort(key=lambda item: (item[0], item[1], item[2]))
+        if matched and matched[0][0] < 6:
+            matched = [item for item in matched if item[0] < 6]
 
         for _, _, _, label, cmd in matched:
             yield from emit(cmd, label)
