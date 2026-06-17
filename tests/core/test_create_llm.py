@@ -4,6 +4,7 @@ from inline_snapshot import snapshot
 from pydantic import SecretStr
 from pythinker_core.chat_provider.echo import EchoChatProvider
 from pythinker_core.chat_provider.pythinker import Pythinker
+from pythinker_core.contrib.chat_provider.anthropic import Anthropic
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacy
 from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponses
 
@@ -13,6 +14,7 @@ from pythinker_code.llm import (
     clone_llm_with_model_alias,
     create_llm,
     derive_model_capabilities,
+    resolve_tool_result_mode,
 )
 
 
@@ -881,3 +883,104 @@ def test_create_llm_kimi_k2_thinking_ignores_thinking_off():
     assert llm.chat_provider._generation_kwargs.get("extra_body") == {  # pyright: ignore[reportPrivateUsage]
         "thinking": {"type": "enabled"}
     }
+
+
+def test_resolve_tool_result_mode_native_vs_compat_proxy():
+    # Native endpoints consume multi-part tool_result content; compatibility proxies
+    # get flattened to one string. Keyed on transport (host), never on model name.
+    assert resolve_tool_result_mode(api_family="anthropic", base_url=None) is None
+    assert (
+        resolve_tool_result_mode(api_family="anthropic", base_url="https://api.anthropic.com")
+        is None
+    )
+    assert resolve_tool_result_mode(api_family="openai", base_url="https://api.openai.com") is None
+    # Anthropic-compatible proxies (z.ai/GLM, MiniMax, Kimi) → flatten.
+    assert (
+        resolve_tool_result_mode(api_family="anthropic", base_url="https://api.z.ai/api/anthropic")
+        == "extract_text"
+    )
+    # OpenAI-compatible proxies (DeepSeek, xAI/Grok, …) → flatten.
+    assert (
+        resolve_tool_result_mode(api_family="openai", base_url="https://api.deepseek.com/v1")
+        == "extract_text"
+    )
+    assert (
+        resolve_tool_result_mode(api_family="openai", base_url="https://api.x.ai/v1")
+        == "extract_text"
+    )
+
+
+def test_resolve_tool_result_mode_host_normalization():
+    # Trailing slashes, paths, and case must not change the genuine-host verdict.
+    for url in (
+        "https://api.anthropic.com/",
+        "https://API.Anthropic.com",
+        "https://api.anthropic.com/v1/messages",
+    ):
+        assert resolve_tool_result_mode(api_family="anthropic", base_url=url) is None
+    # A lookalike host must NOT be treated as genuine.
+    assert (
+        resolve_tool_result_mode(api_family="anthropic", base_url="https://fake-anthropic.com")
+        == "extract_text"
+    )
+
+
+def test_create_llm_zai_anthropic_proxy_flattens_tool_results():
+    # z.ai's Anthropic-compatible proxy only honors the first content block of an
+    # array-form tool_result, so multi-block results (system summary + output) must
+    # be flattened to a single text block or the model never sees the tool output.
+    provider = LLMProvider(
+        type="anthropic",
+        base_url="https://api.z.ai/api/anthropic",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="managed:z-ai",
+        model="glm-5.2",
+        max_context_size=200_000,
+        capabilities=None,
+    )
+    llm = create_llm(provider, model)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, Anthropic)
+    assert llm.chat_provider._tool_message_conversion == "extract_text"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_create_llm_genuine_anthropic_keeps_array_tool_results():
+    # Genuine api.anthropic.com handles array-form tool_result content (incl. images),
+    # so it must NOT be flattened.
+    provider = LLMProvider(
+        type="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        max_context_size=200_000,
+        capabilities=None,
+    )
+    llm = create_llm(provider, model)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, Anthropic)
+    assert llm.chat_provider._tool_message_conversion is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_create_llm_openai_compatible_proxy_flattens_tool_results():
+    # OpenAI-compatible proxies share the chat-completions wire format but vary on
+    # multi-part tool_result support, so they get the single-string safe mode too.
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.deepseek.com/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="deepseek",
+        model="deepseek-chat",
+        max_context_size=64_000,
+        capabilities=None,
+    )
+    llm = create_llm(provider, model)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.chat_provider._tool_message_conversion == "extract_text"  # pyright: ignore[reportPrivateUsage]

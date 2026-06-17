@@ -25,6 +25,7 @@ from rich.style import StyleType
 from rich.table import Table
 from rich.text import Text
 
+from pythinker_code.ui.shell.components.render_utils import sanitize_ansi
 from pythinker_code.ui.shell.render_constants import (
     DIFF_CONTEXT_LINES,
     DIFF_LINE_NUMBER_MIN_WIDTH,
@@ -402,6 +403,13 @@ def render_diff(diff_text: str, *, path: str | None = None) -> RenderableType:
     """
     if not diff_text:
         return Text("")
+
+    # Diff bodies carry untrusted file content and model-supplied edit text. Strip
+    # ANSI/control sequences before rendering so a crafted edit can't smuggle
+    # cursor-movement or color escapes into the terminal through the diff card.
+    # sanitize_ansi keeps newlines and tabs, so +/- prefix and line-number parsing
+    # below is unaffected.
+    diff_text = sanitize_ansi(diff_text)
 
     colors = get_diff_colors()
     # Added/removed rows are distinguished by background tint only; line numbers,

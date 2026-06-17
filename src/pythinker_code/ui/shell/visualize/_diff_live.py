@@ -6,7 +6,9 @@ Rich ``Live`` frame on every streaming tick.
 
 from __future__ import annotations
 
+import os
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import IO, TYPE_CHECKING, TextIO, cast
@@ -45,6 +47,22 @@ def _should_rewrite_growing_last_line(
     return bool(old_lines and len(lines) > len(old_lines) and first_diff == len(old_lines) - 1)
 
 
+def _diff_live_trace(event: str) -> None:
+    """Append a DiffLive timeline event when ``PYTHINKER_DIFF_LIVE_LOG`` is set.
+
+    Diagnostic only. No-op when unset; never raises.
+    """
+    path = os.environ.get("PYTHINKER_DIFF_LIVE_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.monotonic():.3f}\t{event}\n")
+    except OSError:
+        # Diagnostics-only: never let log I/O failures affect UI rendering.
+        pass
+
+
 class DiffLive(RenderHook):
     """Minimal live-region renderer that updates changed lines in place."""
 
@@ -73,6 +91,8 @@ class DiffLive(RenderHook):
         self._console_state_active = False
         self._cursor_below_frame = False
         self._frame_truncated = False
+        self._frame_origin_row: int | None = None
+        self._last_terminal_height: int = 0
 
     def __enter__(self) -> DiffLive:
         if not self._started:
@@ -111,6 +131,15 @@ class DiffLive(RenderHook):
         lines = self._render_lines(renderable)
 
         max_visible = self.console.size.height
+        if max_visible != self._last_terminal_height:
+            self._last_terminal_height = max_visible
+            # A resize can invalidate a previously probed origin (e.g. shrink).
+            if (
+                self._frame_origin_row is not None
+                and max_visible > 0
+                and self._frame_origin_row >= max_visible
+            ):
+                self._frame_origin_row = None
         self._frame_truncated = False
         if max_visible > 0:
             if len(lines) > max_visible:
@@ -119,10 +148,20 @@ class DiffLive(RenderHook):
             if len(self._lines) > max_visible:
                 self._lines = self._lines[-max_visible:]
 
+        growing = bool(self._lines and len(lines) > len(self._lines))
         if not self._lines:
             self._write_initial(lines)
+            _diff_live_trace(
+                f"DIFF_LIVE\tinitial\tlines={len(lines)}\theight={max_visible}"
+                f"\torigin={self._frame_origin_row}"
+            )
         else:
             self._write_diff(lines)
+            if growing:
+                _diff_live_trace(
+                    f"DIFF_LIVE\tgrowth\tlines={len(lines)}\theight={max_visible}"
+                    f"\torigin={self._frame_origin_row}"
+                )
         self._lines = lines
 
     def stop(self) -> None:
@@ -138,6 +177,8 @@ class DiffLive(RenderHook):
             self._restore_console_state()
             self._nested = False
             self._frame_truncated = False
+            self._frame_origin_row = None
+            self._last_terminal_height = 0
 
     def _print_current_renderable(self) -> None:
         renderable = self.get_renderable()
@@ -212,13 +253,55 @@ class DiffLive(RenderHook):
             for line in rendered_lines
         ]
 
+    def _ensure_frame_origin_row(self) -> None:
+        if self._frame_origin_row is not None:
+            return
+        from pythinker_code.utils.term import get_cursor_row
+
+        row = get_cursor_row()
+        if row is None:
+            return
+        origin = row - 1
+        height = self.console.size.height
+        # CPR can time out, lie, or report a row outside the viewport — fail closed.
+        if origin < 0 or height <= 0 or origin >= height:
+            return
+        self._frame_origin_row = origin
+
+    def _bump_origin_after_scroll(self) -> None:
+        if self._frame_origin_row is None:
+            return
+        self._frame_origin_row -= 1
+        # Lost geometry after repeated viewport scrolls — stop guessing.
+        if self._frame_origin_row < 0:
+            self._frame_origin_row = None
+
+    def _row_fits_without_scroll(self, target_row: int) -> bool:
+        """True only when frame row *target_row* is provably on-screen."""
+        if target_row < 0:
+            return False
+        origin = self._frame_origin_row
+        height = self.console.size.height
+        if origin is None or origin < 0 or height <= 0:
+            return False
+        return origin + target_row < height
+
+    def _append_row_transition(self, payload: list[str], target_row: int) -> None:
+        if self._row_fits_without_scroll(target_row):
+            payload.append(self._cursor_down_newline())
+            return
+        payload.append(self._scroll_newline())
+        self._bump_origin_after_scroll()
+
     def _write_initial(self, lines: list[_RenderedLine]) -> None:
         if not lines:
             return
+        self._ensure_frame_origin_row()
         payload_parts: list[str] = []
         for index, line in enumerate(lines):
             if index:
                 payload_parts.append(self._scroll_newline())
+                self._bump_origin_after_scroll()
             payload_parts.append(line.text)
         payload_parts.append(str(Control.move_to_column(0)))
         payload = "".join(payload_parts)
@@ -231,7 +314,7 @@ class DiffLive(RenderHook):
         if first_diff == len(old_lines) == len(lines):
             return
         if first_diff == len(old_lines) and len(lines) > len(old_lines):
-            self._write_appended_lines(lines[first_diff:])
+            self._write_appended_lines(lines[first_diff:], base_row=len(old_lines))
             return
         if _should_rewrite_growing_last_line(old_lines, lines, first_diff):
             self._rewrite_growing_last_line(old_lines[-1], lines[first_diff:])
@@ -282,23 +365,31 @@ class DiffLive(RenderHook):
     ) -> None:
         next_row = row + 1
         if row >= last_old_row or next_row > last_old_row:
-            payload.append(self._scroll_newline())
+            self._append_row_transition(payload, next_row)
             return
         payload.append(self._move_to_line_start(1))
 
-    def _write_appended_lines(self, lines: list[_RenderedLine]) -> None:
+    def _write_appended_lines(
+        self,
+        lines: list[_RenderedLine],
+        *,
+        base_row: int,
+    ) -> None:
         if not lines:
             return
         payload_parts: list[str] = []
+        target_row = base_row
         if self._cursor_below_frame:
             payload_parts.append(str(Control.move_to_column(0)))
             payload_parts.append(lines[0].text)
             remaining_lines = lines[1:]
+            target_row += 1
         else:
             remaining_lines = lines
         for line in remaining_lines:
-            payload_parts.append(self._scroll_newline())
+            self._append_row_transition(payload_parts, target_row)
             payload_parts.append(line.text)
+            target_row += 1
         payload_parts.append(str(Control.move_to_column(0)))
         payload = "".join(payload_parts)
         self._write(payload)
@@ -315,9 +406,11 @@ class DiffLive(RenderHook):
         payload = [self._move_to_line_start(row_delta), new_lines[0].text]
         if old_last_line.cell_length > new_lines[0].cell_length:
             payload.append(str(Control((ControlType.ERASE_IN_LINE, 0))))
+        target_row = len(self._lines)
         for line in new_lines[1:]:
-            payload.append(self._scroll_newline())
+            self._append_row_transition(payload, target_row)
             payload.append(line.text)
+            target_row += 1
         payload.append(str(Control.move_to_column(0)))
         self._write("".join(payload))
         self._cursor_below_frame = False
@@ -341,6 +434,9 @@ class DiffLive(RenderHook):
 
     def _move_to_line_start(self, row_delta: int) -> str:
         return str(Control.move_to_column(0, y=row_delta))
+
+    def _cursor_down_newline(self) -> str:
+        return self._move_to_line_start(1)
 
     def _scroll_newline(self) -> str:
         return f"{Control.move_to_column(0)}\n"

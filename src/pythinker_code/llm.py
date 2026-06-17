@@ -19,6 +19,8 @@ from pythinker_code.thinking import (
 from pythinker_code.utils.logging import logger
 
 if TYPE_CHECKING:
+    from pythinker_core.contrib.chat_provider.common import ToolMessageConversion
+
     from pythinker_code.auth.oauth import OAuthManager
     from pythinker_code.config import Config, LLMModel, LLMProvider
 
@@ -61,6 +63,24 @@ class LLM:
 # through `api.anthropic.com` (see `auth/anthropic_direct.py:ANTHROPIC_BASE_URL`).
 _GENUINE_ANTHROPIC_HOSTS = frozenset({"api.anthropic.com"})
 
+# Hosts that serve the genuine OpenAI API (as opposed to the many
+# OpenAI-compatible proxies that reuse the chat-completions wire format).
+_GENUINE_OPENAI_HOSTS = frozenset({"api.openai.com"})
+
+
+def _normalize_host(base_url: str | None) -> str:
+    """Lowercased hostname of `base_url`, or "" when absent/unparseable.
+
+    Single source of truth for the genuine-vs-proxy host checks so callers do not
+    re-implement URL parsing (and so trailing slashes, paths, and case never matter).
+    """
+    if not base_url:
+        return ""
+    from urllib.parse import urlparse
+
+    return (urlparse(base_url).hostname or "").lower()
+
+
 # Model-name substrings that do NOT support `tool_reference`. Haiku is the only
 # known unsupported pattern in the deferred tool-search workflow.
 _TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS = ("haiku",)
@@ -102,13 +122,40 @@ def supports_deferred_tool_search(llm: LLM | None) -> bool:
         return False
     # type="anthropic" is necessary but NOT sufficient — the compat proxies above
     # share it. Only the genuine Anthropic host forwards the beta.
-    from urllib.parse import urlparse
-
-    host = (urlparse(provider.base_url).hostname or "").lower()
+    host = _normalize_host(provider.base_url)
     if host not in _GENUINE_ANTHROPIC_HOSTS:
         return False
     model = llm.model_name.lower()
     return not any(pat in model for pat in _TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS)
+
+
+def resolve_tool_result_mode(
+    *, api_family: Literal["anthropic", "openai"], base_url: str | None
+) -> ToolMessageConversion | None:
+    """How `role="tool"` results should be serialized for a provider's transport.
+
+    The split that matters is NATIVE endpoint vs COMPATIBILITY PROXY, not which model:
+    genuine `api.anthropic.com` / `api.openai.com` consume structured multi-part
+    `tool_result` content faithfully, but the many proxies that merely speak the same
+    wire format often do not. z.ai/GLM (`api.z.ai/api/anthropic`) honors only the FIRST
+    content block of an array-form `tool_result`, so the leading `<system>` summary block
+    reaches the model while the actual tool OUTPUT block is silently dropped — every
+    Shell/ReadFile result reads as "success" with no payload (confirmed against GLM-5.2).
+
+    For non-native hosts we flatten the tool result to a single text block
+    (`extract_text`), which puts the whole payload in that first block. The flatten is
+    lossless for text and is the lowest-common-denominator shape every proxy accepts; it
+    drops any non-text tool-result block, which a first-block-only proxy could not deliver
+    anyway. Native hosts keep the rich multi-part form (so tool-result images survive).
+
+    Returns `None` to mean "native multi-part" (the provider default) and `"extract_text"`
+    to mean "flatten to one string". New families/modes plug in here, not in agent/tool code.
+    """
+    host = _normalize_host(base_url)
+    native_hosts = _GENUINE_ANTHROPIC_HOSTS if api_family == "anthropic" else _GENUINE_OPENAI_HOSTS
+    if not host or host in native_hosts:
+        return None
+    return "extract_text"
 
 
 def model_display_name(model_name: str | None, model: LLMModel | None = None) -> str:
@@ -293,6 +340,9 @@ def create_llm(
                 reasoning_key=reasoning_key,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
                 http_client=rl_http_client,
+                tool_message_conversion=resolve_tool_result_mode(
+                    api_family="openai", base_url=provider.base_url
+                ),
             )
         case "openai_responses":
             from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponses
@@ -333,6 +383,9 @@ def create_llm(
                 metadata={"user_id": session_id} if session_id else None,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
                 http_client=rl_http_client,
+                tool_message_conversion=resolve_tool_result_mode(
+                    api_family="anthropic", base_url=provider.base_url
+                ),
             )
         case "google_genai" | "gemini":
             from pythinker_core.contrib.chat_provider.google_genai import GoogleGenAI
