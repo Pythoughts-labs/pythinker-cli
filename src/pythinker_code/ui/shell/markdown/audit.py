@@ -6,7 +6,6 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from pythinker_code.share import get_share_dir
 from pythinker_code.ui.shell.markdown.fences import FENCE_RE, FenceState
 from pythinker_code.ui.shell.markdown.normalizers import (
     UNICODE_RULE_LINE_RE as _UNICODE_RULE_LINE_RE,
@@ -145,14 +144,15 @@ def compact_known_paths(text: str) -> str:
     for prefix in PROJECT_PATH_PREFIXES:
         if prefix in text:
             text = text.replace(prefix, "")
-    # Collapse absolute session tool-output paths to a stable, home-agnostic form.
-    sessions_root = f"{get_share_dir(create=False) / 'sessions'}{os.sep}"
-    if sessions_root in text:
-        text = re.sub(
-            re.escape(sessions_root) + r"(?:[^/\s]+/)+(?P<tail>tool-output/?)",
-            r"~/.pythinker/sessions/.../\g<tail>",
-            text,
-        )
+    # Collapse absolute session tool-output paths to a stable form. Anchored on
+    # the ``.pythinker/sessions/`` marker rather than the current home/share dir,
+    # so it works for any user/home/OS and never bakes a machine-local path into
+    # source.
+    text = re.sub(
+        r"/\S*?/\.pythinker/sessions/(?:[^/\s]+/)+(?P<tail>tool-output/?)",
+        r"~/.pythinker/sessions/.../\g<tail>",
+        text,
+    )
     return text
 
 

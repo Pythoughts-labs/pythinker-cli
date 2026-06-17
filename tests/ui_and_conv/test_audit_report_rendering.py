@@ -57,11 +57,12 @@ def test_compact_known_paths_strips_runtime_cwd(tmp_path, monkeypatch) -> None:
     assert compact_known_paths(absolute) == "lsp/client.py:65"
 
 
-def test_compact_known_paths_collapses_session_tool_output(tmp_path, monkeypatch) -> None:
-    """Session tool-output paths collapse home-agnostically via the real share dir."""
-    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
-    path = f"{tmp_path}/sessions/proj-abc/2026-06-17/tool-output/"
-    assert compact_known_paths(path) == "~/.pythinker/sessions/.../tool-output/"
+def test_compact_known_paths_collapses_session_tool_output() -> None:
+    """Session tool-output paths collapse home-agnostically (any user/home/OS)."""
+    macos = "/Users/alice/.pythinker/sessions/proj-abc/session-id/tool-output/"
+    linux = "/home/bob/.pythinker/sessions/proj-abc/session-id/tool-output/"
+    assert compact_known_paths(macos) == "~/.pythinker/sessions/.../tool-output/"
+    assert compact_known_paths(linux) == "~/.pythinker/sessions/.../tool-output/"
 
 
 def test_small_parity_report_renders_field_tables() -> None:
