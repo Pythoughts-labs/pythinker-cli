@@ -1262,6 +1262,20 @@ def _run_upgrade_command(
         if print_output:
             console.print(text, markup=False)
 
+    env = get_clean_env()
+    if command[:1] == ["brew"]:
+        # Self-upgrade hardening: pythinker is the running Homebrew formula.
+        # `brew upgrade` installs the new version side-by-side, but its
+        # post-upgrade cleanup would delete the in-use old Cellar version that
+        # `sys.executable` resolves through — crashing the live session before the
+        # user restarts. Suppress cleanup so the swap only takes effect on the next
+        # launch (matching the "Restart to apply" notice). Also skip brew's
+        # implicit pre-command auto-update: `_refresh_brew_metadata` already
+        # refreshed the tap explicitly, so the implicit pass is only redundant
+        # network/lock work during the user's session.
+        env["HOMEBREW_NO_INSTALL_CLEANUP"] = "1"
+        env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+
     proc = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
@@ -1269,7 +1283,7 @@ def _run_upgrade_command(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=get_clean_env(),
+        env=env,
         bufsize=1,
     )
 

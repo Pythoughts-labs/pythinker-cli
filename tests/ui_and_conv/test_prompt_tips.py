@@ -1711,18 +1711,21 @@ async def test_prompt_next_does_not_mark_submission_as_running_when_delegate_rel
     assert prompt_session.last_submission_was_running is False
 
 
-def test_append_update_notice_inserts_line_below_separator():
-    # Caller appends the separator rule + newline first, then the notice — so the
-    # notice renders underneath the input box (below the bottom border), not inside it.
-    fragments: list[tuple[str, str]] = [("sep", "────"), ("", "\n")]
+def test_append_update_notice_appends_as_last_footer_row():
+    # Called last, after the status lines: the notice becomes the final footer
+    # row (below the status/clock line), fully clear of the input box. It prepends
+    # its own newline and adds no trailing one, so it never leaves a blank bottom row.
+    fragments: list[tuple[str, str]] = [("status", "◇ model"), ("", " ctx")]
     fake = SimpleNamespace(_update_notice_provider=lambda: "↑ Update available — v9.9.9 · /update")
     CustomPromptSession._append_update_notice(cast(Any, fake), fragments, 80)
-    assert fragments[0] == ("sep", "────")
-    assert fragments[1] == ("", "\n")
-    assert "Update available" in fragments[2][1]
-    assert "v9.9.9" in fragments[2][1]
-    assert "bold" in fragments[2][0]
-    assert fragments[3] == ("", "\n")
+    # Existing footer fragments are untouched; the notice is appended at the end.
+    assert fragments[0] == ("status", "◇ model")
+    assert fragments[1] == ("", " ctx")
+    assert fragments[2] == ("", "\n")  # leading newline starts a fresh row
+    assert "Update available" in fragments[3][1]
+    assert "v9.9.9" in fragments[3][1]
+    assert "bold" in fragments[3][0]
+    assert len(fragments) == 4  # no trailing newline → no blank row at the bottom
 
 
 def test_append_update_notice_noop_when_no_update():

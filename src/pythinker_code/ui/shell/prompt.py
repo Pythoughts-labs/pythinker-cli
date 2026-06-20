@@ -3916,10 +3916,13 @@ class CustomPromptSession:
             )
 
     def _append_update_notice(self, fragments: list[tuple[str, str]], columns: int) -> None:
-        """Append a persistent yellow 'update available' line *below* the footer
-        separator, so it renders underneath the prompt input box rather than
-        inside it. Call this right after the separator rule. No-op when no update
-        is pending; style-agnostic across both toolbar layouts."""
+        """Append a persistent yellow 'update available' line as the *last* footer
+        row — below the status/clock line — so it sits fully clear of the prompt
+        input box instead of glued to it. Call this last, after the status lines
+        are assembled: it prepends its own newline (the prior footer line carries
+        none) and adds no trailing newline, so it never leaves a blank row at the
+        bottom. No-op when no update is pending; style-agnostic across both
+        toolbar layouts."""
         provider = getattr(self, "_update_notice_provider", None)
         if provider is None:
             return
@@ -3931,7 +3934,7 @@ class CustomPromptSession:
             return
         tokens = _get_tui_tokens()
         style = f"fg:{tokens.warning or 'ansiyellow'} bold"
-        fragments.extend([(style, line), ("", "\n")])
+        fragments.extend([("", "\n"), (style, line)])
 
     def _render_bottom_toolbar(self) -> FormattedText:
         if (
@@ -3957,7 +3960,6 @@ class CustomPromptSession:
 
         fragments.append((self._prompt_separator_style(tc.separator), _prompt_rule(columns)))
         fragments.append(("", "\n"))
-        self._append_update_notice(fragments, columns)
 
         remaining = columns
 
@@ -4077,6 +4079,7 @@ class CustomPromptSession:
         fragments.append(("", " " * max(0, columns - left_width - right_width)))
         fragments.append((secondary_style, right_text))
 
+        self._append_update_notice(fragments, columns)
         return FormattedText(fragments)
 
     def _build_statusline_context(self, columns: int) -> StatusLineContext:
@@ -4188,7 +4191,6 @@ class CustomPromptSession:
         fragments: list[tuple[str, str]] = []
         fragments.append((self._prompt_separator_style(tc.separator), _prompt_rule(columns)))
         fragments.append(("", "\n"))
-        self._append_update_notice(fragments, columns)
 
         try:
             ctx = self._build_statusline_context(columns)
@@ -4251,6 +4253,7 @@ class CustomPromptSession:
 
         fragments.append(("", " " * max(0, usable - left_width - right_width)))
         fragments.extend(line2_right)
+        self._append_update_notice(fragments, columns)
         return FormattedText(fragments)
 
     def _get_two_rotating_tips(self) -> str | None:

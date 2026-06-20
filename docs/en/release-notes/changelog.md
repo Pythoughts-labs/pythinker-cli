@@ -17,6 +17,15 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Update notice no longer crowds the prompt.** The persistent "Restart to apply"
+  / "Update available" line now renders as the last footer row — below the
+  status/clock line — instead of directly under the input box, keeping the input
+  area clear.
+- **Homebrew self-upgrades no longer risk the live session.** The updater now runs
+  `brew upgrade` with `HOMEBREW_NO_INSTALL_CLEANUP` and `HOMEBREW_NO_AUTO_UPDATE`,
+  so brew can't delete the in-use Cellar version mid-session; the new build is
+  staged side-by-side and goes live on restart.
+
 ## 0.50.0 (2026-06-20)
 
 - **Silent native updates no longer crash a running session.** The downloaded
