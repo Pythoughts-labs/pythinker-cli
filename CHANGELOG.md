@@ -15,6 +15,16 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Update notice renders below the input box.** The "Updated → vX. Restart to
+  apply." line now appears underneath the prompt's bottom border instead of inside
+  the input area.
+- **Silent native updates no longer crash a running session.** The downloaded
+  build is now staged beside the running executable and swapped in at exit (it goes
+  live on the next launch), instead of overwriting the live onefile bundle in place.
+  Overwriting it mid-session corrupted later lazy imports with a
+  `zlib.error: incorrect header check`. A boundary guard also converts any residual
+  post-update archive-corruption crash into a clear "restart to apply" message.
+
 ## 0.49.0 (2026-06-20)
 
 - **Reduction ladder in the default agent prompt.** The agent now walks an explicit,

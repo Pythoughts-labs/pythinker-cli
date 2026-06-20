@@ -67,23 +67,79 @@ def test_native_prompt_does_not_leak_marker(monkeypatch):
     assert "native updater" in text
 
 
-def test_install_native_archive_replaces_current_executable(monkeypatch, tmp_path):
-    current = tmp_path / "pythinker"
-    current.write_text("old", encoding="utf-8")
-    current.chmod(0o755)
-
+def _make_native_archive(tmp_path, body: str = "new"):
     payload = tmp_path / "payload"
     payload.mkdir()
-    (payload / "pythinker").write_text("new", encoding="utf-8")
+    (payload / "pythinker").write_text(body, encoding="utf-8")
     archive = tmp_path / "pythinker-0.2.0-x86_64-unknown-linux-gnu.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
         tar.add(payload / "pythinker", arcname="pythinker")
+    return archive
+
+
+def test_install_native_archive_stages_without_touching_running_exe(monkeypatch, tmp_path):
+    # The running executable must be left untouched (overwriting it mid-session
+    # corrupts this onefile build's lazy archive reads). The new binary lands in
+    # the staged side path instead, ready to promote on exit.
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    current.chmod(0o755)
+    archive = _make_native_archive(tmp_path)
 
     monkeypatch.setattr(upd.sys, "executable", str(current))
 
     assert upd._install_native_archive(archive) is upd.UpdateResult.UPDATED
-    assert current.read_text(encoding="utf-8") == "new"
-    assert current.stat().st_mode & 0o111
+    # Running exe is unchanged...
+    assert current.read_text(encoding="utf-8") == "old"
+    # ...the update is staged beside it, executable, and marked native.
+    staged = upd.staged_native_path()
+    assert staged.read_text(encoding="utf-8") == "new"
+    assert staged.stat().st_mode & 0o111
     assert (tmp_path / ".pythinker-native").read_text(encoding="utf-8") == (
         "pythinker-native-build\n"
     )
+
+
+def test_promote_staged_native_update_swaps_into_place(monkeypatch, tmp_path):
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(upd.sys, "executable", str(current))
+    upd.staged_native_path().write_text("new", encoding="utf-8")
+
+    upd._promote_staged_native_update()
+
+    assert current.read_text(encoding="utf-8") == "new"
+    assert not upd.staged_native_path().exists()
+
+
+def test_promote_staged_native_update_noop_without_staged_file(monkeypatch, tmp_path):
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(upd.sys, "executable", str(current))
+
+    upd._promote_staged_native_update()  # no staged file → no-op
+
+    assert current.read_text(encoding="utf-8") == "old"
+
+
+def test_discard_staged_native_update_removes_file(monkeypatch, tmp_path):
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(upd.sys, "executable", str(current))
+    upd.staged_native_path().write_text("broken", encoding="utf-8")
+
+    upd.discard_staged_native_update()
+
+    assert not upd.staged_native_path().exists()
+    assert current.read_text(encoding="utf-8") == "old"  # running exe untouched
+
+
+def test_register_staged_native_promotion_is_idempotent(monkeypatch):
+    registered: list[object] = []
+    monkeypatch.setattr(upd.atexit, "register", lambda fn: registered.append(fn))
+    monkeypatch.setattr(upd, "_staged_promotion_registered", False)
+
+    upd.register_staged_native_promotion()
+    upd.register_staged_native_promotion()
+
+    assert registered == [upd._promote_staged_native_update]

@@ -382,8 +382,11 @@ async def run_update_job(
             if smoke_ok:
                 message = smoke_message
                 _write_last_success(job_id=job_id, message=message)
+                _finalize_native_staging(promote=True)
             else:
                 message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
+                # Never promote a staged binary that can't even print --version.
+                _finalize_native_staging(promote=False)
 
         write_update_status(
             _new_status(
@@ -432,8 +435,35 @@ def _write_last_success(*, job_id: str, message: str) -> None:
 
 def _smoke_check_command() -> list[str]:
     if is_native_build():
-        return [sys.executable, "--version"]
+        # A native update is staged beside the running exe, not swapped in place,
+        # so validate the staged binary — checking the still-running old exe would
+        # prove nothing about the update.
+        from pythinker_code.ui.shell.update import staged_native_path
+
+        staged = staged_native_path()
+        exe = str(staged) if staged.is_file() else sys.executable
+        return [exe, "--version"]
     return [sys.executable, "-P", "-m", "pythinker_code", "--version"]
+
+
+def _finalize_native_staging(*, promote: bool) -> None:
+    """After the smoke check, either arm the staged native binary for exit-time
+    promotion (it ran) or discard it (it failed). No-op for non-native installs and
+    when nothing was staged."""
+    if not is_native_build():
+        return
+    from pythinker_code.ui.shell.update import (
+        discard_staged_native_update,
+        register_staged_native_promotion,
+        staged_native_path,
+    )
+
+    if not staged_native_path().is_file():
+        return
+    if promote:
+        register_staged_native_promotion()
+    else:
+        discard_staged_native_update()
 
 
 def _smoke_check_cwd() -> Path:

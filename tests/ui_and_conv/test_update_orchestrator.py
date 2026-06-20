@@ -272,6 +272,22 @@ def test_native_smoke_check_does_not_use_python_module_import(monkeypatch):
     assert orchestrator._smoke_check_command() == ["/opt/pythinker/pythinker", "--version"]
 
 
+def test_native_smoke_check_targets_staged_binary_when_present(monkeypatch, tmp_path):
+    # A native update is staged beside the running exe; the smoke check must
+    # validate the staged binary, not the still-running old one.
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(orchestrator, "is_native_build", lambda: True)
+    monkeypatch.setattr(orchestrator.sys, "executable", str(current))
+
+    from pythinker_code.ui.shell.update import staged_native_path
+
+    staged = staged_native_path()
+    staged.write_text("new", encoding="utf-8")
+
+    assert orchestrator._smoke_check_command() == [str(staged), "--version"]
+
+
 @pytest.mark.asyncio
 async def test_do_update_mirrors_messages_to_output_callback(monkeypatch, tmp_path):
     messages: list[str] = []

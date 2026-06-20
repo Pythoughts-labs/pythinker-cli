@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import os
 import platform
@@ -1075,6 +1076,61 @@ def _install_linux_package(asset: Path, package_kind: str) -> UpdateResult:
     return UpdateResult.UPDATED if result.returncode == 0 else UpdateResult.FAILED
 
 
+def staged_native_path() -> Path:
+    """Side path next to the running executable where a downloaded native update is
+    held until it is promoted into place. Deterministic so the orchestrator's smoke
+    check and the exit-time promotion agree on the same file."""
+    target = Path(sys.executable).resolve()
+    return target.with_name(f".{target.name}.staged")
+
+
+_staged_promotion_registered = False
+
+
+def register_staged_native_promotion() -> None:
+    """Arrange for the staged native binary to replace the running executable at
+    process exit.
+
+    Swapping at exit — rather than in place mid-session — is the whole point: the
+    running onefile build reads its Python archive lazily from ``sys.executable``,
+    so overwriting that path while the process is alive corrupts later imports
+    (``zlib.error: incorrect header check``). At exit no further imports happen, so
+    the swap is safe, and the new binary goes live on the next launch — exactly what
+    the "Updated → vX. Restart to apply." notice promises. Registration is idempotent
+    so a silent update followed by a manual ``/update`` only swaps once.
+    """
+    global _staged_promotion_registered
+    if _staged_promotion_registered:
+        return
+    atexit.register(_promote_staged_native_update)
+    _staged_promotion_registered = True
+
+
+def discard_staged_native_update() -> None:
+    """Remove a staged binary that must not be promoted (e.g. it failed its smoke
+    check). Fail-open: a leftover staged file is only ever promoted deliberately."""
+    with contextlib.suppress(OSError):
+        staged_native_path().unlink()
+
+
+def _promote_staged_native_update() -> None:
+    # ponytail: known residual windows, both far smaller than the mid-session login
+    # crash this replaces — (1) a hard kill (SIGKILL) skips atexit, so promotion
+    # defers to the next clean exit (self-healing); (2) a first-time lazy import
+    # during the rest of interpreter shutdown, after the swap below, could read
+    # stale bytes. Closing both needs a detached post-exit swapper (the deferred
+    # seamless-relaunch design); not built here.
+    staged = staged_native_path()
+    if not staged.is_file():
+        return
+    target = Path(sys.executable).resolve()
+    try:
+        os.replace(staged, target)
+    except OSError:
+        # Leave the staged binary in place; a later clean exit retries the swap.
+        logger.exception("Failed to promote staged native update on exit:")
+
+
 def _install_native_archive(archive: Path) -> UpdateResult:
     target = Path(sys.executable).resolve()
     extract_dir = archive.parent / "extract"
@@ -1091,18 +1147,23 @@ def _install_native_archive(archive: Path) -> UpdateResult:
         logger.error("Native archive did not contain a pythinker executable")
         return UpdateResult.FAILED
 
-    replacement = target.with_name(f".{target.name}.new-{os.getpid()}")
+    # Stage the new binary beside the running executable instead of overwriting it
+    # in place. Promotion into `target` happens at process exit (see
+    # register_staged_native_promotion), keeping the live build's on-disk archive
+    # intact so mid-session lazy imports never read stale bytes.
+    staged = staged_native_path()
+    staging_tmp = target.with_name(f".{target.name}.new-{os.getpid()}")
     try:
-        shutil.copyfile(extracted, replacement)
-        replacement.chmod(target.stat().st_mode | 0o755)
-        os.replace(replacement, target)
+        shutil.copyfile(extracted, staging_tmp)
+        staging_tmp.chmod(target.stat().st_mode | 0o755)
+        os.replace(staging_tmp, staged)
         (target.parent / ".pythinker-native").write_text(
             "pythinker-native-build\n", encoding="utf-8"
         )
     except OSError:
-        logger.exception("Failed to replace native executable:")
+        logger.exception("Failed to stage native executable:")
         with contextlib.suppress(OSError):
-            replacement.unlink()
+            staging_tmp.unlink()
         return UpdateResult.FAILED
     return UpdateResult.UPDATED
 
