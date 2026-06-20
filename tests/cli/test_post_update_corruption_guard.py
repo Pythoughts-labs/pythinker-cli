@@ -52,6 +52,12 @@ def test_ignores_unrelated_error_on_frozen_build(frozen):
     assert _is_post_update_bundle_corruption(ValueError("nope")) is False
 
 
+def test_ignores_zlib_error_with_unrelated_message(frozen):
+    # A decompression failure that is NOT the bundle-corruption signature (e.g. a
+    # bad gzip HTTP response) must not be masked behind a restart-only message.
+    assert _is_post_update_bundle_corruption(zlib.error("invalid distance too far back")) is False
+
+
 def test_handles_cyclic_cause_chain(frozen):
     a = RuntimeError("a")
     b = RuntimeError("b")

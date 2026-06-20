@@ -342,11 +342,14 @@ def _is_post_update_bundle_corruption(exc: BaseException) -> bool:
     on-disk archive and raises ``zlib.error: incorrect header check``.
 
     Gated on the PyInstaller ``sys.frozen`` marker so source / pip installs (which
-    never self-replace this way) are unaffected. The zlib error class is matched
-    by ``__module__``/``__name__`` rather than ``isinstance`` so the handler never
-    imports ``zlib`` from a possibly-corrupted archive — ``sys`` is a C built-in
-    and is always safe to import. The cause/context chain is walked with a cycle
-    guard so a self-referential chain can't spin.
+    never self-replace this way) are unaffected, and narrowed to the documented
+    corruption message (``incorrect header check``) so an unrelated decompression
+    failure elsewhere on a frozen build is *not* misclassified as a stale bundle and
+    masked behind a restart-only message. The zlib error class is matched by
+    ``__module__``/``__name__`` rather than ``isinstance`` so the handler never
+    imports ``zlib`` from a possibly-corrupted archive — ``sys`` is a C built-in and
+    is always safe to import. The cause/context chain is walked with a cycle guard so
+    a self-referential chain can't spin.
     """
     import sys
 
@@ -357,7 +360,11 @@ def _is_post_update_bundle_corruption(exc: BaseException) -> bool:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         cls = type(current)
-        if cls.__module__ == "zlib" and cls.__name__ == "error":
+        if (
+            cls.__module__ == "zlib"
+            and cls.__name__ == "error"
+            and "incorrect header check" in str(current).lower()
+        ):
             return True
         current = current.__cause__ or current.__context__
     return False

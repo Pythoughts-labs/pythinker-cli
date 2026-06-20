@@ -1084,9 +1084,6 @@ def staged_native_path() -> Path:
     return target.with_name(f".{target.name}.staged")
 
 
-_staged_promotion_registered = False
-
-
 def register_staged_native_promotion() -> None:
     """Arrange for the staged native binary to replace the running executable at
     process exit.
@@ -1096,14 +1093,13 @@ def register_staged_native_promotion() -> None:
     so overwriting that path while the process is alive corrupts later imports
     (``zlib.error: incorrect header check``). At exit no further imports happen, so
     the swap is safe, and the new binary goes live on the next launch — exactly what
-    the "Updated → vX. Restart to apply." notice promises. Registration is idempotent
-    so a silent update followed by a manual ``/update`` only swaps once.
+    the "Updated → vX. Restart to apply." notice promises.
+
+    Registering more than once (e.g. a silent update plus a manual ``/update`` in the
+    same session) is harmless: the handler no-ops once the staged file has been
+    promoted, so any duplicate registration just runs a second no-op.
     """
-    global _staged_promotion_registered
-    if _staged_promotion_registered:
-        return
     atexit.register(_promote_staged_native_update)
-    _staged_promotion_registered = True
 
 
 def discard_staged_native_update() -> None:

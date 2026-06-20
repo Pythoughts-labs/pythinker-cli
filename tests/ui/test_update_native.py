@@ -134,12 +134,25 @@ def test_discard_staged_native_update_removes_file(monkeypatch, tmp_path):
     assert current.read_text(encoding="utf-8") == "old"  # running exe untouched
 
 
-def test_register_staged_native_promotion_is_idempotent(monkeypatch):
+def test_register_staged_native_promotion_registers_atexit_handler(monkeypatch):
     registered: list[object] = []
     monkeypatch.setattr(upd.atexit, "register", lambda fn: registered.append(fn))
-    monkeypatch.setattr(upd, "_staged_promotion_registered", False)
 
-    upd.register_staged_native_promotion()
     upd.register_staged_native_promotion()
 
     assert registered == [upd._promote_staged_native_update]
+
+
+def test_promote_staged_native_update_is_idempotent_when_run_twice(monkeypatch, tmp_path):
+    # Duplicate registration is safe because the handler itself is idempotent: the
+    # second run finds the staged file already promoted and no-ops without error.
+    current = tmp_path / "pythinker"
+    current.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(upd.sys, "executable", str(current))
+    upd.staged_native_path().write_text("new", encoding="utf-8")
+
+    upd._promote_staged_native_update()
+    upd._promote_staged_native_update()
+
+    assert current.read_text(encoding="utf-8") == "new"
+    assert not upd.staged_native_path().exists()
