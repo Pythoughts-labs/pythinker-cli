@@ -121,6 +121,10 @@ def test_pyinstaller_datas():
             "pythinker_code/skills/check-impl-against-spec",
         ),
         (
+            "src/pythinker_code/skills/cleanup-audit/SKILL.md",
+            "pythinker_code/skills/cleanup-audit",
+        ),
+        (
             "src/pythinker_code/skills/customize-pythinker/SKILL.md",
             "pythinker_code/skills/customize-pythinker",
         ),

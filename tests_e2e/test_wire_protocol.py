@@ -121,6 +121,11 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": [],
                         },
                         {
+                            "name": "skill:cleanup-audit",
+                            "description": 'Whole-repo audit for over-engineering and accidental complexity. Scans the entire codebase (not just a diff) and returns a ranked, read-only list of what to delete, simplify, or replace with standard-library or platform equivalents. Use when the user asks to "audit the codebase", "find bloat", "what can I delete", or wants a repo-wide simplification pass. For a diff-scoped pass use `pythinker review diff --mode deslopify` instead. One-shot report; applies no fixes.',
+                            "aliases": [],
+                        },
+                        {
                             "name": "skill:create-pr",
                             "description": "Prepare a pull request by summarizing changes, verification, risks, and reviewer guidance without adding AI footers.",
                             "aliases": [],
@@ -328,6 +333,11 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         {
                             "name": "skill:check-impl-against-spec",
                             "description": "Compare an implementation against a product or technical spec and report gaps with evidence.",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "skill:cleanup-audit",
+                            "description": 'Whole-repo audit for over-engineering and accidental complexity. Scans the entire codebase (not just a diff) and returns a ranked, read-only list of what to delete, simplify, or replace with standard-library or platform equivalents. Use when the user asks to "audit the codebase", "find bloat", "what can I delete", or wants a repo-wide simplification pass. For a diff-scoped pass use `pythinker review diff --mode deslopify` instead. One-shot report; applies no fixes.',
                             "aliases": [],
                         },
                         {

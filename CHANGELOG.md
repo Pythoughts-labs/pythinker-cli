@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Added an explicit "reduction ladder" and deliberate-shortcut guidance to the default agent prompt so the agent reaches for the simplest working solution (stdlib/native before custom code) by default.
+- Added a `cleanup-audit` skill: a read-only, whole-repo pass that ranks over-engineering to delete, simplify, or replace with standard-library/platform equivalents (the repo-wide complement to `pythinker review diff --mode deslopify`).
 - **Fix: duplicate update notices at startup.** When a background install finishes
   or a cached update is detected, the hint now renders only on the persistent
   under-input line instead of also flashing as a footer toast.
