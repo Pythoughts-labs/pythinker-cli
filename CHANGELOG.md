@@ -15,6 +15,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Fix: duplicate update notices at startup.** When a background install finishes
+  or a cached update is detected, the hint now renders only on the persistent
+  under-input line instead of also flashing as a footer toast.
+
 ## 0.48.0 (2026-06-17)
 
 - **Fix: tool outputs invisible on Anthropic-compatible proxies (GLM-5.2 via z.ai).**

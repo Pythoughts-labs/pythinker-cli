@@ -37,10 +37,13 @@ def _toasts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_silent_update_success_toasts_restart(
+async def test_silent_update_success_refreshes_persistent_notice_not_toast(
     runtime: Runtime, tmp_path: Path, monkeypatch, _toasts
 ):
     shell = _make_shell(runtime, tmp_path)
+    invalidated: list[bool] = []
+    shell._prompt_session = SimpleNamespace(invalidate=lambda: invalidated.append(True))  # type: ignore[assignment]
+    shell._update_notice_cache = (time.monotonic(), "stale")
     monkeypatch.setattr(shell_module, "_should_auto_check_for_updates", lambda: True)
     monkeypatch.setattr(shell_module, "_mark_auto_update_check_attempt", lambda: None)
     monkeypatch.setattr(shell_module, "_detect_upgrade_command", lambda: ["pip"])
@@ -59,8 +62,9 @@ async def test_silent_update_success_toasts_restart(
 
     await shell._silent_auto_update()
 
-    assert any("Restart Pythinker to apply" in m for m, _ in _toasts)
-    assert any("0.43.0" in m for m, _ in _toasts)
+    assert _toasts == []
+    assert invalidated == [True]
+    assert shell._update_notice_cache == (0.0, None)
 
 
 @pytest.mark.asyncio
