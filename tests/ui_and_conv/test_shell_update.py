@@ -767,6 +767,12 @@ def test_run_upgrade_command_guards_homebrew_self_upgrade(monkeypatch):
     # A brew self-upgrade must not let brew clean up the in-use Cellar version
     # mid-session (it would crash the live session), and should skip the redundant
     # implicit auto-update. Non-brew upgrades are left untouched.
+    # Isolate from the ambient environment: CI runners (and some dev machines)
+    # already export these Homebrew guards, which would otherwise leak into the
+    # inherited env and mask whether the code adds them only for brew.
+    monkeypatch.delenv("HOMEBREW_NO_INSTALL_CLEANUP", raising=False)
+    monkeypatch.delenv("HOMEBREW_NO_AUTO_UPDATE", raising=False)
+
     captured: dict[str, dict[str, str]] = {}
 
     class FakeProc:
