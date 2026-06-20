@@ -2135,7 +2135,7 @@ class Shell:
                 style="fg:ansiyellow",
             )
             return
-        # The persistent under-input line (_prepend_update_notice) already renders
+        # The persistent under-input line (_append_update_notice) already renders
         # the restart message; a toast duplicates it on the footer's second row.
         self._refresh_update_notice_line()
 

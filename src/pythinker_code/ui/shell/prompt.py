@@ -3915,10 +3915,11 @@ class CustomPromptSession:
                 error=exc,
             )
 
-    def _prepend_update_notice(self, fragments: list[tuple[str, str]], columns: int) -> None:
-        """Prepend a persistent yellow 'update available' line above the footer
-        separator, so it renders directly under the prompt input. No-op when no
-        update is pending; style-agnostic across both toolbar layouts."""
+    def _append_update_notice(self, fragments: list[tuple[str, str]], columns: int) -> None:
+        """Append a persistent yellow 'update available' line *below* the footer
+        separator, so it renders underneath the prompt input box rather than
+        inside it. Call this right after the separator rule. No-op when no update
+        is pending; style-agnostic across both toolbar layouts."""
         provider = getattr(self, "_update_notice_provider", None)
         if provider is None:
             return
@@ -3930,7 +3931,7 @@ class CustomPromptSession:
             return
         tokens = _get_tui_tokens()
         style = f"fg:{tokens.warning or 'ansiyellow'} bold"
-        fragments[:0] = [(style, line), ("", "\n")]
+        fragments.extend([(style, line), ("", "\n")])
 
     def _render_bottom_toolbar(self) -> FormattedText:
         if (
@@ -3954,9 +3955,9 @@ class CustomPromptSession:
         fragments: list[tuple[str, str]] = []
         tc = get_toolbar_colors()
 
-        self._prepend_update_notice(fragments, columns)
         fragments.append((self._prompt_separator_style(tc.separator), _prompt_rule(columns)))
         fragments.append(("", "\n"))
+        self._append_update_notice(fragments, columns)
 
         remaining = columns
 
@@ -4185,9 +4186,9 @@ class CustomPromptSession:
         secondary_style = f"fg:{tokens.muted}"
 
         fragments: list[tuple[str, str]] = []
-        self._prepend_update_notice(fragments, columns)
         fragments.append((self._prompt_separator_style(tc.separator), _prompt_rule(columns)))
         fragments.append(("", "\n"))
+        self._append_update_notice(fragments, columns)
 
         try:
             ctx = self._build_statusline_context(columns)

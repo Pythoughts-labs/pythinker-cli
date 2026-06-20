@@ -1711,28 +1711,29 @@ async def test_prompt_next_does_not_mark_submission_as_running_when_delegate_rel
     assert prompt_session.last_submission_was_running is False
 
 
-def test_prepend_update_notice_inserts_line_above_separator():
+def test_append_update_notice_inserts_line_below_separator():
+    # Caller appends the separator rule + newline first, then the notice — so the
+    # notice renders underneath the input box (below the bottom border), not inside it.
     fragments: list[tuple[str, str]] = [("sep", "────"), ("", "\n")]
     fake = SimpleNamespace(_update_notice_provider=lambda: "↑ Update available — v9.9.9 · /update")
-    CustomPromptSession._prepend_update_notice(cast(Any, fake), fragments, 80)
-    # Notice is the first row (its own line), then a newline, then the original
-    # separator — i.e. it renders directly under the input, above the footer rule.
-    assert "Update available" in fragments[0][1]
-    assert "v9.9.9" in fragments[0][1]
-    assert "bold" in fragments[0][0]
+    CustomPromptSession._append_update_notice(cast(Any, fake), fragments, 80)
+    assert fragments[0] == ("sep", "────")
     assert fragments[1] == ("", "\n")
-    assert fragments[2] == ("sep", "────")
+    assert "Update available" in fragments[2][1]
+    assert "v9.9.9" in fragments[2][1]
+    assert "bold" in fragments[2][0]
+    assert fragments[3] == ("", "\n")
 
 
-def test_prepend_update_notice_noop_when_no_update():
+def test_append_update_notice_noop_when_no_update():
     fragments: list[tuple[str, str]] = [("sep", "────")]
     fake = SimpleNamespace(_update_notice_provider=lambda: None)
-    CustomPromptSession._prepend_update_notice(cast(Any, fake), fragments, 80)
+    CustomPromptSession._append_update_notice(cast(Any, fake), fragments, 80)
     assert fragments == [("sep", "────")]
 
 
-def test_prepend_update_notice_noop_when_no_provider():
+def test_append_update_notice_noop_when_no_provider():
     fragments: list[tuple[str, str]] = [("sep", "x")]
     fake = SimpleNamespace(_update_notice_provider=None)
-    CustomPromptSession._prepend_update_notice(cast(Any, fake), fragments, 80)
+    CustomPromptSession._append_update_notice(cast(Any, fake), fragments, 80)
     assert fragments == [("sep", "x")]

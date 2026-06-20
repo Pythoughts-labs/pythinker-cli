@@ -333,6 +333,43 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _is_post_update_bundle_corruption(exc: BaseException) -> bool:
+    """True when a frozen build's archive read failed mid-session.
+
+    This is the signature of a silent self-update having replaced the running
+    bundle on disk (see ``_install_native_archive``): the old process keeps
+    running, and the next not-yet-loaded lazy import reads from the now-stale
+    on-disk archive and raises ``zlib.error: incorrect header check``.
+
+    Gated on the PyInstaller ``sys.frozen`` marker so source / pip installs (which
+    never self-replace this way) are unaffected, and narrowed to the documented
+    corruption message (``incorrect header check``) so an unrelated decompression
+    failure elsewhere on a frozen build is *not* misclassified as a stale bundle and
+    masked behind a restart-only message. The zlib error class is matched by
+    ``__module__``/``__name__`` rather than ``isinstance`` so the handler never
+    imports ``zlib`` from a possibly-corrupted archive — ``sys`` is a C built-in and
+    is always safe to import. The cause/context chain is walked with a cycle guard so
+    a self-referential chain can't spin.
+    """
+    import sys
+
+    if not getattr(sys, "frozen", False):
+        return False
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        cls = type(current)
+        if (
+            cls.__module__ == "zlib"
+            and cls.__name__ == "error"
+            and "incorrect header check" in str(current).lower()
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 @cli.callback(invoke_without_command=True)
 def pythinker(
     ctx: typer.Context,
@@ -1310,6 +1347,17 @@ def pythinker(
             # ClickException includes the errors Typer knows how to render; don't
             # wrap them, or we'd lose the standard error UI and exit codes.
             raise
+        if _is_post_update_bundle_corruption(exc):
+            # A silent self-update replaced this running build on disk; lazy imports
+            # from the stale archive now fail. This only resolves with a restart —
+            # surface a clear, actionable message instead of a fatal traceback.
+            logger.warning("Post-update bundle corruption detected; prompting restart")
+            _emit_fatal_error(
+                "A Pythinker update was installed during this session and the "
+                "running build was replaced on disk.\n"
+                "Please restart Pythinker to finish applying the update."
+            )
+            raise typer.Exit(code=1) from exc
         logger.exception("Fatal error when running CLI")
         if debug:
             import traceback
