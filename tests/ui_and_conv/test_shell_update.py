@@ -763,6 +763,38 @@ def test_run_upgrade_command_streams_subprocess_output(monkeypatch):
     assert messages == ["first line", "second line"]
 
 
+def test_run_upgrade_command_guards_homebrew_self_upgrade(monkeypatch):
+    # A brew self-upgrade must not let brew clean up the in-use Cellar version
+    # mid-session (it would crash the live session), and should skip the redundant
+    # implicit auto-update. Non-brew upgrades are left untouched.
+    captured: dict[str, dict[str, str]] = {}
+
+    class FakeProc:
+        stdout: list[str] = []
+
+        def wait(self, *, timeout: float) -> int:
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured[command[0]] = dict(kwargs["env"])
+        return FakeProc()
+
+    monkeypatch.setattr(update.subprocess, "Popen", fake_popen)
+
+    update._run_upgrade_command(
+        ["brew", "upgrade", "pythinker-code"], print_output=False, output_callback=None
+    )
+    update._run_upgrade_command(
+        ["uv", "tool", "upgrade", "pythinker-code"], print_output=False, output_callback=None
+    )
+
+    assert captured["brew"]["HOMEBREW_NO_INSTALL_CLEANUP"] == "1"
+    assert captured["brew"]["HOMEBREW_NO_AUTO_UPDATE"] == "1"
+    # Non-brew upgrades don't get Homebrew guards.
+    assert "HOMEBREW_NO_INSTALL_CLEANUP" not in captured["uv"]
+    assert "HOMEBREW_NO_AUTO_UPDATE" not in captured["uv"]
+
+
 @pytest.mark.asyncio
 async def test_do_update_reports_non_native_upgrade_failure_to_callback(monkeypatch, tmp_path):
     messages: list[str] = []
