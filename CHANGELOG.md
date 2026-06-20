@@ -15,8 +15,21 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
-- Added an explicit "reduction ladder" and deliberate-shortcut guidance to the default agent prompt so the agent reaches for the simplest working solution (stdlib/native before custom code) by default.
-- Added a `cleanup-audit` skill: a read-only, whole-repo pass that ranks over-engineering to delete, simplify, or replace with standard-library/platform equivalents (the repo-wide complement to `pythinker review diff --mode deslopify`).
+## 0.49.0 (2026-06-20)
+
+- **Reduction ladder in the default agent prompt.** The agent now walks an explicit,
+  ordered ladder before writing code — does this need to exist at all, then the standard
+  library, a native platform or framework feature, an already-installed dependency, one
+  line, and only then the minimum custom code — so it reaches for the simplest working
+  solution by default. The same guidance is mirrored into the `/best-practices` profile,
+  and deliberate shortcuts with a known ceiling are flagged with a comment naming the
+  ceiling and the upgrade path. Input validation, error handling, security, and
+  accessibility are never traded away for fewer lines.
+- **New `cleanup-audit` skill.** A read-only, whole-repo pass that ranks over-engineering
+  — what to delete, simplify, or replace with standard-library/platform equivalents — as
+  the repo-wide complement to the diff-scoped `pythinker review diff --mode deslopify`. It
+  applies no fixes and never proposes cutting validation, error handling, security, or
+  accessibility.
 - **Fix: duplicate update notices at startup.** When a background install finishes
   or a cached update is detected, the hint now renders only on the persistent
   under-input line instead of also flashing as a footer toast.

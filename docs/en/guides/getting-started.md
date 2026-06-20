@@ -31,7 +31,7 @@ Run the native installation script to complete the installation. The canonical e
 curl -fsSL https://pythinker.com/install.sh | bash
 
 # Pin a specific version
-curl -fsSL https://pythinker.com/install.sh | bash -s -- --version 0.48.0
+curl -fsSL https://pythinker.com/install.sh | bash -s -- --version 0.49.0
 
 # Custom prefix (defaults to $HOME/.local)
 curl -fsSL https://pythinker.com/install.sh | bash -s -- --prefix /opt/pythinker
@@ -44,7 +44,7 @@ On Windows, run the PowerShell bootstrap. It downloads the native installer, ver
 irm https://pythinker.com/install.ps1 | iex
 ```
 
-You can also download `PythinkerSetup-0.48.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+You can also download `PythinkerSetup-0.49.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 Verify the installation:
 
