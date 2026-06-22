@@ -832,7 +832,11 @@ class PythinkerCLI:
                         await external_cancel_task
 
     async def run_shell(
-        self, command: str | None = None, *, prefill_text: str | None = None
+        self,
+        command: str | None = None,
+        *,
+        prefill_text: str | None = None,
+        suppress_banner: bool = False,
     ) -> bool:
         """Run the Pythinker CLI instance with shell UI."""
         from pythinker_code.ui.shell import Shell, WelcomeInfoItem
@@ -953,7 +957,12 @@ class PythinkerCLI:
             )
         )
         async with self._env():
-            shell = Shell(self._soul, welcome_info=welcome_info, prefill_text=prefill_text)
+            shell = Shell(
+                self._soul,
+                welcome_info=welcome_info,
+                prefill_text=prefill_text,
+                suppress_banner=suppress_banner,
+            )
             return await shell.run(command)
 
     async def run_print(

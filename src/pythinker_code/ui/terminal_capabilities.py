@@ -56,10 +56,15 @@ def color_depth(environ: Mapping[str, str] | None = None) -> ColorDepth:
     Detection order: an explicit ``FORCE_COLOR`` level
     wins, then ``COLORTERM`` truecolor advertising, then the Windows Terminal
     promotion (``WT_SESSION`` implies 24-bit support even when ``TERM`` is
-    conservative), then ``TERM`` itself. ``"none"`` mirrors
+    conservative), then the VS Code-family promotion (``TERM_PROGRAM=vscode``),
+    then ``TERM`` itself. ``"none"`` mirrors
     :func:`colors_disabled`. Rich does its own downgrade for printing; this
     helper exists for UI decisions Rich can't make for us (e.g. skipping
     background tints that quantize badly on 16-color terminals).
+
+    Terminals advertise color support inconsistently (many never set
+    ``COLORTERM``, and it is not forwarded through ``sudo``/SSH/tmux), so
+    hard-coding known 24-bit terminals is the standard workaround.
     """
     env = _env(environ)
     if colors_disabled(env):
@@ -74,6 +79,13 @@ def color_depth(environ: Mapping[str, str] | None = None) -> ColorDepth:
     if _clean(env.get("COLORTERM")) in {"truecolor", "24bit"}:
         return "truecolor"
     if env.get("WT_SESSION"):
+        return "truecolor"
+    # VS Code's integrated terminal — and forks built on it, which keep
+    # TERM_PROGRAM=vscode — is xterm.js-based with 24-bit color, but some builds
+    # ship without COLORTERM. Promote it like Windows Terminal above so diff
+    # tints and other backgrounds don't fall back to the 16-color path. Comes
+    # after FORCE_COLOR so an explicit downgrade is still honored.
+    if _clean(env.get("TERM_PROGRAM")) == "vscode":
         return "truecolor"
     term = _clean(env.get("TERM"))
     if "truecolor" in term or "direct" in term:

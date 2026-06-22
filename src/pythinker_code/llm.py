@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
@@ -12,7 +14,9 @@ from pythinker_core.chat_provider import ChatProvider, ThinkingEffort
 from pythinker_code.constant import USER_AGENT
 from pythinker_code.thinking import (
     DEFAULT_THINKING_EFFORT,
+    available_thinking_levels,
     bool_to_thinking_effort,
+    clamp_thinking_effort,
     normalize_thinking_effort,
     thinking_effort_enabled,
 )
@@ -457,7 +461,15 @@ def create_llm(
             else DEFAULT_THINKING_EFFORT
         )
     elif supports_thinking:
-        effective_effort = requested_effort
+        # Clamp to the model's actually-supported levels so a persisted effort
+        # the model rejects (e.g. ``minimal`` on gpt-5.4/5.5) is never sent.
+        effective_effort = (
+            clamp_thinking_effort(
+                requested_effort, available_model_thinking_levels(model, capabilities)
+            )
+            if requested_effort is not None
+            else None
+        )
     else:
         # Clamp to the model's supported levels: non-reasoning models have
         # only the off level, so explicit non-off requests become off instead of
@@ -592,6 +604,55 @@ def derive_model_capabilities(model: LLMModel) -> set[ModelCapability]:
     elif model.model in {"pythinker-for-coding", "pythinker-code"}:
         capabilities.update(("thinking", "image_in", "video_in"))
     return capabilities
+
+
+_GPT5_REASONING_RE = re.compile(r"gpt-5(?:\.(\d+))?", re.IGNORECASE)
+
+
+def openai_gpt_reasoning_levels(model_id: str) -> tuple[ThinkingEffort, ...] | None:
+    """Reasoning-effort levels an OpenAI GPT-5-family model actually accepts.
+
+    OpenAI's ``reasoning_effort`` set is model-dependent and has drifted across
+    the GPT-5 line, so the provider-neutral ladder over-offers levels a given
+    model rejects (e.g. ``minimal`` on gpt-5.4/5.5). Returns the supported
+    levels low->high including ``off`` (OpenAI ``none``), or ``None`` when
+    *model_id* is not a recognized GPT-5 reasoning model.
+
+    Matrix (OpenAI docs):
+
+    * ``5.0``                  -> minimal, low, medium, high
+    * ``5.1`` / ``5.2`` / ``5.3`` -> low, medium, high (``minimal`` replaced by ``none``)
+    * ``5.1-codex-max``, ``5.4+`` -> low, medium, high, xhigh (``minimal`` dropped)
+    """
+    match = _GPT5_REASONING_RE.search(model_id)
+    if match is None:
+        return None
+    minor = int(match.group(1)) if match.group(1) else 0
+    if minor == 0:
+        return ("off", "minimal", "low", "medium", "high")
+    if minor >= 4 or "codex-max" in model_id.lower():
+        return ("off", "low", "medium", "high", "xhigh")
+    return ("off", "low", "medium", "high")
+
+
+def available_model_thinking_levels(
+    model: LLMModel, capabilities: Collection[str] | None
+) -> tuple[ThinkingEffort, ...]:
+    """Selectable thinking levels for *model*, scoped to provider-specific support.
+
+    Starts from the capability-derived ladder, then narrows to a provider's
+    actually-accepted set when known (currently the OpenAI GPT-5 family) so the
+    selector never offers — and :func:`create_llm` never sends — a level the
+    model rejects. Falls back to the full ladder for models without a known
+    per-model rule.
+    """
+    base = available_thinking_levels(capabilities)
+    gpt_levels = openai_gpt_reasoning_levels(model.model)
+    if gpt_levels is None:
+        return base
+    allowed = set(gpt_levels)
+    scoped: tuple[ThinkingEffort, ...] = tuple(level for level in base if level in allowed)
+    return scoped or base
 
 
 def _is_kimi_k2_model(model_name: str) -> bool:
