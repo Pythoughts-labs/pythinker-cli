@@ -862,7 +862,12 @@ def pythinker(
     # exception handler can clean it up even when _run() fails before returning.
     _latest_created_session: Session | None = None
 
-    async def _run(session_id: str | None, prefill_text: str | None = None) -> tuple[Session, int]:
+    async def _run(
+        session_id: str | None,
+        prefill_text: str | None = None,
+        *,
+        suppress_banner: bool = False,
+    ) -> tuple[Session, int]:
         """
         Create/load session and run the CLI instance.
 
@@ -1056,7 +1061,11 @@ def pythinker(
             try:
                 match ui:
                     case "shell":
-                        shell_ok = await instance.run_shell(prompt, prefill_text=prefill_text)
+                        shell_ok = await instance.run_shell(
+                            prompt,
+                            prefill_text=prefill_text,
+                            suppress_banner=suppress_banner,
+                        )
                         exit_code = ExitCode.SUCCESS if shell_ok else ExitCode.FAILURE
                     case "print":
                         exit_code = await instance.run_print(
@@ -1190,10 +1199,15 @@ def pythinker(
         """
         last_session: Session | None = None
         prefill_text: str | None = None
+        suppress_banner = False
         try:
             while True:
                 try:
-                    last_session, exit_code = await _run(session_id, prefill_text=prefill_text)
+                    last_session, exit_code = await _run(
+                        session_id,
+                        prefill_text=prefill_text,
+                        suppress_banner=suppress_banner,
+                    )
                     break
                 except Reload as e:
                     if e.clear_screen:
@@ -1220,6 +1234,10 @@ def pythinker(
                             _print_resume_hint(old)
                     session_id = e.session_id
                     prefill_text = e.prefill_text
+                    # A non-clearing reload (/model, /theme, /new, fork, …) leaves
+                    # the previous banner on screen, so skip reprinting the splash.
+                    # /clear and /reload wiped the screen above and want it back.
+                    suppress_banner = not e.clear_screen
                     continue
                 except SwitchToWeb as e:
                     # The web worker subprocess becomes the session's writer.

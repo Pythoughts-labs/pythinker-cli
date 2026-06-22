@@ -15,6 +15,28 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Reasoning levels now match each GPT model.** The thinking selector and
+  Shift+Tab cycle scope reasoning effort to what the active OpenAI GPT-5-family
+  model actually accepts — e.g. gpt-5.4/gpt-5.5 no longer offer `minimal`
+  (which they reject) and keep `xhigh`, while gpt-5.0 keeps `minimal`. A
+  persisted unsupported level is clamped to the nearest supported one before
+  it is sent, so the API never rejects it.
+- **Diff cards no longer show a "blue overlay".** The syntax highlighter no
+  longer paints the code theme's opaque background (e.g. catppuccin `#1E1E2E`)
+  onto diff lines, so the green/red row tints — and the terminal background on
+  context lines — show through on every terminal. Previously that code-theme
+  block masked the row tints and only blended where the terminal background
+  happened to match it.
+- **VS Code-family terminals are detected as truecolor.** `color_depth()` now
+  promotes integrated terminals reporting `TERM_PROGRAM=vscode` (including forks
+  built on it) to truecolor — like the existing Windows Terminal promotion — so
+  diff tints don't fall back to the colorless 16-color path when the terminal
+  doesn't advertise `COLORTERM`.
+- **Model/theme switches no longer reprint the welcome banner.** A same-session
+  reload (`/model`, `/theme`, `/thinking`, `/new`, fork, …) now keeps the
+  existing banner and shows only its own "Switched to… / Reloading…"
+  confirmation, instead of stacking a redundant second welcome splash below it.
+  `/clear` and `/reload` still wipe the screen and reprint the banner.
 - **Update notice no longer crowds the prompt.** The persistent "Restart to apply"
   / "Update available" line now renders as the last footer row — below the
   status/clock line — instead of directly under the input box, keeping the input

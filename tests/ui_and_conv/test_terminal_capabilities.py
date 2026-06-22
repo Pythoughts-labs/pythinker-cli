@@ -62,6 +62,17 @@ def test_color_depth_windows_terminal_promotion() -> None:
     assert color_depth({"WT_SESSION": "guid", "FORCE_COLOR": "2"}) == "256"
 
 
+def test_color_depth_vscode_family_promotion() -> None:
+    # VS Code-family integrated terminals (TERM_PROGRAM=vscode, including forks)
+    # are truecolor-capable even when they don't advertise COLORTERM and TERM is
+    # conservative — promote them so diff tints don't fall to the 16-color path.
+    assert color_depth({"TERM_PROGRAM": "vscode", "TERM": "xterm-256color"}) == "truecolor"
+    assert color_depth({"TERM_PROGRAM": "vscode", "TERM": "xterm"}) == "truecolor"
+    # Disabled color and explicit FORCE_COLOR downgrades still win over the promotion.
+    assert color_depth({"TERM_PROGRAM": "vscode", "NO_COLOR": "1"}) == "none"
+    assert color_depth({"TERM_PROGRAM": "vscode", "FORCE_COLOR": "2"}) == "256"
+
+
 def test_diff_colors_fall_back_to_foregrounds_on_16_color(monkeypatch) -> None:
     from pythinker_code.ui.theme import get_diff_colors
 
@@ -71,6 +82,7 @@ def test_diff_colors_fall_back_to_foregrounds_on_16_color(monkeypatch) -> None:
         "CLICOLOR",
         "COLORTERM",
         "WT_SESSION",
+        "TERM_PROGRAM",
         "FORCE_COLOR",
     ):
         monkeypatch.delenv(var, raising=False)

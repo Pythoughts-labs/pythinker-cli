@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from rich.console import Console
 from rich.style import Style as RichStyle
@@ -16,6 +18,8 @@ from pythinker_code.utils.rich.diff_render import (
     _highlight_hunk,
     _make_highlighter,
     collect_diff_hunks,
+    highlight_diff_code,
+    make_diff_highlighter,
     render_diff_panel,
     render_diff_preview,
 )
@@ -30,6 +34,18 @@ def _restore_active_theme():
         yield
     finally:
         set_active_theme(saved)
+
+
+@pytest.fixture(autouse=True)
+def _restore_active_code_theme() -> Iterator[None]:
+    """Keep the process-wide code theme from leaking between tests."""
+    from pythinker_code.utils.rich.syntax import get_active_code_theme, set_active_code_theme
+
+    saved = get_active_code_theme()
+    try:
+        yield
+    finally:
+        set_active_code_theme(saved)
 
 
 # ---------------------------------------------------------------------------
@@ -652,3 +668,27 @@ class TestEdgeCases:
         """Unknown/missing extension should not crash — falls back to plain text."""
         hunks, a, r = collect_diff_hunks([_make_block(path=path, old_text="a", new_text="b")])
         _render_to_text(render_diff_panel(path, hunks, a, r))
+
+
+def test_highlight_diff_code_carries_no_background() -> None:
+    """Syntax-highlighted diff code must not paint the code-theme background.
+
+    The catppuccin theme sets an opaque base color; if it leaked onto diff
+    cells it would mask the row's add/remove tint and only blend on terminals
+    whose own background matched it (the "blue overlay" bug). The diff row tint
+    and the terminal background on context lines must show through.
+    """
+    from pythinker_code.utils.rich.syntax import set_active_code_theme
+
+    set_active_code_theme("catppuccin-adaptive")
+    highlighter = make_diff_highlighter("snippet.py")
+    text = highlight_diff_code(highlighter, "import os")
+
+    assert not (isinstance(text.style, RichStyle) and text.style.bgcolor is not None)
+    for span in text.spans:
+        if isinstance(span.style, RichStyle):
+            assert span.style.bgcolor is None, "diff syntax span must not carry a background"
+    # Foreground token colors are still applied.
+    assert any(
+        isinstance(span.style, RichStyle) and span.style.color is not None for span in text.spans
+    )

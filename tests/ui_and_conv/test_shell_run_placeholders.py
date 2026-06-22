@@ -421,3 +421,32 @@ async def test_shell_run_exits_immediately_for_visible_slash_quit_command_in_she
     shell._run_shell_command.assert_not_awaited()
     shell._run_slash_command.assert_not_awaited()
     assert printed == ["Bye!"]
+
+
+@pytest.mark.asyncio
+async def test_shell_run_prints_welcome_banner_by_default(monkeypatch, _patched_shell_run) -> None:
+    banner_calls: list[int] = []
+    monkeypatch.setattr(shell_module, "_print_welcome_info", lambda *a, **k: banner_calls.append(1))
+    _FakePromptSession.responses = deque([EOFError()])
+    shell = shell_module.Shell(cast(Soul, _make_fake_soul()))
+
+    await shell.run()
+
+    assert banner_calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_shell_run_suppresses_welcome_banner_on_reload(
+    monkeypatch, _patched_shell_run
+) -> None:
+    # A same-session reload (/model, /theme, /new, fork, …) leaves the previous
+    # banner on screen and prints its own confirmation, so the splash must not
+    # be reprinted — otherwise it stacks a redundant copy below the old one.
+    banner_calls: list[int] = []
+    monkeypatch.setattr(shell_module, "_print_welcome_info", lambda *a, **k: banner_calls.append(1))
+    _FakePromptSession.responses = deque([EOFError()])
+    shell = shell_module.Shell(cast(Soul, _make_fake_soul()), suppress_banner=True)
+
+    await shell.run()
+
+    assert banner_calls == []

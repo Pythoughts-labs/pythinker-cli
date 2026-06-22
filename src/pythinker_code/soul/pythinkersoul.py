@@ -924,7 +924,12 @@ class PythinkerSoul:
         """Selectable thinking levels for the current model."""
         if self._runtime.llm is None:
             return ("off",)
-        return available_thinking_levels(self._runtime.llm.capabilities)
+        model = self._runtime.llm.model_config
+        if model is None:
+            return available_thinking_levels(self._runtime.llm.capabilities)
+        from pythinker_code.llm import available_model_thinking_levels
+
+        return available_model_thinking_levels(model, self._runtime.llm.capabilities)
 
     def set_thinking_effort_from_manual(self, effort: ThinkingEffort) -> ThinkingEffort | None:
         """Apply a user-selected thinking level to the live runtime.

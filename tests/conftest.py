@@ -31,6 +31,15 @@ for _capability_var in (
     "PYTHINKER_REDUCED_MOTION",
     "PYTHINKER_NO_ANIMATION",
     "PYTHINKER_STATIC_OUTPUT",
+    # Drop every truecolor-promoting signal so the pinned ``TERM`` below fixes
+    # the color tier at 256 (matching CI). A dev shell — e.g. a VS Code-family
+    # terminal — leaks ``COLORTERM``/``TERM_PROGRAM`` that ``color_depth()``
+    # honors, which would otherwise flip the tier to truecolor and break the
+    # 256-tier shimmer/motion contract tests. Truecolor tests opt in by setting
+    # ``COLORTERM`` explicitly.
+    "COLORTERM",
+    "WT_SESSION",
+    "TERM_PROGRAM",
 ):
     os.environ.pop(_capability_var, None)
 os.environ["TERM"] = "xterm-256color"

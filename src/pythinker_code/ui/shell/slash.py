@@ -303,11 +303,12 @@ async def model(app: Shell, args: str):
 
     # Step 2: Determine thinking effort
     capabilities = derive_model_capabilities(selected_model_cfg)
-    from pythinker_code.thinking import available_thinking_levels, clamp_thinking_effort
+    from pythinker_code.llm import available_model_thinking_levels
+    from pythinker_code.thinking import clamp_thinking_effort
     from pythinker_code.ui.shell.selectors.thinking import ThinkingLevel, run_thinking_selector
 
     native_thinking = model_uses_native_thinking(capabilities)
-    available_efforts = available_thinking_levels(capabilities)
+    available_efforts = available_model_thinking_levels(selected_model_cfg, capabilities)
     if native_thinking or available_efforts == ("off",):
         new_effort = "off"
     else:
@@ -1224,7 +1225,6 @@ async def thinking(app: Shell, args: str) -> None:
         return
 
     from pythinker_code.thinking import (
-        available_thinking_levels,
         clamp_thinking_effort,
         model_uses_native_thinking,
     )
@@ -1237,7 +1237,8 @@ async def thinking(app: Shell, args: str) -> None:
         console.print(f"[{_t_think.error}]LLM is not set.[/]")
         return
     capabilities = soul.runtime.llm.capabilities
-    available_efforts = available_thinking_levels(capabilities)
+    # Model-aware levels (scopes e.g. gpt-5.4/5.5 away from unsupported 'minimal').
+    available_efforts = soul.available_thinking_efforts()
     if available_efforts == ("off",):
         if model_uses_native_thinking(capabilities):
             console.print(

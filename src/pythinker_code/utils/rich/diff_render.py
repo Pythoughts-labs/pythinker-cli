@@ -17,7 +17,7 @@ from rich.console import RenderableType
 from rich.panel import Panel
 from rich.style import Style as RichStyle
 from rich.table import Table
-from rich.text import Text
+from rich.text import Span, Text
 
 from pythinker_code.tools.display import DiffDisplayBlock
 from pythinker_code.ui.theme import get_diff_colors, tui_rich_style
@@ -161,6 +161,36 @@ def _cached_diff_highlighter(lexer: str, theme: str) -> PythinkerSyntax:
     return PythinkerSyntax("", lexer, theme=resolve_code_theme(theme))
 
 
+def _without_bg(style: RichStyle | str) -> RichStyle | str:
+    """Return *style* with its background color dropped (foreground kept)."""
+    if not isinstance(style, RichStyle) or style.bgcolor is None:
+        return style
+    return RichStyle(
+        color=style.color,
+        bold=style.bold,
+        dim=style.dim,
+        italic=style.italic,
+        underline=style.underline,
+        strike=style.strike,
+        reverse=style.reverse,
+    )
+
+
+def _strip_background(text: Text) -> Text:
+    """Drop syntax-theme backgrounds in place.
+
+    The code theme paints its base color (e.g. catppuccin ``#1E1E2E``) onto
+    every cell. Inside a diff that opaque block masks the green/red row tints
+    and only blends on terminals whose own background happens to match it.
+    Removing it lets the diff row's add/remove tint — and the terminal
+    background on context lines — show through on every terminal.
+    """
+    if isinstance(text.style, RichStyle):
+        text.style = _without_bg(text.style)
+    text.spans = [Span(span.start, span.end, _without_bg(span.style)) for span in text.spans]
+    return text
+
+
 def highlight_diff_code(highlighter: PythinkerSyntax, code: str) -> Text:
     """Syntax-highlight a single diff code line (no row/inline diff styling)."""
     t = highlighter.highlight(code)
@@ -168,7 +198,7 @@ def highlight_diff_code(highlighter: PythinkerSyntax, code: str) -> Text:
     # not trailing whitespace which may be meaningful in diffs.
     if t.plain.endswith("\n"):
         t.right_crop(1)
-    return t
+    return _strip_background(t)
 
 
 def apply_inline_diff_highlights(

@@ -560,10 +560,16 @@ class Shell:
         soul: Soul,
         welcome_info: list[WelcomeInfoItem] | None = None,
         prefill_text: str | None = None,
+        suppress_banner: bool = False,
     ):
         self.soul = soul
         self._welcome_info = list(welcome_info or [])
         self._prefill_text = prefill_text
+        # Skip the full welcome splash on an in-session reload (/model, /theme,
+        # /new, fork, …): the screen still shows the previous banner and each
+        # reload path prints its own "Switched to… / Reloading…" confirmation,
+        # so reprinting the splash just stacks a redundant copy below it.
+        self._suppress_banner = suppress_banner
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._prompt_session: CustomPromptSession | None = None
         # (timestamp, text) memo for the under-input update line; refreshed on a
@@ -839,11 +845,12 @@ class Shell:
             # carries the blinking "connecting" heartbeat without ever
             # blocking input.
             await self.soul.start_background_mcp_loading()
-        _print_welcome_info(
-            self.soul.name or "Pythinker CLI",
-            self._welcome_info,
-            banner=_welcome_banner_chip(),
-        )
+        if not self._suppress_banner:
+            _print_welcome_info(
+                self.soul.name or "Pythinker CLI",
+                self._welcome_info,
+                banner=_welcome_banner_chip(),
+            )
 
         # Start telemetry periodic flush and disk retry
         from pythinker_code.telemetry import get_sink
