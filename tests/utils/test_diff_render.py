@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from rich.console import Console
 from rich.style import Style as RichStyle
@@ -32,6 +34,18 @@ def _restore_active_theme():
         yield
     finally:
         set_active_theme(saved)
+
+
+@pytest.fixture(autouse=True)
+def _restore_active_code_theme() -> Iterator[None]:
+    """Keep the process-wide code theme from leaking between tests."""
+    from pythinker_code.utils.rich.syntax import get_active_code_theme, set_active_code_theme
+
+    saved = get_active_code_theme()
+    try:
+        yield
+    finally:
+        set_active_code_theme(saved)
 
 
 # ---------------------------------------------------------------------------
