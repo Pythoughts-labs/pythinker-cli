@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.51.0 (2026-06-22)
+
 - **Reasoning levels now match each GPT model.** The thinking selector and
   Shift+Tab cycle scope reasoning effort to what the active OpenAI GPT-5-family
   model actually accepts — e.g. gpt-5.4/gpt-5.5 no longer offer `minimal`
@@ -45,6 +47,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   `brew upgrade` with `HOMEBREW_NO_INSTALL_CLEANUP` and `HOMEBREW_NO_AUTO_UPDATE`,
   so brew can't delete the in-use Cellar version mid-session; the new build is
   staged side-by-side and goes live on restart.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.51.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.50.0 (2026-06-20)
 
