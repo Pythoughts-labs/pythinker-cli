@@ -17,6 +17,30 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.51.0 (2026-06-22)
+
+- **Reasoning levels now match each GPT model.** The thinking selector and
+  Shift+Tab cycle scope reasoning effort to what the active OpenAI GPT-5-family
+  model actually accepts — e.g. gpt-5.4/gpt-5.5 no longer offer `minimal`
+  (which they reject) and keep `xhigh`, while gpt-5.0 keeps `minimal`. A
+  persisted unsupported level is clamped to the nearest supported one before
+  it is sent, so the API never rejects it.
+- **Diff cards no longer show a "blue overlay".** The syntax highlighter no
+  longer paints the code theme's opaque background (e.g. catppuccin `#1E1E2E`)
+  onto diff lines, so the green/red row tints — and the terminal background on
+  context lines — show through on every terminal. Previously that code-theme
+  block masked the row tints and only blended where the terminal background
+  happened to match it.
+- **VS Code-family terminals are detected as truecolor.** `color_depth()` now
+  promotes integrated terminals reporting `TERM_PROGRAM=vscode` (including forks
+  built on it) to truecolor — like the existing Windows Terminal promotion — so
+  diff tints don't fall back to the colorless 16-color path when the terminal
+  doesn't advertise `COLORTERM`.
+- **Model/theme switches no longer reprint the welcome banner.** A same-session
+  reload (`/model`, `/theme`, `/thinking`, `/new`, fork, …) now keeps the
+  existing banner and shows only its own "Switched to… / Reloading…"
+  confirmation, instead of stacking a redundant second welcome splash below it.
+  `/clear` and `/reload` still wipe the screen and reprint the banner.
 - **Update notice no longer crowds the prompt.** The persistent "Restart to apply"
   / "Update available" line now renders as the last footer row — below the
   status/clock line — instead of directly under the input box, keeping the input
@@ -25,6 +49,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   `brew upgrade` with `HOMEBREW_NO_INSTALL_CLEANUP` and `HOMEBREW_NO_AUTO_UPDATE`,
   so brew can't delete the in-use Cellar version mid-session; the new build is
   staged side-by-side and goes live on restart.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.51.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.50.0 (2026-06-20)
 
