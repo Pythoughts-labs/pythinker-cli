@@ -149,6 +149,14 @@ def test_pyinstaller_datas():
             "pythinker_code/skills/implement-specs",
         ),
         (
+            "src/pythinker_code/skills/judge-minimum-diff/SKILL.md",
+            "pythinker_code/skills/judge-minimum-diff",
+        ),
+        (
+            "src/pythinker_code/skills/judge-overengineering-review/SKILL.md",
+            "pythinker_code/skills/judge-overengineering-review",
+        ),
+        (
             "src/pythinker_code/skills/pr-walkthrough/SKILL.md",
             "pythinker_code/skills/pr-walkthrough",
         ),
