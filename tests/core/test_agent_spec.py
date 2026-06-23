@@ -33,6 +33,7 @@ def test_load_default_agent_spec():
         [
             "pythinker_code.tools.agent:Agent",
             "pythinker_code.tools.agent:RunAgents",
+            "pythinker_code.tools.agent:ImplementAndJudge",
             "pythinker_code.tools.skill:ReadSkill",
             "pythinker_code.tools.ask_user:AskUserQuestion",
             "pythinker_code.tools.todo:SetTodoList",
@@ -245,6 +246,7 @@ The `edge_cases_claimed` key is optional; omit it if you have no distinct edge c
         [
             "pythinker_code.tools.agent:Agent",
             "pythinker_code.tools.agent:RunAgents",
+            "pythinker_code.tools.agent:ImplementAndJudge",
             "pythinker_code.tools.skill:ReadSkill",
             "pythinker_code.tools.ask_user:AskUserQuestion",
             "pythinker_code.tools.todo:SetTodoList",
@@ -378,6 +380,7 @@ Bullet list of missing context/capabilities or `None.`.
         [
             "pythinker_code.tools.agent:Agent",
             "pythinker_code.tools.agent:RunAgents",
+            "pythinker_code.tools.agent:ImplementAndJudge",
             "pythinker_code.tools.skill:ReadSkill",
             "pythinker_code.tools.ask_user:AskUserQuestion",
             "pythinker_code.tools.todo:SetTodoList",
@@ -521,6 +524,7 @@ Bullet list of questions that must be answered before execution, or `None.`.
         [
             "pythinker_code.tools.agent:Agent",
             "pythinker_code.tools.agent:RunAgents",
+            "pythinker_code.tools.agent:ImplementAndJudge",
             "pythinker_code.tools.skill:ReadSkill",
             "pythinker_code.tools.ask_user:AskUserQuestion",
             "pythinker_code.tools.todo:SetTodoList",
@@ -649,6 +653,7 @@ vantage points. A single-seed result signals the task is not worth parallelizing
         [
             "pythinker_code.tools.agent:Agent",
             "pythinker_code.tools.agent:RunAgents",
+            "pythinker_code.tools.agent:ImplementAndJudge",
             "pythinker_code.tools.skill:ReadSkill",
             "pythinker_code.tools.ask_user:AskUserQuestion",
             "pythinker_code.tools.todo:SetTodoList",
@@ -825,6 +830,7 @@ agent:
             [
                 "pythinker_code.tools.agent:Agent",
                 "pythinker_code.tools.agent:RunAgents",
+                "pythinker_code.tools.agent:ImplementAndJudge",
                 "pythinker_code.tools.skill:ReadSkill",
                 "pythinker_code.tools.ask_user:AskUserQuestion",
                 "pythinker_code.tools.todo:SetTodoList",

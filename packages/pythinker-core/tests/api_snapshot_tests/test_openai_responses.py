@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+import pytest
 import respx
 from common import COMMON_CASES, Case, capture_request, run_test_cases
 from httpx import Response
@@ -531,3 +532,62 @@ async def test_openai_responses_with_thinking_max_clamps_to_xhigh():
             pass
         body = json.loads(mock.calls.last.request.content.decode())
         assert body["reasoning"] == snapshot({"effort": "xhigh", "summary": "auto"})
+
+
+# Regression: local system-prompt roles must become developer messages regardless
+# of model name. A model switch to gpt-5.5 produced
+# `Error code: 400 - {'detail': 'System messages are not allowed'}` while the old
+# conversion gate was tied to the openai SDK's lagging ResponsesModel literal.
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gpt-5.5",  # in Pythinker catalog but missing from openai SDK ResponsesModel
+        "gpt-5.3-codex",  # same — in catalog, missing from SDK
+        "ft:gpt-5.5:my-org:custom:id",  # user-defined fine-tune, never in any SDK set
+    ],
+)
+async def test_openai_responses_system_prompt_uses_developer_role(model_name: str):
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/responses").mock(return_value=Response(200, json=make_response()))
+        provider = OpenAIResponses(model=model_name, api_key="test-key", stream=False)
+        body = await capture_request(
+            mock,
+            provider,
+            "You are a helpful assistant.",
+            [],
+            [Message(role="user", content="Hi")],
+        )
+
+    assert body["input"][0] == {
+        "role": "developer",
+        "content": "You are a helpful assistant.",
+    }
+    assert all(item.get("role") != "system" for item in body["input"])
+
+
+async def test_openai_responses_history_system_message_becomes_developer():
+    """Mid-session model switch via `_carry_context_to_session` seeds a
+    role='system' summary into the new session's history. With an OpenAI Responses
+    target (e.g. gpt-5.5), that history item must be re-mapped to role='developer'
+    on the wire — otherwise the first request after the switch is rejected.
+    """
+    carried_summary = Message(
+        role="system",
+        content="Summary carried from the previous model session: user asked about X.",
+    )
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/responses").mock(return_value=Response(200, json=make_response()))
+        provider = OpenAIResponses(model="gpt-5.5", api_key="test-key", stream=False)
+        body = await capture_request(
+            mock,
+            provider,
+            "You are a helpful assistant.",
+            [],
+            [carried_summary, Message(role="user", content="continue")],
+        )
+
+    roles = [item.get("role") for item in body["input"]]
+    assert "system" not in roles, body["input"]
+    assert roles[0] == "developer"  # system_prompt
+    assert roles[1] == "developer"  # carried-over summary
+    assert roles[2] == "user"

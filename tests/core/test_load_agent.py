@@ -383,7 +383,13 @@ def test_load_tools_valid(runtime: Runtime):
 
 
 def test_load_tools_invalid(runtime: Runtime):
-    """Test loading with invalid tool paths."""
+    """Test loading with invalid tool paths.
+
+    Regression for the cryptic "Invalid tools: [...]" message that hid the
+    actual reason (module not found, class not found, constructor error)
+    from the user. The error must now name each failing tool and its reason
+    so a stale-binary or typo case is diagnosable from the traceback alone.
+    """
     tool_paths = ["pythinker_code.tools.nonexistent:Tool", "pythinker_code.tools.think:Think"]
     toolset = PythinkerToolset()
     try:
@@ -400,7 +406,52 @@ def test_load_tools_invalid(runtime: Runtime):
         )
         raise AssertionError("should fail to load non-existing tool")
     except InvalidToolError as e:
-        assert "pythinker_code.tools.nonexistent:Tool" in str(e)
+        msg = str(e)
+        assert "pythinker_code.tools.nonexistent:Tool" in msg
+        # Aggregated error must name the reason, not just the path. The exact
+        # wording ("class or module not found") matches _load_tool's known
+        # miss-path placeholder.
+        assert "class or module not found" in msg
+
+
+def test_load_tools_aggregates_constructor_errors(runtime: Runtime, monkeypatch):
+    """A constructor exception on one tool must surface as a per-tool reason
+    in the aggregated InvalidToolError, not a bare traceback out of agent load.
+
+    Regression for the model-switch flow: when a PyInstaller binary is built
+    before a new tool is added to the source, the bundled module imports OK
+    but the class is missing — the loader returns None and (now) records a
+    reason. The same per-tool-catch path also covers the rarer "constructor
+    raised" case (e.g. a tool that requires a dep the toolset doesn't carry);
+    both should land in the aggregated error message.
+    """
+    real_load_tool = PythinkerToolset._load_tool
+
+    def boom(tool_path, dependencies):
+        if tool_path.endswith(":Shell"):
+            raise RuntimeError("simulated constructor failure")
+        return real_load_tool(tool_path, dependencies)
+
+    monkeypatch.setattr(PythinkerToolset, "_load_tool", staticmethod(boom))
+
+    tool_paths = ["pythinker_code.tools.shell:Shell", "pythinker_code.tools.think:Think"]
+    toolset = PythinkerToolset()
+    with pytest.raises(InvalidToolError) as excinfo:
+        toolset.load_tools(
+            tool_paths,
+            {
+                Runtime: runtime,
+                Config: runtime.config,
+                BuiltinSystemPromptArgs: runtime.builtin_args,
+                Session: runtime.session,
+                DenwaRenji: runtime.denwa_renji,
+                Approval: runtime.approval,
+            },
+        )
+    msg = str(excinfo.value)
+    # Per-tool reason attached; whole load still aborts (fail-fast preserved).
+    assert "pythinker_code.tools.shell:Shell" in msg
+    assert "RuntimeError: simulated constructor failure" in msg
 
 
 async def test_load_agent_invalid_tools(agent_file_invalid_tools: Path, runtime: Runtime):

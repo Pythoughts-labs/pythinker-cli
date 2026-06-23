@@ -159,10 +159,11 @@ class OpenAIResponses:
         inputs: ResponseInputParam = []
         instructions = system_prompt if self._system_prompt_as_instructions else None
         if system_prompt and not instructions:
-            system_message: ResponseInputItemParam = {"role": "system", "content": system_prompt}
-            if is_openai_model(self.model_name):
-                system_message["role"] = "developer"
-            inputs.append(system_message)
+            # This class is exclusively the Responses API transport (see provider.type
+            # "openai_responses" / "openai_codex" in pythinker-code). Normalize local
+            # system prompts to developer messages so model-name drift cannot leak an
+            # unsupported system role onto the wire.
+            inputs.append({"role": "developer", "content": system_prompt})
         # The `Message` type is OpenAI-compatible for Responses API `input` messages.
 
         for message in history:
@@ -235,13 +236,13 @@ class OpenAIResponses:
 
         Rules:
         - role in {user, assistant}: map to EasyInputMessageParam with role kept
-        role == system: map to role=developer for OpenAI models, otherwise kept
-        content: str kept; list[ContentPart] mapped to ResponseInputMessageContentListParam
+        - role == system: always mapped to role=developer so model-name drift cannot
+          leak a local system role onto the Responses API wire
         - role == tool: map to FunctionCallOutput with call_id and output
         """
 
         role = message.role
-        if is_openai_model(self.model_name) and role == "system":
+        if role == "system":
             role = "developer"
 
         # tool role → function_call_output (return value from a prior tool call)

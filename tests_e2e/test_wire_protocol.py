@@ -156,6 +156,16 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": [],
                         },
                         {
+                            "name": "skill:judge-minimum-diff",
+                            "description": "Reduction-ladder and minimum-diff checks the Pythinker judge subagent applies to every non-trivial diff.",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "skill:judge-overengineering-review",
+                            "description": "Over-engineering review checklist the parent runs before declaring non-trivial code changes done.",
+                            "aliases": [],
+                        },
+                        {
                             "name": "skill:pr-walkthrough",
                             "description": "Produce a concise reviewer-friendly walkthrough of a PR or diff, including changed areas, behavior, tests, and risks.",
                             "aliases": [],
@@ -368,6 +378,16 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         {
                             "name": "skill:implement-specs",
                             "description": "Implement one or more checked-in specs using scout-plan-implement-verify workflow.",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "skill:judge-minimum-diff",
+                            "description": "Reduction-ladder and minimum-diff checks the Pythinker judge subagent applies to every non-trivial diff.",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "skill:judge-overengineering-review",
+                            "description": "Over-engineering review checklist the parent runs before declaring non-trivial code changes done.",
                             "aliases": [],
                         },
                         {

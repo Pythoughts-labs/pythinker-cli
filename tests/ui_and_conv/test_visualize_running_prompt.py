@@ -2291,6 +2291,11 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     state["now"], state["output_tokens"] = 100.0, 40_000
     second = render()
     assert "(<1s, ↓ 40k tokens)" in second  # no rate until the window fills
+    assert session._bg_last_active_at == 100.0
+    state["now"] = 101.0
+    assert session._bg_refresh_active() is True
+    state["now"] = 103.0
+    assert session._bg_refresh_active() is False
 
     state["now"], state["output_tokens"] = 100.4, 40_400
     render()
@@ -2303,6 +2308,74 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     assert render() == ""
     assert session._bg_status_started_at is None
     assert session._bg_status_start_tokens is None
+    assert session._bg_last_active_at is None
+
+
+def test_background_pure_bash_uses_fixed_label_not_verb_spinner() -> None:
+    """Pure-bash background work (npm dev, docker run) shows a fixed label,
+    not the agent verb spinner ('Composing…' / 'Brewing…')."""
+    session = object.__new__(CustomPromptSession)
+    session._background_task_count_provider = lambda: BgTaskCounts(bash=1)
+
+    rendered = CustomPromptSession._render_background_working_status(session, 80)
+    text = "".join(item[1] for item in rendered)
+
+    assert "Running in background…" in text
+    # The whimsical agent verbs must not leak into the pure-bash path.
+    assert "Composing" not in text
+    assert "Brewing" not in text
+    # The braille active marker is still present.
+    assert text.strip()
+
+
+def test_background_mixed_bash_agent_keeps_verb_spinner(monkeypatch) -> None:
+    """When agent work is also running, the verb spinner stays — the agent
+    is actively working."""
+    import pythinker_code.ui.shell.prompt as prompt_module
+
+    monkeypatch.setattr(prompt_module.time, "monotonic", lambda: 0.5)
+    session = object.__new__(CustomPromptSession)
+    session._background_task_count_provider = lambda: BgTaskCounts(bash=1, agent=1)
+
+    rendered = CustomPromptSession._render_background_working_status(session, 80)
+    text = "".join(item[1] for item in rendered)
+
+    assert "Running in background…" not in text
+    assert "…" in text  # verb spinner with ellipsis
+
+
+def test_background_status_truncates_after_dropping_metadata(monkeypatch) -> None:
+    import pythinker_code.ui.shell.prompt as prompt_module
+
+    monkeypatch.setattr(prompt_module.time, "monotonic", lambda: 0.0)
+    session = object.__new__(CustomPromptSession)
+    session._background_task_count_provider = lambda: BgTaskCounts(bash=1)
+    session._background_status_metadata = lambda now: "metadata"
+    session._latest_todos = ()
+
+    rendered = CustomPromptSession._render_background_working_status(session, 8)
+    text = "".join(item[1] for item in rendered)
+
+    assert "metadata" not in text
+    assert prompt_module._display_width(text) <= 8
+
+
+def test_bg_refresh_active_drops_to_idle_when_quiet(monkeypatch) -> None:
+    """A quiet background task (no token flow past the threshold) signals the
+    refresh loop to drop from 0.1s to 1.0s."""
+    import pythinker_code.ui.shell.prompt as prompt_module
+
+    session = object.__new__(CustomPromptSession)
+    base = prompt_module.time.monotonic()
+    session._bg_last_active_at = base
+
+    # Freshly-spawned: within the quiet window → still active.
+    monkeypatch.setattr(prompt_module.time, "monotonic", lambda: base + 0.5)
+    assert session._bg_refresh_active() is True
+
+    # Past the quiet threshold → idle refresh.
+    monkeypatch.setattr(prompt_module.time, "monotonic", lambda: base + 5.0)
+    assert session._bg_refresh_active() is False
 
 
 # ---------------------------------------------------------------------------

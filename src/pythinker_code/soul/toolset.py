@@ -1203,10 +1203,14 @@ class PythinkerToolset:
 
         Raises:
             InvalidToolError(PythinkerCLIException, ValueError): When any tool cannot be loaded.
+                The message lists each bad tool with the actual failure reason
+                (module missing, class missing, or constructor exception) so a
+                stale-binary or typo case is diagnosable from the traceback
+                without grepping the log file.
         """
 
         good_tools: list[str] = []
-        bad_tools: list[str] = []
+        bad_tools: list[tuple[str, str]] = []
 
         for tool_path in tool_paths:
             if ":" not in tool_path:
@@ -1220,14 +1224,41 @@ class PythinkerToolset:
             except SkipThisTool:
                 logger.info("Skipping tool: {tool_path}", tool_path=tool_path)
                 continue
+            except Exception as exc:  # noqa: BLE001 - aggregate per-tool failures, re-raise below
+                # A constructor error (missing dep, type mismatch, binary built
+                # before the tool was added) is a per-tool configuration bug.
+                # Catch it here so the aggregated error names which tool failed
+                # and why, instead of bubbling a bare traceback out of agent
+                # load. The whole load still aborts on any failure — agent.yaml
+                # tool references are hard requirements — but the user now gets
+                # a one-line pointer to the offending tool.
+                reason = f"{type(exc).__name__}: {exc}"
+                # logger.exception keeps the full traceback in the log next to
+                # the aggregated error, so a stale-binary / import-time
+                # constructor failure stays diagnosable (the aggregated
+                # InvalidToolError carries only the one-line reason).
+                logger.exception(
+                    "Tool load failed: {tool_path}: {reason}",
+                    tool_path=tool_path,
+                    reason=reason,
+                )
+                bad_tools.append((tool_path, reason))
+                continue
             if tool:
                 self.add(tool)
                 good_tools.append(tool_path)
             else:
-                bad_tools.append(tool_path)
+                # _load_tool returns None only for the known import / class
+                # miss paths, both already logged with a reason. Surface a
+                # generic placeholder so the aggregated error still names
+                # the tool.
+                bad_tools.append((tool_path, "class or module not found"))
         logger.info("Loaded tools: {good_tools}", good_tools=good_tools)
         if bad_tools:
-            raise InvalidToolError(f"Invalid tools: {bad_tools}")
+            lines = ["Invalid tools:"]
+            for path, reason in bad_tools:
+                lines.append(f"  - {path}: {reason}")
+            raise InvalidToolError("\n".join(lines))
 
     @staticmethod
     def _load_tool(tool_path: str, dependencies: dict[type[Any], Any]) -> ToolType | None:
@@ -1244,10 +1275,22 @@ class PythinkerToolset:
             return None
         tool_cls = getattr(module, class_name, None)
         if tool_cls is None:
+            # Best-effort "did you mean" — points users at the actual class
+            # name when they typo'd it. Only attach to the warning, not the
+            # aggregated error, so the log search stays one line per failure.
+            suggestion = ""
+            try:
+                available = [n for n in dir(module) if not n.startswith("_")]
+                matches = difflib.get_close_matches(class_name, available, n=1, cutoff=0.6)
+                if matches:
+                    suggestion = f" Did you mean {matches[0]!r}?"
+            except Exception:  # noqa: BLE001 - dir() / difflib can't realistically fail, fail open
+                suggestion = ""
             logger.warning(
-                "Tool class not found: {class_name} in {module_name}",
+                "Tool class not found: {class_name} in {module_name}{suggestion}",
                 class_name=class_name,
                 module_name=module_name,
+                suggestion=suggestion,
             )
             return None
         args: list[Any] = []

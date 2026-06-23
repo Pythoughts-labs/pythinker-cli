@@ -1864,6 +1864,8 @@ class UserInput(BaseModel):
 
 _IDLE_REFRESH_INTERVAL = 1.0
 _RUNNING_REFRESH_INTERVAL = 0.1
+# ponytail: 2s quiet threshold — silent dev servers drop to idle refresh
+_BG_QUIET_THRESHOLD_S = 2.0
 
 _GIT_BRANCH_TTL = 5.0
 _GIT_STATUS_TTL = 15.0
@@ -3509,6 +3511,7 @@ class CustomPromptSession:
             # Background work drained — reset the elapsed/rate trackers.
             self._bg_status_started_at = None
             self._bg_status_start_tokens = None
+            self._bg_last_active_at = None
             samples = getattr(self, "_bg_token_samples", None)
             if samples is not None:
                 samples.clear()
@@ -3521,26 +3524,31 @@ class CustomPromptSession:
             started_at = now
             self._bg_status_started_at = now
             self._bg_status_start_tokens = get_total_output_tokens()
+            # ponytail: treat freshly-spawned bg work as active so a quiet
+            # bash task gets the fast refresh for its first window.
+            self._bg_last_active_at = now
         elapsed = max(0.0, now - started_at)
         frame = active_marker_frame(elapsed)
         tokens = _get_tui_tokens()
         muted_style = f"fg:{tokens.muted}" if tokens.muted else ""
         frame_style = f"fg:{tokens.activity_spinner}" if tokens.activity_spinner else muted_style
         frame_text = f"{frame} "
-        verb_text = spinner_message(now)
+        # ponytail: pure-bash background work (e.g. npm dev) gets a fixed
+        # label, not the agent verb spinner — the verbs read as agent work.
+        has_agent_work = counts.agent > 0
+        verb_text = spinner_message(now) if has_agent_work else "Running in background…"
         metadata = self._background_status_metadata(now)
         suffix = f" {metadata}" if metadata else ""
-        if _display_width(frame_text + verb_text + suffix) > columns:
+        if suffix and _display_width(frame_text + verb_text + suffix) > columns:
             # Narrow terminals: drop the metadata first, then trim the verb.
             suffix = ""
-            if _display_width(frame_text + verb_text) > columns:
-                verb_text = _truncate_right(verb_text, columns - _display_width(frame_text))
-        fragments = FormattedText(
-            [
-                (frame_style, frame_text),
-                *shimmer_prompt_fragments(verb_text, now),
-            ]
-        )
+        if _display_width(frame_text + verb_text) > columns:
+            verb_text = _truncate_right(verb_text, columns - _display_width(frame_text))
+        fragments = FormattedText([(frame_style, frame_text)])
+        if has_agent_work:
+            fragments.extend(shimmer_prompt_fragments(verb_text, now))
+        else:
+            fragments.append((muted_style, verb_text))
         if suffix:
             fragments.append((muted_style, suffix))
         todo_rows = self._render_background_todo_rows(columns)
@@ -3572,6 +3580,8 @@ class CustomPromptSession:
         )
         if bg_tokens:
             parts.append(f"↓ {format_token_count(bg_tokens)} tokens")
+            # ponytail: token flow = real agent activity; stamp for the refresh throttle
+            self._bg_last_active_at = now
             samples: deque[tuple[float, int]] | None = getattr(self, "_bg_token_samples", None)
             if samples is None:
                 samples = deque()
@@ -3598,6 +3608,17 @@ class CustomPromptSession:
     def _has_background_tasks(self) -> bool:
         counts = self._background_task_counts()
         return counts.bash > 0 or counts.agent > 0
+
+    def _bg_refresh_active(self) -> bool:
+        """Whether background work warrants the fast refresh rate.
+
+        ponytail: quiet dev servers (no token flow in last _BG_QUIET_THRESHOLD_S)
+        drop to idle refresh so the prompt isn't repainted at 12.5fps for hours.
+        """
+        last_active = getattr(self, "_bg_last_active_at", None)
+        if last_active is None:
+            return True
+        return time.monotonic() - last_active < _BG_QUIET_THRESHOLD_S
 
     def _render_interactive_body(self, columns: int) -> FormattedText:
         """Render the interactive area from the active delegate (modal or running prompt)."""
@@ -3640,7 +3661,7 @@ class CustomPromptSession:
                     interval = (
                         _RUNNING_REFRESH_INTERVAL
                         if self._active_prompt_delegate() is not None
-                        or self._has_background_tasks()
+                        or (self._has_background_tasks() and self._bg_refresh_active())
                         or (
                             self._fast_refresh_provider is not None
                             and self._fast_refresh_provider()
