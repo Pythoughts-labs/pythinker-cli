@@ -46,7 +46,6 @@ GitHub Releases page; `0.8.0` is the new starting line.
   applied as a judge dimension) and `judge-overengineering-review` (the
   parent-facing review checklist) ship as static default skills, replacing
   ad-hoc prose in the system prompt with explicit, versionable content.
-
 - **Fix OpenAI Responses requests that could still send `role="system"` after
   switching to a newer Pythinker catalog model (gpt-5.5, gpt-5.3-codex,
   gpt-5.3-codex-spark, or any user-defined fine-tune).** Pythinker observed
