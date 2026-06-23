@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.52.0 (2026-06-23)
+
 - **`InvalidToolError` now names the failing tool and the reason.** A bad
   tool path in `agent.yaml` (typo, missing class, or — most commonly — a
   `pythinker` binary built before the tool was added) used to surface as a
