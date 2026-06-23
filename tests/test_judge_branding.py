@@ -48,7 +48,6 @@ _BRAND_GUARD_TARGETS: tuple[Path, ...] = (
     REPO_ROOT / "tests" / "core" / "test_implement_judge_chain.py",
     REPO_ROOT / "tests" / "utils" / "test_pyinstaller_utils.py",
     REPO_ROOT / "CHANGELOG.md",
-    REPO_ROOT / "tasks" / "implementer-judge-chain-plan.md",
 )
 
 # The brand-guard file names the brand by design — it is the test that

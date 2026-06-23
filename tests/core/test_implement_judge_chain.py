@@ -50,7 +50,7 @@ def test_parse_verdict_blocked() -> None:
 def test_parse_verdict_missing_fails_closed_to_blocked() -> None:
     """No SUMMARY heading -> BLOCKED.
 
-    The chain must never silently treat an unparseable judge reply as a pass.
+    The chain must never silently treat an unparsable judge reply as a pass.
     """
     text = "The judge went on a tangent and never emitted a verdict."
     assert _parse_judge_verdict(text) == ("BLOCKED", None)

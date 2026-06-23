@@ -1167,7 +1167,7 @@ def _parse_judge_verdict(output: str) -> tuple[str, str | None]:
     """Return (verdict, raw_match) from the judge output. The verdict is the
     first token under the SUMMARY heading, per the judge's output contract.
     Fails closed to BLOCKED when there is no SUMMARY heading or no verdict token
-    under it — never silently treat an unparseable judge reply as a pass.
+    under it — never silently treat an unparsable judge reply as a pass.
     """
     summary = _IMPLEMENT_JUDGE_SUMMARY_RE.search(output)
     if summary is None:
