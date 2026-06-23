@@ -374,6 +374,26 @@ async def test_chain_needs_work_hits_cap(runtime: Runtime, monkeypatch: pytest.M
     assert [c[0] for c in calls].count("implementer") == 2
 
 
+async def test_chain_revision_implementer_error_resets_to_blocked(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An implementer error on the revision fails closed to BLOCKED — the prior
+    revision's NEEDS_WORK verdict and artifact must not leak into the result.
+    """
+    tool, _calls = _make_chain(
+        runtime,
+        monkeypatch,
+        [_ok(_ARTIFACT_OUTPUT), _ok(_JUDGE_NEEDS_WORK), _err("implementer exploded on revision")],
+    )
+    with tool_call_context("ImplementAndJudge"):
+        result = await tool(ImplementAndJudgeParams(brief="do x"))
+    assert result.is_error is True
+    assert result.extras is not None and result.extras["verdict"] == "BLOCKED"
+    assert "implementer exploded on revision" in result.output
+    # The superseded rev-0 artifact must not be presented as the current one.
+    assert "coding_artifact: (missing" in result.output
+
+
 async def test_chain_implementer_error_blocks(
     runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:

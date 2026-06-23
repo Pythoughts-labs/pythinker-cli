@@ -1450,7 +1450,13 @@ class ImplementAndJudgeTool(CallableTool2[ImplementAndJudgeParams]):
             )
             last_implementer_output = self._child_result_output(impl_result)
             if impl_result.is_error:
+                # Fail closed: an implementer error on a revision must not let the
+                # prior revision's NEEDS_WORK verdict or artifact leak into the
+                # final result. Reset to BLOCKED, mirroring the judge-error branch.
                 last_implementer_error = impl_result.message
+                last_verdict = "BLOCKED"
+                last_verdict_raw = None
+                last_artifact = None
                 break
 
             last_artifact = _extract_coding_artifact(last_implementer_output)
