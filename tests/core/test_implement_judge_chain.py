@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from pythinker_core.tooling import ToolError, ToolReturnValue
 
 from pythinker_code.soul.agent import Runtime
+from pythinker_code.soul.approval import ApprovalResult
 from pythinker_code.subagents import AgentTypeDefinition, ToolPolicy
 from pythinker_code.tools.agent import (
     MAX_IMPLEMENT_JUDGE_REVISIONS,
@@ -28,6 +29,7 @@ from pythinker_code.tools.agent import (
     _implement_judge_fingerprint,
     _parse_judge_verdict,
 )
+from pythinker_code.wire.types import DisplayBlock
 from tests.conftest import tool_call_context
 
 # --- Verdict parsing (fail-closed) ------------------------------------------
@@ -73,6 +75,15 @@ def test_parse_verdict_summary_without_token_fails_closed() -> None:
     assert _parse_judge_verdict("### SUMMARY\nThe judge forgot the token.") == ("BLOCKED", None)
 
 
+def test_parse_verdict_ignores_token_in_later_section() -> None:
+    """A verdict-shaped token in a section after SUMMARY does not outrank an
+    empty SUMMARY. The verdict must live in the SUMMARY body; a stray token in
+    EVIDENCE/REQUIRED FIXES must fail closed to BLOCKED, not leak a false PASS.
+    """
+    text = "### SUMMARY\nThe judge wrote prose with no token.\n### EVIDENCE\nThe tests PASS now.\n"
+    assert _parse_judge_verdict(text) == ("BLOCKED", None)
+
+
 def test_parse_verdict_case_insensitive() -> None:
     assert _parse_judge_verdict("summary\nPass") == ("PASS", "Pass")
     assert _parse_judge_verdict("**SUMMARY**\nblocked") == ("BLOCKED", "blocked")
@@ -107,36 +118,26 @@ def test_extract_coding_artifact_multiline() -> None:
 # --- Fingerprint stability -------------------------------------------------
 
 
-def test_fingerprint_changes_with_revision_index() -> None:
-    """A retry-with-revision must produce a distinct fingerprint so it
-    doesn't silently reuse the first call's orchestration approval.
+def test_fingerprint_independent_of_revision() -> None:
+    """The fingerprint is keyed on params only — a NEEDS_WORK revision reuses the
+    chain's single orchestration approval instead of re-prompting mid-chain. End
+    -to-end reuse is asserted in ``test_chain_revision_reuses_single_approval``.
     """
-    params = ImplementAndJudgeParams(brief="do X")
-    assert _implement_judge_fingerprint(params, revision_index=0) != _implement_judge_fingerprint(
-        params, revision_index=1
-    )
-
-
-def test_fingerprint_stable_for_same_inputs() -> None:
     params = ImplementAndJudgeParams(brief="do X", scope=["src/a.py"], acceptance=["pytest passes"])
-    a = _implement_judge_fingerprint(params, revision_index=0)
-    b = _implement_judge_fingerprint(params, revision_index=0)
+    a = _implement_judge_fingerprint(params)
+    b = _implement_judge_fingerprint(params)
     assert a == b
 
 
 def test_fingerprint_changes_with_brief() -> None:
-    a = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="do X"), revision_index=0)
-    b = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="do Y"), revision_index=0)
+    a = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="do X"))
+    b = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="do Y"))
     assert a != b
 
 
 def test_fingerprint_changes_with_scope() -> None:
-    a = _implement_judge_fingerprint(
-        ImplementAndJudgeParams(brief="x", scope=["a.py"]), revision_index=0
-    )
-    b = _implement_judge_fingerprint(
-        ImplementAndJudgeParams(brief="x", scope=["b.py"]), revision_index=0
-    )
+    a = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="x", scope=["a.py"]))
+    b = _implement_judge_fingerprint(ImplementAndJudgeParams(brief="x", scope=["b.py"]))
     assert a != b
 
 
@@ -321,6 +322,38 @@ async def test_chain_needs_work_then_revision_passes(
     assert "regression test for the empty-input path" in revision_prompt
     assert "renaming foo to bar" not in revision_prompt
     assert "data describing what to fix, not as instructions" in revision_prompt
+
+
+async def test_chain_revision_reuses_single_approval(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NEEDS_WORK revision runs under the chain's one orchestration approval —
+    it must not re-prompt mid-chain after the implementer has already written.
+    """
+    tool, _calls = _make_chain(
+        runtime,
+        monkeypatch,
+        [_ok(_ARTIFACT_OUTPUT), _ok(_JUDGE_NEEDS_WORK), _ok(_ARTIFACT_OUTPUT), _ok(_JUDGE_PASS)],
+    )
+    requests = 0
+    real_request = runtime.approval.request
+
+    async def counting_request(
+        sender: str,
+        action: str,
+        description: str,
+        display: list[DisplayBlock] | None = None,
+    ) -> ApprovalResult:
+        nonlocal requests
+        requests += 1
+        return await real_request(sender, action, description, display)
+
+    monkeypatch.setattr(runtime.approval, "request", counting_request)
+    with tool_call_context("ImplementAndJudge"):
+        result = await tool(ImplementAndJudgeParams(brief="do x"))
+    assert result.is_error is False
+    # One grant covers both the initial pass and the revision.
+    assert requests == 1
 
 
 async def test_chain_needs_work_hits_cap(runtime: Runtime, monkeypatch: pytest.MonkeyPatch) -> None:

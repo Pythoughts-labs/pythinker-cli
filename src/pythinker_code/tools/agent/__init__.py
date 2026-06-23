@@ -1082,6 +1082,14 @@ class RunAgentsTool(CallableTool2[RunAgentsParams]):
 # invent a passing verdict from freeform text.
 _IMPLEMENT_JUDGE_SUMMARY_RE = re.compile(r"^[#*\s]{0,8}SUMMARY\b.*$", re.IGNORECASE | re.MULTILINE)
 _IMPLEMENT_JUDGE_VERDICT_RE = re.compile(r"\b(PASS|NEEDS_WORK|BLOCKED)\b", re.IGNORECASE)
+# Bounds the verdict search to the SUMMARY section: the body ends at the next
+# Output-Contract heading. Without this a stray PASS/NEEDS_WORK/BLOCKED token in
+# a later section (e.g. EVIDENCE) could be mistaken for the verdict — a fail-open
+# read on a quality gate. Same heading vocabulary as the REQUIRED FIXES anchor.
+_IMPLEMENT_JUDGE_NEXT_HEADING_RE = re.compile(
+    r"^[#*\s]{0,8}(?:REQUIRED FIXES|ADVISORY|BLOCKERS|EVIDENCE|SUMMARY)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 _IMPLEMENT_JUDGE_ARTIFACT_RE = re.compile(
     r"<coding_artifact>\s*(?P<body>.*?)\s*</coding_artifact>", re.DOTALL
 )
@@ -1137,17 +1145,19 @@ class ImplementAndJudgeParams(BaseModel):
         description=(
             "How many times to re-invoke the implementer after a NEEDS_WORK "
             f"verdict. Capped at {MAX_IMPLEMENT_JUDGE_REVISIONS}; higher values "
-            "are clamped to the cap."
+            "are rejected at validation."
         ),
         ge=0,
         le=MAX_IMPLEMENT_JUDGE_REVISIONS,
     )
 
 
-def _implement_judge_fingerprint(params: ImplementAndJudgeParams, *, revision_index: int) -> str:
-    """Stable fingerprint for one chain invocation. The revision index is part
-    of the fingerprint so a retry-with-revision produces a distinct approval
-    key and never silently reuses the first call's approval.
+def _implement_judge_fingerprint(params: ImplementAndJudgeParams) -> str:
+    """Stable fingerprint for one chain invocation, keyed on the chain's params
+    only — matching ``_run_agents_fingerprint``. The fingerprint is deliberately
+    independent of the revision index: a NEEDS_WORK revision is part of the chain
+    the user already approved, so it reuses the single orchestration grant rather
+    than re-prompting mid-chain after the implementer has already written.
     """
     payload = {
         "brief": params.brief,
@@ -1157,7 +1167,6 @@ def _implement_judge_fingerprint(params: ImplementAndJudgeParams, *, revision_in
         "implementer_model": params.implementer_model,
         "judge_model": params.judge_model,
         "max_revisions": params.max_revisions,
-        "revision_index": revision_index,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1172,7 +1181,10 @@ def _parse_judge_verdict(output: str) -> tuple[str, str | None]:
     summary = _IMPLEMENT_JUDGE_SUMMARY_RE.search(output)
     if summary is None:
         return "BLOCKED", None
-    match = _IMPLEMENT_JUDGE_VERDICT_RE.search(output, summary.end())
+    tail = output[summary.end() :]
+    next_heading = _IMPLEMENT_JUDGE_NEXT_HEADING_RE.search(tail)
+    summary_body = tail[: next_heading.start()] if next_heading else tail
+    match = _IMPLEMENT_JUDGE_VERDICT_RE.search(summary_body)
     if match is None:
         return "BLOCKED", None
     token = match.group(1)
@@ -1350,13 +1362,14 @@ class ImplementAndJudgeTool(CallableTool2[ImplementAndJudgeParams]):
     ) -> tuple[bool, str]:
         """Orchestration approval for the chain. Matches RunAgents' pattern
         so a session-approved chain doesn't re-prompt per implementer / judge
-        invocation. This single orchestration approval is the chain's only
+        invocation — nor per NEEDS_WORK revision, since the fingerprint is keyed
+        on params only. This single orchestration approval is the chain's only
         approval gate: the inner ``AgentTool`` launches request no approval of
         their own, so the chain's side effects (the implementer's writes and
         shell) run under this one grant — never silently weaker than a bare
         ``Agent`` launch, but never per-call either.
         """
-        fingerprint = _implement_judge_fingerprint(params, revision_index=revision_index)
+        fingerprint = _implement_judge_fingerprint(params)
         if self._runtime.approval.is_orchestration_approved(fingerprint):
             from pythinker_code.soul.toolset import emit_current_tool_execution_started
 
