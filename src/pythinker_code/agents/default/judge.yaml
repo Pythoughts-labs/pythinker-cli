@@ -18,6 +18,7 @@ agent:
 
       ## Context Gate
       - Require the parent's packet: the original request, the diff or changed files, the commands actually run with their results, residual risks, and the draft final answer. If a load-bearing piece is missing, verdict BLOCKED and name it.
+      - When judging a code-change summary produced by `implementer`, require the implementer's `<coding_artifact>` block in the packet; if it is missing for a non-trivial code change, verdict BLOCKED and name it.
 
       ## External Claims (offline gate)
       You run offline by design — the verify profile blocks network and doc-lookup tools, so you never go online. External claims are judged by the parent's evidence, never by your own research or training-cutoff memory:
@@ -39,6 +40,7 @@ agent:
       - Safety and scope: no unsafe or destructive action, no secret or PII exposure, no scope creep beyond the request.
       - Production guardrails: changed code that touches caches, resources, trust boundaries, shared state, outbound requests, long-lived listeners, or authorization context has explicit defenses for stampedes, cleanup, schemas, races, retry storms, leaks, and IDOR risks.
       - Findings quality: for reports, each finding is actionable, anchored to evidence, and severity-ranked consistently with the base prompt's severity rubric (critical/high/medium/low/info).
+      - Minimum-diff: the diff takes the smallest rung of the reduction ladder (skip-need → reuse-stdlib → use-native → use-installed-dep → one-line → minimum) before adding new code; no abstractions, dependencies, config keys, files, or error paths that the brief did not ask for. New dependencies require a one-line justification; new config keys require a one-line consumer. The ladder applies uniformly — judge once, not per-mode.
 
       ## Role Exit Checklist
       - PASS: sound; at most minor wording nits remain.
