@@ -63,6 +63,8 @@ def test_welcome_banner_chip_shown_in_output(monkeypatch):
 def test_welcome_banner_chip_update_wins_over_whats_new(monkeypatch):
     monkeypatch.setattr(shell_module, "consume_whats_new", lambda: "0.25.0")
     monkeypatch.setattr(shell_module, "welcome_update_target", lambda: "0.26.0")
+    # No UPDATED status → falls through to "Update available".
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: None)
 
     chip = shell_module._welcome_banner_chip()
 
@@ -71,6 +73,72 @@ def test_welcome_banner_chip_update_wins_over_whats_new(monkeypatch):
     assert "Update available" in text
     assert "0.26.0" in text
     assert "What's new" not in text
+
+
+def test_welcome_banner_chip_shows_restart_after_successful_update(monkeypatch):
+    """After /update lands, the banner chip shows the restart line, not
+    'Update available' — mirroring the under-input _compute_update_notice."""
+    from pythinker_code.ui.shell.update_orchestrator import UpdateJobState, UpdateJobStatus
+
+    monkeypatch.setattr(shell_module, "consume_whats_new", lambda: None)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: "0.51.0")
+    monkeypatch.setattr(
+        shell_module,
+        "read_update_status",
+        lambda: UpdateJobStatus(
+            job_id="test",
+            state=UpdateJobState.UPDATED,
+            started_at=1.0,
+            finished_at=2.0,
+            current_version="0.50.0",
+            target_version="0.51.0",
+            result="ok",
+            message=None,
+            log_path="/dev/null",
+            pid=123,
+        ),
+    )
+
+    chip = shell_module._welcome_banner_chip()
+
+    assert chip is not None
+    text = chip.plain
+    assert "Restart to apply" in text
+    assert "0.51.0" in text
+    # Must NOT show the stale "Update available" line.
+    assert "Update available" not in text
+
+
+def test_welcome_banner_chip_shows_update_if_smoke_check_failed(monkeypatch):
+    """If the post-update smoke check failed, keep showing 'Update available'
+    — the install didn't land cleanly."""
+    from pythinker_code.ui.shell.update_orchestrator import UpdateJobState, UpdateJobStatus
+
+    monkeypatch.setattr(shell_module, "consume_whats_new", lambda: None)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: "0.51.0")
+    monkeypatch.setattr(
+        shell_module,
+        "read_update_status",
+        lambda: UpdateJobStatus(
+            job_id="test",
+            state=UpdateJobState.UPDATED,
+            started_at=1.0,
+            finished_at=2.0,
+            current_version="0.50.0",
+            target_version="0.51.0",
+            result="smoke_failed",
+            message="Updated, but smoke check did not pass: binary not executable",
+            log_path="/dev/null",
+            pid=123,
+        ),
+    )
+
+    chip = shell_module._welcome_banner_chip()
+
+    assert chip is not None
+    text = chip.plain
+    assert "Update available" in text
+    assert "Restart to apply" not in text
 
 
 def test_welcome_banner_no_chip_unchanged(monkeypatch):

@@ -2413,7 +2413,9 @@ def _value_style_for_label(label: str, level: WelcomeInfoItem.Level) -> str:
 def _welcome_banner_chip() -> Text | None:
     """One-line chip for the top-right of the welcome banner, or None.
 
-    Precedence: update-available > what's-new > nothing.
+    Precedence: update-restart > update-available > what's-new > nothing.
+    Mirrors the under-input ``_compute_update_notice`` precedence so the
+    banner and footer never disagree after a successful /update.
     ``consume_whats_new`` is always called first so the 'last seen' mark is
     written regardless of which chip wins the display.
     """
@@ -2429,6 +2431,22 @@ def _welcome_banner_chip() -> Text | None:
         return chip
 
     if update_target:
+        # ponytail: mirror _compute_update_notice — if /update already landed
+        # this session, show the restart line instead of "Update available".
+        status = read_update_status()
+        installed = (
+            status is not None
+            and status.state is UpdateJobState.UPDATED
+            and status.target_version == update_target
+            and not (status.message and status.message.startswith(SMOKE_CHECK_FAILED_PREFIX))
+        )
+        if installed:
+            from pythinker_code.constant import VERSION as current_version
+
+            return _chip(
+                f"[{_t.info}]↻ Updated {current_version} → v{update_target}. Restart to apply.[/]",
+                _t.info,
+            )
         return _chip(
             f"[{_t.warning}]↑ Update available — v{update_target} · /update[/]", _t.warning
         )

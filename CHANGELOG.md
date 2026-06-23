@@ -15,6 +15,32 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Fix OpenAI Responses requests that could still send `role="system"` after
+  switching to a newer Pythinker catalog model (gpt-5.5, gpt-5.3-codex,
+  gpt-5.3-codex-spark, or any user-defined fine-tune).** Pythinker observed
+  OpenAI returning `System messages are not allowed` on this path, but the
+  `system→developer` conversion was previously gated on the openai SDK's
+  `ResponsesModel` literal, which lags Pythinker's own model catalog. The
+  conversion now runs unconditionally in `OpenAIResponses`, so all local
+  system messages are normalized before sending. Also fixes the model-switch
+  carry-over path (`_carry_context_to_session`) whose seeded `role="system"`
+  summary message was sent verbatim on the first request after a switch.
+- **Background bash tasks (npm dev, docker run) no longer show the agent
+  verb spinner.** Pure-bash background work now shows a fixed "Running in
+  background…" label instead of "Composing…/Brewing…" verbs, which read as
+  agent activity. Mixed bash+agent background work keeps the verb spinner
+  while the agent is actively producing tokens.
+- **Quiet background tasks no longer force a 0.1s prompt repaint.** When a
+  background task has produced no output for 2 seconds, the refresh loop
+  drops to the idle 1.0s interval instead of spinning the braille marker at
+  12.5 fps — fixing the "stuck spinner" look for long-running dev servers
+  on Windows VS Code.
+- **Welcome banner no longer shows a stale "Update available" chip after a
+  successful /update.** The banner chip now mirrors the under-input notice:
+  when the update has landed this session (state=UPDATED, smoke check passed),
+  it shows "Updated X → vY. Restart to apply." instead of telling the user
+  to re-run an update that already completed.
+
 ## 0.51.0 (2026-06-22)
 
 - **Reasoning levels now match each GPT model.** The thinking selector and
