@@ -15,6 +15,38 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **`InvalidToolError` now names the failing tool and the reason.** A bad
+  tool path in `agent.yaml` (typo, missing class, or — most commonly — a
+  `pythinker` binary built before the tool was added) used to surface as a
+  bare `Invalid tools: ['pythinker_code.tools.agent:ImplementAndJudge']`
+  with the actual reason buried in the log file. The aggregated error now
+  lists each bad tool with the per-tool reason, and a class-name miss logs
+  a `Did you mean '<Closest>'?` hint. A constructor exception on one tool
+  is caught per-tool so the user gets one clear error instead of a
+  traceback. Rebuild the binary (`make build-bin`) if the new error names
+  a tool that exists in the working tree.
+- **Auto-chain `implementer` → `judge` for non-trivial scoped edits.** The new
+  `ImplementAndJudge` tool runs `implementer` once, hands the artifact to
+  `judge`, and on `NEEDS_WORK` re-invokes `implementer` once with the
+  judge's `REQUIRED FIXES` under a `## Revision brief` section before
+  re-judging. Two implementer invocations is the hard cap — a
+  still-`NEEDS_WORK` after revision surfaces the contradiction and stops.
+  Parent agents should call `ImplementAndJudge` instead of `Agent:
+  implementer` + `Agent: judge`; bare `judge` calls remain the right shape
+  for non-implementation reviews (reports, audits, severity-scored
+  findings).
+- **Judge adopts the minimum-diff rubric dimension.** Every non-trivial diff
+  the judge reviews is now checked against the reduction ladder
+  (skip-need → reuse-stdlib → use-native → use-installed-dep → one-line →
+  minimum) and the minimum-diff rubric (no abstractions, no new deps
+  without justification, no new config keys without a consumer, no
+  reformatting churn outside the changed lines). The judge applies the full
+  ladder uniformly — there is no mode switch on the judge.
+- **Bundled judge-branded skills.** `judge-minimum-diff` (the rubric
+  applied as a judge dimension) and `judge-overengineering-review` (the
+  parent-facing review checklist) ship as static default skills, replacing
+  ad-hoc prose in the system prompt with explicit, versionable content.
+
 - **Fix OpenAI Responses requests that could still send `role="system"` after
   switching to a newer Pythinker catalog model (gpt-5.5, gpt-5.3-codex,
   gpt-5.3-codex-spark, or any user-defined fine-tune).** Pythinker observed
