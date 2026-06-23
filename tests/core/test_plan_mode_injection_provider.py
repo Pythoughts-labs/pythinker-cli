@@ -107,9 +107,14 @@ class TestPlanModeInjectionProvider:
         assert len(result) == 1
         assert "Plan mode is active" in result[0].content
 
-    async def test_pending_activation_returns_full(self) -> None:
+    async def test_pending_activation_returns_full(self, tmp_path: Path) -> None:
         provider = PlanModeInjectionProvider()
-        soul = _make_soul_mock(plan_mode=True, plan_path=Path("/tmp/plan.md"), consume_pending=True)
+        # Use a path that is guaranteed not to exist so this hits the
+        # plan-absent (full reminder) branch rather than the reentry branch —
+        # the provider checks ``plan_path.exists()``, so a hardcoded /tmp path
+        # makes the test non-hermetic.
+        plan_path = tmp_path / "nonexistent-plan.md"
+        soul = _make_soul_mock(plan_mode=True, plan_path=plan_path, consume_pending=True)
 
         result = await provider.get_injections([], soul)
         assert len(result) == 1
