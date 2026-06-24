@@ -15,6 +15,14 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix a fatal "Could not resolve authentication method" crash when a GPT/ChatGPT
+  session token is invalidated mid-session (e.g. the OAuth refresh token was
+  rotated by signing in on another machine). The provider now surfaces a typed
+  401 that routes into the standard re-authentication path instead of an
+  uncaught error — prompting `/login` rather than dumping a traceback.
+- Render the `ImplementAndJudge` chain as `Implement & Judge — <brief>` in the
+  TUI instead of the raw `ImplementAndJudge(4 args: …)` argument dump.
+
 ## 0.52.0 (2026-06-23)
 
 - **`InvalidToolError` now names the failing tool and the reason.** A bad
