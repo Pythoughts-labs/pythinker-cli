@@ -38,13 +38,13 @@ dependencies = [
     # Pinned: click 8.4.x regresses pyright (`click.Option` typed partially
     # unknown, ~95 errors in `make check`). Unpin once that type regression is
     # fixed upstream. Mirrored as a Dependabot ignore in .github/dependabot.yml.
-    "click==8.3.0",
+    "click==8.3.3",
     "streamingjson==0.0.5",
-    "trafilatura==2.0.0",
+    "trafilatura==2.1.0",
     # lxml is used by trafilatura/htmldate/justext; keep pinned for binary wheels.
     "lxml==6.1.1",
     "tenacity==9.1.4",
-    "fastmcp==3.2.0",
+    "fastmcp==3.4.2",
     "pydantic==2.13.4",
     "httpx[socks]==0.28.1",
     "pythinker-host==1.0.0",
@@ -69,7 +69,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pyinstaller==6.18.0",
+    "pyinstaller==6.21.0",
     "inline-snapshot[black]>=0.31.1",
     "pyright>=1.1.409",
     "ty>=0.0.9",
