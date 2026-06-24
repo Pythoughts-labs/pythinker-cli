@@ -2884,3 +2884,46 @@ def test_successful_non_review_agent_shows_done_subline_not_prose_dump():
     assert "Done" in rendered
     assert "Refactored the auth module" not in rendered
     assert "Review Findings" not in rendered
+
+
+def test_implement_judge_renders_clean_label_not_arg_dump():
+    rendered = _render(
+        "ImplementAndJudge",
+        {
+            "brief": "Rewrite Logo.astro GSAP: matchMedia + scoped context",
+            "scope": ["apps/web/src/components/Logo.astro"],
+            "acceptance": ["typecheck passes"],
+            "base_prompt": "shared context",
+        },
+        output="ACCEPT",
+        width=120,
+    )
+    # Friendly label + brief, not the generic "Name(N args: ...)" arg dump.
+    assert "Implement & Judge" in rendered
+    assert "Rewrite Logo.astro GSAP" in rendered
+    assert "ImplementAndJudge(" not in rendered
+    assert "4 args" not in rendered
+    assert "base_prompt" not in rendered
+
+
+def test_implement_judge_running_brief_visible():
+    rendered = _render_running(
+        "ImplementAndJudge",
+        {"brief": "Add retry to the uploader"},
+        width=120,
+    )
+    assert "Implement & Judge" in rendered
+    assert "Add retry to the uploader" in rendered
+    assert "4 args" not in rendered
+
+
+def test_implement_judge_renderer_name_matches_tool_constant():
+    # The renderer's registered name must track the tool's canonical name so a
+    # rename of one without the other can't silently fall back to the generic
+    # arg-dump renderer.
+    from pythinker_code.tools.agent import IMPLEMENT_JUDGE_NAME
+    from pythinker_code.ui.shell.tool_renderers.implement_judge import (
+        IMPLEMENT_JUDGE_RENDERER,
+    )
+
+    assert IMPLEMENT_JUDGE_RENDERER.name == IMPLEMENT_JUDGE_NAME

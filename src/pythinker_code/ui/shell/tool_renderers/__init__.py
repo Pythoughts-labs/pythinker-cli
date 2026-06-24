@@ -157,6 +157,7 @@ def register_builtin_renderers() -> None:
         find,
         generic,
         grep,
+        implement_judge,
         lsp,
         mcp_resource,
         memory,
@@ -188,6 +189,7 @@ def register_builtin_renderers() -> None:
     register_tool_renderer(mcp_resource.READ_MCP_RESOURCE_RENDERER)
     register_tool_renderer(agent.AGENT_RENDERER)
     register_tool_renderer(agent.RUN_AGENTS_RENDERER)
+    register_tool_renderer(implement_judge.IMPLEMENT_JUDGE_RENDERER)
     register_tool_renderer(ask_user.ASK_USER_RENDERER)
     register_tool_renderer(think.THINK_RENDERER)
     register_tool_renderer(todo.TODO_RENDERER)

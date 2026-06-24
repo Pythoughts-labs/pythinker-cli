@@ -30,6 +30,7 @@ from openai.types.shared.reasoning_effort import ReasoningEffort
 from openai.types.shared_params.responses_model import ResponsesModel
 
 from pythinker_core.chat_provider import (
+    APIStatusError,
     ChatProvider,
     RetryableChatProvider,
     StreamedMessagePart,
@@ -192,6 +193,21 @@ class OpenAIResponses:
             return OpenAIResponsesStreamedMessage(response)
         except (OpenAIError, httpx.HTTPError) as e:
             raise convert_error(e) from e
+        except TypeError as e:
+            # The OpenAI SDK raises a bare TypeError from `_validate_headers` at
+            # request-build time when no credential can be resolved. This happens
+            # when a live client's `api_key` is blanked mid-session — e.g. an OAuth
+            # refresh token rejected server-side after being rotated on another
+            # machine. Surface it as a typed 401 so the caller's refresh ->
+            # re-authenticate recovery engages instead of crashing the session.
+            # Gate on the empty key so unrelated TypeErrors still propagate.
+            if not self._client.api_key:
+                raise APIStatusError(
+                    401,
+                    "OpenAI session credential is missing or expired "
+                    "(no API key or Authorization header); re-authenticate with /login.",
+                ) from e
+            raise
 
     def on_retryable_error(self, error: BaseException) -> bool:
         old_client = self._client
