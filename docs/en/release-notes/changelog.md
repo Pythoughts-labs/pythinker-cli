@@ -17,6 +17,18 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.54.0 (2026-06-30)
+
+- **New `Workflow` tool for deterministic multi-agent orchestration.** The default
+  agent can now author and run a JavaScript-like script that fans work out across
+  subagents with `agent()`, `parallel()`, and `pipeline()` primitives, then
+  synthesizes the results — instead of manually chaining one-off subagent calls.
+  Runs stream live progress (phases, per-agent status) to the TUI, support
+  structured-schema output per agent call, enforce an optional token budget, and
+  require a single up-front approval rather than one per spawned subagent.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.54.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+
 ## 0.53.0 (2026-06-23)
 
 - **GPT/ChatGPT session re-authentication crash fixed.** A fatal "Could not
