@@ -1,6 +1,6 @@
 """Integration test proving Workflow's cancellation tears down a real child agent.
 
-``test_cancellation_marks_running_skipped_and_reraises`` in
+``test_cancellation_marks_running_cancelled_and_reraises`` in
 ``tests/tools/test_workflow_engine.py`` only proves the engine's own bookkeeping with a
 fake ``agent_runner``. This test exercises the real spawn layer one level up: cancelling
 the ``Workflow`` tool's task must propagate through ``AgentTool`` ->
