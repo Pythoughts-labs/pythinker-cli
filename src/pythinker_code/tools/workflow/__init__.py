@@ -145,7 +145,7 @@ class Workflow(CallableTool2[Params]):
         if result.agent_count == 0:
             return ToolError(
                 message="workflow scripts must call agent() at least once; this workflow "
-                "declared phases but ran no subagents.",
+                "ran no subagents.",
                 brief="No agents run",
             )
 
