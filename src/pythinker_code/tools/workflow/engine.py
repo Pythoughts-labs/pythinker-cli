@@ -113,8 +113,10 @@ def _validate_meta(raw: Any) -> WorkflowMeta:
         raise WorkflowScriptError("meta.phases must be a list")
     phases: list[WorkflowMetaPhase] = []
     for entry in cast(list[Any], phases_raw):
+        if not isinstance(entry, dict):
+            raise WorkflowScriptError("each meta phase must have a title string")
         entry_d = cast(dict[str, Any], entry)
-        if not isinstance(entry, dict) or not isinstance(entry_d.get("title"), str):
+        if not isinstance(entry_d.get("title"), str):
             raise WorkflowScriptError("each meta phase must have a title string")
         phases.append(
             WorkflowMetaPhase(entry_d["title"], entry_d.get("detail"), entry_d.get("model"))

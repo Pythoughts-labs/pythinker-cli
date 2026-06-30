@@ -31,6 +31,9 @@ def test_parse_accepts_valid_script():
         ('meta = {"name": "n", "description": "d"}\nimport os\n', "not allowed"),
         ('meta = {"name": "n", "description": "d"}\nx = random.random()\n', "deterministic"),
         ('meta = {"name": "n", "description": "d"}\nx = time.time()\n', "deterministic"),
+        ('meta = {"name": "n", "description": "d", "when_to_use": 42}\nawait agent("x")\n', "when_to_use"),
+        ('meta = {"name": "n", "description": "d", "phases": "oops"}\nawait agent("x")\n', "phases"),
+        ('meta = {"name": "n", "description": "d", "phases": [42]}\nawait agent("x")\n', "title"),
     ],
 )
 def test_parse_rejects(script, fragment):
