@@ -49,8 +49,8 @@ class Params(BaseModel):
         description=(
             "Optional cap on estimated total tokens spent by spawned subagents. When set, "
             "the script's `budget.remaining()` reaches 0 once the cap is hit and further "
-            "agent() calls raise inside the engine: within parallel(), that one call is "
-            "caught and returns None (logged), but a bare `await agent(...)` propagates "
+            "agent() calls raise inside the engine: within parallel()/pipeline(), that one "
+            "call is caught and returns None (logged), but a bare `await agent(...)` propagates "
             "and fails the whole workflow run. Leave unset for no cap (budget.remaining() "
             "stays unbounded)."
         ),
