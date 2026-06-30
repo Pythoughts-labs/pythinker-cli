@@ -24,6 +24,7 @@ agent:
     - "pythinker_code.tools.worktree:ExitWorktree"
     - "pythinker_code.tools.goal:UpdateGoal"
     - "pythinker_code.tools.progress:Progress"
+    - "pythinker_code.tools.workflow:Workflow"
     - "pythinker_code.tools.suggest:Suggest"
     - "pythinker_code.tools.memory:Memory"
     - "pythinker_code.tools.recall:Recall"

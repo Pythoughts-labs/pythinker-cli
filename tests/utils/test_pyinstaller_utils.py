@@ -281,6 +281,10 @@ def test_pyinstaller_datas():
             "pythinker_code/tools/web",
         ),
         (
+            "src/pythinker_code/tools/workflow/description.md",
+            "pythinker_code/tools/workflow",
+        ),
+        (
             "src/pythinker_code/tools/worktree/enter_worktree.md",
             "pythinker_code/tools/worktree",
         ),
@@ -373,6 +377,9 @@ def test_pyinstaller_hiddenimports():
             "pythinker_code.tools.web._allowlist",
             "pythinker_code.tools.web.fetch",
             "pythinker_code.tools.web.search",
+            "pythinker_code.tools.workflow",
+            "pythinker_code.tools.workflow.display",
+            "pythinker_code.tools.workflow.engine",
             "pythinker_code.tools.worktree",
             "setproctitle",
         ]
