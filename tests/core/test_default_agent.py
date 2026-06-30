@@ -318,6 +318,7 @@ async def test_default_agent_background_bash_guardrails(runtime: Runtime):
             "ExitWorktree",
             "UpdateGoal",
             "Progress",
+            "Workflow",
             "Suggest",
             "Memory",
             "Recall",

@@ -12,10 +12,7 @@ def test_workflow_registered_in_default_spec():
 
     import yaml
 
-    spec_path = (
-        Path(__file__).resolve().parents[2]
-        / "src/pythinker_code/agents/default/agent.yaml"
-    )
+    spec_path = Path(__file__).resolve().parents[2] / "src/pythinker_code/agents/default/agent.yaml"
     spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
     tools = spec["agent"]["tools"]
     assert "pythinker_code.tools.workflow:Workflow" in tools

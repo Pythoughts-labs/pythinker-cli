@@ -5,11 +5,11 @@ from pythinker_code.tools.workflow.engine import (
     parse_workflow_script,
 )
 
-GOOD = '''meta = {"name": "inspect", "description": "Inspect repo", "phases": [{"title": "Scan"}]}
+GOOD = """meta = {"name": "inspect", "description": "Inspect repo", "phases": [{"title": "Scan"}]}
 phase("Scan")
 inventory = await agent("Inspect the repository.", {"label": "repo inventory"})
 return {"inventory": inventory}
-'''
+"""
 
 
 def test_parse_accepts_valid_script():
@@ -31,8 +31,14 @@ def test_parse_accepts_valid_script():
         ('meta = {"name": "n", "description": "d"}\nimport os\n', "not allowed"),
         ('meta = {"name": "n", "description": "d"}\nx = random.random()\n', "deterministic"),
         ('meta = {"name": "n", "description": "d"}\nx = time.time()\n', "deterministic"),
-        ('meta = {"name": "n", "description": "d", "when_to_use": 42}\nawait agent("x")\n', "when_to_use"),
-        ('meta = {"name": "n", "description": "d", "phases": "oops"}\nawait agent("x")\n', "phases"),
+        (
+            'meta = {"name": "n", "description": "d", "when_to_use": 42}\nawait agent("x")\n',
+            "when_to_use",
+        ),
+        (
+            'meta = {"name": "n", "description": "d", "phases": "oops"}\nawait agent("x")\n',
+            "phases",
+        ),
         ('meta = {"name": "n", "description": "d", "phases": [42]}\nawait agent("x")\n', "title"),
     ],
 )

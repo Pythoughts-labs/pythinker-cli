@@ -15,6 +15,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Add a built-in `Workflow` tool that runs a deterministic Python script orchestrating
+  multiple subagents via `agent()`, `parallel()`, and `pipeline()`, with live progress,
+  structured-schema output, and one-shot approval.
+
 ## 0.53.0 (2026-06-23)
 
 - **GPT/ChatGPT session re-authentication crash fixed.** A fatal "Could not

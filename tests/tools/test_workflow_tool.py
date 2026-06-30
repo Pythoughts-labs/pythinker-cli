@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import json
+from typing import cast
 
 import pytest
 
+from pythinker_code.soul.agent import Runtime
 from pythinker_code.tools.workflow import Workflow
 
 
@@ -76,7 +80,7 @@ def make_tool(monkeypatch, *, responder, approved=True, role="root"):
     monkeypatch.setattr(mod, "AgentTool", lambda rt: FakeAgentTool(responder))
     # Suppress wire emission (no Wire ContextVar in a unit test).
     monkeypatch.setattr(mod, "wire_send", lambda *a, **k: None)
-    tool = Workflow(runtime)
+    tool = Workflow(cast(Runtime, runtime))
     return tool, approval
 
 
@@ -90,6 +94,7 @@ async def test_runs_and_returns_result(monkeypatch):
     )
     res = await tool(tool.params(script=script))
     assert not res.is_error
+    assert isinstance(res.output, str)
     assert json.loads(res.output) == {"r": "SUMMARY_TEXT"}
     assert approval.requests == 1  # approval requested exactly once
 
@@ -141,5 +146,6 @@ async def test_schema_validation_and_retry(monkeypatch):
         "return r\n"
     )
     res = await tool(tool.params(script=script))
+    assert isinstance(res.output, str)
     assert json.loads(res.output) == {"paths": ["a.py"]}
     assert attempts["n"] == 2  # retried once
