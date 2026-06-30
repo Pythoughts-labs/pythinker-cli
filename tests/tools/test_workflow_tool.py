@@ -129,6 +129,54 @@ async def test_no_agent_call_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_token_budget_param_reaches_run_workflow(monkeypatch):
+    captured: dict[str, object] = {}
+    import pythinker_code.tools.workflow as mod
+
+    real_run_workflow = mod.run_workflow
+
+    async def spy_run_workflow(*args, **kwargs):
+        captured.update(kwargs)
+        return await real_run_workflow(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "run_workflow", spy_run_workflow)
+
+    tool, _ = make_tool(monkeypatch, responder=lambda p: "ok")
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        'r = await agent("x", {"label": "L"})\n'
+        'return {"r": r}\n'
+    )
+    res = await tool(tool.params(script=script, token_budget=12345))
+    assert not res.is_error
+    assert captured.get("token_budget") == 12345
+
+
+@pytest.mark.asyncio
+async def test_token_budget_defaults_to_none(monkeypatch):
+    captured: dict[str, object] = {}
+    import pythinker_code.tools.workflow as mod
+
+    real_run_workflow = mod.run_workflow
+
+    async def spy_run_workflow(*args, **kwargs):
+        captured.update(kwargs)
+        return await real_run_workflow(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "run_workflow", spy_run_workflow)
+
+    tool, _ = make_tool(monkeypatch, responder=lambda p: "ok")
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        'r = await agent("x", {"label": "L"})\n'
+        'return {"r": r}\n'
+    )
+    res = await tool(tool.params(script=script))
+    assert not res.is_error
+    assert captured.get("token_budget") is None
+
+
+@pytest.mark.asyncio
 async def test_schema_validation_and_retry(monkeypatch):
     attempts = {"n": 0}
 

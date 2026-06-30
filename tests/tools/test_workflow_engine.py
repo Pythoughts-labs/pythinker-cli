@@ -159,7 +159,7 @@ async def test_budget_check_does_not_race_past_semaphore():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_marks_running_skipped_and_reraises():
+async def test_cancellation_marks_running_cancelled_and_reraises():
     runner, _ = make_runner(delay=10.0)
     skipped: list[str] = []
     started: list[str] = []

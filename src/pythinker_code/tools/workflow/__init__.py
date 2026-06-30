@@ -44,6 +44,18 @@ class Params(BaseModel):
         default=None,
         description="Optional JSON value exposed to the script as the global `args`.",
     )
+    token_budget: int | None = Field(
+        default=None,
+        description=(
+            "Optional cap on estimated total tokens spent by spawned subagents. When set, "
+            "the script's `budget.remaining()` reaches 0 once the cap is hit and further "
+            "agent() calls raise inside the engine: within parallel(), that one call is "
+            "caught and returns None (logged), but a bare `await agent(...)` propagates "
+            "and fails the whole workflow run. Leave unset for no cap (budget.remaining() "
+            "stays unbounded)."
+        ),
+        ge=1,
+    )
 
 
 class Workflow(CallableTool2[Params]):
@@ -117,6 +129,7 @@ class Workflow(CallableTool2[Params]):
                 args=params.args,
                 cwd=str(self._runtime.work_dir),
                 concurrency=max(1, self._runtime.config.background.max_running_tasks),
+                token_budget=params.token_budget,
                 hooks=hooks,
             )
         except WorkflowScriptError as exc:
