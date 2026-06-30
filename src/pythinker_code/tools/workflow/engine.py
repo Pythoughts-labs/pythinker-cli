@@ -378,9 +378,17 @@ async def run_workflow(
         task_prompt = _require_str(prompt, "agent prompt")
         opts = _normalize_options(options)
         assigned_phase = opts.phase or state["current_phase"]
-        if token_budget is not None and budget.remaining() <= 0:
-            raise WorkflowRuntimeError("workflow token budget exhausted")
         async with semaphore:
+            # Checked AFTER acquiring the semaphore, not before: agent() calls
+            # dispatched together (e.g. via parallel()) all reach this point
+            # before any of them has recorded real spend, so the check would
+            # otherwise let every dispatched agent through regardless of
+            # concurrency, deferring rejection past the budget. Gating inside
+            # the semaphore re-evaluates state["spent"] once a slot actually
+            # frees, bounding the worst-case overshoot to one concurrency
+            # batch instead of the whole dispatched set.
+            if token_budget is not None and budget.remaining() <= 0:
+                raise WorkflowRuntimeError("workflow token budget exhausted")
             state["agent_count"] += 1
             label = (opts.label or "").strip() or _default_label(
                 assigned_phase, state["agent_count"]

@@ -7,6 +7,7 @@ from pythinker_code.tools.workflow.engine import (
     AgentOptions,
     RunWorkflowHooks,
     WorkflowRuntimeError,
+    _estimate_tokens,
     run_workflow,
 )
 
@@ -29,7 +30,7 @@ async def test_single_agent_and_return():
     script = (
         'meta = {"name": "n", "description": "d"}\n'
         'r = await agent("hello", {"label": "L"})\n'
-        "return {\"r\": r}\n"
+        'return {"r": r}\n'
     )
     out = await run_workflow(script, agent_runner=runner, cwd=".")
     assert out.result == {"r": "result:hello"}
@@ -121,6 +122,40 @@ async def test_unawaited_coroutine_in_result_raises():
     with pytest.raises(WorkflowRuntimeError) as exc:
         await run_workflow(script, agent_runner=runner, cwd=".")
     assert "await" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_budget_check_does_not_race_past_semaphore():
+    # Regression guard: agent() calls dispatched together (via parallel()) all
+    # reach the budget check before any of them has recorded real spend. If the
+    # check runs before the semaphore is acquired, every dispatched agent sees
+    # the same stale state["spent"] and passes, regardless of `concurrency` —
+    # so a 6-item parallel() with a budget for ~1 result would let all 6 run.
+    # The check must be re-evaluated once a semaphore slot is actually granted,
+    # bounding the overshoot to one concurrency batch instead of every item.
+    result_payload = "x" * 200
+    one_result_cost = _estimate_tokens(result_payload)
+
+    async def runner(prompt: str, opts: AgentOptions) -> str:
+        await asyncio.sleep(0.01)  # force a real suspension so calls overlap
+        return result_payload
+
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        'rs = await parallel([agent("a"), agent("b"), agent("c"), '
+        'agent("d"), agent("e"), agent("f")])\n'
+        "return rs\n"
+    )
+    out = await run_workflow(
+        script,
+        agent_runner=runner,
+        cwd=".",
+        concurrency=2,
+        token_budget=one_result_cost + 1,
+    )
+    succeeded = [r for r in out.result if r == result_payload]
+    assert len(succeeded) <= 2  # bounded by concurrency, not by the 6 dispatched items
+    assert len(succeeded) >= 1  # the first batch must still get through
 
 
 @pytest.mark.asyncio
