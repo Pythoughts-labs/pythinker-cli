@@ -4,14 +4,14 @@ from pythinker_code.tools.workflow.display import WorkflowSnapshot, render_progr
 def test_snapshot_lifecycle_and_render():
     snap = WorkflowSnapshot(name="inspect", description="d")
     snap.add_phase("Scan")
-    a = snap.start_agent("repo inventory", "Scan")
+    a = snap.start_agent(1, "repo inventory", "Scan")
     assert a.status == "running"
     assert snap.running_count == 1
-    snap.end_agent("repo inventory")
+    snap.end_agent(1)
     assert snap.done_count == 1 and snap.running_count == 0
 
     snap.add_phase("Analyze")
-    snap.start_agent("modules", "Analyze")
+    snap.start_agent(2, "modules", "Analyze")
     text = render_progress(snap)
     assert "Workflow: inspect" in text
     assert "Scan" in text and "Analyze" in text
@@ -20,9 +20,43 @@ def test_snapshot_lifecycle_and_render():
 
 def test_mark_running_skipped():
     snap = WorkflowSnapshot(name="n", description="d")
-    snap.start_agent("a", None)
-    snap.start_agent("b", None)
-    snap.end_agent("a")
+    snap.start_agent(1, "a", None)
+    snap.start_agent(2, "b", None)
+    snap.end_agent(1)
     snap.mark_running_skipped()
     assert snap.done_count == 1
     assert snap.skipped_count == 1
+
+
+def test_end_agent_does_not_swap_status_on_duplicate_labels():
+    # Regression guard for CodeRabbit finding: two concurrent agents sharing the
+    # same explicit label must not have their completion statuses swapped when
+    # the SECOND-started one finishes (errors) before the FIRST-started one.
+    snap = WorkflowSnapshot(name="n", description="d")
+    first = snap.start_agent(1, "scan", None)
+    second = snap.start_agent(2, "scan", None)
+    snap.end_agent(2, error="boom")  # the second-started agent fails first
+    assert first.status == "running"
+    assert second.status == "error"
+    snap.end_agent(1)  # the first-started agent finishes after
+    assert first.status == "done"
+    assert second.status == "error"
+
+
+def test_render_progress_shows_recent_log_messages():
+    snap = WorkflowSnapshot(name="n", description="d")
+    snap.logs.append("first checkpoint")
+    snap.logs.append("second checkpoint")
+    text = render_progress(snap)
+    assert "first checkpoint" in text
+    assert "second checkpoint" in text
+
+
+def test_render_progress_truncates_to_max_logs():
+    snap = WorkflowSnapshot(name="n", description="d")
+    for i in range(5):
+        snap.logs.append(f"log {i}")
+    text = render_progress(snap, max_logs=2)
+    assert "log 3" in text
+    assert "log 4" in text
+    assert "log 0" not in text

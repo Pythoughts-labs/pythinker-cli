@@ -210,20 +210,27 @@ class AgentOptions:
 
 
 class AgentStartEvent:
-    __slots__ = ("label", "phase", "prompt")
+    __slots__ = ("agent_id", "label", "phase", "prompt")
 
-    def __init__(self, label: str, phase: str | None, prompt: str) -> None:
+    def __init__(self, agent_id: int, label: str, phase: str | None, prompt: str) -> None:
+        self.agent_id = agent_id
         self.label = label
         self.phase = phase
         self.prompt = prompt
 
 
 class AgentEndEvent:
-    __slots__ = ("label", "phase", "result", "error")
+    __slots__ = ("agent_id", "label", "phase", "result", "error")
 
     def __init__(
-        self, label: str, phase: str | None, result: Any, error: str | None = None
+        self,
+        agent_id: int,
+        label: str,
+        phase: str | None,
+        result: Any,
+        error: str | None = None,
     ) -> None:
+        self.agent_id = agent_id
         self.label = label
         self.phase = phase
         self.result = result
@@ -270,18 +277,28 @@ def _require_str(value: Any, name: str) -> str:
     return value
 
 
+def _optional_str_field(d: dict[str, Any], name: str) -> str | None:
+    value = d.get(name)
+    if value is not None and not isinstance(value, str):
+        raise WorkflowRuntimeError(f"agent() option '{name}' must be a string or None")
+    return value
+
+
 def _normalize_options(value: Any) -> AgentOptions:
     if value is None:
         return AgentOptions()
     if not isinstance(value, dict):
         raise WorkflowRuntimeError("agent options must be a dict")
     d = cast(dict[str, Any], value)
+    schema = d.get("schema")
+    if schema is not None and not isinstance(schema, dict):
+        raise WorkflowRuntimeError("agent() option 'schema' must be a dict or None")
     return AgentOptions(
-        label=d.get("label"),
-        phase=d.get("phase"),
-        schema=d.get("schema"),
-        model=d.get("model"),
-        agent_type=d.get("agent_type") or d.get("agentType"),
+        label=_optional_str_field(d, "label"),
+        phase=_optional_str_field(d, "phase"),
+        schema=cast("dict[str, Any] | None", schema),
+        model=_optional_str_field(d, "model"),
+        agent_type=_optional_str_field(d, "agent_type") or _optional_str_field(d, "agentType"),
     )
 
 
@@ -390,29 +407,35 @@ async def run_workflow(
             if token_budget is not None and budget.remaining() <= 0:
                 raise WorkflowRuntimeError("workflow token budget exhausted")
             state["agent_count"] += 1
-            label = (opts.label or "").strip() or _default_label(
-                assigned_phase, state["agent_count"]
-            )
+            # Captured into a local now, before the first `await` below: other
+            # concurrently-dispatched agent() calls can advance
+            # state["agent_count"] further while this call awaits
+            # agent_runner, so re-reading the shared counter later would pick
+            # up the wrong (now-higher) value.
+            agent_id = state["agent_count"]
+            label = (opts.label or "").strip() or _default_label(assigned_phase, agent_id)
             opts.label = label
             opts.phase = assigned_phase
             if hooks.on_agent_start:
-                hooks.on_agent_start(AgentStartEvent(label, assigned_phase, task_prompt))
+                hooks.on_agent_start(AgentStartEvent(agent_id, label, assigned_phase, task_prompt))
             try:
                 result = await agent_runner(task_prompt, opts)
             except asyncio.CancelledError:
                 if hooks.on_agent_end:
                     hooks.on_agent_end(
-                        AgentEndEvent(label, assigned_phase, None, error="cancelled")
+                        AgentEndEvent(agent_id, label, assigned_phase, None, error="cancelled")
                     )
                 raise
             except Exception as exc:  # noqa: BLE001 - reference parity: branch fails to None
                 log(f"agent {label} failed: {exc}")
                 if hooks.on_agent_end:
-                    hooks.on_agent_end(AgentEndEvent(label, assigned_phase, None, error=str(exc)))
+                    hooks.on_agent_end(
+                        AgentEndEvent(agent_id, label, assigned_phase, None, error=str(exc))
+                    )
                 return None
             state["spent"] += _estimate_tokens(result)
             if hooks.on_agent_end:
-                hooks.on_agent_end(AgentEndEvent(label, assigned_phase, result))
+                hooks.on_agent_end(AgentEndEvent(agent_id, label, assigned_phase, result))
             return result
 
     async def parallel(items: Sequence[Any]) -> list[Any]:

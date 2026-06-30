@@ -7,6 +7,7 @@ import pytest
 
 from pythinker_code.soul.agent import Runtime
 from pythinker_code.tools.workflow import Workflow
+from pythinker_code.wire.types import ProgressNote
 
 
 class FakeApproval:
@@ -75,11 +76,11 @@ def make_tool(monkeypatch, *, responder, approved=True, role="root"):
 
     runtime = FakeRuntime()
     # Patch AgentTool so the Workflow tool wires our fake instead of the real one.
-    import pythinker_code.tools.workflow as mod
-
-    monkeypatch.setattr(mod, "AgentTool", lambda rt: FakeAgentTool(responder))
+    monkeypatch.setattr(
+        "pythinker_code.tools.workflow.AgentTool", lambda rt: FakeAgentTool(responder)
+    )
     # Suppress wire emission (no Wire ContextVar in a unit test).
-    monkeypatch.setattr(mod, "wire_send", lambda *a, **k: None)
+    monkeypatch.setattr("pythinker_code.tools.workflow.wire_send", lambda *a, **k: None)
     tool = Workflow(cast(Runtime, runtime))
     return tool, approval
 
@@ -129,43 +130,29 @@ async def test_no_agent_call_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_token_budget_param_reaches_run_workflow(monkeypatch):
-    captured: dict[str, object] = {}
-    import pythinker_code.tools.workflow as mod
-
-    real_run_workflow = mod.run_workflow
-
-    async def spy_run_workflow(*args, **kwargs):
-        captured.update(kwargs)
-        return await real_run_workflow(*args, **kwargs)
-
-    monkeypatch.setattr(mod, "run_workflow", spy_run_workflow)
-
-    tool, _ = make_tool(monkeypatch, responder=lambda p: "ok")
+async def test_token_budget_exhausted_fails_the_workflow(monkeypatch):
+    # Drives the tool through its public ToolOk/ToolError surface rather than
+    # spying on run_workflow's internal kwargs: a tiny token_budget is exhausted
+    # by the first agent() call's estimated spend, so the second (bare, not
+    # inside parallel()) agent() call propagates "budget exhausted" and fails
+    # the whole tool call.
+    tool, _ = make_tool(monkeypatch, responder=lambda p: "x" * 200)
     script = (
         'meta = {"name": "n", "description": "d"}\n'
-        'r = await agent("x", {"label": "L"})\n'
-        'return {"r": r}\n'
+        'r1 = await agent("x", {"label": "L1"})\n'
+        'r2 = await agent("y", {"label": "L2"})\n'
+        'return {"r1": r1, "r2": r2}\n'
     )
-    res = await tool(tool.params(script=script, token_budget=12345))
-    assert not res.is_error
-    assert captured.get("token_budget") == 12345
+    res = await tool(tool.params(script=script, token_budget=1))
+    assert res.is_error
+    assert "budget" in res.message.lower()
 
 
 @pytest.mark.asyncio
-async def test_token_budget_defaults_to_none(monkeypatch):
-    captured: dict[str, object] = {}
-    import pythinker_code.tools.workflow as mod
-
-    real_run_workflow = mod.run_workflow
-
-    async def spy_run_workflow(*args, **kwargs):
-        captured.update(kwargs)
-        return await real_run_workflow(*args, **kwargs)
-
-    monkeypatch.setattr(mod, "run_workflow", spy_run_workflow)
-
-    tool, _ = make_tool(monkeypatch, responder=lambda p: "ok")
+async def test_token_budget_unset_allows_large_results(monkeypatch):
+    # No token_budget set: even a large agent() result must not trip any cap,
+    # proving the default is genuinely unbounded (observable via ToolOk).
+    tool, _ = make_tool(monkeypatch, responder=lambda p: "x" * 5000)
     script = (
         'meta = {"name": "n", "description": "d"}\n'
         'r = await agent("x", {"label": "L"})\n'
@@ -173,7 +160,22 @@ async def test_token_budget_defaults_to_none(monkeypatch):
     )
     res = await tool(tool.params(script=script))
     assert not res.is_error
-    assert captured.get("token_budget") is None
+
+
+@pytest.mark.asyncio
+async def test_log_calls_reach_the_progress_note(monkeypatch):
+    tool, _ = make_tool(monkeypatch, responder=lambda p: "ok")
+    notes: list[ProgressNote] = []
+    monkeypatch.setattr("pythinker_code.tools.workflow.wire_send", notes.append)
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        'log("custom checkpoint reached")\n'
+        'r = await agent("x", {"label": "L"})\n'
+        'return {"r": r}\n'
+    )
+    res = await tool(tool.params(script=script))
+    assert not res.is_error
+    assert any("custom checkpoint reached" in note.body for note in notes)
 
 
 @pytest.mark.asyncio

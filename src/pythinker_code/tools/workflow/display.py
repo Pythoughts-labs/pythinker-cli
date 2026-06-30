@@ -37,15 +37,19 @@ class WorkflowSnapshot:
         if title not in self.phases:
             self.phases.append(title)
 
-    def start_agent(self, label: str, phase: str | None) -> AgentSnapshot:
+    def start_agent(self, agent_id: int, label: str, phase: str | None) -> AgentSnapshot:
         self.add_phase(phase)
-        agent = AgentSnapshot(len(self.agents) + 1, label, phase)
+        agent = AgentSnapshot(agent_id, label, phase)
         self.agents.append(agent)
         return agent
 
-    def end_agent(self, label: str, *, error: str | None = None) -> None:
-        for agent in reversed(self.agents):
-            if agent.label == label and agent.status == "running":
+    def end_agent(self, agent_id: int, *, error: str | None = None) -> None:
+        # Matched by the engine's stable dispatch id, not by label: two
+        # concurrent agents may share the same caller-supplied label, and a
+        # label-based reverse search can mark the wrong entry done/error if
+        # they finish out of dispatch order.
+        for agent in self.agents:
+            if agent.id == agent_id and agent.status == "running":
                 agent.status = "error" if error else "done"
                 return
 
@@ -71,7 +75,7 @@ class WorkflowSnapshot:
         return sum(1 for a in self.agents if a.status == "skipped")
 
 
-def render_progress(snapshot: WorkflowSnapshot, max_agents: int = 6) -> str:
+def render_progress(snapshot: WorkflowSnapshot, max_agents: int = 6, max_logs: int = 3) -> str:
     state = ""
     if snapshot.error_count:
         state = f", {snapshot.error_count} errors"
@@ -96,4 +100,6 @@ def render_progress(snapshot: WorkflowSnapshot, max_agents: int = 6) -> str:
     unphased = [a for a in snapshot.agents if a.id not in rendered]
     for agent in unphased[-max_agents:]:
         lines.append(f"    #{agent.id} {_STATUS_ICON.get(agent.status, '?')} {agent.label}")
+    for message in snapshot.logs[-max_logs:]:
+        lines.append(f"  log: {message}")
     return "\n".join(lines)

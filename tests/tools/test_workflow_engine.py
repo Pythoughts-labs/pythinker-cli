@@ -125,6 +125,75 @@ async def test_unawaited_coroutine_in_result_raises():
 
 
 @pytest.mark.asyncio
+async def test_malformed_agent_option_types_raise_workflow_runtime_error():
+    # Regression guard: a malformed agent() option (e.g. a non-string label)
+    # must surface as a clean WorkflowRuntimeError, not an internal
+    # AttributeError leaking from deep inside the engine.
+    runner, _ = make_runner()
+    script = (
+        'meta = {"name": "n", "description": "d"}\nr = await agent("x", {"label": 1})\nreturn r\n'
+    )
+    with pytest.raises(WorkflowRuntimeError) as exc:
+        await run_workflow(script, agent_runner=runner, cwd=".")
+    assert "label" in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options, bad_field",
+    [
+        ({"phase": 1}, "phase"),
+        ({"model": 1}, "model"),
+        ({"agent_type": 1}, "agent_type"),
+        ({"schema": "not-a-dict"}, "schema"),
+    ],
+)
+async def test_malformed_agent_option_fields_raise_workflow_runtime_error(options, bad_field):
+    runner, _ = make_runner()
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        f"r = await agent('x', {options!r})\n"
+        "return r\n"
+    )
+    with pytest.raises(WorkflowRuntimeError) as exc:
+        await run_workflow(script, agent_runner=runner, cwd=".")
+    assert bad_field in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_labels_do_not_swap_completion_status():
+    # Regression guard for a CodeRabbit finding: two agent() calls dispatched
+    # with the SAME explicit label, where the second-started one finishes
+    # first (errors), must not have their on_agent_end statuses swapped.
+    async def runner(prompt: str, opts: AgentOptions) -> str:
+        if prompt == "second":
+            raise RuntimeError("boom")  # second-started agent fails immediately
+        await asyncio.sleep(0.05)  # first-started agent finishes later
+        return "ok"
+
+    statuses: dict[int, str | None] = {}
+
+    def on_agent_end(event):
+        statuses[event.agent_id] = event.error
+
+    script = (
+        'meta = {"name": "n", "description": "d"}\n'
+        'rs = await parallel([agent("first", {"label": "scan"}), '
+        'agent("second", {"label": "scan"})])\n'
+        "return rs\n"
+    )
+    out = await run_workflow(
+        script,
+        agent_runner=runner,
+        cwd=".",
+        concurrency=4,
+        hooks=RunWorkflowHooks(on_agent_end=on_agent_end),
+    )
+    assert out.result == ["ok", None]
+    assert statuses == {1: None, 2: "boom"}  # id 1 (first) succeeded, id 2 (second) errored
+
+
+@pytest.mark.asyncio
 async def test_budget_check_does_not_race_past_semaphore():
     # Regression guard: agent() calls dispatched together (via parallel()) all
     # reach the budget check before any of them has recorded real spend. If the

@@ -103,20 +103,24 @@ class Workflow(CallableTool2[Params]):
         def emit() -> None:
             wire_send(ProgressNote(title=f"Workflow {meta.name}", body=render_progress(snapshot)))
 
+        def on_log(message: str) -> None:
+            snapshot.logs.append(message)
+            emit()
+
         def on_phase(title: str) -> None:
             snapshot.add_phase(title)
             emit()
 
         def on_agent_start(event: AgentStartEvent) -> None:
-            snapshot.start_agent(event.label, event.phase)
+            snapshot.start_agent(event.agent_id, event.label, event.phase)
             emit()
 
         def on_agent_end(event: AgentEndEvent) -> None:
-            snapshot.end_agent(event.label, error=event.error)
+            snapshot.end_agent(event.agent_id, error=event.error)
             emit()
 
         hooks = RunWorkflowHooks(
-            on_log=lambda _m: emit(),
+            on_log=on_log,
             on_phase=on_phase,
             on_agent_start=on_agent_start,
             on_agent_end=on_agent_end,

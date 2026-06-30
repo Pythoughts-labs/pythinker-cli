@@ -39,7 +39,7 @@ class _RecordingWire:
 
 @pytest.mark.asyncio
 async def test_workflow_cancel_tears_down_real_child_through_agent_tool(runtime, monkeypatch):
-    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", lambda: _RecordingWire())
+    monkeypatch.setattr("pythinker_code.soul.get_wire_or_none", _RecordingWire)
     runtime.labor_market.add_builtin_type(
         AgentTypeDefinition(
             name="coder",
