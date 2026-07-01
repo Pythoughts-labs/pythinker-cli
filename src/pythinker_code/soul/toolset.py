@@ -818,6 +818,16 @@ class PythinkerToolset:
         """Whether a cross-step duplicate was blocked in the current step."""
         return self._dedup_triggered
 
+    @property
+    def consecutive_repeat_count(self) -> int:
+        """Length of the current streak of identical-argument tool calls.
+
+        Tracked independently of each call's reported success/failure, so it
+        still catches a degenerate loop even if a tool falsely reports success
+        on a call that made no progress.
+        """
+        return self._consecutive_count
+
     def handle(self, tool_call: ToolCall) -> HandleResult:
         token = current_tool_call.set(tool_call)
         try:

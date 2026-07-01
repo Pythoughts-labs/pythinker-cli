@@ -586,6 +586,11 @@ class LoopControl(BaseModel):
     call failed (a degenerate stuck loop), instead of continuing to
     ``max_steps_per_turn``. The turn ends with a ``stuck`` outcome and a handoff
     summary of what was tried. ``0`` disables the backstop. Default: 8."""
+    max_consecutive_identical_calls: int = Field(default=10, ge=0)
+    """Yield to the user after this many consecutive tool calls with identical
+    arguments, even if each call reports success. Tracked independently of
+    ``max_consecutive_failures`` so a tool that falsely reports success on a call
+    that made no progress can't defeat the backstop. ``0`` disables it. Default: 10."""
     max_truncation_recoveries: int = Field(default=3, ge=0)
     """When a model response is cut off by the output-token limit and makes no tool call,
     nudge the model to continue at most this many times per turn before surfacing the
