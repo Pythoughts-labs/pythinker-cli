@@ -1,4 +1,5 @@
 import io
+import os
 
 from rich.console import Console
 from rich.text import Text
@@ -95,7 +96,7 @@ def test_welcome_banner_chip_shows_restart_after_successful_update(monkeypatch):
             result="ok",
             message=None,
             log_path="/dev/null",
-            pid=123,
+            pid=os.getpid(),
         ),
     )
 
@@ -107,6 +108,38 @@ def test_welcome_banner_chip_shows_restart_after_successful_update(monkeypatch):
     assert "0.51.0" in text
     # Must NOT show the stale "Update available" line.
     assert "Update available" not in text
+
+
+def test_welcome_banner_chip_shows_update_after_restart_if_version_is_still_old(monkeypatch):
+    """A persisted success from a previous process must not leave old installs
+    stuck on 'Restart to apply' forever."""
+    from pythinker_code.ui.shell.update_orchestrator import UpdateJobState, UpdateJobStatus
+
+    monkeypatch.setattr(shell_module, "consume_whats_new", lambda: None)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: "0.51.0")
+    monkeypatch.setattr(
+        shell_module,
+        "read_update_status",
+        lambda: UpdateJobStatus(
+            job_id="test",
+            state=UpdateJobState.UPDATED,
+            started_at=1.0,
+            finished_at=2.0,
+            current_version="0.50.0",
+            target_version="0.51.0",
+            result="ok",
+            message=None,
+            log_path="/dev/null",
+            pid=os.getpid() + 1,
+        ),
+    )
+
+    chip = shell_module._welcome_banner_chip()
+
+    assert chip is not None
+    text = chip.plain
+    assert "Update available" in text
+    assert "Restart to apply" not in text
 
 
 def test_welcome_banner_chip_shows_update_if_smoke_check_failed(monkeypatch):
@@ -129,7 +162,7 @@ def test_welcome_banner_chip_shows_update_if_smoke_check_failed(monkeypatch):
             result="smoke_failed",
             message="Updated, but smoke check did not pass: binary not executable",
             log_path="/dev/null",
-            pid=123,
+            pid=os.getpid(),
         ),
     )
 
