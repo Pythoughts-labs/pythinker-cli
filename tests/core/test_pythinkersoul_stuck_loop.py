@@ -128,11 +128,8 @@ class _OkTool(CallableTool2[_NoParams]):
         return ToolOk(output="ok", message="ok")
 
 
-def _make_soul(
-    runtime: Runtime, provider: _ScriptedToolCallProvider, tmp_path: Path
-) -> tuple[Context, PythinkerSoul]:
-    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
-    runtime = Runtime(
+def _rebuild_runtime_with_llm(runtime: Runtime, llm: LLM) -> Runtime:
+    return Runtime(
         config=runtime.config,
         llm=llm,
         session=runtime.session,
@@ -149,6 +146,13 @@ def _make_soul(
         skills_dirs=runtime.skills_dirs,
         role=runtime.role,
     )
+
+
+def _make_soul(
+    runtime: Runtime, provider: _ScriptedToolCallProvider, tmp_path: Path
+) -> tuple[Context, PythinkerSoul]:
+    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
+    runtime = _rebuild_runtime_with_llm(runtime, llm)
     agent = Agent(
         name="Stuck Test Agent",
         system_prompt="Stuck test prompt.",
@@ -166,23 +170,7 @@ def _make_soul_with_pythinker_toolset(
     """Like `_make_soul`, but with a real `PythinkerToolset` — required to exercise the
     identical-call repeat backstop, which is tracked on `PythinkerToolset` specifically."""
     llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
-    runtime = Runtime(
-        config=runtime.config,
-        llm=llm,
-        session=runtime.session,
-        builtin_args=runtime.builtin_args,
-        denwa_renji=runtime.denwa_renji,
-        approval=runtime.approval,
-        labor_market=runtime.labor_market,
-        environment=runtime.environment,
-        notifications=runtime.notifications,
-        background_tasks=runtime.background_tasks,
-        skills=runtime.skills,
-        oauth=runtime.oauth,
-        additional_dirs=runtime.additional_dirs,
-        skills_dirs=runtime.skills_dirs,
-        role=runtime.role,
-    )
+    runtime = _rebuild_runtime_with_llm(runtime, llm)
     toolset = PythinkerToolset()
     toolset.add(_BoomTool())
     toolset.add(_OkTool())

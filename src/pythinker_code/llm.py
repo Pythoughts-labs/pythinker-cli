@@ -66,6 +66,7 @@ class LLM:
 # providers, plus the first-party `pythinker` provider, all use `max_tokens`).
 _MAX_OUTPUT_TOKENS_KWARG_OVERRIDES: dict[str, str] = {
     "openai_responses": "max_output_tokens",
+    "openai_codex": "max_output_tokens",
     "google_genai": "max_output_tokens",
     "gemini": "max_output_tokens",
     "vertexai": "max_output_tokens",

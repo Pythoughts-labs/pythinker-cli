@@ -18,7 +18,7 @@ import pythinker_core
 from pythinker_core.chat_provider import APIStatusError
 from pythinker_core.message import Message
 
-from pythinker_code.llm import LLM
+from pythinker_code.llm import LLM, capped_chat_provider
 from pythinker_code.soul.compaction import SimpleCompaction
 from pythinker_code.wire.types import TextPart
 
@@ -44,6 +44,42 @@ class _FakeChatProvider:
 
 def _fake_llm() -> LLM:
     return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
+
+
+def _fake_llm_with_provider_type(provider_type: str) -> LLM:
+    return cast(
+        LLM,
+        SimpleNamespace(
+            chat_provider=_FakeChatProvider(),
+            provider_config=SimpleNamespace(type=provider_type),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "expected_kwarg"),
+    [
+        ("openai_legacy", "max_tokens"),
+        ("anthropic", "max_tokens"),
+        ("pythinker", "max_tokens"),
+        ("openai_responses", "max_output_tokens"),
+        # ChatGPT/Codex sessions build the same OpenAIResponses provider as
+        # "openai_responses" (see create_llm's "openai_codex" case), so they
+        # take the same max_output_tokens kwarg, not the max_tokens default.
+        ("openai_codex", "max_output_tokens"),
+        ("google_genai", "max_output_tokens"),
+        ("gemini", "max_output_tokens"),
+        ("vertexai", "max_output_tokens"),
+    ],
+)
+def test_capped_chat_provider_picks_kwarg_by_provider_type(
+    provider_type: str, expected_kwarg: str
+) -> None:
+    llm = _fake_llm_with_provider_type(provider_type)
+
+    capped_chat_provider(llm, 4000)
+
+    assert cast(_FakeChatProvider, llm.chat_provider).generation_kwargs == {expected_kwarg: 4000}
 
 
 def _overflow_error() -> APIStatusError:
