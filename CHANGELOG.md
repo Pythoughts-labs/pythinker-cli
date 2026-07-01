@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix stale update-success notices so restarting into an older Homebrew install
+  shows `/update` again instead of a permanent "Restart to apply" banner.
+
 ## 0.55.0 (2026-06-30)
 
 - **Local-model reliability fixes for compaction, Qwen3 reasoning, and stuck loops.**

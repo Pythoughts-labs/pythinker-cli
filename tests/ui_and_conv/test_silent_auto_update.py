@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,7 +50,7 @@ async def test_silent_update_success_refreshes_persistent_notice_not_toast(
     monkeypatch.setattr(shell_module, "_detect_upgrade_command", lambda: ["pip"])
 
     async def fake_job(**kw):
-        assert kw["print_output"] is False
+        assert not kw["print_output"]
         assert kw["source"] == "startup-auto"
         return UpdateResult.UPDATED
 
@@ -64,7 +65,8 @@ async def test_silent_update_success_refreshes_persistent_notice_not_toast(
 
     assert _toasts == []
     assert invalidated == [True]
-    assert shell._update_notice_cache == (0.0, None)
+    expected_cache = (0.0, None)
+    assert shell._update_notice_cache == expected_cache
 
 
 @pytest.mark.asyncio
@@ -195,7 +197,7 @@ async def test_silent_update_respects_throttle(
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
     await shell._silent_auto_update()
-    assert called is False
+    assert not called
     assert _toasts == []
 
 
@@ -317,10 +319,15 @@ def test_auto_update_override_reason_none_when_config_decides(monkeypatch):
     assert update_policy.auto_update_override_reason() is None
 
 
-def _updated_status(target: str, *, message: str = "updated"):
+def _updated_status(target: str, *, message: str = "updated", pid: int | None = None):
     from pythinker_code.ui.shell.update_orchestrator import UpdateJobState
 
-    return SimpleNamespace(state=UpdateJobState.UPDATED, target_version=target, message=message)
+    return SimpleNamespace(
+        state=UpdateJobState.UPDATED,
+        target_version=target,
+        message=message,
+        pid=os.getpid() if pid is None else pid,
+    )
 
 
 def test_update_notice_available_points_to_slash_update(runtime, tmp_path, monkeypatch):
@@ -351,6 +358,15 @@ def test_update_notice_installed_but_smoke_failed_falls_back(runtime, tmp_path, 
     status = _updated_status("9.9.9", message=shell_module.SMOKE_CHECK_FAILED_PREFIX + "boom")
     monkeypatch.setattr(shell_module, "read_update_status", lambda: status)
     # A failed-verification install must not claim restart-to-apply.
+    assert shell._compute_update_notice() == "↑ Update available — v9.9.9 · /update"
+
+
+def test_update_notice_previous_process_success_falls_back(runtime, tmp_path, monkeypatch):
+    shell = _make_shell(runtime, tmp_path)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: "9.9.9")
+    monkeypatch.setattr(shell_module, "ascii_glyphs_enabled", lambda: False)
+    status = _updated_status("9.9.9", pid=os.getpid() + 1)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: status)
     assert shell._compute_update_notice() == "↑ Update available — v9.9.9 · /update"
 
 

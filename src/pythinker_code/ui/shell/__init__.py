@@ -81,9 +81,9 @@ from pythinker_code.ui.shell.update import (
 )
 from pythinker_code.ui.shell.update_orchestrator import (
     SMOKE_CHECK_FAILED_PREFIX,
-    UpdateJobState,
     read_update_status,
     run_update_job,
+    update_restart_pending,
 )
 from pythinker_code.ui.shell.visualize import (
     ApprovalPromptDelegate,
@@ -2213,12 +2213,7 @@ class Shell:
         # surface that here instead of telling the user to re-run an update that
         # has already landed.
         status = read_update_status()
-        installed = (
-            status is not None
-            and status.state is UpdateJobState.UPDATED
-            and status.target_version == target
-        )
-        if installed and not self._installed_update_smoke_check_failed():
+        if update_restart_pending(status, target):
             text = self._installed_update_restart_notice()
         else:
             text = f"↑ Update available — v{target} · /update"
@@ -2434,13 +2429,7 @@ def _welcome_banner_chip() -> Text | None:
         # ponytail: mirror _compute_update_notice — if /update already landed
         # this session, show the restart line instead of "Update available".
         status = read_update_status()
-        installed = (
-            status is not None
-            and status.state is UpdateJobState.UPDATED
-            and status.target_version == update_target
-            and not (status.message and status.message.startswith(SMOKE_CHECK_FAILED_PREFIX))
-        )
-        if installed:
+        if update_restart_pending(status, update_target):
             from pythinker_code.constant import VERSION as current_version
 
             return _chip(

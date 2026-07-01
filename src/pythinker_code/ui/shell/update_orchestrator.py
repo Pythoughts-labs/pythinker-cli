@@ -223,6 +223,16 @@ def read_update_status() -> UpdateJobStatus | None:
     )
 
 
+def update_restart_pending(status: UpdateJobStatus | None, target_version: str | None) -> bool:
+    return (
+        status is not None
+        and status.state is UpdateJobState.UPDATED
+        and status.target_version == target_version
+        and status.pid == os.getpid()
+        and not (status.message and status.message.startswith(SMOKE_CHECK_FAILED_PREFIX))
+    )
+
+
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
