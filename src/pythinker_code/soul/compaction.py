@@ -9,7 +9,7 @@ from pythinker_core.message import Message
 from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.prompts as prompts
-from pythinker_code.llm import LLM
+from pythinker_code.llm import LLM, capped_chat_provider
 from pythinker_code.soul.api_errors import is_context_overflow_error
 from pythinker_code.soul.message import system
 from pythinker_code.utils.logging import logger
@@ -86,6 +86,11 @@ def should_prune(token_count: int, max_context_size: int, *, ratio: float) -> bo
 
 PRUNE_PLACEHOLDER = "[tool output elided to save context: {n} chars]"
 CAP_PLACEHOLDER = "\n[tool output capped: removed {n} chars]"
+
+# A compaction summary is a short digest, not a full response — cap it well
+# below the model's normal output budget so a degenerate/repetitive
+# completion can't run unbounded and hang the soul loop.
+_COMPACTION_MAX_OUTPUT_TOKENS = 4000
 
 
 def prune_stale_tool_outputs(
@@ -270,16 +275,15 @@ class SimpleCompaction:
         half is dropped and the request retried; ``(None, None)`` means even
         a single message did not fit.
 
-        NOTE: the summary length is bounded by the chat provider's
-        construction-time max output tokens (LLM default_max_tokens, or
-        PYTHINKER_MODEL_MAX_TOKENS). A tighter per-call cap would require a
-        max-tokens parameter on ``ChatProvider.generate`` (and
-        ``pythinker_core.step``), which neither exposes today.
+        The summary's output length is capped at ``_COMPACTION_MAX_OUTPUT_TOKENS``
+        via a per-call generation kwarg (see ``capped_chat_provider``), so a
+        slow/degenerate completion can't run unbounded.
         """
+        capped_provider = capped_chat_provider(llm, _COMPACTION_MAX_OUTPUT_TOKENS)
         while True:
             try:
                 result = await pythinker_core.step(
-                    chat_provider=llm.chat_provider,
+                    chat_provider=capped_provider,
                     system_prompt="You are a helpful assistant that compacts conversation context.",
                     toolset=EmptyToolset(),
                     history=[compact_message],

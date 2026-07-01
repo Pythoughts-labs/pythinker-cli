@@ -31,8 +31,19 @@ def _history(n_pairs: int = 4) -> list[Message]:
     return messages
 
 
+class _FakeChatProvider:
+    """Minimal provider double recording `with_generation_kwargs` calls."""
+
+    def __init__(self) -> None:
+        self.generation_kwargs: dict[str, object] = {}
+
+    def with_generation_kwargs(self, **kwargs: object) -> _FakeChatProvider:
+        self.generation_kwargs = kwargs
+        return self
+
+
 def _fake_llm() -> LLM:
-    return cast(LLM, SimpleNamespace(chat_provider=None))
+    return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
 
 
 def _overflow_error() -> APIStatusError:
@@ -87,6 +98,17 @@ async def test_exhausted_retries_fall_back_to_tail_with_note(monkeypatch) -> Non
     assert "dropped" in joined.lower()
     # The preserved tail survives.
     assert "reply 3" in joined
+
+
+@pytest.mark.asyncio
+async def test_compaction_caps_output_tokens(monkeypatch) -> None:
+    fake_step = _FakeStep(failures_before_success=0)
+    monkeypatch.setattr(pythinker_core, "step", fake_step)
+
+    llm = _fake_llm()
+    await SimpleCompaction(max_preserved_messages=2).compact(_history(), llm=llm)
+
+    assert cast(_FakeChatProvider, llm.chat_provider).generation_kwargs == {"max_tokens": 4000}
 
 
 @pytest.mark.asyncio

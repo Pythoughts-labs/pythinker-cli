@@ -23,8 +23,15 @@ from pythinker_code.soul.compaction import SimpleCompaction
 from pythinker_code.wire.types import TextPart
 
 
+class _FakeChatProvider:
+    """Minimal provider double supporting `with_generation_kwargs`."""
+
+    def with_generation_kwargs(self, **kwargs: object) -> _FakeChatProvider:
+        return self
+
+
 def _fake_llm() -> LLM:
-    return cast(LLM, SimpleNamespace(chat_provider=None))
+    return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
 
 
 def _history(n_pairs: int = 3) -> list[Message]:

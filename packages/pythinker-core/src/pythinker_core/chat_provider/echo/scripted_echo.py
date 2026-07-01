@@ -67,6 +67,13 @@ class ScriptedEchoChatProvider:
         copied._scripts = deque(self._scripts)
         return copied
 
+    def with_generation_kwargs(self, **kwargs: object) -> Self:
+        # Scripted replay carries no real request body, so generation
+        # kwargs (e.g. an output-length cap) have nothing to attach to.
+        copied = copy.copy(self)
+        copied._scripts = deque(self._scripts)
+        return copied
+
 
 class ScriptedEchoStreamedMessage(StreamedMessage):
     """Streamed message for ScriptedEchoChatProvider."""
