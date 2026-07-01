@@ -135,3 +135,15 @@ async def test_scripted_echo_chat_provider_requires_dsl_content():
 
     with pytest.raises(ChatProviderError):
         await provider.generate(system_prompt="", tools=[], history=[])
+
+
+async def test_scripted_echo_chat_provider_with_generation_kwargs_preserves_scripts():
+    provider = ScriptedEchoChatProvider(["text: first", "text: second"])
+
+    capped = provider.with_generation_kwargs(max_tokens=4000)
+
+    assert capped is not provider
+    first_stream = await capped.generate(system_prompt="", tools=[], history=[])
+    assert [part async for part in first_stream] == [TextPart(text="first")]
+    second_stream = await capped.generate(system_prompt="", tools=[], history=[])
+    assert [part async for part in second_stream] == [TextPart(text="second")]

@@ -50,6 +50,7 @@ def test_default_config_dump():
             "loop_control": {
                 "max_steps_per_turn": 1000,
                 "max_consecutive_failures": 8,
+                "max_consecutive_identical_calls": 10,
                 "max_truncation_recoveries": 3,
                 "max_compaction_failures": 1,
                 "max_session_cost_usd": None,

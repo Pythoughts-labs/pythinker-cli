@@ -188,6 +188,47 @@ def test_create_llm_sends_kimi_thinking_disable_switch(monkeypatch):
     assert llm.thinking is False
 
 
+def test_create_llm_sends_qwen3_enable_thinking_toggle(monkeypatch):
+    captured = {}
+
+    class FakeOpenAILegacy:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.model_name = kwargs["model"]
+
+        def with_generation_kwargs(self, **kwargs):
+            captured["generation_kwargs"] = kwargs
+            return self
+
+        def with_thinking(self, effort):  # pragma: no cover - should not be called for Qwen3
+            captured["thinking"] = effort
+            return self
+
+    monkeypatch.setattr(
+        "pythinker_core.contrib.chat_provider.openai_legacy.OpenAILegacy", FakeOpenAILegacy
+    )
+
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="http://localhost:1234/v1",
+        api_key=SecretStr("lm-studio"),
+    )
+    model = LLMModel(
+        provider="managed:lm-studio",
+        model="qwen3-30b-a3b-instruct",
+        max_context_size=262_000,
+    )
+
+    llm = create_llm(provider, model, thinking=False)
+
+    assert llm is not None
+    assert captured["generation_kwargs"] == {
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}
+    }
+    assert "thinking" not in captured
+    assert llm.thinking is False
+
+
 def test_clone_llm_preserves_thinking_state_for_kimi_model_override(monkeypatch):
     captured = {}
 

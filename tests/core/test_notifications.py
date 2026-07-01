@@ -75,6 +75,9 @@ class _SequenceProvider:
     def with_thinking(self, effort: ThinkingEffort) -> Self:
         return self
 
+    def with_generation_kwargs(self, **kwargs: object) -> Self:
+        return self
+
 
 def _runtime_with_llm(runtime: Runtime, llm: LLM) -> Runtime:
     return Runtime(

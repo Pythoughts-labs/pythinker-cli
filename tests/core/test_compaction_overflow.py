@@ -18,7 +18,7 @@ import pythinker_core
 from pythinker_core.chat_provider import APIStatusError
 from pythinker_core.message import Message
 
-from pythinker_code.llm import LLM
+from pythinker_code.llm import LLM, capped_chat_provider
 from pythinker_code.soul.compaction import SimpleCompaction
 from pythinker_code.wire.types import TextPart
 
@@ -31,8 +31,59 @@ def _history(n_pairs: int = 4) -> list[Message]:
     return messages
 
 
+class _FakeChatProvider:
+    """Minimal provider double recording `with_generation_kwargs` calls.
+
+    Returns a fresh instance rather than mutating in place, matching the real
+    providers' copy-on-write contract — so tests must assert on the returned
+    provider, not the original, to actually exercise that contract.
+    """
+
+    def __init__(self, generation_kwargs: dict[str, object] | None = None) -> None:
+        self.generation_kwargs: dict[str, object] = generation_kwargs or {}
+
+    def with_generation_kwargs(self, **kwargs: object) -> _FakeChatProvider:
+        return _FakeChatProvider(kwargs)
+
+
 def _fake_llm() -> LLM:
-    return cast(LLM, SimpleNamespace(chat_provider=None))
+    return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
+
+
+def _fake_llm_with_provider_type(provider_type: str) -> LLM:
+    return cast(
+        LLM,
+        SimpleNamespace(
+            chat_provider=_FakeChatProvider(),
+            provider_config=SimpleNamespace(type=provider_type),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "expected_kwarg"),
+    [
+        ("openai_legacy", "max_tokens"),
+        ("anthropic", "max_tokens"),
+        ("pythinker", "max_tokens"),
+        ("openai_responses", "max_output_tokens"),
+        # ChatGPT/Codex sessions build the same OpenAIResponses provider as
+        # "openai_responses" (see create_llm's "openai_codex" case), so they
+        # take the same max_output_tokens kwarg, not the max_tokens default.
+        ("openai_codex", "max_output_tokens"),
+        ("google_genai", "max_output_tokens"),
+        ("gemini", "max_output_tokens"),
+        ("vertexai", "max_output_tokens"),
+    ],
+)
+def test_capped_chat_provider_picks_kwarg_by_provider_type(
+    provider_type: str, expected_kwarg: str
+) -> None:
+    llm = _fake_llm_with_provider_type(provider_type)
+
+    capped_provider = cast(_FakeChatProvider, capped_chat_provider(llm, 4000))
+
+    assert capped_provider.generation_kwargs == {expected_kwarg: 4000}
 
 
 def _overflow_error() -> APIStatusError:
@@ -50,9 +101,11 @@ class _FakeStep:
     def __init__(self, failures_before_success: int) -> None:
         self.failures_before_success = failures_before_success
         self.histories: list[list[Message]] = []
+        self.chat_providers: list[object] = []
 
     async def __call__(self, *, chat_provider, system_prompt, toolset, history):
         self.histories.append(list(history))
+        self.chat_providers.append(chat_provider)
         if len(self.histories) <= self.failures_before_success:
             raise _overflow_error()
         return _summary_result()
@@ -87,6 +140,18 @@ async def test_exhausted_retries_fall_back_to_tail_with_note(monkeypatch) -> Non
     assert "dropped" in joined.lower()
     # The preserved tail survives.
     assert "reply 3" in joined
+
+
+@pytest.mark.asyncio
+async def test_compaction_caps_output_tokens(monkeypatch) -> None:
+    fake_step = _FakeStep(failures_before_success=0)
+    monkeypatch.setattr(pythinker_core, "step", fake_step)
+
+    llm = _fake_llm()
+    await SimpleCompaction(max_preserved_messages=2).compact(_history(), llm=llm)
+
+    used_provider = cast(_FakeChatProvider, fake_step.chat_providers[0])
+    assert used_provider.generation_kwargs == {"max_tokens": 4000}
 
 
 @pytest.mark.asyncio

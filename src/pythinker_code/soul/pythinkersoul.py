@@ -388,12 +388,17 @@ def _should_nudge_truncation(
 
 
 def _stuck_summary_message(
-    failures: int, tool_calls: Sequence[ToolCall], tool_results: Sequence[ToolResult]
+    count: int,
+    tool_calls: Sequence[ToolCall],
+    tool_results: Sequence[ToolResult],
+    *,
+    reason: str = "steps each had every tool call fail",
 ) -> Message:
     """Build a concise handoff message when the loop yields on a degenerate stuck loop.
 
-    Surfaces a count of consecutive all-error steps and a brief of what the last
-    step tried, so the human can take over without reconstructing state.
+    Surfaces a count (consecutive all-error steps, or consecutive identical calls,
+    per ``reason``) and a brief of what the last step tried, so the human can take
+    over without reconstructing state.
     """
     calls_by_id = {call.id: call for call in tool_calls}
     tried: list[str] = []
@@ -409,8 +414,8 @@ def _stuck_summary_message(
             brief = brief[:200] + "…"
         tried.append(f"- {name}: {brief}")
     text = (
-        f"I appear to be stuck — the last {failures} steps each had every tool call "
-        "fail, so I'm stopping and handing control back to you rather than continuing.\n\n"
+        f"I appear to be stuck — the last {count} {reason}, so I'm stopping and "
+        "handing control back to you rather than continuing.\n\n"
         "What I last tried:\n" + "\n".join(tried) + "\n\n"
         "You can adjust the request, fix the underlying issue, or tell me how to proceed."
     )
@@ -2197,6 +2202,32 @@ class PythinkerSoul:
                     return StepOutcome(stop_reason="stuck", assistant_message=summary)
             else:
                 self._consecutive_failures = 0
+
+            # Second, independent backstop: the same tool call repeated with
+            # identical arguments enough times in a row, regardless of whether
+            # each call reports success — catches a tool that falsely reports
+            # success on a call that never made progress, which the all-error
+            # check above can't see.
+            repeat_threshold = self._loop_control.max_consecutive_identical_calls
+            if repeat_threshold and isinstance(self._agent.toolset, PythinkerToolset):
+                repeat_count = self._agent.toolset.consecutive_repeat_count
+                if repeat_count >= repeat_threshold:
+                    from pythinker_code.telemetry import track
+
+                    summary = _stuck_summary_message(
+                        repeat_count,
+                        result.tool_calls,
+                        results,
+                        reason="tool calls were identical",
+                    )
+                    await self._context.append_message(summary)
+                    wire_send(TextPart(text=summary.extract_text(" ")))
+                    track(
+                        "agent_stuck_repeat",
+                        consecutive_repeat_calls=repeat_count,
+                        model=self._runtime.llm.model_name,
+                    )
+                    return StepOutcome(stop_reason="stuck", assistant_message=summary)
             return None
 
         # A tool-call-free message normally ends the turn. If it is only a

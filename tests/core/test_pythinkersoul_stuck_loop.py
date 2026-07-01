@@ -26,6 +26,7 @@ from pythinker_code.soul import run_soul
 from pythinker_code.soul.agent import Agent, BuiltinSystemPromptArgs, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul, TurnStopReason
+from pythinker_code.soul.toolset import PythinkerToolset
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.wire import Wire
 
@@ -127,11 +128,8 @@ class _OkTool(CallableTool2[_NoParams]):
         return ToolOk(output="ok", message="ok")
 
 
-def _make_soul(
-    runtime: Runtime, provider: _ScriptedToolCallProvider, tmp_path: Path
-) -> tuple[Context, PythinkerSoul]:
-    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
-    runtime = Runtime(
+def _rebuild_runtime_with_llm(runtime: Runtime, llm: LLM) -> Runtime:
+    return Runtime(
         config=runtime.config,
         llm=llm,
         session=runtime.session,
@@ -148,10 +146,38 @@ def _make_soul(
         skills_dirs=runtime.skills_dirs,
         role=runtime.role,
     )
+
+
+def _make_soul(
+    runtime: Runtime, provider: _ScriptedToolCallProvider, tmp_path: Path
+) -> tuple[Context, PythinkerSoul]:
+    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
+    runtime = _rebuild_runtime_with_llm(runtime, llm)
     agent = Agent(
         name="Stuck Test Agent",
         system_prompt="Stuck test prompt.",
         toolset=SimpleToolset([_BoomTool(), _OkTool()]),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    return context, soul
+
+
+def _make_soul_with_pythinker_toolset(
+    runtime: Runtime, provider: _ScriptedToolCallProvider, tmp_path: Path
+) -> tuple[Context, PythinkerSoul]:
+    """Like `_make_soul`, but with a real `PythinkerToolset` — required to exercise the
+    identical-call repeat backstop, which is tracked on `PythinkerToolset` specifically."""
+    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
+    runtime = _rebuild_runtime_with_llm(runtime, llm)
+    toolset = PythinkerToolset()
+    toolset.add(_BoomTool())
+    toolset.add(_OkTool())
+    agent = Agent(
+        name="Stuck Test Agent",
+        system_prompt="Stuck test prompt.",
+        toolset=toolset,
         runtime=runtime,
     )
     context = Context(file_backend=tmp_path / "history.jsonl")
@@ -502,6 +528,44 @@ async def test_max_consecutive_failures_zero_disables_backstop(
         await run_soul(soul, "go", _drain_ui_messages, asyncio.Event())
 
     # Never escalated despite 4 consecutive failures; ran to the final text step.
+    assert provider.generate_attempts == 5
+    assert record_turn.call_args.kwargs["stop_reason"] == "no_tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_consecutive_identical_calls_yield_stuck_outcome(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """N consecutive identical-argument tool calls stop the turn with `stuck`, even
+    though every call reports success — this backstop is independent of the
+    all-error check above, so it still catches a tool that falsely reports success
+    on a call that made no progress."""
+    runtime.config.loop_control.max_consecutive_identical_calls = 3
+    runtime.config.loop_control.max_steps_per_turn = 50
+    provider = _ScriptedToolCallProvider(["Ok"] * 10)
+    context, soul = _make_soul_with_pythinker_toolset(runtime, provider, tmp_path)
+
+    with patch("pythinker_code.telemetry.metrics.record_turn") as record_turn:
+        await run_soul(soul, "go", _drain_ui_messages, asyncio.Event())
+
+    assert provider.generate_attempts == 3
+    assert record_turn.call_args.kwargs["stop_reason"] == "stuck"
+    assert "identical" in context.history[-1].extract_text(" ").lower()
+
+
+@pytest.mark.asyncio
+async def test_max_consecutive_identical_calls_zero_disables_backstop(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """A threshold of 0 disables the identical-call backstop entirely."""
+    runtime.config.loop_control.max_consecutive_identical_calls = 0
+    runtime.config.loop_control.max_steps_per_turn = 50
+    provider = _ScriptedToolCallProvider(["Ok", "Ok", "Ok", "Ok", None])
+    context, soul = _make_soul_with_pythinker_toolset(runtime, provider, tmp_path)
+
+    with patch("pythinker_code.telemetry.metrics.record_turn") as record_turn:
+        await run_soul(soul, "go", _drain_ui_messages, asyncio.Event())
+
     assert provider.generate_attempts == 5
     assert record_turn.call_args.kwargs["stop_reason"] == "no_tool_calls"
 

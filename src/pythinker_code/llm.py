@@ -61,6 +61,31 @@ class LLM:
         return self.chat_provider.model_name
 
 
+# Providers whose generation kwargs use `max_output_tokens` instead of the
+# more common `max_tokens` (OpenAI Chat-Completions-shaped and Anthropic
+# providers, plus the first-party `pythinker` provider, all use `max_tokens`).
+_MAX_OUTPUT_TOKENS_KWARG_OVERRIDES: dict[str, str] = {
+    "openai_responses": "max_output_tokens",
+    "openai_codex": "max_output_tokens",
+    "google_genai": "max_output_tokens",
+    "gemini": "max_output_tokens",
+    "vertexai": "max_output_tokens",
+}
+
+
+def capped_chat_provider(llm: LLM, max_output_tokens: int) -> ChatProvider:
+    """Return a copy of ``llm.chat_provider`` with its output length capped.
+
+    Callers needing a small, predictable cap regardless of the model's
+    usual output budget (e.g. a context-compaction summary) can use this
+    instead of hand-picking a provider-specific kwarg name.
+    """
+    provider_config = getattr(llm, "provider_config", None)
+    provider_type = getattr(provider_config, "type", None)
+    kwarg = _MAX_OUTPUT_TOKENS_KWARG_OVERRIDES.get(provider_type or "", "max_tokens")
+    return cast(Any, llm.chat_provider).with_generation_kwargs(**{kwarg: max_output_tokens})
+
+
 # Hosts that serve the genuine Anthropic API and therefore accept the
 # `tool_reference` / `defer_loading` beta content blocks that deferred tool
 # search depends on. The Claude API-key path and Anthropic OAuth both route
@@ -490,12 +515,22 @@ def create_llm(
         and not is_dashscope_legacy
     )
     is_glm_openai_legacy = provider.type == "openai_legacy" and _is_glm_model(model.model)
+    # Qwen3.x exposes a binary `enable_thinking` template toggle, not tiered
+    # reasoning effort; DashScope's own hosted endpoint already sends
+    # `enable_thinking` below, so only apply this for other openai_legacy
+    # routes (e.g. local llama.cpp/vLLM/LM Studio servers).
+    is_qwen3_openai_legacy = (
+        provider.type == "openai_legacy"
+        and _is_qwen3_model(model.model)
+        and not is_dashscope_legacy
+    )
     if (
         effective_effort is not None
         and supports_thinking
         and not is_kimi_openai_legacy
         and not is_glm_openai_legacy
         and not is_dashscope_legacy
+        and not is_qwen3_openai_legacy
     ):
         # Only explicitly send thinking controls for models that advertise
         # reasoning. Some OpenAI-compatible non-reasoning models reject even a
@@ -524,6 +559,13 @@ def create_llm(
     ):
         chat_provider = cast(Any, chat_provider).with_generation_kwargs(
             extra_body={"enable_thinking": thinking_on}
+        )
+
+    # Self-hosted Qwen3.x servers (llama.cpp/vLLM/LM Studio) take the same
+    # `enable_thinking` toggle via the template-kwargs extra_body shape.
+    if is_qwen3_openai_legacy and effective_effort is not None:
+        chat_provider = cast(Any, chat_provider).with_generation_kwargs(
+            extra_body={"chat_template_kwargs": {"enable_thinking": thinking_on}}
         )
 
     # Apply Pythinker AI-specific ``thinking.keep`` (preserved thinking) only when
@@ -661,6 +703,14 @@ def _is_kimi_k2_model(model_name: str) -> bool:
 
 def _is_glm_model(model_name: str) -> bool:
     return model_name.lower().replace("_", "-").startswith("glm-")
+
+
+def _is_qwen3_model(model_name: str) -> bool:
+    """Qwen3.x (dense and MoE) models only support the chat template's
+    binary `enable_thinking` toggle, not tiered reasoning effort levels.
+    """
+    normalized = model_name.lower().replace("_", "-")
+    return "qwen3" in normalized or "qwen-3" in normalized
 
 
 def _is_dashscope_endpoint(base_url: str) -> bool:

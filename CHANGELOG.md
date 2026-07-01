@@ -15,6 +15,19 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Cap context-compaction summary output length so a slow/degenerate local
+  model completion (observed hanging the soul loop indefinitely on local
+  OpenAI-compatible backends) can no longer run unbounded.
+- Send Qwen3.x's binary `enable_thinking` chat-template toggle instead of a
+  tiered `reasoning_effort` value on self-hosted openai_legacy endpoints
+  (llama.cpp/vLLM/LM Studio), where the model only supports on/off and was
+  silently promoting every configured effort level to full reasoning.
+- Add a second, independent stuck-loop backstop (`max_consecutive_identical_calls`,
+  default 10) that stops a turn after enough consecutive tool calls with identical
+  arguments, regardless of whether each call reports success — the existing
+  all-error backstop can't catch a loop where a tool falsely reports success on a
+  call that never made progress.
+
 ## 0.54.0 (2026-06-30)
 
 - **New `Workflow` tool for deterministic multi-agent orchestration.** The default
