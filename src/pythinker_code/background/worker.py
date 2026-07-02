@@ -185,7 +185,12 @@ async def run_background_task_worker(
                 "env": scrub_secret_env(get_clean_env()) if spec.scrub_secrets else get_clean_env(),
             }
             if os.name == "nt":
-                spawn_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                # CREATE_NO_WINDOW: don't share the interactive console — a child
+                # touching it via the Win32 console API bypasses the redirected
+                # stdio and can blank the parent TUI until terminal restart.
+                spawn_kwargs["creationflags"] = getattr(
+                    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+                ) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
             else:
                 spawn_kwargs["start_new_session"] = True
 

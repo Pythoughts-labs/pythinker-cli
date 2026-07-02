@@ -31,7 +31,11 @@ def install_synchronized_output(output: Output) -> bool:
     """Bracket every flushed frame of *output* in synchronized-update marks.
 
     Returns ``True`` when installed (or already installed). Outputs without
-    the vt100 list buffer (Windows console, dummy outputs) are left untouched.
+    the vt100 list buffer (legacy ``Win32Output``, dummy outputs) are left
+    untouched. Note that on VT-capable Windows consoles prompt_toolkit uses
+    ``Windows10_Output``, which delegates ``_buffer`` to its inner vt100
+    output — so those ARE patched, same as Unix. Safe either way: Windows
+    Terminal expires an unmatched begin-mark after 100ms, xterm.js after 5s.
     """
     if getattr(output, _INSTALLED_MARKER, False):
         return True

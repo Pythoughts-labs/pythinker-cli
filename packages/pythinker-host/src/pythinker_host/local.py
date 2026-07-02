@@ -198,9 +198,14 @@ class LocalHost:
 
         process_options: dict[str, Any] = {}
         if os.name == "nt":
+            # CREATE_NO_WINDOW detaches the child from the interactive console
+            # (it gets its own hidden one): console-API writes, `cls`, or
+            # SetConsoleMode calls from the child would otherwise bypass the
+            # stdio pipes and corrupt the parent TUI until terminal restart.
+            # CREATE_NEW_PROCESS_GROUP keeps kill() semantics unchanged.
             process_options["creationflags"] = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
-            )
+            ) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         else:
             process_options["start_new_session"] = True
 

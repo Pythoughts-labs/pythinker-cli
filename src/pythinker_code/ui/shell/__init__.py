@@ -4,8 +4,10 @@ import ast
 import asyncio
 import contextlib
 import json
+import os
 import re
 import shlex
+import subprocess
 import textwrap
 import time
 from collections import deque
@@ -1271,11 +1273,18 @@ class Shell:
         try:
             # TODO: For the sake of simplicity, we now use `create_subprocess_shell`.
             # Later we should consider making this behave like a real shell.
+            spawn_kwargs: dict[str, Any] = {}
+            if os.name == "nt":
+                # CREATE_NO_WINDOW: don't share the interactive console — a child
+                # touching it via the Win32 console API bypasses the pipes and
+                # can blank the TUI until terminal restart.
+                spawn_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
             proc = await asyncio.create_subprocess_shell(
                 command,
                 env=get_clean_env(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **spawn_kwargs,
             )
             stdout_task = asyncio.create_task(_read_stream_limited(proc.stdout, max_output_bytes))
             stderr_task = asyncio.create_task(_read_stream_limited(proc.stderr, max_output_bytes))

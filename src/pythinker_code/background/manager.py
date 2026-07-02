@@ -243,7 +243,12 @@ class BackgroundTaskManager:
             "cwd": str(task_dir),
         }
         if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            # CREATE_NO_WINDOW: don't share the interactive console — a child
+            # touching it via the Win32 console API bypasses DEVNULL stdio and
+            # can blank the parent TUI until terminal restart.
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+                subprocess, "CREATE_NO_WINDOW", 0x08000000
+            )
         else:
             kwargs["start_new_session"] = True
 

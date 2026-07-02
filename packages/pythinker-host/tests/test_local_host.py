@@ -257,3 +257,46 @@ async def test_kill_signals_running_process(local_host: LocalHost, monkeypatch: 
     await process.wait()
 
     assert sent and sent[0] == signal_any.SIGKILL
+
+
+async def test_exec_windows_child_gets_hidden_console(
+    local_host: LocalHost, monkeypatch: pytest.MonkeyPatch
+):
+    """On Windows the child must not attach to the interactive console.
+
+    A child sharing the TUI's console can clear it or reset its modes through
+    the Win32 console API (bypassing the stdio pipes), blanking the shell UI
+    until the terminal is restarted. CREATE_NO_WINDOW gives the child its own
+    hidden console; CREATE_NEW_PROCESS_GROUP keeps kill() semantics unchanged.
+    """
+    from types import SimpleNamespace
+
+    from pythinker_host import local as local_module
+
+    captured: dict[str, Any] = {}
+
+    class _FakePipe:
+        pass
+
+    class _FakeProcess:
+        stdin: Any = _FakePipe()
+        stdout: Any = _FakePipe()
+        stderr: Any = _FakePipe()
+
+    async def _fake_create_subprocess_exec(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _FakeProcess()
+
+    # Swap the module's `os` reference rather than mutating the global
+    # `os.name`, which corrupts pathlib/pytest path handling mid-run.
+    monkeypatch.setattr(local_module, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(
+        local_module.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec
+    )
+
+    await local_host.exec("cmd", "/c", "echo hi")
+
+    flags = captured["creationflags"]
+    assert flags & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
+    assert "start_new_session" not in captured

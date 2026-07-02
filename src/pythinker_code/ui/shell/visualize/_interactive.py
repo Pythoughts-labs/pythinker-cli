@@ -196,10 +196,33 @@ class _PromptLiveView(_LiveView):
                     self._resize_recovery_remaining = _RESIZE_RECOVERY_FRAMES
                     self._force_refresh = True
                     _handoff_trace(f"RESIZE\t{columns}x{rows}")
+                    self._reset_prompt_renderer("resize")
             else:
                 _handoff_trace(f"RESIZE_IGNORE\t{columns}x{rows}")
         if self._resize_recovery_remaining > 0:
             self._resize_recovery_remaining -= 1
+
+    def _reset_prompt_renderer(self, reason: str) -> None:
+        """Drop the prompt renderer's diff state so the next redraw repaints every row.
+
+        When the real screen diverges from prompt_toolkit's frame model —
+        ConPTY rewraps lines on resize, a terminal replays/clears the
+        viewport, a scrollback handoff dies mid-erase — the differential
+        renderer keeps emitting empty diffs over a blank screen and the UI
+        never comes back. Resetting makes the next frame absolute.
+        """
+        from prompt_toolkit.application import get_app_or_none
+
+        app = get_app_or_none()
+        if app is None:
+            return
+        try:
+            app.renderer.reset()
+        except Exception as exc:  # noqa: BLE001 — recovery must never take down the UI loop
+            _handoff_trace(f"RENDERER_RESET_FAIL\t{reason}\t{type(exc).__name__}:{exc}")
+            logger.debug("Prompt renderer reset failed ({}): {}", reason, exc)
+        else:
+            _handoff_trace(f"RENDERER_RESET\t{reason}")
 
     def _defer_scrollback_handoff(self) -> bool:
         """Backpressure: defer permanent scrollback while preamble geometry is unstable."""
@@ -244,6 +267,9 @@ class _PromptLiveView(_LiveView):
                 emit()
         except Exception as exc:
             _handoff_trace(f"HANDOFF_FAIL\t{reason}\t{type(exc).__name__}:{exc}")
+            # The teardown/erase may have half-completed; force an absolute
+            # repaint so the prompt recovers instead of diffing a wrong model.
+            self._reset_prompt_renderer("handoff-fail")
             raise
         finally:
             self._scrollback_handoff_depth -= 1

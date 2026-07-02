@@ -15,6 +15,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix the Windows shell UI going blank mid-session (transcript and input box
+  disappearing until terminal restart): child processes no longer attach to the
+  interactive console (`CREATE_NO_WINDOW` on Shell-tool, background-task, and
+  `!` command spawns), and the prompt renderer now forces an absolute repaint
+  after terminal resizes and failed scrollback handoffs instead of diffing
+  against a stale frame.
 - Fix Workflow progress rendering duplicating agents truncated by the per-phase
   display cap, close leaked `agent()` coroutines when `parallel()` rejects its
   arguments, and add a 1000-agent lifetime backstop against runaway workflow loops.

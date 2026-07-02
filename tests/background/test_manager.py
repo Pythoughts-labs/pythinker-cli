@@ -1622,3 +1622,45 @@ def test_mark_task_completed_is_lock_protected(runtime, monkeypatch):
     assert events == ["lock_enter", "read", "write_unlocked", "lock_exit"]
     # The mutation still landed: state reflects the terminal status.
     assert real_read(task_id).status == "completed"
+
+
+def test_launch_worker_windows_child_gets_hidden_console(monkeypatch):
+    """The detached worker must not attach to the interactive console on Windows.
+
+    A worker sharing the TUI's console can corrupt it via the Win32 console
+    API even with DEVNULL stdio; CREATE_NO_WINDOW detaches it.
+    """
+    from pathlib import Path as _Path
+
+    manager = object.__new__(manager_module.BackgroundTaskManager)
+    monkeypatch.setattr(
+        manager_module.BackgroundTaskManager,
+        "_worker_command",
+        lambda self, task_dir: ["worker"],
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeProcess:
+        pid = 4242
+
+    def _fake_popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return _FakeProcess()
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(manager_module.subprocess, "Popen", _fake_popen)
+    # Swap the module's `os` reference rather than mutating the global
+    # `os.name`, which corrupts pathlib/pytest path handling mid-run.
+    monkeypatch.setattr(manager_module, "os", SimpleNamespace(name="nt"))
+
+    pid = manager._launch_worker(_Path("/tmp/task"))
+
+    assert pid == 4242
+    flags = captured["creationflags"]
+    assert isinstance(flags, int)
+    # CREATE_NEW_PROCESS_GROUP resolves to 0 off-Windows (getattr fallback);
+    # this test only owns the console-detachment bit.
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
+    assert "start_new_session" not in captured
