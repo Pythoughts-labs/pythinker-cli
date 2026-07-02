@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pythinker_host.windows import windows_console_detach_flags
+
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.subprocess_env import get_clean_env, scrub_secret_env
 
@@ -188,9 +190,7 @@ async def run_background_task_worker(
                 # CREATE_NO_WINDOW: don't share the interactive console — a child
                 # touching it via the Win32 console API bypasses the redirected
                 # stdio and can blank the parent TUI until terminal restart.
-                spawn_kwargs["creationflags"] = getattr(
-                    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-                ) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                spawn_kwargs["creationflags"] = windows_console_detach_flags()
             else:
                 spawn_kwargs["start_new_session"] = True
 

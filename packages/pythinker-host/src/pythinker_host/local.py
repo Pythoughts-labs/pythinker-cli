@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import subprocess
 from asyncio.subprocess import Process as AsyncioProcess
 from collections.abc import AsyncGenerator
 from pathlib import Path, PurePath
@@ -30,6 +29,7 @@ from pythinker_host import (
     StrOrHostPath,
 )
 from pythinker_host.path import HostPath
+from pythinker_host.windows import windows_console_detach_flags
 
 if TYPE_CHECKING:
 
@@ -203,9 +203,7 @@ class LocalHost:
             # SetConsoleMode calls from the child would otherwise bypass the
             # stdio pipes and corrupt the parent TUI until terminal restart.
             # CREATE_NEW_PROCESS_GROUP keeps kill() semantics unchanged.
-            process_options["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
-            ) | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            process_options["creationflags"] = windows_console_detach_flags()
         else:
             process_options["start_new_session"] = True
 

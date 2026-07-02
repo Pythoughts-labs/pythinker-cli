@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import textwrap
 import time
 from collections import deque
@@ -26,6 +25,7 @@ from pythinker_core.chat_provider import (
     APITimeoutError,
     ChatProviderError,
 )
+from pythinker_host.windows import windows_console_detach_flags
 from rich import box
 from rich.align import Align
 from rich.cells import cell_len
@@ -1278,7 +1278,9 @@ class Shell:
                 # CREATE_NO_WINDOW: don't share the interactive console — a child
                 # touching it via the Win32 console API bypasses the pipes and
                 # can blank the TUI until terminal restart.
-                spawn_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                spawn_kwargs["creationflags"] = windows_console_detach_flags(
+                    new_process_group=False
+                )
             proc = await asyncio.create_subprocess_shell(
                 command,
                 env=get_clean_env(),
