@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pythinker_host.local import local_host
+from pythinker_host.windows import windows_console_detach_flags
 
 from pythinker_code.config import BackgroundConfig
 from pythinker_code.notifications import NotificationEvent, NotificationManager
@@ -243,7 +244,10 @@ class BackgroundTaskManager:
             "cwd": str(task_dir),
         }
         if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            # CREATE_NO_WINDOW: don't share the interactive console — a child
+            # touching it via the Win32 console API bypasses DEVNULL stdio and
+            # can blank the parent TUI until terminal restart.
+            kwargs["creationflags"] = windows_console_detach_flags()
         else:
             kwargs["start_new_session"] = True
 

@@ -2489,3 +2489,81 @@ async def test_intercepted_shell_command_output_is_captured_not_printed(capsys) 
     assert "menu for /version" in visible
     assert "❯ /version" in visible  # echo lives inside the panel too
     assert "menu for /version" not in capsys.readouterr().out
+
+
+def test_reset_prompt_renderer_resets_app_renderer(monkeypatch) -> None:
+    import prompt_toolkit.application as pt_application
+
+    view = object.__new__(_PromptLiveView)
+    resets: list[str] = []
+
+    class _Renderer:
+        def reset(self) -> None:
+            resets.append("reset")
+
+    class _App:
+        renderer = _Renderer()
+
+    monkeypatch.setattr(pt_application, "get_app_or_none", lambda: _App())
+    view._reset_prompt_renderer("test")
+    assert resets == ["reset"]
+
+
+def test_reset_prompt_renderer_survives_no_app_and_renderer_failure(monkeypatch) -> None:
+    import prompt_toolkit.application as pt_application
+
+    view = object.__new__(_PromptLiveView)
+
+    monkeypatch.setattr(pt_application, "get_app_or_none", lambda: None)
+    view._reset_prompt_renderer("no-app")  # must not raise
+
+    class _BoomRenderer:
+        def reset(self) -> None:
+            raise RuntimeError("boom")
+
+    class _App:
+        renderer = _BoomRenderer()
+
+    monkeypatch.setattr(pt_application, "get_app_or_none", lambda: _App())
+    view._reset_prompt_renderer("boom")  # must not raise
+
+
+def test_resize_change_forces_absolute_prompt_repaint(monkeypatch) -> None:
+    view = object.__new__(_PromptLiveView)
+    view._last_terminal_size = (80, 24)
+    view._resize_recovery_remaining = 0
+    view._force_refresh = False
+    view._current_terminal_size = lambda: (100, 30)  # type: ignore[method-assign]
+
+    resets: list[str] = []
+    monkeypatch.setattr(view, "_reset_prompt_renderer", lambda reason: resets.append(reason))
+
+    view._tick_resize_recovery()
+
+    assert resets == ["resize"]
+
+
+@pytest.mark.asyncio
+async def test_handoff_failure_forces_absolute_prompt_repaint(monkeypatch) -> None:
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise RuntimeError("terminal suspended")
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "_force_terminal", True)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    resets: list[str] = []
+    monkeypatch.setattr(view, "_reset_prompt_renderer", lambda reason: resets.append(reason))
+    view._pending_scrollback.append((Text("must survive"), True))
+
+    await view._flush_pending_scrollback()
+
+    assert resets == ["handoff-fail"]

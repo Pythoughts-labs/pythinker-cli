@@ -81,6 +81,7 @@ _KEYBOARD_SHORTCUTS = [
     ("Ctrl-O", "Edit in external editor ($VISUAL/$EDITOR)"),
     ("Ctrl-J / Alt-Enter", "Insert newline"),
     ("Ctrl-V", "Paste (supports images)"),
+    ("Ctrl-L", "Repaint the screen (recover a blank/corrupted display)"),
     ("Ctrl-D", "Exit"),
     ("Ctrl-C", "Interrupt"),
 ]
