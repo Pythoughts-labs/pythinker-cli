@@ -52,6 +52,26 @@ def test_render_progress_shows_recent_log_messages():
     assert "second checkpoint" in text
 
 
+def test_render_progress_truncated_phase_agents_are_not_duplicated():
+    # Regression guard: agents cut by the per-phase max_agents tail must stay
+    # truncated, not reappear at the bottom as "unphased" rows.
+    snap = WorkflowSnapshot(name="n", description="d")
+    for i in range(1, 9):
+        snap.start_agent(i, f"scan {i}", "Scan")
+        snap.end_agent(i)
+    text = render_progress(snap, max_agents=6)
+    assert "#1 " not in text
+    assert "#2 " not in text
+    assert text.count("#8 ") == 1
+
+
+def test_render_progress_still_shows_phaseless_agents():
+    snap = WorkflowSnapshot(name="n", description="d")
+    snap.start_agent(1, "loner", None)
+    text = render_progress(snap)
+    assert "loner" in text
+
+
 def test_render_progress_truncates_to_max_logs():
     snap = WorkflowSnapshot(name="n", description="d")
     for i in range(5):

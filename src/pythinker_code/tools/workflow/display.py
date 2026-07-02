@@ -84,7 +84,6 @@ def render_progress(snapshot: WorkflowSnapshot, max_agents: int = 6, max_logs: i
     lines = [
         f"◆ Workflow: {snapshot.name} ({snapshot.done_count}/{len(snapshot.agents)} done{state})"
     ]
-    rendered: set[int] = set()
     phase_order = list(snapshot.phases)
     if snapshot.current_phase and snapshot.current_phase not in phase_order:
         phase_order.append(snapshot.current_phase)
@@ -95,9 +94,10 @@ def render_progress(snapshot: WorkflowSnapshot, max_agents: int = 6, max_logs: i
         done = sum(1 for a in agents if a.status == "done")
         lines.append(f"  {phase} {done}/{len(agents)}")
         for agent in agents[-max_agents:]:
-            rendered.add(agent.id)
             lines.append(f"    #{agent.id} {_STATUS_ICON.get(agent.status, '?')} {agent.label}")
-    unphased = [a for a in snapshot.agents if a.id not in rendered]
+    # Membership in phase_order, not an id set of rendered rows: agents cut by
+    # the per-phase max_agents tail must stay truncated, not reappear here.
+    unphased = [a for a in snapshot.agents if a.phase not in phase_order]
     for agent in unphased[-max_agents:]:
         lines.append(f"    #{agent.id} {_STATUS_ICON.get(agent.status, '?')} {agent.label}")
     for message in snapshot.logs[-max_logs:]:
