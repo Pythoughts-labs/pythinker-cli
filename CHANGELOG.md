@@ -15,17 +15,24 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
-- Fix the Windows shell UI going blank mid-session (transcript and input box
-  disappearing until terminal restart): child processes no longer attach to the
-  interactive console (`CREATE_NO_WINDOW` on Shell-tool, background-task, and
-  `!` command spawns), and the prompt renderer now forces an absolute repaint
-  after terminal resizes and failed scrollback handoffs instead of diffing
-  against a stale frame.
-- Fix Workflow progress rendering duplicating agents truncated by the per-phase
-  display cap, close leaked `agent()` coroutines when `parallel()` rejects its
-  arguments, and add a 1000-agent lifetime backstop against runaway workflow loops.
-- Fix stale update-success notices so restarting into an older Homebrew install
-  shows `/update` again instead of a permanent "Restart to apply" banner.
+## 0.56.0 (2026-07-02)
+
+- **Windows shell UI recovers from mid-session console blanking.** The TUI's
+  transcript and input box could go blank mid-session until a terminal restart;
+  child processes spawned by the Shell tool, background tasks, and `!` commands
+  no longer attach to the interactive console (`CREATE_NO_WINDOW`), and the
+  prompt renderer now forces an absolute repaint after terminal resizes and
+  failed scrollback handoffs instead of diffing against a stale frame.
+- **Workflow progress rendering and lifecycle fixes.** Progress display no
+  longer duplicates agents once truncated by the per-phase display cap,
+  `agent()` coroutines are no longer leaked when `parallel()` rejects its
+  arguments, and a 1000-agent lifetime backstop now guards against runaway
+  workflow loops.
+- **Stale update-success notice cleared after downgrading.** Restarting into
+  an older Homebrew install no longer leaves a permanent "Restart to apply"
+  banner — the `/update` command surfaces again as expected.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.56.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.55.0 (2026-06-30)
 
