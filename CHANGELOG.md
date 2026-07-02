@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix Workflow progress rendering duplicating agents truncated by the per-phase
+  display cap, close leaked `agent()` coroutines when `parallel()` rejects its
+  arguments, and add a 1000-agent lifetime backstop against runaway workflow loops.
 - Fix stale update-success notices so restarting into an older Homebrew install
   shows `/update` again instead of a permanent "Restart to apply" banner.
 

@@ -250,3 +250,36 @@ async def test_cancellation_marks_running_cancelled_and_reraises():
         await task
     assert set(started) == {"a", "b"}
     assert set(skipped) == {"a", "b"}  # in-flight agents reported as cancelled, none completed
+
+
+@pytest.mark.asyncio
+async def test_agent_lifetime_cap_stops_runaway_loop(monkeypatch):
+    from pythinker_code.tools.workflow import engine
+
+    monkeypatch.setattr(engine, "MAX_TOTAL_AGENTS", 3)
+    runner, calls = make_runner()
+    script = 'meta = {"name": "n", "description": "d"}\nwhile True:\n    await agent("go")\n'
+    with pytest.raises(WorkflowRuntimeError, match="lifetime cap"):
+        await run_workflow(script, agent_runner=runner, cwd=".")
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_parallel_validation_failure_closes_pending_coroutines():
+    # Regression guard: mixing a plain function into parallel() raises, but the
+    # already-created agent() coroutines in the same list must be closed, not
+    # leaked as "coroutine was never awaited" warnings at GC time.
+    import gc
+    import warnings
+
+    runner, calls = make_runner()
+    script = (
+        'meta = {"name": "n", "description": "d"}\nawait parallel([agent("a"), len])\nreturn None\n'
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(WorkflowRuntimeError, match="not functions"):
+            await run_workflow(script, agent_runner=runner, cwd=".")
+        gc.collect()
+    assert not [w for w in caught if "never awaited" in str(w.message)]
+    assert calls == []

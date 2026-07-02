@@ -191,6 +191,12 @@ class WorkflowRuntimeError(Exception):
     """Raised when a workflow script misuses a primitive at runtime."""
 
 
+# Lifetime cap on agent() calls per workflow run — a runaway-loop backstop
+# (e.g. `while True: await agent(...)` with no token_budget set), mirroring
+# the reference implementation. Set far above any real workflow.
+MAX_TOTAL_AGENTS = 1000
+
+
 class AgentOptions:
     __slots__ = ("label", "phase", "schema", "model", "agent_type")
 
@@ -406,6 +412,11 @@ async def run_workflow(
             # batch instead of the whole dispatched set.
             if token_budget is not None and budget.remaining() <= 0:
                 raise WorkflowRuntimeError("workflow token budget exhausted")
+            if state["agent_count"] >= MAX_TOTAL_AGENTS:
+                raise WorkflowRuntimeError(
+                    f"workflow exceeded the {MAX_TOTAL_AGENTS}-agent lifetime cap; "
+                    "this is a runaway-loop backstop"
+                )
             state["agent_count"] += 1
             # Captured into a local now, before the first `await` below: other
             # concurrently-dispatched agent() calls can advance
@@ -440,9 +451,14 @@ async def run_workflow(
 
     async def parallel(items: Sequence[Any]) -> list[Any]:
         if not isinstance(items, (list, tuple)):
+            # Close before raising: the argument may itself be (or contain)
+            # already-created agent() coroutines that would otherwise leak
+            # as "never awaited" warnings.
+            _close_coroutines(items)
             raise WorkflowRuntimeError("parallel() expects a list of awaitables")
         for item in items:
             if callable(item) and not inspect.isawaitable(item):
+                _close_coroutines(items)
                 raise WorkflowRuntimeError(
                     "parallel() expects awaitables, not functions: "
                     "use parallel([agent('...'), agent('...')])"
