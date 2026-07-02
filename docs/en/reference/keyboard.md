@@ -17,6 +17,7 @@ Pythinker Code shell mode supports the following keyboard shortcuts.
 | `Ctrl-V` | Paste (supports images and video files) |
 | `Ctrl-E` | Expand full approval request content |
 | `Ctrl-T` | Show/hide the pinned todo list (during a running turn) |
+| `Ctrl-L` | Clear and repaint the screen (recovers a blank/corrupted display) |
 | `1`–`4` | Quick select approval option (`4` for decline with feedback) |
 | `1`–`5` | Select question option by number |
 | `Ctrl-D` | Exit Pythinker Code |

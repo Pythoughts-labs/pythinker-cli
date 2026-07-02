@@ -171,3 +171,51 @@ def test_terminate_process_tree_windows_uses_taskkill_tree(monkeypatch):
         ["taskkill", "/PID", "1234", "/T"],
         ["taskkill", "/PID", "1234", "/T", "/F"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_spawn_detaches_windows_console(runtime, monkeypatch):
+    """The spawned child must not attach to the interactive console on Windows.
+
+    A child sharing the TUI's console can corrupt it via the Win32 console
+    API even with redirected stdio; CREATE_NO_WINDOW detaches it.
+    """
+    import os as real_os
+    from types import SimpleNamespace
+
+    from pythinker_code.background import worker as worker_module
+
+    store = BackgroundTaskStore(runtime.session.context_file.parent / "tasks")
+    spec = TaskSpec(
+        id="b5555555",
+        kind="bash",
+        session_id=runtime.session.id,
+        description="echo hello",
+        tool_call_id="tool-9",
+        command="echo hello",
+        shell_name="bash",
+        shell_path="/bin/bash",
+        cwd=str(runtime.session.work_dir),
+        timeout_s=60,
+    )
+    store.create_task(spec)
+
+    captured: dict[str, object] = {}
+
+    async def _capture_and_abort(*args, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("spawn intercepted by test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _capture_and_abort)
+    # Swap the module's `os` reference rather than mutating the global
+    # `os.name`, which corrupts pathlib/pytest path handling mid-run.
+    monkeypatch.setattr(worker_module, "os", SimpleNamespace(name="nt", getpid=real_os.getpid))
+
+    await run_background_task_worker(store.task_dir(spec.id), heartbeat_interval_ms=50)
+
+    flags = captured["creationflags"]
+    assert isinstance(flags, int)
+    assert flags & 0x08000000  # CREATE_NO_WINDOW
+    assert "start_new_session" not in captured
+    # The intercepted spawn surfaced as an explicit failure, not silent success.
+    assert store.merged_view(spec.id).runtime.status == "failed"

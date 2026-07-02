@@ -2554,6 +2554,11 @@ class CustomPromptSession:
             track("shortcut_editor")
             self._open_in_external_editor(event)
 
+        @_kb.add("c-l", eager=True)
+        def _(event: KeyPressEvent) -> None:
+            """Erase and fully repaint the screen (recovery from console damage)."""
+            self._hard_repaint(event)
+
         def _has_staged_suggestion_prefill() -> bool:
             return bool(getattr(self, "_staged_suggestion_prefill", None))
 
@@ -3091,6 +3096,21 @@ class CustomPromptSession:
         fragments.append(("", _card_side_indent()))
         fragments.append(("bold", f"{PROMPT_SYMBOL_SHELL} "))
         return fragments
+
+    def _hard_repaint(self, event: KeyPressEvent) -> None:
+        """Erase the screen and absolutely repaint the prompt (Ctrl+L escape hatch).
+
+        Pins prompt_toolkit's default clear-screen behavior explicitly: when the
+        real screen has diverged from the renderer's frame model (Windows ConPTY
+        replay, a child process writing to the shared console), the differential
+        renderer keeps emitting empty diffs and the UI looks blank; this forces
+        an absolute frame. Explicit so future custom bindings cannot silently
+        shadow the recovery path.
+        """
+        try:
+            event.app.renderer.clear()
+        except Exception as exc:  # noqa: BLE001 — recovery must never crash the prompt
+            logger.debug("Hard repaint (ctrl-l) failed: {}", exc)
 
     def _open_in_external_editor(self, event: KeyPressEvent) -> None:
         """Open the current buffer content in an external editor."""
