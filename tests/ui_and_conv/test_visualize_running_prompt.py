@@ -285,6 +285,164 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
     assert out.value.strip() != ""
 
 
+def _card_session(
+    *, text: str = "", turn_starting: bool = False, delegate: object | None = None
+) -> CustomPromptSession:
+    """A CustomPromptSession stub with exactly the attrs the input-card gate reads
+    via direct access (so an init regression would fail loudly, not silently)."""
+    from types import SimpleNamespace
+
+    session = object.__new__(CustomPromptSession)
+    session._modal_delegates = []
+    session._turn_starting = turn_starting
+    session._running_prompt_delegate = delegate
+    session._session = SimpleNamespace(default_buffer=SimpleNamespace(text=text))
+    return session
+
+
+def _hiding_delegate(hide: bool) -> object:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(running_prompt_hide_input_card=lambda: hide)
+
+
+def test_input_card_hidden_pre_attach_via_turn_starting() -> None:
+    """The turn-start race: the shell dispatches a turn (and can repaint the
+    prompt) before the running-prompt delegate attaches. With only the
+    ``_turn_starting`` hint set — no delegate yet — the card is already hidden so
+    the pre-attach frame never paints the chrome that fossilizes."""
+    session = _card_session(turn_starting=True, delegate=None)
+    assert session._input_card_hidden_pre_stream() is True
+    assert session._should_render_input_buffer() is False
+
+
+def test_input_card_hidden_until_first_commit_via_delegate() -> None:
+    """Post-attach: the delegate reports the card must stay hidden until the
+    turn's first scrollback commit."""
+    session = _card_session(delegate=_hiding_delegate(True))
+    assert session._input_card_hidden_pre_stream() is True
+    assert session._should_render_input_buffer() is False
+
+
+def test_input_card_shown_after_first_commit() -> None:
+    """Once the turn has committed, the delegate stops hiding and the card
+    repaints so the user can see where to steer."""
+    session = _card_session(delegate=_hiding_delegate(False))
+    assert session._input_card_hidden_pre_stream() is False
+    assert session._should_render_input_buffer() is True
+
+
+def test_input_card_shown_once_user_types_to_steer() -> None:
+    """A non-empty buffer (the user typed to steer) always shows the card, even
+    while the delegate would otherwise hide it."""
+    session = _card_session(text="steer this", delegate=_hiding_delegate(True))
+    assert session._input_card_hidden_pre_stream() is False
+    assert session._should_render_input_buffer() is True
+
+
+def test_input_card_shown_when_idle_between_turns() -> None:
+    session = _card_session(turn_starting=False, delegate=None)
+    assert session._input_card_hidden_pre_stream() is False
+    assert session._should_render_input_buffer() is True
+
+
+def test_running_prompt_hide_input_card_flips_on_first_commit() -> None:
+    """The delegate hides the card until the turn's first commit, then shows it;
+    a finalizing/ended turn always shows it."""
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._committed_scrollback_this_turn = False
+    assert view.running_prompt_hide_input_card() is True
+
+    view._committed_scrollback_this_turn = True
+    assert view.running_prompt_hide_input_card() is False
+
+    view._committed_scrollback_this_turn = False
+    view._turn_ended = True
+    assert view.running_prompt_hide_input_card() is False
+
+
+def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None:
+    """The shell sets the hint on dispatch (once — idempotent); attach (delegate
+    takes over) and detach (turn ended / error-before-attach) both clear it so
+    the idle prompt is never left collapsed."""
+    session = object.__new__(CustomPromptSession)
+    session._turn_starting = False
+    invalidations: list[int] = []
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
+
+    session.mark_turn_starting()
+    assert session._turn_starting is True
+    assert len(invalidations) == 1  # repaint requested once
+    session.mark_turn_starting()  # idempotent: no extra repaint
+    assert len(invalidations) == 1
+
+    # attach clears the hint (delegate becomes source of truth)
+    session._running_prompt_delegate = None
+    session._running_prompt_previous_mode = None
+    session._mode = PromptMode.AGENT
+    session._apply_mode = lambda: None  # type: ignore[method-assign]
+    delegate = object()
+    session.attach_running_prompt(cast(Any, delegate))
+    assert session._turn_starting is False
+
+    # detach also clears it (belt-and-suspenders for the error-before-attach path)
+    session._turn_starting = True
+    session.detach_running_prompt(cast(Any, delegate))
+    assert session._turn_starting is False
+
+
+def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup() -> None:
+    """The shell's run_soul_command finally block must clear a stale hint on an
+    error-before-attach path without reaching into the private ``_turn_starting``
+    attribute — this is the public method it calls instead."""
+    session = object.__new__(CustomPromptSession)
+    session._turn_starting = True
+
+    session.clear_turn_starting()
+    assert session._turn_starting is False
+
+    # Idempotent by construction (plain assignment): a repeat call is harmless.
+    session.clear_turn_starting()
+    assert session._turn_starting is False
+
+
+def test_render_agent_prompt_message_honors_input_card_gate(monkeypatch) -> None:
+    """The chrome renderer must actually consult the gate: no top border and no
+    ``❯`` when ``_input_card_hidden_pre_stream()`` is True; both present when
+    False. This is the CI-runnable (no-PTY) guard for the failure mode the pyte
+    e2e catches visually — a renderer that stops reading the gate."""
+    from types import SimpleNamespace
+
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
+
+    border = "──────── ● off"
+    session = object.__new__(CustomPromptSession)
+    session._modal_delegates = []
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_input_top_border", lambda _c, _f: [("", border)])
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
+    monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
+
+    def _rendered(hidden: bool) -> str:
+        monkeypatch.setattr(session, "_input_card_hidden_pre_stream", lambda: hidden)
+        return "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    hidden_frame = _rendered(True)
+    assert border not in hidden_frame
+    assert PROMPT_SYMBOL_AGENT_INPUT not in hidden_frame
+
+    shown_frame = _rendered(False)
+    assert border in shown_frame
+    assert PROMPT_SYMBOL_AGENT_INPUT in shown_frame
+
+
 def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
     import time as _time
 

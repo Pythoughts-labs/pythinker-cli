@@ -47,6 +47,9 @@ class _FakePromptSession:
     def detach_running_prompt(self, delegate) -> None:
         return None
 
+    def mark_turn_starting(self) -> None:
+        return None
+
 
 def _make_user_input(
     command: str,

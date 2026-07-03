@@ -63,6 +63,7 @@ from pythinker_code.wire.types import (
     SteerInput,
     StepInterrupted,
     Suggestion,
+    TurnBegin,
     TurnEnd,
     WireMessage,
 )
@@ -163,6 +164,13 @@ class _PromptLiveView(_LiveView):
         self._scrollback_flush_lock = asyncio.Lock()
         self._last_terminal_size: tuple[int, int] | None = None
         self._resize_recovery_remaining: int = 0
+        # True once this turn has committed anything to scrollback via a
+        # run_in_terminal handoff. The input card is hidden until then (see
+        # running_prompt_hide_input_card): the turn's FIRST commit is the one
+        # whose teardown erase-height drifts and fossilizes the card above the
+        # stream, so the card must be absent from that pre-handoff frame. Reset
+        # at each turn's start.
+        self._committed_scrollback_this_turn: bool = False
 
     # -- Helpers -------------------------------------------------------------
 
@@ -265,6 +273,9 @@ class _PromptLiveView(_LiveView):
                 await run_in_terminal(emit)
             else:
                 emit()
+            # This turn has now committed to scrollback; the input card may
+            # repaint from here on (see running_prompt_hide_input_card).
+            self._committed_scrollback_this_turn = True
         except Exception as exc:
             _handoff_trace(f"HANDOFF_FAIL\t{reason}\t{type(exc).__name__}:{exc}")
             # The teardown/erase may have half-completed; force an absolute
@@ -786,6 +797,10 @@ class _PromptLiveView(_LiveView):
             # prompt, where they can look like part of the previous assistant
             # answer.
             return
+        # A fresh turn starts hidden-carded until its first commit — reset the
+        # flag on the 0->1 transition (super() increments the depth below).
+        if isinstance(msg, TurnBegin) and self._active_turn_depth == 0:
+            self._committed_scrollback_this_turn = False
         super().dispatch_wire_message(msg)
 
     def display_suggestion(self, event: Suggestion) -> None:
@@ -907,6 +922,29 @@ class _PromptLiveView(_LiveView):
 
     def running_prompt_hides_input_buffer(self) -> bool:
         return False
+
+    def running_prompt_hide_input_card(self) -> bool:
+        """True while the input card must stay hidden to avoid fossilizing it.
+
+        The card is hidden from turn-start until this turn's first scrollback
+        commit. That first commit's ``run_in_terminal`` teardown fossilizes
+        whatever chrome sits in the pre-handoff frame (the erase-height drifts on
+        the first transition into streaming); keeping the card out of that frame
+        is the only reliable prevention — suppressing it merely *during* the
+        handoff is too late, because the erase runs before the repaint. Once the
+        turn has committed, the layout is established and the card repaints for
+        the rest of the turn so the user can see where to steer.
+
+        No ``_active_turn_depth`` guard: the flag must hide the card from the
+        moment the delegate attaches — which can precede the ``TurnBegin`` that
+        raises the depth — through the first commit. ``_committed_scrollback_this_turn``
+        is explicitly reset to False on each ``TurnBegin`` (see
+        ``dispatch_wire_message``), not merely assumed from construction — this
+        method must stay correct even if a future change reuses one delegate
+        instance across turns instead of building a fresh one per turn."""
+        if self._turn_ended:
+            return False
+        return not self._committed_scrollback_this_turn
 
     def running_prompt_allows_text_input(self) -> bool:
         if self._current_approval_request_panel is not None:

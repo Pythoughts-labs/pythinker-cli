@@ -76,6 +76,10 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=6.0",
+    # Pure-Python VT100/xterm emulator: PTY UI tests feed raw terminal bytes to
+    # a virtual screen so they can assert on the *rendered* frame (catching
+    # incomplete-erase "ghost" rows), not just the byte stream.
+    "pyte>=0.8.2",
     # Pinned: ruff 0.15's formatter reflow fails `make check`. Unpin once the
     # formatting churn is resolved. Mirrored as a Dependabot ignore in
     # .github/dependabot.yml.

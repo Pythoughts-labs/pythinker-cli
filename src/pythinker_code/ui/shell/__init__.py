@@ -1387,6 +1387,17 @@ class Shell:
         """
         logger.info("Running soul with user input: {user_input}", user_input=user_input)
 
+        # Collapse the input card before the running-prompt delegate attaches, so
+        # a repaint in that gap cannot fossilize the card chrome above the stream
+        # (see CustomPromptSession.mark_turn_starting / _input_card_hidden_pre_stream).
+        # Set here — the single funnel for every dispatch path — rather than at
+        # each call site: this runs synchronously on coroutine entry, before the
+        # first await lets the just-resumed prompt task repaint. Cleared in this
+        # method's finally and on delegate attach/detach.
+        prompt_session = self._prompt_session
+        if prompt_session is not None:
+            prompt_session.mark_turn_starting()
+
         cancel_event = asyncio.Event()
 
         def _handler():
@@ -1688,6 +1699,11 @@ class Shell:
             )
             raise  # re-raise unknown error
         finally:
+            # Belt-and-suspenders: clear the turn-starting hint in case the turn
+            # errored before the delegate attached (detach clears it on the
+            # normal path). A stale hint would leave the idle prompt collapsed.
+            if prompt_session is not None:
+                prompt_session.clear_turn_starting()
             # Clean up btw modal if it's still attached (exception skipped wait_for_btw_dismiss)
             if captured_view is not None:
                 captured_view._dismiss_btw()  # pyright: ignore[reportPrivateUsage]

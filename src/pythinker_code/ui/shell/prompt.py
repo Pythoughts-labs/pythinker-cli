@@ -2340,6 +2340,13 @@ class CustomPromptSession:
         self._input_activity_event: asyncio.Event = asyncio.Event()
         self._running_prompt_previous_mode: PromptMode | None = None
         self._running_prompt_delegate: RunningPromptDelegate | None = None
+        # Set by the shell the instant an agent turn is dispatched, before the
+        # running-prompt delegate attaches. Bridges the race where the prompt is
+        # resumed (and can repaint the input card) before the delegate exists —
+        # without it, the pre-attach frame paints the card chrome that then
+        # fossilizes above the stream. Cleared on attach/detach. See
+        # _input_card_hidden_pre_stream.
+        self._turn_starting: bool = False
         self._latest_todos: tuple[TodoDisplayItem, ...] = ()
         self._modal_delegates: list[RunningPromptDelegate] = []
         self._shortcut_help_open = False
@@ -3185,8 +3192,51 @@ class CustomPromptSession:
             return PromptUIState.MODAL_TEXT_INPUT
         return PromptUIState.NORMAL_INPUT
 
+    def _input_card_hidden_pre_stream(self) -> bool:
+        """Hide the input card from turn-start until the turn's first commit.
+
+        The input card (top border + ``❯`` + buffer) is a second prompt beneath
+        the just-echoed message. If it is painted before the turn's first
+        scrollback commit, that commit's ``run_in_terminal`` teardown fossilizes
+        it above the stream as a ghost "second prompt" — the erase-height drifts
+        on the first transition into streaming, and suppressing the card only
+        *during* the handoff is too late (the erase runs before the repaint). So
+        the card must be absent from every pre-first-commit frame. Two windows
+        cover that: the pre-attach gap after the shell dispatches the turn but
+        before the delegate exists (``_turn_starting``), and post-attach until the
+        first commit (the delegate reports it via
+        ``running_prompt_hide_input_card``). Both hide the chrome and, in
+        lockstep, the buffer window (:meth:`_should_render_input_buffer`). Once
+        the turn has committed, the card repaints for the rest of the turn so the
+        user can see where to steer. Skipped when the user has typed (non-empty
+        buffer) or a modal owns the input line.
+        """
+        if self._active_modal_delegate() is not None:
+            return False
+        # Direct attribute access (not getattr-with-default): these are set in
+        # __init__, so an init regression should fail loudly, not silently drop
+        # the input guard and re-introduce the ghost. The delegate method stays a
+        # getattr: it is an optional RunningPromptDelegate extension only the
+        # live view implements.
+        if self._turn_starting:
+            hide = True
+        else:
+            delegate = self._running_prompt_delegate
+            hide = (
+                delegate is not None
+                and getattr(delegate, "running_prompt_hide_input_card", lambda: False)()
+            )
+        if not hide:
+            return False
+        return not self._session.default_buffer.text
+
     def _should_render_input_buffer(self) -> bool:
-        return self._active_ui_state() != PromptUIState.MODAL_HIDDEN_INPUT
+        if self._active_ui_state() == PromptUIState.MODAL_HIDDEN_INPUT:
+            return False
+        # Hide the empty buffer window in lockstep with the input card during the
+        # pre-first-commit window so the two never disagree on height (that drift
+        # is how the fossil ghost formed). Both repaint once the turn commits.
+        return not self._input_card_hidden_pre_stream()
 
     def _should_handle_running_prompt_key(self, key: str) -> bool:
         delegate = self._active_prompt_delegate()
@@ -3310,6 +3360,13 @@ class CustomPromptSession:
 
         # 3. When a modal is active, skip the normal input chrome.
         if modal_active:
+            return fragments
+
+        # Hide the input card until the turn's first scrollback commit, so its
+        # border + ``❯`` cannot be fossilized above the stream as a ghost second
+        # prompt (see _input_card_hidden_pre_stream). The card repaints for the
+        # rest of the turn so the user can see where to steer.
+        if self._input_card_hidden_pre_stream():
             return fragments
 
         if is_card_style():
@@ -3830,6 +3887,31 @@ class CustomPromptSession:
         await self._input_activity_event.wait()
         self._input_activity_event.clear()
 
+    def mark_turn_starting(self) -> None:
+        """Collapse the input card immediately, before the delegate attaches.
+
+        The shell calls this the moment it dispatches an agent turn — right
+        before it resumes the prompt read — so the first repaint after the turn
+        starts never paints the input-card chrome (which would fossilize above
+        the stream). Superseded by the delegate once :meth:`attach_running_prompt`
+        runs; cleared there and on detach.
+        """
+        # Idempotent: a repeat call (e.g. two dispatches before an attach) must
+        # not cost an extra repaint.
+        if not self._turn_starting:
+            self._turn_starting = True
+            self.invalidate()
+
+    def clear_turn_starting(self) -> None:
+        """Drop the pre-attach turn-starting hint without an attach/detach.
+
+        Public counterpart to :meth:`mark_turn_starting`, for callers (the shell's
+        ``run_soul_command`` ``finally``) that need to clear the hint on an error
+        path that occurred before the running-prompt delegate ever attached —
+        without reaching into the private ``_turn_starting`` attribute.
+        """
+        self._turn_starting = False
+
     def attach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
         current = getattr(self, "_running_prompt_delegate", None)
         if current is delegate:
@@ -3837,6 +3919,8 @@ class CustomPromptSession:
         if current is None:
             self._running_prompt_previous_mode = self._mode
         self._running_prompt_delegate = delegate
+        # The delegate is the source of truth now; drop the pre-attach hint.
+        self._turn_starting = False
         self._mode = PromptMode.AGENT
         self._apply_mode()
         self.invalidate()
@@ -3847,6 +3931,7 @@ class CustomPromptSession:
         previous_mode = getattr(self, "_running_prompt_previous_mode", None)
         self._running_prompt_delegate = None
         self._running_prompt_previous_mode = None
+        self._turn_starting = False
         if previous_mode is not None:
             self._mode = previous_mode
         self._apply_mode()

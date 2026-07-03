@@ -15,6 +15,17 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **No more ghost/duplicate input prompt while the agent works.** After
+  submitting a prompt, the input card (top border + `❯`) is no longer
+  fossilized above the stream as a second, ghostly prompt. The card is hidden
+  from turn-start until the turn's first scrollback commit — the transition
+  whose `run_in_terminal` teardown drifts and leaves the chrome behind — then
+  repaints below the live stream so you can still see where to steer. It also
+  collapses the instant a turn is dispatched (before the running-prompt delegate
+  attaches) to close the same race on the pre-attach frame; the card returns as
+  soon as the response starts streaming, when you type to steer, or when the
+  turn ends.
+
 ## 0.56.0 (2026-07-02)
 
 - **Windows shell UI recovers from mid-session console blanking.** The TUI's
