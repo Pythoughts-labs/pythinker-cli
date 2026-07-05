@@ -44,8 +44,8 @@ def benchmark_usage() -> str:
     return "\n".join(
         [
             "Usage:",
-            "  /benchmark start --model <model-key> [--task <task-id> | --suite <suite-name>]",
-            "  /benchmark estimate --model <model-key> [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark start [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
             "  /benchmark list",
             "  /benchmark show <run-id>",
             "  /benchmark report [--suite <suite-name>]",
@@ -109,8 +109,6 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
     suite = _optional_str(values.get("suite"))
     if task is not None and suite is not None:
         raise BenchmarkSyntaxError("--task and --suite are mutually exclusive")
-    if values["subcommand"] in {"start", "estimate"} and not values.get("model"):
-        raise BenchmarkSyntaxError(f"Missing --model\n{benchmark_usage()}")
     judges = str(values.get("judges", "off"))
     if judges != "off":
         raise BenchmarkSyntaxError("--judges only supports 'off' in v1")
@@ -177,10 +175,9 @@ def list_benchmarks() -> str:
 
 
 def estimate_benchmark(soul: PythinkerSoul, args: BenchmarkArgs) -> str:
-    assert args.model is not None
-    _validate_model(soul, args.model)
+    model_key = _resolve_model_key(soul, args.model)
     estimate = build_estimate(
-        model_key=args.model,
+        model_key=model_key,
         task_id=args.task,
         suite_name=args.suite or (None if args.task else DEFAULT_SUITE),
         repeat=args.repeat,
@@ -189,8 +186,7 @@ def estimate_benchmark(soul: PythinkerSoul, args: BenchmarkArgs) -> str:
 
 
 async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
-    assert args.model is not None
-    _validate_model(soul, args.model)
+    model_key = _resolve_model_key(soul, args.model)
     root = args.output or get_share_dir() / "benchmarks"
     run_summaries: list[str] = []
     suite_name = args.suite or (None if args.task else DEFAULT_SUITE)
@@ -205,7 +201,7 @@ async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args:
                 soul=soul,
                 task=task,
                 recorder=recorder,
-                model_key=args.model,
+                model_key=model_key,
                 command=f"/benchmark {raw_args}",
                 suite_name=suite_name,
                 repeat_index=repeat_index,
@@ -258,6 +254,24 @@ def render_benchmark_report(output: Path | None = None, suite: str | None = None
 def _validate_model(soul: PythinkerSoul, model_key: str) -> None:
     if model_key not in soul.runtime.config.models:
         raise UnknownBenchmarkModelError(f"Unknown benchmark model: {model_key}")
+
+
+def _resolve_model_key(soul: PythinkerSoul, requested_model: str | None) -> str:
+    if requested_model is not None:
+        _validate_model(soul, requested_model)
+        return requested_model
+    config = soul.runtime.config
+    active_model = soul.runtime.llm.model_config if soul.runtime.llm else None
+    if active_model is not None:
+        for model_key, model_config in config.models.items():
+            if model_config == active_model:
+                return model_key
+    if config.default_model:
+        _validate_model(soul, config.default_model)
+        return config.default_model
+    raise UnknownBenchmarkModelError(
+        "No active benchmark model. Select a Pythinker model or pass --model <model-key>."
+    )
 
 
 def _run_id(task_id: str) -> str:

@@ -25,6 +25,7 @@ def _make_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
     runtime.config.models["mock-model"] = LLMModel(
         provider="mock", model="mock", max_context_size=100_000
     )
+    runtime.config.default_model = "mock-model"
     agent = Agent(
         name="Test Agent",
         system_prompt="Test system prompt.",
@@ -76,7 +77,7 @@ async def test_benchmark_estimate_does_not_run_turn(
 ) -> None:
     soul = _make_soul(runtime, tmp_path)
 
-    await _run(soul, "estimate --model mock-model --suite pythinker-smoke")
+    await _run(soul, "estimate --suite pythinker-smoke")
 
     text = "\n".join(part.text for part in sent)
     assert "Pythinker Benchmark estimate" in text
@@ -86,14 +87,15 @@ async def test_benchmark_estimate_does_not_run_turn(
     turn_mock.assert_not_awaited()
 
 
-async def test_benchmark_start_missing_model_shows_usage(
+async def test_benchmark_start_without_model_uses_current_model(
     runtime: Runtime, tmp_path: Path, sent: list[TextPart]
 ) -> None:
     soul = _make_soul(runtime, tmp_path)
 
-    await _run(soul, "start --task smoke-edit-readme")
+    await _run(soul, "estimate --task smoke-edit-readme")
 
-    assert any("Usage:" in part.text and "--model" in part.text for part in sent)
+    text = "\n".join(part.text for part in sent)
+    assert "Model: mock-model" in text
 
 
 async def test_benchmark_start_rejects_concurrency_gt_one(
@@ -140,8 +142,8 @@ async def test_benchmark_start_default_suite_records_suite_name(
 
     await start_benchmark(
         soul,
-        BenchmarkArgs(subcommand="start", model="mock-model", output=tmp_path / "runs"),
-        raw_args="start --model mock-model",
+        BenchmarkArgs(subcommand="start", output=tmp_path / "runs"),
+        raw_args="start",
     )
 
     assert seen_suite_names == ["pythinker-smoke", "pythinker-smoke", "pythinker-smoke"]
