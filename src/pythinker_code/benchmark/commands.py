@@ -212,16 +212,15 @@ async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args:
                     [
                         "Pythinker Benchmark finished.",
                         "",
-                        f"Run: {run_id}",
-                        f"Status: {result.status}",
-                        f"Duration: {result.duration_ms / 1000:.1f}s",
-                        f"Steps: {result.steps}",
-                        f"Tool calls: {result.tool_calls}",
-                        "Changed files: "
+                        f"- Run: {run_id}",
+                        f"- Status: {result.status}",
+                        f"- Duration: {result.duration_ms / 1000:.1f}s",
+                        f"- Steps: {result.steps}",
+                        f"- Tool calls: {result.tool_calls}",
+                        "- Changed files: "
                         + (", ".join(result.changed_files) if result.changed_files else "(none)"),
-                        "Estimated cost: unavailable",
-                        "",
-                        f"Report: {recorder.run_dir / 'report.md'}",
+                        "- Estimated cost: unavailable",
+                        f"- Report: {recorder.run_dir / 'report.md'}",
                     ]
                 )
             )

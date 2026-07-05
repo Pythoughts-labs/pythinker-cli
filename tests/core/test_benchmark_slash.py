@@ -141,12 +141,15 @@ async def test_benchmark_start_default_suite_records_suite_name(
 
     monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)
 
-    await start_benchmark(
+    output = await start_benchmark(
         soul,
         BenchmarkArgs(subcommand="start", output=tmp_path / "runs"),
         raw_args="start",
     )
 
+    assert "- Run:" in output
+    assert "\nRun:" not in output
+    assert "- Report:" in output
     assert seen_suite_names == [
         "pythinker-core",
         "pythinker-core",
