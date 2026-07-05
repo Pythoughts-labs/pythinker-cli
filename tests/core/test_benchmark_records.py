@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
+
+import pytest
 
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.runner import BenchmarkResult, VerificationResult
@@ -229,3 +232,49 @@ def test_finish_run_persists_reproducibility_metadata(tmp_path: Path) -> None:
     assert summary["environment"]["git_commit"] == "abc123"
     assert summary["environment"]["git_dirty"] is False
     assert summary["environment"]["task_max_steps"] == 60
+
+
+def test_collect_benchmark_environment_includes_pythinker_version_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.benchmark import environment
+
+    monkeypatch.setattr(
+        "pythinker_code.benchmark.environment.importlib.metadata.version",
+        lambda _distribution_name: "9.9.9",
+    )
+
+    collected = environment.collect_benchmark_environment(
+        repo_root=tmp_path,
+        task_timeout_seconds=4,
+        task_max_steps=8,
+        verification_command="pytest",
+    )
+
+    assert collected["pythinker_version"] == "9.9.9"
+
+
+def test_collect_benchmark_environment_records_none_without_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _missing_package(_distribution_name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        _missing_package,
+    )
+
+    from pythinker_code.benchmark import environment
+
+    collected = environment.collect_benchmark_environment(
+        repo_root=tmp_path,
+        task_timeout_seconds=4,
+        task_max_steps=8,
+        verification_command="pytest",
+    )
+
+    assert collected["pythinker_version"] is None

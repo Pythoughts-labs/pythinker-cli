@@ -194,3 +194,31 @@ async def test_run_task_applies_and_restores_task_step_limit(
     assert result.status == "passed"
     assert seen_limits == [2]
     assert soul._loop_control.max_steps_per_turn == original_limit  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_run_task_records_timeout_override_for_environment(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    soul.turn = AsyncMock(  # type: ignore[method-assign]
+        return_value=type("Outcome", (), {"step_count": 1, "final_message": None})()
+    )
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    monkeypatch.setattr(
+        "pythinker_code.benchmark.runner.collect_benchmark_environment",
+        lambda *_, task_timeout_seconds, **__: {"task_timeout_seconds": task_timeout_seconds},
+    )
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-edit-readme"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --task smoke-edit-readme",
+        timeout_seconds=5,
+    )
+
+    assert result.environment["task_timeout_seconds"] == 5

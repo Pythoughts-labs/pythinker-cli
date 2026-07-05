@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import platform
 import subprocess
 import sys
@@ -19,6 +20,7 @@ def collect_benchmark_environment(
         "git_dirty": _git_dirty(repo_root),
         "python_version": sys.version.split()[0],
         "platform": platform.platform(),
+        "pythinker_version": _pythinker_version(),
         "task_timeout_seconds": task_timeout_seconds,
         "task_max_steps": task_max_steps,
         "verification_command_sha256": hashlib.sha256(
@@ -63,3 +65,10 @@ def _git_dirty(repo_root: Path) -> bool | None:
     if completed.returncode != 0:
         return None
     return bool(completed.stdout.strip())
+
+
+def _pythinker_version() -> str | None:
+    try:
+        return importlib.metadata.version("pythinker-code")
+    except importlib.metadata.PackageNotFoundError:
+        return None

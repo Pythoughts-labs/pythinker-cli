@@ -83,6 +83,7 @@ async def run_task(
     workspace = recorder.workspace_dir
     materialize_workspace(task, workspace)
     recorder.record_event("workspace_prepared", {"workspace": str(workspace)})
+    effective_timeout = timeout_seconds or task.limits.timeout_seconds
 
     before = _snapshot_files(workspace)
     started = time.monotonic()
@@ -119,7 +120,7 @@ async def run_task(
         try:
             outcome = await asyncio.wait_for(
                 soul.turn(Message(role="user", content=benchmark_prompt)),  # type: ignore[attr-defined]
-                timeout=timeout_seconds or task.limits.timeout_seconds,
+                timeout=effective_timeout,
             )
         except TimeoutError:
             status = "timeout"
@@ -201,7 +202,7 @@ async def run_task(
         activity={},
         environment=collect_benchmark_environment(
             repo_root=Path.cwd(),
-            task_timeout_seconds=task.limits.timeout_seconds,
+            task_timeout_seconds=effective_timeout,
             task_max_steps=task.limits.max_steps,
             verification_command=task.verification.command,
         ),
