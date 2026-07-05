@@ -40,6 +40,7 @@ from prompt_toolkit.formatted_text import (
     AnyFormattedText,
     FormattedText,
     StyleAndTextTuples,
+    fragment_list_to_text,
     to_formatted_text,
 )
 from prompt_toolkit.history import InMemoryHistory
@@ -87,6 +88,7 @@ from pythinker_code.ui.shell.spacing import (
 )
 from pythinker_code.ui.shell.spinner_words import spinner_message
 from pythinker_code.ui.shell.sync_output import install_synchronized_output
+from pythinker_code.ui.shell.tui import RunningPromptScene
 from pythinker_code.ui.terminal_capabilities import synchronized_output_enabled
 from pythinker_code.ui.theme import get_prompt_style, get_toolbar_colors, thinking_dot_style
 from pythinker_code.ui.theme import get_tui_tokens as _get_tui_tokens
@@ -3339,6 +3341,77 @@ class CustomPromptSession:
         if getattr(self, "_shortcut_help_open", False) and not modal_active:
             fragments.extend(self._render_shortcut_help(columns))
             ensure_prompt_newline(fragments)
+
+        running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
+        if not modal_active and running_prompt_delegate is not None and is_card_style():
+            input_card_hidden = self._input_card_hidden_pre_stream()
+            render_running_body = getattr(
+                running_prompt_delegate, "render_running_prompt_body", None
+            )
+            running_body = (
+                to_formatted_text(render_running_body(columns))
+                if not input_card_hidden and callable(render_running_body)
+                else FormattedText()
+            )
+            preamble = FormattedText()
+            if agent_status:
+                preamble.extend(agent_status)
+                ensure_prompt_newline(preamble)
+            if running_body:
+                preamble.extend(running_body)
+                ensure_prompt_newline(preamble)
+            if preamble or pinned_rows:
+                preamble = self._fit_preamble_with_pinned_tail(
+                    preamble,
+                    pinned,
+                    columns,
+                    max_rows,
+                )
+            if preamble:
+                fragments.extend(preamble)
+
+            if input_card_hidden:
+                hide_chrome = (
+                    self._turn_starting
+                    or getattr(
+                        running_prompt_delegate,
+                        "running_prompt_hide_input_card_chrome",
+                        lambda: False,
+                    )()
+                )
+                if hide_chrome:
+                    return fragments
+
+            tc = get_toolbar_colors()
+            body_text = fragment_list_to_text(fragments).rstrip("\n")
+            top_border = fragment_list_to_text(
+                self._render_input_top_border(columns, tc.separator)
+            ).rstrip("\n")
+            render_placeholder = getattr(
+                running_prompt_delegate, "running_prompt_placeholder", None
+            )
+            placeholder_value = (
+                render_placeholder()
+                if not input_card_hidden and callable(render_placeholder)
+                else FormattedText()
+            )
+            placeholder = fragment_list_to_text(to_formatted_text(placeholder_value)).strip()
+            scene = RunningPromptScene(
+                body=body_text,
+                top_border=top_border,
+                prompt_symbol=PROMPT_SYMBOL_AGENT_INPUT,
+                placeholder=placeholder,
+            )
+            scene_fragments: FormattedText = FormattedText()
+            scene_lines = scene.render(columns)
+            for index, line in enumerate(scene_lines):
+                if index:
+                    scene_fragments.append(("", "\n"))
+                text = line.rstrip()
+                if index == len(scene_lines) - 1 and not placeholder:
+                    text = f"{text} "
+                scene_fragments.append(("", text))
+            return scene_fragments
 
         if modal_active and body:
             status_budget = max(0, max_rows - body_rows - pinned_rows)

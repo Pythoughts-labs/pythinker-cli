@@ -306,6 +306,32 @@ def _hiding_delegate(hide: bool) -> object:
     return SimpleNamespace(running_prompt_hide_input_card=lambda: hide)
 
 
+def _body_delegate(body: str):
+    class _Delegate:
+        def render_running_prompt_body(self, columns: int) -> str:
+            return body
+
+        def running_prompt_placeholder(self) -> None:
+            return None
+
+        def running_prompt_allows_text_input(self) -> bool:
+            return False
+
+        def running_prompt_hides_input_buffer(self) -> bool:
+            return True
+
+        def running_prompt_accepts_submission(self) -> bool:
+            return False
+
+        def should_handle_running_prompt_key(self, key: str) -> bool:
+            return False
+
+        def handle_running_prompt_key(self, key: str, event) -> None:  # noqa: ANN001
+            raise AssertionError("not expected")
+
+    return _Delegate()
+
+
 def test_input_card_pre_attach_hides_until_delegate_can_pin_spinner() -> None:
     """The pre-attach race frame hides the card so it cannot fossilize above
     the spinner before the running-prompt delegate exists."""
@@ -517,6 +543,31 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buf
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+
+
+def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
+
+    border = "──────── ● off"
+    session = _card_session(delegate=_body_delegate("assistant chunk"))
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_input_top_border", lambda _c, _f: [("", border)])
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
+    monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
+
+    frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    assert frame == f"assistant chunk\n{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_live_view_hides_buffer(
