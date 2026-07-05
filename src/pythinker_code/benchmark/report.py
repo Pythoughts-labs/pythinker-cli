@@ -17,8 +17,10 @@ def render_run_report(
     runtime_obj = summary.get("runtime")
     verification_obj = summary.get("verification")
     usage_obj = summary.get("usage")
+    activity_obj = summary.get("activity")
     changed_files = []
     runtime = cast(dict[str, Any], runtime_obj) if isinstance(runtime_obj, dict) else {}
+    activity = cast(dict[str, Any], activity_obj) if isinstance(activity_obj, dict) else {}
     verification = (
         cast(dict[str, Any], verification_obj) if isinstance(verification_obj, dict) else {}
     )
@@ -27,6 +29,12 @@ def render_run_report(
         raw_changed = runtime.get("changed_files")
         if isinstance(raw_changed, list):
             changed_files = [str(item) for item in cast(list[object], raw_changed)]
+    activity_lines = [
+        f"  - changed files: {activity.get('changed_files_count', 0)}",
+        f"  - added lines: {activity.get('added_lines', 0)}",
+        f"  - removed lines: {activity.get('removed_lines', 0)}",
+        f"  - shell tool calls: {activity.get('shell_tool_calls', 0)}",
+    ]
     verification_status = "unknown"
     if verification:
         verification_status = str(verification.get("status", "unknown"))
@@ -50,6 +58,8 @@ def render_run_report(
         f"- Steps: {runtime.get('steps', 0)}",
         f"- Tool calls: {runtime.get('tool_calls', 0)}",
         f"- Changed files: {', '.join(changed_files) if changed_files else '(none)'}",
+        "- Activity:",
+        *activity_lines,
         f"- Verification: {verification_status}",
         f"- Estimated cost: {estimated_cost}",
         f"- Artifacts: {artifact_root}",

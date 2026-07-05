@@ -13,6 +13,7 @@ from pythinker_core.message import Message
 from pythinker_host.path import HostPath
 
 from pythinker_code.benchmark.environment import collect_benchmark_environment
+from pythinker_code.benchmark.activity import summarize_benchmark_activity
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.tasks import BenchmarkTask, materialize_workspace
 from pythinker_code.config import LoopControl
@@ -182,7 +183,9 @@ async def run_task(
         runtime.builtin_args = old_builtin_args
         _restore_benchmark_step_limit(soul, old_loop_control)
 
-    changed_files = _changed_files(workspace, before)
+    after = _snapshot_files(workspace)
+    changed_files = _changed_files_from_snapshots(before, after)
+    activity = summarize_benchmark_activity(before, after, wire_file, wire_offset)
     tool_calls = _count_wire_tool_calls(wire_file, wire_offset)
     usage = _last_wire_usage(wire_file, wire_offset)
     result = BenchmarkResult(
@@ -199,7 +202,7 @@ async def run_task(
         output_tokens=usage["output_tokens"],
         reasoning_tokens=usage["reasoning_tokens"],
         estimated_cost_usd=None,
-        activity={},
+        activity=activity,
         environment=collect_benchmark_environment(
             repo_root=Path.cwd(),
             task_timeout_seconds=effective_timeout,
@@ -396,9 +399,8 @@ def _snapshot_files(workspace: Path) -> dict[str, str]:
     return snapshot
 
 
-def _changed_files(workspace: Path, before: dict[str, str]) -> list[str]:
+def _changed_files_from_snapshots(before: dict[str, str], after: dict[str, str]) -> list[str]:
     changed: list[str] = []
-    after = _snapshot_files(workspace)
     for name, content in sorted(after.items()):
         if before.get(name) != content:
             changed.append(name)
