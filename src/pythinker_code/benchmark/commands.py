@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ DEFAULT_SANDBOX = "current-pythinker-approval-runtime"
 class BenchmarkArgs:
     subcommand: str
     model: str | None = None
+    models: list[str] | None = None
     task: str | None = None
     suite: str | None = None
     repeat: int = 1
@@ -48,6 +50,7 @@ class BenchmarkArgs:
     trusted_dataset: bool = False
     run_id: str | None = None
 
+
 def benchmark_usage() -> str:
     return "\n".join(
         [
@@ -57,6 +60,10 @@ def benchmark_usage() -> str:
             "  /benchmark:all [--model <model-key>]",
             "  /benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
             "  /benchmark:estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark compare --models <model-a,model-b> [--task <task-id> | "
+            "--suite <suite-name>] [--repeat <n>]",
+            "  /benchmark:compare --models <model-a,model-b> [--task <task-id> | "
+            "--suite <suite-name>] [--repeat <n>]",
             "  /benchmark list",
             "  /benchmark:list",
             "  /benchmark show <run-id>",
@@ -79,7 +86,7 @@ def parse_args(args: str) -> BenchmarkArgs:
     if not tokens:
         raise BenchmarkSyntaxError(benchmark_usage())
     subcommand = tokens.pop(0)
-    if subcommand not in {"start", "estimate", "list", "show", "report", "swe"}:
+    if subcommand not in {"start", "estimate", "list", "show", "report", "swe", "compare"}:
         raise BenchmarkSyntaxError(
             f"Unknown benchmark subcommand: {subcommand}\n{benchmark_usage()}"
         )
@@ -95,6 +102,7 @@ def parse_args(args: str) -> BenchmarkArgs:
         key = token.removeprefix("--").replace("-", "_")
         if key not in {
             "model",
+            "models",
             "task",
             "suite",
             "repeat",
@@ -122,6 +130,10 @@ def parse_args(args: str) -> BenchmarkArgs:
 
 
 def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
+    models_value = values.get("models")
+    models = _model_list(models_value) if models_value is not None else None
+    if str(values["subcommand"]) == "compare" and (models is None or len(models) < 2):
+        raise BenchmarkSyntaxError("--models must include at least two models")
     repeat = _positive_int(values.get("repeat", "1"), "--repeat")
     max_concurrency = _positive_int(values.get("max_concurrency", "1"), "--max-concurrency")
     timeout = values.get("timeout_seconds")
@@ -149,6 +161,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         task=task,
         suite=suite,
         repeat=repeat,
+        models=models,
         max_concurrency=max_concurrency,
         timeout_seconds=timeout_seconds,
         judges=judges,
@@ -159,6 +172,11 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         trusted_dataset=trusted_dataset,
         run_id=_optional_str(values.get("run_id")),
     )
+
+
+
+def _model_list(value: object) -> list[str]:
+    return [part.strip() for part in str(value).split(",") if part.strip()]
 
 
 def _optional_str(value: object) -> str | None:
@@ -204,7 +222,21 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
         return await start_swe_benchmark(soul, parsed, raw_args=args)
     if parsed.subcommand == "start":
         return await start_benchmark(soul, parsed, raw_args=args)
+    if parsed.subcommand == "compare":
+        return await compare_benchmark(soul, parsed, raw_args=args)
     raise BenchmarkSyntaxError(benchmark_usage())
+
+
+async def compare_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
+    assert args.models is not None
+    summaries: list[str] = []
+    for model_key in args.models:
+        _validate_model(soul, model_key)
+        model_args = dataclasses.replace(args, model=model_key, models=None, subcommand="start")
+        summaries.append(await start_benchmark(soul, model_args, raw_args=raw_args))
+    suite = args.suite or (None if args.task else DEFAULT_SUITE)
+    report = render_benchmark_report(args.output, suite)
+    return "\n\n".join([*summaries, report])
 
 
 def list_benchmarks() -> str:

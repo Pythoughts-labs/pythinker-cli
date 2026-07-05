@@ -9,7 +9,9 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code.benchmark.commands import (
     BenchmarkArgs,
+    BenchmarkSyntaxError,
     benchmark_usage,
+    parse_args,
     render_benchmark_report,
     start_benchmark,
 )
@@ -75,9 +77,11 @@ async def test_benchmark_command_registered(runtime: Runtime, tmp_path: Path) ->
     assert "benchmark:list" in names
     assert "benchmark:show" in names
     assert "benchmark:report" in names
+    assert "benchmark:compare" in names
     assert "benchmark:swe" in names
     assert soul_slash_registry.find_command("benchmark") is not None
     assert soul_slash_registry.find_command("benchmark:start") is not None
+    assert soul_slash_registry.find_command("benchmark:compare") is not None
     assert soul_slash_registry.find_command("benchmark:swe") is not None
 
 
@@ -86,6 +90,20 @@ def test_benchmark_usage_documents_trusted_swe_dataset_gate() -> None:
 
     assert "/benchmark swe --dataset <path.jsonl> --trusted-dataset true" in usage
     assert "/benchmark:swe --dataset <path.jsonl> --trusted-dataset true" in usage
+
+
+def test_parse_compare_models() -> None:
+    args = parse_args("compare --models model-a,model-b --suite pythinker-core --repeat 2")
+
+    assert args.subcommand == "compare"
+    assert args.models == ["model-a", "model-b"]
+    assert args.suite == "pythinker-core"
+    assert args.repeat == 2
+
+
+def test_parse_compare_requires_two_models() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="at least two models"):
+        parse_args("compare --models model-a")
 
 
 async def test_benchmark_list_shows_bundled_suite(
