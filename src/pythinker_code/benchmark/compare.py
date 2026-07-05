@@ -14,14 +14,14 @@ def readiness_warnings(rows: Sequence[BenchmarkReportRow]) -> list[str]:
     for row in rows:
         model = str(row.run.get("model_key") or "unknown")
         repeats_by_model.setdefault(model, set()).add(_repeat_index(row))
-    suites = {str(row.run.get("suite_name") or "") for row in rows}
+    suites = {row.run.get("suite_name") for row in rows}
     if len(models) < 2:
         warnings.append("Single model only: do not describe this as a model comparison.")
     if any(len(repeats) < 2 for repeats in repeats_by_model.values()):
         warnings.append(
             "Single repeat only: report this as a smoke result, not a stable estimate."
         )
-    if any(suite == "pythinker-core" or suite.startswith("swe:") for suite in suites):
+    if any(_is_local_fixture_suite(suite) for suite in suites):
         warnings.append("Local fixture scope: this is not a full SWE-bench Docker evaluation.")
     if any(_missing_cost(row) for row in rows):
         warnings.append("Cost unavailable for at least one run: omit cost-efficiency claims.")
@@ -61,3 +61,11 @@ def _repeat_index(row: BenchmarkReportRow) -> int:
         except ValueError:
             return 1
     return 1
+
+
+def _is_local_fixture_suite(suite: object) -> bool:
+    if suite is None:
+        return True
+    if not isinstance(suite, str):
+        return False
+    return suite in {"pythinker-core", "pythinker-smoke"} or suite.startswith("swe:")

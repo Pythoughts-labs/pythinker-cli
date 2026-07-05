@@ -70,3 +70,43 @@ def test_readiness_warnings_flag_missing_dirty_metadata() -> None:
     warnings = readiness_warnings([row])
 
     assert any("dirty git worktree metadata" in warning.lower() for warning in warnings)
+
+
+def test_readiness_warnings_flag_direct_task_runs_as_local_fixture() -> None:
+    row = BenchmarkReportRow(
+        run={
+            "model_key": "model-a",
+            "task_id": "core-safe-path-join",
+            "suite_name": None,
+            "repeat_index": 1,
+        },
+        summary={
+            "status": "passed",
+            "usage": {"estimated_cost_usd": 0.01},
+            "environment": {"git_dirty": False},
+        },
+    )
+
+    warnings = readiness_warnings([row])
+
+    assert "local fixture" in " ".join(warnings).lower()
+
+
+def test_readiness_warnings_flag_smoke_suite_as_local_fixture() -> None:
+    row = BenchmarkReportRow(
+        run={
+            "model_key": "model-a",
+            "task_id": "smoke-edit-readme",
+            "suite_name": "pythinker-smoke",
+            "repeat_index": 1,
+        },
+        summary={
+            "status": "passed",
+            "usage": {"estimated_cost_usd": 0.01},
+            "environment": {"git_dirty": False},
+        },
+    )
+
+    warnings = readiness_warnings([row])
+
+    assert "local fixture" in " ".join(warnings).lower()
