@@ -107,6 +107,25 @@ A bundled task JSON object contains:
 
 Workspace paths must be relative, non-empty, and must not contain `..` path segments. Verification type is currently `command`.
 
+## Online discovery and quiz fixtures
+
+`/benchmark discover` can write provisional JSONL records from allowlisted online benchmark sources. These records preserve the source URL and are marked `trusted: false`. Online quiz fixture records use deterministic review metadata:
+
+```json
+{
+  "verification": {
+    "type": "answer_contains",
+    "expected_substrings": ["terminal-bench", "hard"]
+  },
+  "trusted": false,
+  "workspace": {
+    "files": {}
+  }
+}
+```
+
+These manifests are for dataset review and offline conversion first. They are not runnable through `/benchmark:swe`, and `answer_contains` is not executed by the benchmark runner. Convert reviewed tasks into trusted local fixtures with workspace files and a local verification command before running them.
+
 ## SWE-style local fixtures
 
 `/benchmark:swe` loads newline-delimited JSON records with local workspace files and a verification command. The command is executed on the local machine after the agent turn, so the slash command refuses to run unless `--trusted-dataset true` is present:

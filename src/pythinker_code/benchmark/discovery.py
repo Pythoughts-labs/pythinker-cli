@@ -61,6 +61,29 @@ def discover_benchmark_sources(
     ]
 
 
+def quiz_fixture_from_discovery(
+    task: DiscoveredBenchmarkTask,
+    *,
+    question: str,
+    expected_substrings: list[str],
+) -> dict[str, object]:
+    if not expected_substrings:
+        raise ValueError("expected_substrings must not be empty")
+    return {
+        "instance_id": f"online-{task.source}-{_slug(task.title)}",
+        "repo": task.source,
+        "base_commit": "online-discovery",
+        "problem_statement": question,
+        "workspace": {"files": {}},
+        "verification": {
+            "type": "answer_contains",
+            "expected_substrings": expected_substrings,
+        },
+        "trusted": False,
+        "source_url": task.source_url,
+    }
+
+
 def _fetch_text(url: str) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": "pythinker-benchmark-discovery"})
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -83,6 +106,11 @@ def _candidate_titles(text: str, *, source: str, difficulty: str) -> list[str]:
             seen.add(title)
             titles.append(title)
     return titles
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
+    return slug[:80] or "task"
 
 
 def _anchor_texts(text: str) -> list[str]:

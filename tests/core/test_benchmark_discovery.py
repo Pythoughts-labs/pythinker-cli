@@ -15,6 +15,7 @@ from pythinker_code.benchmark.discovery import (
     SOURCE_URLS,
     DiscoveredBenchmarkTask,
     discover_benchmark_sources,
+    quiz_fixture_from_discovery,
 )
 
 
@@ -61,6 +62,28 @@ def test_discover_deepswe_from_allowlisted_source() -> None:
             notes=tasks[0].notes,
         )
     ]
+
+
+def test_quiz_fixture_uses_deterministic_answer_check() -> None:
+    task = discover_benchmark_sources(
+        source="terminal-bench",
+        difficulty="hard",
+        limit=1,
+        fetch_text=lambda url: "train-fasttext Github model-training hard",
+    )[0]
+
+    record = quiz_fixture_from_discovery(
+        task,
+        question="Which benchmark source produced this hard task?",
+        expected_substrings=["terminal-bench", "hard"],
+    )
+
+    assert record["verification"] == {
+        "type": "answer_contains",
+        "expected_substrings": ["terminal-bench", "hard"],
+    }
+    assert record["trusted"] is False
+    assert record["workspace"]["files"] == {}
 
 
 def test_discover_rejects_unknown_source() -> None:
