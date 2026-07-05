@@ -35,6 +35,17 @@ def render_run_report(
         f"  - removed lines: {activity.get('removed_lines', 0)}",
         f"  - shell tool calls: {activity.get('shell_tool_calls', 0)}",
     ]
+    tool_calls_by_name = activity.get("tool_calls_by_name")
+    if isinstance(tool_calls_by_name, dict):
+        by_name = [
+            f"{name}: {count}"
+            for name, count in sorted(tool_calls_by_name.items())
+            if isinstance(name, str) and isinstance(count, int)
+        ]
+        if by_name:
+            activity_lines.append(f"  - tool calls by name: {', '.join(by_name)}")
+        else:
+            activity_lines.append("  - tool calls by name: (none)")
     verification_status = "unknown"
     if verification:
         verification_status = str(verification.get("status", "unknown"))

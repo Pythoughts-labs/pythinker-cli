@@ -20,8 +20,7 @@ def summarize_benchmark_activity(
         "added_lines": added,
         "removed_lines": removed,
         "tool_calls_by_name": dict(sorted(tool_calls_by_name.items())),
-        "shell_tool_calls": tool_calls_by_name.get("Bash", 0)
-        + tool_calls_by_name.get("Shell", 0),
+        "shell_tool_calls": tool_calls_by_name.get("Bash", 0) + tool_calls_by_name.get("Shell", 0),
     }
 
 
@@ -50,25 +49,28 @@ def _tool_calls_by_name(wire_file: Path, offset: int) -> dict[str, int]:
     counts: dict[str, int] = {}
     if not wire_file.exists():
         return counts
-    with wire_file.open("r", encoding="utf-8", errors="replace") as f:
-        f.seek(offset)
-        for line in f:
-            try:
-                raw: object = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(raw, dict):
-                continue
-            message = cast(dict[str, object], raw).get("message")
-            if not isinstance(message, dict):
-                continue
-            message_data = cast(dict[str, object], message)
-            if message_data.get("type") != "ToolCall":
-                continue
-            payload = message_data.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            name = cast(dict[str, object], payload).get("name")
-            if isinstance(name, str) and name:
-                counts[name] = counts.get(name, 0) + 1
+    try:
+        with wire_file.open("r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            for line in f:
+                try:
+                    raw: object = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                message = cast(dict[str, object], raw).get("message")
+                if not isinstance(message, dict):
+                    continue
+                message_data = cast(dict[str, object], message)
+                if message_data.get("type") != "ToolCall":
+                    continue
+                payload = message_data.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                name = cast(dict[str, object], payload).get("name")
+                if isinstance(name, str) and name:
+                    counts[name] = counts.get(name, 0) + 1
+    except OSError:
+        return {}
     return counts
