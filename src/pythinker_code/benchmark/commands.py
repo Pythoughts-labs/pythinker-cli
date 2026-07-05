@@ -45,10 +45,16 @@ def benchmark_usage() -> str:
         [
             "Usage:",
             "  /benchmark start [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark:start [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark:all [--model <model-key>]",
             "  /benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
+            "  /benchmark:estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
             "  /benchmark list",
+            "  /benchmark:list",
             "  /benchmark show <run-id>",
+            "  /benchmark:show <run-id>",
             "  /benchmark report [--suite <suite-name>]",
+            "  /benchmark:report [--suite <suite-name>]",
         ]
     )
 

@@ -43,6 +43,14 @@ async def _run(soul: PythinkerSoul, args: str) -> None:
         await result
 
 
+async def _run_registered(soul: PythinkerSoul, name: str, args: str = "") -> None:
+    command = soul_slash_registry.find_command(name)
+    assert command is not None
+    result = command.func(soul, args)
+    if result is not None:
+        await result
+
+
 @pytest.fixture
 def sent(monkeypatch: pytest.MonkeyPatch) -> list[TextPart]:
     captured: list[TextPart] = []
@@ -56,7 +64,14 @@ async def test_benchmark_command_registered(runtime: Runtime, tmp_path: Path) ->
     names = {cmd.name for cmd in soul.available_slash_commands}
 
     assert "benchmark" in names
+    assert "benchmark:start" in names
+    assert "benchmark:all" in names
+    assert "benchmark:estimate" in names
+    assert "benchmark:list" in names
+    assert "benchmark:show" in names
+    assert "benchmark:report" in names
     assert soul_slash_registry.find_command("benchmark") is not None
+    assert soul_slash_registry.find_command("benchmark:start") is not None
 
 
 async def test_benchmark_list_shows_bundled_suite(
@@ -71,6 +86,18 @@ async def test_benchmark_list_shows_bundled_suite(
     assert "pythinker-core" in text
     assert "pythinker-smoke" in text
     assert "smoke-edit-readme" in text
+
+
+async def test_benchmark_namespaced_list_shows_bundled_suite(
+    runtime: Runtime, tmp_path: Path, sent: list[TextPart]
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+
+    await _run_registered(soul, "benchmark:list")
+
+    text = "\n".join(part.text for part in sent)
+    assert "Pythinker Benchmark" in text
+    assert "pythinker-core" in text
 
 
 async def test_benchmark_estimate_does_not_run_turn(
