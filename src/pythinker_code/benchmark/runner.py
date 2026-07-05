@@ -108,11 +108,12 @@ async def run_task(
         PYTHINKER_WORK_DIR_LS="",
         PYTHINKER_AGENTS_MD="",
     )
+    benchmark_prompt = _benchmark_prompt(task.prompt, workspace)
     try:
-        recorder.record_event("user_message", {"content": task.prompt})
+        recorder.record_event("user_message", {"content": benchmark_prompt})
         try:
             outcome = await asyncio.wait_for(
-                soul.turn(Message(role="user", content=task.prompt)),  # type: ignore[attr-defined]
+                soul.turn(Message(role="user", content=benchmark_prompt)),  # type: ignore[attr-defined]
                 timeout=timeout_seconds or task.limits.timeout_seconds,
             )
         except TimeoutError:
@@ -176,6 +177,7 @@ async def run_task(
 
     changed_files = _changed_files(workspace, before)
     tool_calls = _count_wire_tool_calls(wire_file, wire_offset)
+    usage = _last_wire_usage(wire_file, wire_offset)
     result = BenchmarkResult(
         run_id=recorder.run_id,
         status=status,
@@ -186,9 +188,9 @@ async def run_task(
         steps=steps,
         tool_calls=tool_calls,
         changed_files=changed_files,
-        input_tokens=0,
-        output_tokens=0,
-        reasoning_tokens=0,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage["output_tokens"],
+        reasoning_tokens=usage["reasoning_tokens"],
         estimated_cost_usd=None,
     )
     recorder.copy_context_and_wire(
@@ -255,6 +257,15 @@ def _set_work_dir_override(soul: PythinkerSoul, work_dir: HostPath | None) -> No
         soul.runtime.work_dir_override = work_dir
 
 
+def _benchmark_prompt(task_prompt: str, workspace: Path) -> str:
+    return (
+        f"{task_prompt}\n\n"
+        "Pythinker Benchmark workspace:\n"
+        f"{workspace}\n\n"
+        "Use relative paths from that workspace. Do not edit the original project checkout."
+    )
+
+
 def _count_wire_tool_calls(wire_file: Path, offset: int) -> int:
     if not wire_file.exists():
         return 0
@@ -290,6 +301,62 @@ def _count_wire_tool_calls(wire_file: Path, offset: int) -> int:
     except OSError:
         return 0
     return len(tool_call_ids)
+
+
+def _last_wire_usage(wire_file: Path, offset: int) -> dict[str, int]:
+    usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    if not wire_file.exists():
+        return usage
+    try:
+        with wire_file.open("r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            for line in f:
+                raw_record = _json_object(line)
+                if raw_record is None:
+                    continue
+                message = raw_record.get("message")
+                if not isinstance(message, dict):
+                    continue
+                message_data = cast(dict[str, object], message)
+                if message_data.get("type") != "StatusUpdate":
+                    continue
+                payload = message_data.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                payload_data = cast(dict[str, object], payload)
+                token_usage = payload_data.get("token_usage")
+                if not isinstance(token_usage, dict):
+                    continue
+                token_data = cast(dict[str, object], token_usage)
+                input_tokens = (
+                    _int_token(token_data.get("input_other"))
+                    + _int_token(token_data.get("input_cache_read"))
+                    + _int_token(token_data.get("input_cache_creation"))
+                )
+                usage = {
+                    "input_tokens": input_tokens,
+                    "output_tokens": _int_token(token_data.get("output")),
+                    "reasoning_tokens": _int_token(token_data.get("output_reasoning")),
+                }
+    except OSError:
+        return usage
+    return usage
+
+
+def _json_object(line: str) -> dict[str, object] | None:
+    try:
+        raw_record: object = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw_record, dict):
+        return None
+    return cast(dict[str, object], raw_record)
+
+
+def _int_token(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    return 0
 
 
 def _snapshot_files(workspace: Path) -> dict[str, str]:

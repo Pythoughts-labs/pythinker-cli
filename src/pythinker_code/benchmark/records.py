@@ -117,7 +117,13 @@ class BenchmarkRecorder:
         )
         (self.run_dir / "final.md").write_text(redact_text(result.final_answer), encoding="utf-8")
         (self.run_dir / "report.md").write_text(
-            render_run_report(summary, self.run_dir), encoding="utf-8"
+            render_run_report(
+                self._run,
+                summary,
+                self.run_dir,
+                final_answer=result.final_answer,
+            ),
+            encoding="utf-8",
         )
         self._run["status"] = result.status
         self._run["exit_reason"] = result.exit_reason

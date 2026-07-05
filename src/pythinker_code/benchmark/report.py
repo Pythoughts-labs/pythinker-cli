@@ -7,7 +7,13 @@ from typing import Any, cast
 from pythinker_code.benchmark.redact import redact_text
 
 
-def render_run_report(summary: Mapping[str, object], artifact_root: Path) -> str:
+def render_run_report(
+    run: Mapping[str, object],
+    summary: Mapping[str, object],
+    artifact_root: Path,
+    *,
+    final_answer: str = "",
+) -> str:
     runtime_obj = summary.get("runtime")
     verification_obj = summary.get("verification")
     usage_obj = summary.get("usage")
@@ -27,12 +33,18 @@ def render_run_report(summary: Mapping[str, object], artifact_root: Path) -> str
     estimated_cost = "unavailable"
     if usage.get("estimated_cost_usd") is not None:
         estimated_cost = f"${float(usage['estimated_cost_usd']):.4f}"
+    verification_output = _verification_output(verification)
+    final_excerpt = _excerpt(final_answer)
 
     lines = [
         "# Pythinker Benchmark",
         "",
         f"- Run: {summary.get('run_id', '')}",
         f"- Status: {summary.get('status', '')}",
+        f"- Model: {run.get('model_key', '')}",
+        f"- Provider: {run.get('provider_key', '')}",
+        f"- Task: {run.get('task_id') or '(suite)'}",
+        f"- Suite: {run.get('suite_name') or '(none)'}",
         f"- Score: {summary.get('score', '')}",
         f"- Duration: {runtime.get('duration_ms', 0)} ms",
         f"- Steps: {runtime.get('steps', 0)}",
@@ -43,7 +55,29 @@ def render_run_report(summary: Mapping[str, object], artifact_root: Path) -> str
         f"- Artifacts: {artifact_root}",
         "",
     ]
+    if verification_output:
+        lines.extend(["## Verification Output", "", "```text", verification_output, "```", ""])
+    if final_excerpt:
+        lines.extend(["## Final Answer", "", "```text", final_excerpt, "```", ""])
     return redact_text("\n".join(lines))
+
+
+def _verification_output(verification: Mapping[str, Any]) -> str:
+    chunks: list[str] = []
+    stdout = _excerpt(str(verification.get("stdout", "")))
+    stderr = _excerpt(str(verification.get("stderr", "")))
+    if stdout:
+        chunks.append(f"stdout:\n{stdout}")
+    if stderr:
+        chunks.append(f"stderr:\n{stderr}")
+    return "\n\n".join(chunks)
+
+
+def _excerpt(value: str, limit: int = 2_000) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated]"
 
 
 def render_show(run: Mapping[str, object], summary: Mapping[str, object] | None = None) -> str:

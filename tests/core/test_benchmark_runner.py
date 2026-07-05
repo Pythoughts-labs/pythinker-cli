@@ -41,6 +41,9 @@ async def test_run_task_records_passed_smoke_task(
 
     async def fake_turn(message: Message):
         workspace = Path(str(soul.runtime.work_dir))
+        prompt = message.extract_text(" ")
+        assert "Pythinker Benchmark workspace:" in prompt
+        assert str(workspace) in prompt
         wire_path = Path(str(soul.runtime.session.wire_file.path))
         wire_path.parent.mkdir(parents=True, exist_ok=True)
         with wire_path.open("a", encoding="utf-8") as f:
@@ -66,6 +69,24 @@ async def test_run_task_records_passed_smoke_task(
                 )
                 + "\n"
             )
+            f.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "type": "StatusUpdate",
+                            "payload": {
+                                "token_usage": {
+                                    "input_other": 10,
+                                    "input_cache_read": 20,
+                                    "input_cache_creation": 5,
+                                    "output": 7,
+                                }
+                            },
+                        }
+                    }
+                )
+                + "\n"
+            )
         (workspace / "README.md").write_text(
             "# Example Project\n\nPythinker benchmark smoke test\n",
             encoding="utf-8",
@@ -86,6 +107,8 @@ async def test_run_task_records_passed_smoke_task(
     assert result.status == "passed"
     assert result.changed_files == ["README.md"]
     assert result.tool_calls == 1
+    assert result.input_tokens == 35
+    assert result.output_tokens == 7
     assert (tmp_path / "runs" / "bench_test" / "summary.json").exists()
 
 

@@ -30,7 +30,7 @@ def test_recorder_writes_required_artifacts_and_redacts(tmp_path: Path) -> None:
             status="passed",
             type="command",
             exit_code=0,
-            stdout="",
+            stdout="3 passed in 0.00s\n",
             stderr="",
         ),
         duration_ms=10,
@@ -66,6 +66,13 @@ def test_recorder_writes_required_artifacts_and_redacts(tmp_path: Path) -> None:
 
     final = (run_dir / "final.md").read_text(encoding="utf-8")
     assert "sk-test-secret" not in final
+
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "Pythinker Benchmark" in report
+    assert "Model: mock-model" in report
+    assert "Task: smoke-edit-readme" in report
+    assert "3 passed in 0.00s" in report
+    assert "<redacted>" in report
 
 
 def test_trace_payload_is_size_capped(tmp_path: Path) -> None:
