@@ -306,10 +306,13 @@ def _hiding_delegate(hide: bool) -> object:
     return SimpleNamespace(running_prompt_hide_input_card=lambda: hide)
 
 
-def _body_delegate(body: str):
+def _body_delegate(body: str, *, hide_card: bool = False):
     class _Delegate:
         def render_running_prompt_body(self, columns: int) -> str:
             return body
+
+        def running_prompt_hide_input_card(self) -> bool:
+            return hide_card
 
         def running_prompt_placeholder(self) -> None:
             return None
@@ -556,7 +559,7 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
     from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
-    session = _card_session(delegate=_body_delegate("assistant chunk"))
+    session = _card_session(delegate=_body_delegate("assistant chunk", hide_card=True))
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
@@ -586,6 +589,8 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_live_view_hides_bu
     view._scrollback_handoff_depth = 0
     view._turn_ended = False
     view._committed_scrollback_this_turn = False
+    view._transient_command_output = None
+    view._queued_messages = []
 
     session = _card_session(delegate=view)
     session._shortcut_help_open = False

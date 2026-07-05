@@ -3350,7 +3350,7 @@ class CustomPromptSession:
             )
             running_body = (
                 to_formatted_text(render_running_body(columns))
-                if not input_card_hidden and callable(render_running_body)
+                if callable(render_running_body)
                 else FormattedText()
             )
             preamble = FormattedText()
