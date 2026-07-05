@@ -382,6 +382,19 @@ async def best_practices(soul: PythinkerSoul, args: str):
     )
 
 
+@registry.command
+async def benchmark(soul: PythinkerSoul, args: str) -> None:
+    """Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>"""
+    from pythinker_code.benchmark.commands import benchmark_usage, dispatch_benchmark
+    from pythinker_code.benchmark.errors import BenchmarkError
+
+    try:
+        text = await dispatch_benchmark(soul, args)
+    except BenchmarkError as exc:
+        text = str(exc) or benchmark_usage()
+    wire_send(TextPart(text=text))
+
+
 def _best_practices_headings() -> list[str]:
     return [
         line.removeprefix("## ").strip()

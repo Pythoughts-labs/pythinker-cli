@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
+from pydantic import SecretStr
+from pythinker_core.message import Message
+from pythinker_core.tooling.empty import EmptyToolset
+
+from pythinker_code.benchmark.records import BenchmarkRecorder
+from pythinker_code.benchmark.runner import run_task
+from pythinker_code.benchmark.tasks import load_task
+from pythinker_code.config import LLMModel, LLMProvider
+from pythinker_code.soul.agent import Agent, Runtime
+from pythinker_code.soul.context import Context
+from pythinker_code.soul.pythinkersoul import PythinkerSoul
+
+
+def _make_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
+    runtime.config.providers["mock"] = LLMProvider(
+        type="pythinker", base_url="", api_key=SecretStr("")
+    )
+    runtime.config.models["mock-model"] = LLMModel(
+        provider="mock", model="mock", max_context_size=100_000
+    )
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    return PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
+
+
+async def test_run_task_records_passed_smoke_task(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+
+    async def fake_turn(message: Message):
+        workspace = Path(str(soul.runtime.work_dir))
+        wire_path = Path(str(soul.runtime.session.wire_file.path))
+        wire_path.parent.mkdir(parents=True, exist_ok=True)
+        with wire_path.open("a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "type": "ToolCall",
+                            "payload": {"id": "call-1"},
+                        }
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "type": "ToolExecutionStarted",
+                            "payload": {"tool_call_id": "call-1"},
+                        }
+                    }
+                )
+                + "\n"
+            )
+        (workspace / "README.md").write_text(
+            "# Example Project\n\nPythinker benchmark smoke test\n",
+            encoding="utf-8",
+        )
+        return type("Outcome", (), {"step_count": 1, "final_message": message})()
+
+    soul.turn = AsyncMock(side_effect=fake_turn)  # type: ignore[method-assign]
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-edit-readme"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --model mock-model --task smoke-edit-readme",
+    )
+
+    assert result.status == "passed"
+    assert result.changed_files == ["README.md"]
+    assert result.tool_calls == 1
+    assert (tmp_path / "runs" / "bench_test" / "summary.json").exists()
+
+
+async def test_run_task_records_failed_verification(runtime: Runtime, tmp_path: Path) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    soul.turn = AsyncMock(  # type: ignore[method-assign]
+        return_value=type("Outcome", (), {"step_count": 1, "final_message": None})()
+    )
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-edit-readme"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --model mock-model --task smoke-edit-readme",
+    )
+
+    assert result.status == "failed_verification"
+    assert result.verification.exit_code != 0
