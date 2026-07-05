@@ -582,6 +582,62 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
     assert frame == f"assistant chunk\n{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
 
+def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
+
+    class _StyledDelegate:
+        def render_running_prompt_body(self, columns: int) -> FormattedText:
+            return FormattedText([("class:stream.body", "assistant chunk")])
+
+        def running_prompt_hide_input_card(self) -> bool:
+            return False
+
+        def running_prompt_placeholder(self) -> FormattedText:
+            return FormattedText([("class:placeholder", "keep typing")])
+
+        def running_prompt_allows_text_input(self) -> bool:
+            return False
+
+        def running_prompt_hides_input_buffer(self) -> bool:
+            return True
+
+        def running_prompt_accepts_submission(self) -> bool:
+            return False
+
+        def should_handle_running_prompt_key(self, key: str) -> bool:
+            return False
+
+        def handle_running_prompt_key(self, key: str, event) -> None:  # noqa: ANN001
+            raise AssertionError("not expected")
+
+    border = "──────── ● off"
+    session = _card_session(delegate=_StyledDelegate())
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(
+        session, "_render_input_top_border", lambda _c, _f: [("class:border", border)]
+    )
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
+    monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
+
+    fragments = session._render_agent_prompt_message()
+
+    assert ("class:stream.body", "assistant chunk") in fragments
+    assert ("class:border", border) in fragments
+    assert ("class:placeholder", "keep typing") in fragments
+    assert (
+        session._thinking_prompt_prefix_style(),
+        f"{PROMPT_SYMBOL_AGENT_INPUT} ",
+    ) in fragments
+
+
 def test_render_agent_prompt_message_hides_live_view_chrome_before_first_commit(
     monkeypatch,
 ) -> None:

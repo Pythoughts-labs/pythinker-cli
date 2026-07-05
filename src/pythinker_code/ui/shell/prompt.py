@@ -40,7 +40,6 @@ from prompt_toolkit.formatted_text import (
     AnyFormattedText,
     FormattedText,
     StyleAndTextTuples,
-    fragment_list_to_text,
     to_formatted_text,
 )
 from prompt_toolkit.history import InMemoryHistory
@@ -88,7 +87,6 @@ from pythinker_code.ui.shell.spacing import (
 )
 from pythinker_code.ui.shell.spinner_words import spinner_message
 from pythinker_code.ui.shell.sync_output import install_synchronized_output
-from pythinker_code.ui.shell.tui import RunningPromptScene
 from pythinker_code.ui.terminal_capabilities import synchronized_output_enabled
 from pythinker_code.ui.theme import get_prompt_style, get_toolbar_colors, thinking_dot_style
 from pythinker_code.ui.theme import get_tui_tokens as _get_tui_tokens
@@ -3359,20 +3357,20 @@ class CustomPromptSession:
                 else FormattedText()
             )
             preamble = FormattedText()
-            if agent_status:
+            if agent_status and any(text for _, text, *_ in agent_status):
                 preamble.extend(agent_status)
                 ensure_prompt_newline(preamble)
-            if running_body:
+            if running_body and any(text for _, text, *_ in running_body):
                 preamble.extend(running_body)
                 ensure_prompt_newline(preamble)
-            if preamble or pinned_rows:
+            if (preamble and any(text for _, text, *_ in preamble)) or pinned_rows:
                 preamble = self._fit_preamble_with_pinned_tail(
                     preamble,
                     pinned,
                     columns,
                     max_rows,
                 )
-            if preamble:
+            if preamble and any(text for _, text, *_ in preamble):
                 fragments.extend(preamble)
 
             if input_card_hidden:
@@ -3388,10 +3386,11 @@ class CustomPromptSession:
                     return fragments
 
             tc = get_toolbar_colors()
-            body_text = fragment_list_to_text(fragments).rstrip("\n")
-            top_border = fragment_list_to_text(
-                self._render_input_top_border(columns, tc.separator)
-            ).rstrip("\n")
+            scene_fragments: FormattedText = FormattedText()
+            if fragments and any(text for _, text, *_ in fragments):
+                scene_fragments.extend(fragments)
+                ensure_prompt_newline(scene_fragments)
+
             render_placeholder_attr = getattr(
                 running_prompt_delegate, "running_prompt_placeholder", None
             )
@@ -3405,22 +3404,16 @@ class CustomPromptSession:
                 if not input_card_hidden and render_placeholder is not None
                 else FormattedText()
             )
-            placeholder = fragment_list_to_text(to_formatted_text(placeholder_value)).strip()
-            scene = RunningPromptScene(
-                body=body_text,
-                top_border=top_border,
-                prompt_symbol=PROMPT_SYMBOL_AGENT_INPUT,
-                placeholder=placeholder,
+            placeholder_fragments = to_formatted_text(placeholder_value)
+
+            scene_fragments.extend(self._render_input_top_border(columns, tc.separator))
+            scene_fragments.append(("", "\n"))
+            scene_fragments.append(("", _card_side_indent()))
+            scene_fragments.append(
+                (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
             )
-            scene_fragments: FormattedText = FormattedText()
-            scene_lines = scene.render(columns)
-            for index, line in enumerate(scene_lines):
-                if index:
-                    scene_fragments.append(("", "\n"))
-                text = line.rstrip()
-                if index == len(scene_lines) - 1 and not placeholder:
-                    text = f"{text} "
-                scene_fragments.append(("", text))
+            if placeholder_fragments:
+                scene_fragments.extend(placeholder_fragments)
             return scene_fragments
 
         if modal_active and body:
