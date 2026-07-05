@@ -1,0 +1,10 @@
+{
+  "name": "pythinker-smoke",
+  "title": "Pythinker Smoke Suite",
+  "description": "Small deterministic tasks for validating the native benchmark runner.",
+  "tasks": [
+    "smoke-edit-readme",
+    "smoke-fix-python-test",
+    "smoke-add-small-function"
+  ]
+}

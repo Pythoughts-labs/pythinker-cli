@@ -26,6 +26,10 @@ GitHub Releases page; `0.8.0` is the new starting line.
   pre-attach frame; the row returns as soon as the response starts streaming,
   when you type to steer, or when the turn ends.
 
+- Added native `/benchmark` slash command for deterministic local Pythinker
+  model evaluation with bundled smoke tasks, replayable artifacts, and branded
+  markdown reports.
+
 ## 0.56.0 (2026-07-02)
 
 - **Windows shell UI recovers from mid-session console blanking.** The TUI's

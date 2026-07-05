@@ -96,6 +96,11 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": ["bp"],
                         },
                         {
+                            "name": "benchmark",
+                            "description": "Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>",
+                            "aliases": [],
+                        },
+                        {
                             "name": "add-dir",
                             "description": "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs",
                             "aliases": [],
@@ -319,6 +324,11 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                             "name": "best-practices",
                             "description": "Inject engineering best practices (code changes, testing, todos, debugging) into context",
                             "aliases": ["bp"],
+                        },
+                        {
+                            "name": "benchmark",
+                            "description": "Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>",
+                            "aliases": [],
                         },
                         {
                             "name": "add-dir",

@@ -1,0 +1,20 @@
+{
+  "id": "smoke-edit-readme",
+  "title": "Edit README",
+  "description": "Update a README with a requested sentence.",
+  "prompt": "Update README.md to include a short sentence explaining that this project is used for a Pythinker benchmark smoke test.",
+  "workspace": {
+    "files": {
+      "README.md": "# Example Project\n\n"
+    }
+  },
+  "verification": {
+    "type": "command",
+    "command": "python - <<'PY'\nfrom pathlib import Path\ntext = Path('README.md').read_text(encoding='utf-8')\nassert 'Pythinker benchmark smoke test' in text\nPY"
+  },
+  "limits": {
+    "timeout_seconds": 120,
+    "max_steps": 30
+  },
+  "tags": ["smoke", "offline", "deterministic"]
+}

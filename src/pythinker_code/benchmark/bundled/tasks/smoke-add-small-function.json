@@ -1,0 +1,21 @@
+{
+  "id": "smoke-add-small-function",
+  "title": "Add Small Function",
+  "description": "Add a tiny function required by a deterministic check.",
+  "prompt": "Add a slugify(text) function to strings.py. It should lowercase text, strip leading/trailing whitespace, and replace spaces with hyphens.",
+  "workspace": {
+    "files": {
+      "strings.py": "",
+      "test_strings.py": "from strings import slugify\n\n\ndef test_slugify():\n    assert slugify(' Hello Benchmark ') == 'hello-benchmark'\n"
+    }
+  },
+  "verification": {
+    "type": "command",
+    "command": "python -m pytest test_strings.py -q"
+  },
+  "limits": {
+    "timeout_seconds": 120,
+    "max_steps": 30
+  },
+  "tags": ["smoke", "offline", "deterministic"]
+}
