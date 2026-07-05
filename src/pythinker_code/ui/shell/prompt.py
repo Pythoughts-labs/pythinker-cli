@@ -3193,23 +3193,14 @@ class CustomPromptSession:
         return PromptUIState.NORMAL_INPUT
 
     def _input_card_hidden_pre_stream(self) -> bool:
-        """Hide the input card from turn-start until the turn's first commit.
+        """Gate editable pre-stream input while keeping the input card visible.
 
-        The input card (top border + ``❯`` + buffer) is a second prompt beneath
-        the just-echoed message. If it is painted before the turn's first
-        scrollback commit, that commit's ``run_in_terminal`` teardown fossilizes
-        it above the stream as a ghost "second prompt" — the erase-height drifts
-        on the first transition into streaming, and suppressing the card only
-        *during* the handoff is too late (the erase runs before the repaint). So
-        the card must be absent from every pre-first-commit frame. Two windows
-        cover that: the pre-attach gap after the shell dispatches the turn but
-        before the delegate exists (``_turn_starting``), and post-attach until the
-        first commit (the delegate reports it via
-        ``running_prompt_hide_input_card``). Both hide the chrome and, in
-        lockstep, the buffer window (:meth:`_should_render_input_buffer`). Once
-        the turn has committed, the card repaints for the rest of the turn so the
-        user can see where to steer. Skipped when the user has typed (non-empty
-        buffer) or a modal owns the input line.
+        The first lazy-load frame should still render the two-line card (top
+        border + ``❯`` row). This gate only marks the empty editable content as
+        pre-stream-hidden from turn-start until the first scrollback commit, so
+        prompt_toolkit keeps the prompt row geometry stable without dropping the
+        visible marker. Skipped when the user has typed (non-empty buffer) or a
+        modal owns the input line.
         """
         if self._active_modal_delegate() is not None:
             return False
@@ -3233,10 +3224,11 @@ class CustomPromptSession:
     def _should_render_input_buffer(self) -> bool:
         if self._active_ui_state() == PromptUIState.MODAL_HIDDEN_INPUT:
             return False
-        # Hide the empty buffer window in lockstep with the input card during the
-        # pre-first-commit window so the two never disagree on height (that drift
-        # is how the fossil ghost formed). Both repaint once the turn commits.
-        return not self._input_card_hidden_pre_stream()
+        # Before the running-prompt delegate attaches, there is no pinned spinner
+        # frame to own the geometry; hiding this window prevents the prompt row
+        # from fossilizing above the spinner. After attach, keep it visible
+        # because prompt_toolkit renders the ❯ marker in this buffer window.
+        return not (self._turn_starting and not self._session.default_buffer.text)
 
     def _should_handle_running_prompt_key(self, key: str) -> bool:
         delegate = self._active_prompt_delegate()
@@ -3362,15 +3354,21 @@ class CustomPromptSession:
         if modal_active:
             return fragments
 
-        # Hide the editable input row until the turn's first scrollback commit,
-        # while keeping the card top border visible above the suppressed row
-        # (see _input_card_hidden_pre_stream). The row repaints for the rest of
-        # the turn so the user can see where to steer.
+        # Hide the pre-attach race frame entirely; once the running-prompt
+        # delegate attaches, hide only editable buffer content while keeping the
+        # two-line input card visible (see _input_card_hidden_pre_stream).
         if self._input_card_hidden_pre_stream():
+            if self._turn_starting:
+                return fragments
             if is_card_style():
                 ensure_prompt_newline(fragments)
                 tc = get_toolbar_colors()
                 fragments.extend(self._render_input_top_border(columns, tc.separator))
+                fragments.append(("", "\n"))
+                fragments.append(("", _card_side_indent()))
+                fragments.append(
+                    (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
+                )
             return fragments
 
         if is_card_style():

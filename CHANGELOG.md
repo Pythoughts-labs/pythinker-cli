@@ -18,13 +18,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - **No more ghost/duplicate input prompt while the agent works.** After
   submitting a prompt, the editable input row is no longer fossilized above the
   stream as a second, ghostly prompt. The top border stays visible while the
-  `❯` row is hidden from turn-start until the turn's first
-  scrollback commit — the transition whose `run_in_terminal` teardown drifts
-  and leaves the row behind — then repaints below the live stream so you can
-  still see where to steer. It also collapses the instant a turn is dispatched
-  (before the running-prompt delegate attaches) to close the same race on the
-  pre-attach frame; the row returns as soon as the response starts streaming,
-  when you type to steer, or when the turn ends.
+  pre-attach race frame still collapses before the running-prompt delegate
+  exists, preventing prompt chrome from fossilizing above the spinner. Once the
+  running frame owns the prompt, the `❯` marker stays visible while only the
+  editable buffer is hidden until the first scrollback commit, avoiding the
+  collapsed one-line card under the lazy-load spinner; the full editable row
+  remains below the live stream so you can still see where to steer.
 
 - Added native `/benchmark` slash command for deterministic local Pythinker
   model evaluation with bundled smoke tasks, replayable artifacts, and branded

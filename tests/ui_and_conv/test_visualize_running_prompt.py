@@ -306,22 +306,20 @@ def _hiding_delegate(hide: bool) -> object:
     return SimpleNamespace(running_prompt_hide_input_card=lambda: hide)
 
 
-def test_input_card_hidden_pre_attach_via_turn_starting() -> None:
-    """The turn-start race: the shell dispatches a turn (and can repaint the
-    prompt) before the running-prompt delegate attaches. With only the
-    ``_turn_starting`` hint set — no delegate yet — the card is already hidden so
-    the pre-attach frame never paints the chrome that fossilizes."""
+def test_input_card_pre_attach_hides_until_delegate_can_pin_spinner() -> None:
+    """The pre-attach race frame hides the card so it cannot fossilize above
+    the spinner before the running-prompt delegate exists."""
     session = _card_session(turn_starting=True, delegate=None)
     assert session._input_card_hidden_pre_stream() is True
     assert session._should_render_input_buffer() is False
 
 
-def test_input_card_hidden_until_first_commit_via_delegate() -> None:
-    """Post-attach: the delegate reports the card must stay hidden until the
-    turn's first scrollback commit."""
+def test_input_card_pre_first_commit_keeps_prompt_row_via_delegate() -> None:
+    """Post-attach: the delegate gates editable content until the first commit,
+    but the prompt marker row still renders."""
     session = _card_session(delegate=_hiding_delegate(True))
     assert session._input_card_hidden_pre_stream() is True
-    assert session._should_render_input_buffer() is False
+    assert session._should_render_input_buffer() is True
 
 
 def test_input_card_shown_after_first_commit() -> None:
@@ -407,10 +405,10 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     assert session._turn_starting is False
 
 
-def test_render_agent_prompt_message_keeps_top_border_when_card_gate_hides_row(
+def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_buffer(
     monkeypatch,
 ) -> None:
-    """The chrome renderer keeps the top border while hiding the input row."""
+    """The chrome renderer keeps the prompt marker while hiding the editable buffer."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -422,6 +420,7 @@ def test_render_agent_prompt_message_keeps_top_border_when_card_gate_hides_row(
     session = object.__new__(CustomPromptSession)
     session._modal_delegates = []
     session._shortcut_help_open = False
+    session._turn_starting = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
@@ -434,18 +433,17 @@ def test_render_agent_prompt_message_keeps_top_border_when_card_gate_hides_row(
         return "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     hidden_frame = _rendered(True)
-    assert hidden_frame == border
-    assert PROMPT_SYMBOL_AGENT_INPUT not in hidden_frame
+    assert hidden_frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
     shown_frame = _rendered(False)
     assert border in shown_frame
     assert PROMPT_SYMBOL_AGENT_INPUT in shown_frame
 
 
-def test_render_agent_prompt_message_keeps_top_border_when_first_turn_frame_hides_row(
+def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buffer(
     monkeypatch,
 ) -> None:
-    """The pre-attach first thinking frame keeps the top border."""
+    """The post-attach running frame keeps the prompt marker."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -454,7 +452,7 @@ def test_render_agent_prompt_message_keeps_top_border_when_first_turn_frame_hide
     from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
-    session = _card_session(turn_starting=True)
+    session = _card_session(delegate=_hiding_delegate(True))
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
@@ -465,8 +463,7 @@ def test_render_agent_prompt_message_keeps_top_border_when_first_turn_frame_hide
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == border
-    assert PROMPT_SYMBOL_AGENT_INPUT not in frame
+    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
