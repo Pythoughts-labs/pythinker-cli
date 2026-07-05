@@ -6,7 +6,7 @@
   "workspace": {
     "files": {
       "paths.py": "from pathlib import Path\n\n\ndef safe_join(root, user_path):\n    return Path(root) / user_path\n",
-      "test_paths.py": "from pathlib import Path\n\nimport pytest\n\nfrom paths import safe_join\n\n\ndef test_safe_join_allows_nested_relative_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    assert safe_join(root, 'logs/app.txt') == root / 'logs/app.txt'\n\n\ndef test_safe_join_rejects_parent_traversal(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, '../secret.txt')\n\n\ndef test_safe_join_rejects_absolute_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, Path('/tmp/secret.txt'))\n"
+      "test_paths.py": "from pathlib import Path\n\nimport pytest\n\nfrom paths import safe_join\n\n\ndef test_safe_join_allows_nested_relative_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    assert safe_join(root, 'logs/app.txt') == root / 'logs/app.txt'\n\n\ndef test_safe_join_allows_root_relative_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    assert safe_join(root, '.') == root\n\n\ndef test_safe_join_rejects_parent_traversal(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, '../secret.txt')\n\n\ndef test_safe_join_rejects_absolute_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, Path('/tmp/secret.txt'))\n"
     }
   },
   "verification": {

@@ -96,15 +96,24 @@ def test_trace_payload_is_size_capped(tmp_path: Path) -> None:
 def test_context_and_wire_copy_only_tail_and_redact(tmp_path: Path) -> None:
     context = tmp_path / "context-source.jsonl"
     wire = tmp_path / "wire-source.jsonl"
-    context.write_text("old context\n", encoding="utf-8")
-    wire.write_text("old wire\n", encoding="utf-8")
+    context.write_text(json.dumps({"old": "context"}) + "\n", encoding="utf-8")
+    wire.write_text(json.dumps({"old": "wire"}) + "\n", encoding="utf-8")
     context_offset = context.stat().st_size
     wire_offset = wire.stat().st_size
     context.write_text(
-        "old context\nnew Authorization: Bearer secret-token-1234567890\n",
+        json.dumps({"old": "context"})
+        + "\n"
+        + json.dumps({"new": "Authorization: Bearer secret-token-1234567890"})
+        + "\n",
         encoding="utf-8",
     )
-    wire.write_text("old wire\nnew Cookie: session=abcdef1234567890\n", encoding="utf-8")
+    wire.write_text(
+        json.dumps({"old": "wire"})
+        + "\n"
+        + json.dumps({"new": "Cookie: session=abcdef1234567890"})
+        + "\n",
+        encoding="utf-8",
+    )
 
     recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
     recorder.start_run(
@@ -127,9 +136,41 @@ def test_context_and_wire_copy_only_tail_and_redact(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     copied_wire = (tmp_path / "runs" / "bench_test" / "wire.jsonl").read_text(encoding="utf-8")
-    assert "old context" not in copied_context
-    assert "old wire" not in copied_wire
+    assert "old" not in copied_context
+    assert "old" not in copied_wire
     assert "secret-token" not in copied_context
     assert "abcdef1234567890" not in copied_wire
     assert "<redacted>" in copied_context
     assert "<redacted>" in copied_wire
+    for line in copied_context.splitlines() + copied_wire.splitlines():
+        json.loads(line)
+
+
+def test_copied_jsonl_artifacts_remain_valid_when_truncated(tmp_path: Path) -> None:
+    wire = tmp_path / "wire-source.jsonl"
+    wire.write_text(
+        json.dumps({"message": {"type": "ToolResult", "payload": {"text": "x" * 20_000}}})
+        + "\n"
+        + "<truncated>\n",
+        encoding="utf-8",
+    )
+
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+    recorder.start_run(
+        command="/benchmark start --model mock-model --task smoke-edit-readme",
+        model_key="mock-model",
+        provider_key="mock",
+        task_id="smoke-edit-readme",
+        suite_name=None,
+        repeat_index=1,
+    )
+
+    recorder.copy_context_and_wire(
+        tmp_path / "missing-context.jsonl",
+        wire,
+    )
+
+    copied_wire = tmp_path / "runs" / "bench_test" / "wire.jsonl"
+    records = [json.loads(line) for line in copied_wire.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["message"]["payload"]["text"].endswith("<truncated>")
+    assert records[1]["type"] == "invalid_jsonl_line"

@@ -76,8 +76,8 @@ class BenchmarkRecorder:
         context_offset: int = 0,
         wire_offset: int = 0,
     ) -> None:
-        self._copy_tail_redacted(context_file, self.run_dir / "context.jsonl", context_offset)
-        self._copy_tail_redacted(wire_file, self.run_dir / "wire.jsonl", wire_offset)
+        self._copy_jsonl_tail_redacted(context_file, self.run_dir / "context.jsonl", context_offset)
+        self._copy_jsonl_tail_redacted(wire_file, self.run_dir / "wire.jsonl", wire_offset)
 
     def finish_run(self, result: Any) -> None:
         self.record_event(
@@ -134,14 +134,28 @@ class BenchmarkRecorder:
         self.run_path.write_text(dumps_redacted(self._run, indent=2) + "\n", encoding="utf-8")
 
     @staticmethod
-    def _copy_tail_redacted(source: Path, dest: Path, offset: int) -> None:
+    def _copy_jsonl_tail_redacted(source: Path, dest: Path, offset: int) -> None:
         if not source.exists():
             dest.touch()
             return
         with source.open("r", encoding="utf-8", errors="replace") as src:
             src.seek(offset)
-            content = src.read()
-        dest.write_text(redact_text(content), encoding="utf-8")
+            lines = src.readlines()
+        with dest.open("w", encoding="utf-8") as out:
+            for line_number, line in enumerate(lines, start=1):
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                try:
+                    record: object = json.loads(stripped)
+                except json.JSONDecodeError:
+                    record = {
+                        "schema_version": 1,
+                        "type": "invalid_jsonl_line",
+                        "line": line_number,
+                        "content": redact_text(stripped),
+                    }
+                out.write(dumps_redacted(record) + "\n")
 
 
 def load_run(root: Path, run_id: str) -> tuple[dict[str, object], dict[str, object] | None]:
