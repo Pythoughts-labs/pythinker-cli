@@ -18,9 +18,7 @@ def readiness_warnings(rows: Sequence[BenchmarkReportRow]) -> list[str]:
     if len(models) < 2:
         warnings.append("Single model only: do not describe this as a model comparison.")
     if any(len(repeats) < 2 for repeats in repeats_by_model.values()):
-        warnings.append(
-            "Single repeat only: report this as a smoke result, not a stable estimate."
-        )
+        warnings.append("Single repeat only: report this as a smoke result, not a stable estimate.")
     if any(_is_local_fixture_suite(suite) for suite in suites):
         warnings.append("Local fixture scope: this is not a full SWE-bench Docker evaluation.")
     if any(_missing_cost(row) for row in rows):
