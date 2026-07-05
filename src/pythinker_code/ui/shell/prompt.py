@@ -3362,11 +3362,15 @@ class CustomPromptSession:
         if modal_active:
             return fragments
 
-        # Hide the input card until the turn's first scrollback commit, so its
-        # border + ``❯`` cannot be fossilized above the stream as a ghost second
-        # prompt (see _input_card_hidden_pre_stream). The card repaints for the
-        # rest of the turn so the user can see where to steer.
+        # Hide the editable input row until the turn's first scrollback commit,
+        # while keeping the card top border visible above the suppressed row
+        # (see _input_card_hidden_pre_stream). The row repaints for the rest of
+        # the turn so the user can see where to steer.
         if self._input_card_hidden_pre_stream():
+            if is_card_style():
+                ensure_prompt_newline(fragments)
+                tc = get_toolbar_colors()
+                fragments.extend(self._render_input_top_border(columns, tc.separator))
             return fragments
 
         if is_card_style():

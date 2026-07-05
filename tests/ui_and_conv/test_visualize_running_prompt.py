@@ -295,8 +295,8 @@ def _card_session(
     session = object.__new__(CustomPromptSession)
     session._modal_delegates = []
     session._turn_starting = turn_starting
-    session._running_prompt_delegate = delegate
-    session._session = SimpleNamespace(default_buffer=SimpleNamespace(text=text))
+    session._running_prompt_delegate = cast(Any, delegate)
+    session._session = cast(Any, SimpleNamespace(default_buffer=SimpleNamespace(text=text)))
     return session
 
 
@@ -407,11 +407,10 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     assert session._turn_starting is False
 
 
-def test_render_agent_prompt_message_honors_input_card_gate(monkeypatch) -> None:
-    """The chrome renderer must actually consult the gate: no top border and no
-    ``❯`` when ``_input_card_hidden_pre_stream()`` is True; both present when
-    False. This is the CI-runnable (no-PTY) guard for the failure mode the pyte
-    e2e catches visually — a renderer that stops reading the gate."""
+def test_render_agent_prompt_message_keeps_top_border_when_card_gate_hides_row(
+    monkeypatch,
+) -> None:
+    """The chrome renderer keeps the top border while hiding the input row."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -435,12 +434,39 @@ def test_render_agent_prompt_message_honors_input_card_gate(monkeypatch) -> None
         return "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     hidden_frame = _rendered(True)
-    assert border not in hidden_frame
+    assert hidden_frame == border
     assert PROMPT_SYMBOL_AGENT_INPUT not in hidden_frame
 
     shown_frame = _rendered(False)
     assert border in shown_frame
     assert PROMPT_SYMBOL_AGENT_INPUT in shown_frame
+
+
+def test_render_agent_prompt_message_keeps_top_border_when_first_turn_frame_hides_row(
+    monkeypatch,
+) -> None:
+    """The pre-attach first thinking frame keeps the top border."""
+    from types import SimpleNamespace
+
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
+
+    border = "──────── ● off"
+    session = _card_session(turn_starting=True)
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_input_top_border", lambda _c, _f: [("", border)])
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
+    monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
+
+    frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    assert frame == border
+    assert PROMPT_SYMBOL_AGENT_INPUT not in frame
 
 
 def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
