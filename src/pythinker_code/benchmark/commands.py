@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from pythinker_code.benchmark.discovery import discover_benchmark_sources
 from pythinker_code.benchmark.errors import (
     BenchmarkInternalError,
     BenchmarkSyntaxError,
@@ -51,6 +52,9 @@ class BenchmarkArgs:
     instance: str | None = None
     trusted_dataset: bool = False
     run_id: str | None = None
+    source: str | None = None
+    difficulty: str = "hard"
+    limit: int = 5
 
 
 def benchmark_usage() -> str:
@@ -73,6 +77,8 @@ def benchmark_usage() -> str:
             "  /benchmark report [--suite <suite-name>]",
             "  /benchmark:report [--suite <suite-name>]",
             "  /benchmark export [--suite <suite-name>] [--format json|csv] [--output <path>]",
+            "  /benchmark discover --source <allowlisted> --difficulty hard --limit 5 "
+            "[--output <path.jsonl>]",
             "  /benchmark swe --dataset <path.jsonl> --trusted-dataset true "
             "[--instance <instance-id>]",
             "  /benchmark:swe --dataset <path.jsonl> --trusted-dataset true "
@@ -98,6 +104,7 @@ def parse_args(args: str) -> BenchmarkArgs:
         "export",
         "swe",
         "compare",
+        "discover",
     }:
         raise BenchmarkSyntaxError(
             f"Unknown benchmark subcommand: {subcommand}\n{benchmark_usage()}"
@@ -127,6 +134,9 @@ def parse_args(args: str) -> BenchmarkArgs:
             "dataset",
             "instance",
             "trusted_dataset",
+            "source",
+            "difficulty",
+            "limit",
         }:
             raise BenchmarkSyntaxError(f"Unknown benchmark flag: {token}\n{benchmark_usage()}")
         if i + 1 >= len(tokens):
@@ -150,6 +160,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
     if str(values["subcommand"]) == "compare" and models is not None and len(set(models)) < 2:
         raise BenchmarkSyntaxError("--models must include at least two distinct models")
     repeat = _positive_int(values.get("repeat", "1"), "--repeat")
+    limit = _positive_int(values.get("limit", "5"), "--limit")
     max_concurrency = _positive_int(values.get("max_concurrency", "1"), "--max-concurrency")
     timeout = values.get("timeout_seconds")
     timeout_seconds = _positive_int(timeout, "--timeout-seconds") if timeout is not None else None
@@ -190,6 +201,9 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         instance=_optional_str(values.get("instance")),
         trusted_dataset=trusted_dataset,
         run_id=_optional_str(values.get("run_id")),
+        source=_optional_str(values.get("source")),
+        difficulty=str(values.get("difficulty", "hard")),
+        limit=limit,
     )
 
 
@@ -238,6 +252,8 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
         return render_benchmark_report(parsed.output, parsed.suite)
     if parsed.subcommand == "export":
         return export_benchmark(parsed.output, parsed.suite, parsed.format)
+    if parsed.subcommand == "discover":
+        return discover_benchmark(parsed)
     if parsed.subcommand == "swe":
         return await start_swe_benchmark(soul, parsed, raw_args=args)
     if parsed.subcommand == "start":
@@ -283,6 +299,31 @@ def estimate_benchmark(soul: PythinkerSoul, args: BenchmarkArgs) -> str:
         repeat=args.repeat,
     )
     return render_estimate(estimate)
+
+
+def discover_benchmark(args: BenchmarkArgs) -> str:
+    if args.source is None:
+        raise BenchmarkSyntaxError("--source is required for /benchmark discover")
+    try:
+        tasks = discover_benchmark_sources(
+            source=args.source,
+            difficulty=args.difficulty,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        raise BenchmarkSyntaxError(str(exc)) from exc
+    lines = ["Pythinker Benchmark discovery", ""]
+    if tasks:
+        lines.extend(f"- {task.source}: {task.title} ({task.difficulty})" for task in tasks)
+    else:
+        lines.append(f"No benchmark tasks found for {args.source} at difficulty {args.difficulty}.")
+    if args.output is not None and args.output.suffix == ".jsonl":
+        args.output.write_text(
+            "".join(task.to_json_line() + "\n" for task in tasks),
+            encoding="utf-8",
+        )
+        lines.append(f"\nWrote provisional manifest: {args.output}")
+    return "\n".join(lines)
 
 
 async def start_benchmark(
