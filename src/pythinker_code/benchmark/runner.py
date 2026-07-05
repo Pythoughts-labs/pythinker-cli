@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, cast
 from pythinker_core.message import Message
 from pythinker_host.path import HostPath
 
-from pythinker_code.benchmark.environment import collect_benchmark_environment
 from pythinker_code.benchmark.activity import summarize_benchmark_activity
+from pythinker_code.benchmark.environment import collect_benchmark_environment
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.tasks import BenchmarkTask, materialize_workspace
 from pythinker_code.config import LoopControl
