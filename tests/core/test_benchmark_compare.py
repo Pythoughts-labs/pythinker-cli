@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pythinker_code.benchmark.commands import BenchmarkReportRow
 from pythinker_code.benchmark.compare import readiness_warnings
+from pythinker_code.benchmark.types import BenchmarkReportRow
 
 
 def _row(model: str, task: str, repeat: int, cost: object = None) -> BenchmarkReportRow:

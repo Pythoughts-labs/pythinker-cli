@@ -20,6 +20,7 @@ from pythinker_code.benchmark.runner import run_task
 from pythinker_code.benchmark.suites import list_suite_names, load_suite
 from pythinker_code.benchmark.swe import load_swe_instances, swe_instance_to_task
 from pythinker_code.benchmark.tasks import list_task_ids, load_task
+from pythinker_code.benchmark.types import BenchmarkReportRow, JsonObject
 from pythinker_code.share import get_share_dir
 
 if TYPE_CHECKING:
@@ -46,16 +47,6 @@ class BenchmarkArgs:
     instance: str | None = None
     trusted_dataset: bool = False
     run_id: str | None = None
-
-
-JsonObject = dict[str, object]
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkReportRow:
-    run: JsonObject
-    summary: JsonObject
-
 
 def benchmark_usage() -> str:
     return "\n".join(
@@ -356,13 +347,12 @@ def render_benchmark_report(output: Path | None = None, suite: str | None = None
         f"Suite: {suite or 'all'}",
         f"Runs: {len(rows)}",
         f"Passed: {passed}/{len(rows)} ({_percent(passed, len(rows))})",
-        "",
-        "Models:",
     ]
     warnings = readiness_warnings(rows)
     if warnings:
         lines.extend(["", "Publishability warnings:"])
         lines.extend(f"- {warning}" for warning in warnings)
+    lines.extend(["", "Models:"])
     for model, model_rows in _group_rows(rows, "model_key").items():
         model_passed = sum(1 for row in model_rows if _row_status(row) == "passed")
         lines.append(

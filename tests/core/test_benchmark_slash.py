@@ -263,6 +263,7 @@ def test_benchmark_report_includes_publishability_warnings(tmp_path: Path) -> No
 
     assert "Publishability warnings:" in report
     assert "- Single model only: do not describe this as a model comparison." in report
+    assert report.index("Publishability warnings:") < report.index("Models:")
 
 
 def _write_run_summary(

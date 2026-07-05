@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pythinker_code.benchmark.commands import BenchmarkReportRow
+from pythinker_code.benchmark.types import BenchmarkReportRow
 
 
 def readiness_warnings(rows: Sequence[BenchmarkReportRow]) -> list[str]:

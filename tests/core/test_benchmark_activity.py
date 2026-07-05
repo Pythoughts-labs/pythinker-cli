@@ -94,7 +94,7 @@ def test_render_run_report_missing_activity_shows_unavailable(tmp_path: Path) ->
     assert "  - changed files:" not in run_report
 
 
-def test_render_run_report_includes_publishability_warnings(tmp_path: Path) -> None:
+def test_render_run_report_does_not_include_publishability_warnings(tmp_path: Path) -> None:
     run_report = render_run_report(
         run={
             "run_id": "run-id",
@@ -111,6 +111,6 @@ def test_render_run_report_includes_publishability_warnings(tmp_path: Path) -> N
         artifact_root=tmp_path,
     )
 
-    assert "Publishability warnings:" in run_report
-    assert "- Single model only:" in run_report
-    assert "- Single repeat only:" in run_report
+    assert "Publishability warnings:" not in run_report
+    assert "- Single model only:" not in run_report
+    assert "- Single repeat only:" not in run_report
