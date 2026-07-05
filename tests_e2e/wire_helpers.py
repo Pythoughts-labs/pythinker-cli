@@ -90,6 +90,7 @@ def write_scripted_config(
     provider_name: str = "scripted_provider",
     capabilities: list[str] | None = None,
     loop_control: dict[str, Any] | None = None,
+    extra_config: Mapping[str, Any] | None = None,
 ) -> Path:
     scripts_path = write_scripts_file(tmp_path, scripts)
     model_config: dict[str, Any] = {
@@ -114,6 +115,8 @@ def write_scripted_config(
     }
     if loop_control:
         config_data["loop_control"] = loop_control
+    if extra_config:
+        config_data.update(extra_config)
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(config_data), encoding="utf-8")

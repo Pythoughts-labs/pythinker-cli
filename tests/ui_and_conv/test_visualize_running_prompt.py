@@ -396,6 +396,7 @@ def test_running_prompt_hide_input_card_flips_on_first_commit() -> None:
     view._turn_ended = False
     view._scrollback_handoff_depth = 0
     view._committed_scrollback_this_turn = False
+    view._awaiting_input_card_restore_anchor = False
     assert view.running_prompt_hide_input_card() is True
     assert view.running_prompt_hide_input_card_chrome() is True
 
@@ -493,6 +494,31 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     # Idempotent by construction (plain assignment): a repeat call is harmless.
     session.clear_turn_starting()
     assert session._turn_starting is False
+
+
+def test_render_agent_prompt_message_hides_top_border_during_first_load(
+    monkeypatch,
+) -> None:
+    """The pre-attach loading frame hides chrome to avoid scrollback fossils."""
+    from types import SimpleNamespace
+
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+
+    border = "──────── ● off"
+    session = _card_session(turn_starting=True, delegate=None)
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_input_top_border", lambda _c, _f: [("", border)])
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
+    monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
+
+    frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    assert frame == ""
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_buffer(
@@ -657,6 +683,7 @@ def test_render_agent_prompt_message_hides_live_view_chrome_before_first_commit(
     view._current_approval_request_panel = None
     view._transient_command_output = None
     view._queued_messages = []
+    view._awaiting_input_card_restore_anchor = False
 
     session = _card_session(delegate=view)
     session._shortcut_help_open = False
@@ -1137,6 +1164,29 @@ def test_file_activity_shelf_renders_compact_rows() -> None:
     assert "src/three.py" in plain
     assert "+1 more" in plain
     assert "src/one.py" not in plain
+
+
+def test_compose_agent_output_hides_file_activity_shelf_by_default() -> None:
+    from rich.console import Console
+
+    class _PromptSession:
+        def update_pinned_todos(self, _items) -> None:  # noqa: ANN001
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._file_activity_shelf.mark("src/noisy.py", "updated")
+
+    console = Console(width=80, record=True, color_system=None)
+    for block in view.compose_agent_output(include_working_indicator=False):
+        console.print(block)
+
+    plain = console.export_text()
+    assert "Files" not in plain
+    assert "src/noisy.py" not in plain
 
 
 def test_file_activity_tracks_write_tool_until_result() -> None:

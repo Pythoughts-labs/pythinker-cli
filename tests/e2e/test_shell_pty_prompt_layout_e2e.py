@@ -83,6 +83,46 @@ def _has_fossil_border_above_content(rows: list[str]) -> bool:
     return any(_is_input_card_border(rows[i]) for i in range(echo_i + 1, content_i))
 
 
+def test_focus_tui_hides_files_and_never_fossilizes_prompt(tmp_path: Path) -> None:
+    write = {
+        "id": "w1",
+        "name": "WriteFile",
+        "arguments": json.dumps({"path": "src/a.py", "content": "x"}),
+    }
+    config_path = write_scripted_config(
+        tmp_path,
+        [f"tool_call: {json.dumps(write)}", "text: Done."],
+        capabilities=["thinking"],
+        extra_config={"tui": {"focus_mode": True}},
+    )
+    work_dir = make_work_dir(tmp_path)
+    home_dir = make_home_dir(tmp_path)
+    shell = start_shell_pty(
+        config_path=config_path,
+        work_dir=work_dir,
+        home_dir=home_dir,
+        yolo=True,
+        columns=_COLS,
+        lines=_ROWS,
+    )
+    try:
+        shell.read_until_contains("think first, then code")
+        read_until_prompt_ready(shell, after=shell.mark())
+        shell.send_line(_PROMPT_TEXT)
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            shell.read_available(timeout=0.08)
+            rows = _render(shell._raw_chunks)
+            joined = "\n".join(rows)
+            assert not _has_fossil_border_above_content(rows)
+            assert "src/a.py" not in joined
+            if "Done." in shell.normalized_text():
+                break
+        assert "Done." in shell.normalized_text()
+    finally:
+        shell.close()
+
+
 def test_input_card_never_fossilizes_above_the_stream(tmp_path: Path) -> None:
     """The input card must never appear between the echoed prompt and the stream.
 

@@ -154,9 +154,14 @@ def test_default_config_dump():
                     "cost_budget": None,
                 },
                 "smooth_streaming": True,
+                "focus_mode": False,
             },
         }
     )
+
+
+def test_tui_focus_mode_default_off() -> None:
+    assert get_default_config().tui.focus_mode is False
 
 
 def test_tui_sticky_input_default_on() -> None:

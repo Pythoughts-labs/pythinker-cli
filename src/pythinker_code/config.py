@@ -1014,6 +1014,13 @@ class TUIConfig(BaseModel):
             "(bounded catch-up). Set false to reveal each delta immediately."
         ),
     )
+    focus_mode: bool = Field(
+        default=False,
+        description=(
+            "Use the fullscreen Focus TUI during active agent turns. Focus TUI "
+            "owns the viewport to avoid terminal jump/fossilized prompt rows."
+        ),
+    )
 
     @field_validator("code_theme")
     @classmethod

@@ -18,6 +18,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Ported the running agent TUI toward Pi's stable diff-rendered scene model so streamed output keeps the input card visible without prompt jumps.
 - Added publishability-focused benchmark comparison planning for multi-model
   runs, activity metrics, exportable reports, and safe online source discovery.
+- Added an experimental Focus TUI mode for active agent turns, keeping the composer pinned, hiding file activity by default, and rendering live output without terminal scrollback jumps.
 - Stream file write/edit activity in a compact live shelf so changed files update in place during agent runs instead of adding noisy terminal rows.
 - Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
   underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`

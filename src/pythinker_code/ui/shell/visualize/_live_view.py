@@ -41,6 +41,7 @@ from pythinker_code.ui.shell.components.render_utils import (
 )
 from pythinker_code.ui.shell.console import console, current_console_width
 from pythinker_code.ui.shell.echo import render_user_echo
+from pythinker_code.ui.shell.focus_model import FocusTuiModel
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_TOOL_GUTTER
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
@@ -246,6 +247,7 @@ class _LiveView:
         self._pending_turn_recap = False
         self._file_activity_shelf = FileActivityShelf()
         self._tool_file_paths: dict[str, str] = {}
+        self.focus_model: FocusTuiModel | None = None
 
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
@@ -824,29 +826,28 @@ class _LiveView:
                     self._current_content_block.compose(include_activity=include_content_activity),
                     leading=True,
                 )
-            file_activity = self._file_activity_shelf.render(current_console_width())
-            if file_activity is not None:
-                _append_action_block(blocks, file_activity, leading=True)
-            # When an approval panel is on-screen for a specific tool call, the
-            # panel already previews the same command/diff that the pending tool
-            # card would show. Suppress the matching card to avoid the duplicate.
-            suppressed_tool_call_id: str | None = None
-            if self._current_approval_request_panel is not None:
-                suppressed_tool_call_id = self._current_approval_request_panel.request.tool_call_id
-            for tool_call in list(self._tool_call_blocks.values()):
-                if (
-                    suppressed_tool_call_id is not None
-                    and tool_call.tool_call_id == suppressed_tool_call_id
-                ):
-                    continue
-                if tool_call.is_todo_list:
-                    # Todo updates are pinned under the verb spinner; don't also
-                    # render a floating todo tool card above the stream.
-                    continue
-                # leading=True gives the first live tool card a blank row above
-                # it too, so a still-running agent is separated from a finished
-                # one already committed to scrollback.
-                _append_action_block(blocks, tool_call.compose(), leading=True)
+                # When an approval panel is on-screen for a specific tool call, the
+                # panel already previews the same command/diff that the pending tool
+                # card would show. Suppress the matching card to avoid the duplicate.
+                suppressed_tool_call_id: str | None = None
+                if self._current_approval_request_panel is not None:
+                    suppressed_tool_call_id = (
+                        self._current_approval_request_panel.request.tool_call_id
+                    )
+                for tool_call in list(self._tool_call_blocks.values()):
+                    if (
+                        suppressed_tool_call_id is not None
+                        and tool_call.tool_call_id == suppressed_tool_call_id
+                    ):
+                        continue
+                    if tool_call.is_todo_list:
+                        # Todo updates are pinned under the verb spinner; don't also
+                        # render a floating todo tool card above the stream.
+                        continue
+                    # leading=True gives the first live tool card a blank row above
+                    # it too, so a still-running agent is separated from a finished
+                    # one already committed to scrollback.
+                    _append_action_block(blocks, tool_call.compose(), leading=True)
             for hook_block in getattr(self, "_hook_blocks", {}).values():
                 _append_action_block(blocks, hook_block.compose(), leading=True)
             if (
@@ -895,6 +896,31 @@ class _LiveView:
             for block in getattr(result.return_value, "display", []) or []
             if isinstance(block, DiffDisplayBlock) and block.path
         ]
+
+    def enable_focus_model(self) -> FocusTuiModel:
+        self.focus_model = FocusTuiModel()
+        return self.focus_model
+
+    def _update_focus_model_for_tool_call(self, tool_call: ToolCall) -> None:
+        if self.focus_model is None:
+            return
+        title = f"{tool_call.function.name}"
+        path = self._tool_call_path(tool_call)
+        if path:
+            self.focus_model.mark_file(path, "writing")
+        self.focus_model.append_tool_row(tool_call.id, title, expandable=True)
+
+    def _update_focus_model_for_tool_result(self, result: ToolResult) -> None:
+        if self.focus_model is None:
+            return
+        paths = self._tool_result_paths(result)
+        if not paths:
+            stored_path = self._tool_file_paths.get(result.tool_call_id)
+            paths = [stored_path] if stored_path else []
+        status = "failed" if result.return_value.is_error else "updated"
+        for path in paths:
+            self.focus_model.mark_file(path, status)
+        self.focus_model.update_tool_row(result.tool_call_id, done=True)
 
     def _mark_file_activity_started(self, tool_call: ToolCall) -> None:
         path = self._tool_call_path(tool_call)
@@ -1491,7 +1517,8 @@ class _LiveView:
         for tool_call_id in list(self._tool_call_blocks.keys()):
             block = self._tool_call_blocks.pop(tool_call_id)
             self._archive_completed_tool_card(block)
-            self._emit_action_block(block.compose())
+            if self.focus_model is None:
+                self._emit_action_block(block.compose())
             self.refresh_soon()
         self.flush_notifications()
         if not is_interrupt and self._active_turn_depth == 0 and self._pending_turn_recap:
@@ -1573,7 +1600,8 @@ class _LiveView:
         if self._held_tool_search_block is not None:
             block = self._held_tool_search_block
             self._held_tool_search_block = None
-            self._emit_action_block(block.compose())
+            if self.focus_model is None:
+                self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_finished_tool_calls(self) -> None:
@@ -1606,7 +1634,8 @@ class _LiveView:
                 self._held_tool_search_block = block
             else:
                 self._flush_held_tool_search()
-                self._emit_action_block(block.compose())
+                if self.focus_model is None:
+                    self._emit_action_block(block.compose())
             self.refresh_soon()
 
     def flush_notifications(self) -> None:
@@ -1655,6 +1684,7 @@ class _LiveView:
         self._current_step_retry = None
         self.flush_content(FlushReason.TOOL_START)
         self._mark_file_activity_started(tool_call)
+        self._update_focus_model_for_tool_call(tool_call)
         self._tool_call_blocks[tool_call.id] = _ToolCallBlock(tool_call)
         self._last_tool_call_block = self._tool_call_blocks[tool_call.id]
         self.refresh_soon()
@@ -1679,6 +1709,7 @@ class _LiveView:
 
     def append_tool_result(self, result: ToolResult) -> None:
         self._mark_file_activity_finished(result)
+        self._update_focus_model_for_tool_result(result)
         if block := self._tool_call_blocks.get(result.tool_call_id):
             self._record_todo_display(result.return_value)
             if block.is_todo_list and not result.return_value.is_error:

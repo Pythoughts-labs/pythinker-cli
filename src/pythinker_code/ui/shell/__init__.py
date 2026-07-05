@@ -1425,6 +1425,7 @@ class Shell:
             runtime = self.soul.runtime if isinstance(self.soul, PythinkerSoul) else None
             show_thinking_stream = runtime.config.show_thinking_stream if runtime else False
             show_turn_recaps = runtime.config.tui.turn_recaps if runtime else False
+            focus_mode = runtime.config.tui.focus_mode if runtime else False
             # Capture view reference via closure — _clear_active_view sets
             # _active_view=None inside visualize()'s finally (before run_soul
             # returns), so we must capture the view object independently.
@@ -1459,6 +1460,7 @@ class Shell:
                     on_view_closed=self._clear_active_view,
                     show_thinking_stream=show_thinking_stream,
                     show_turn_recaps=show_turn_recaps,
+                    focus_mode=focus_mode,
                 ),
                 cancel_event,
                 runtime.session.wire_file if runtime else None,
@@ -1515,6 +1517,7 @@ class Shell:
                         on_view_closed=self._clear_active_view,
                         show_thinking_stream=show_thinking_stream,
                         show_turn_recaps=show_turn_recaps,
+                        focus_mode=focus_mode,
                     ),
                     cancel_event,
                     runtime.session.wire_file if runtime else None,

@@ -21,6 +21,7 @@ from rich.live import Live as Live  # noqa: F401
 # --- Re-exports (keep all existing import paths working) -------------------
 # Console (re-exported for test monkeypatching compatibility)
 from pythinker_code.ui.shell.console import console as console  # noqa: F401
+from pythinker_code.ui.shell.focus_surface import FocusTuiSurface
 from pythinker_code.ui.shell.keyboard import KeyEvent as KeyEvent  # noqa: F401
 from pythinker_code.ui.shell.prompt import CustomPromptSession, UserInput
 
@@ -143,6 +144,7 @@ async def visualize(
     on_view_closed: Callable[[], None] | None = None,
     show_thinking_stream: bool = False,
     show_turn_recaps: bool = False,
+    focus_mode: bool = False,
 ) -> None:
     """A loop to consume agent events and visualize the agent behavior.
 
@@ -150,6 +152,7 @@ async def visualize(
     ``_PromptLiveView`` (prompt_toolkit, interactive) depending on whether
     a prompt session is provided.
     """
+    focus_surface: FocusTuiSurface | None = None
     if prompt_session is not None and steer is not None:
         view = _PromptLiveView(
             initial_status,
@@ -162,6 +165,9 @@ async def visualize(
             show_turn_recaps=show_turn_recaps,
         )
         prompt_session.attach_running_prompt(view)
+        if focus_mode:
+            focus_surface = FocusTuiSurface(view.enable_focus_model(), delegate=view)
+            prompt_session.attach_modal(focus_surface)
 
         def _cancel_running_input() -> None:
             if cancel_event is not None:
@@ -185,6 +191,8 @@ async def visualize(
             if unbind_running_input is not None:
                 unbind_running_input()
             if isinstance(view, _PromptLiveView):
+                if focus_surface is not None:
+                    prompt_session.detach_modal(focus_surface)
                 prompt_session.detach_running_prompt(view)
         if on_view_closed is not None:
             on_view_closed()

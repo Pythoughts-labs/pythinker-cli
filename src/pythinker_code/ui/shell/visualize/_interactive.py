@@ -172,6 +172,7 @@ class _PromptLiveView(_LiveView):
         # stream, so the card must be absent from that pre-handoff frame. Reset
         # at each turn's start.
         self._committed_scrollback_this_turn: bool = False
+        self._awaiting_input_card_restore_anchor: bool = False
 
     # -- Helpers -------------------------------------------------------------
 
@@ -447,6 +448,11 @@ class _PromptLiveView(_LiveView):
                 return
             batch = self._pending_scrollback[:]
             anchor_batch = self._pending_scrollback_anchors[: len(batch)]
+            if self.focus_model is not None and self._active_turn_depth > 0:
+                del self._pending_scrollback[: len(batch)]
+                del self._pending_scrollback_anchors[: len(batch)]
+                self._safe_prompt_invalidate()
+                return
 
             def emit() -> None:
                 for renderable, blank_row in batch:
@@ -466,7 +472,12 @@ class _PromptLiveView(_LiveView):
             del self._pending_scrollback[: len(batch)]
             del self._pending_scrollback_anchors[: len(batch)]
             if any(anchor_batch):
+                first_commit = not self._committed_scrollback_this_turn
                 self._committed_scrollback_this_turn = True
+                if first_commit:
+                    self._awaiting_input_card_restore_anchor = True
+                elif self._awaiting_input_card_restore_anchor:
+                    self._awaiting_input_card_restore_anchor = False
             self._safe_prompt_invalidate()
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
@@ -479,6 +490,8 @@ class _PromptLiveView(_LiveView):
 
     def _emit_steer_echo(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, False))
+        if not hasattr(self, "_pending_scrollback_anchors"):
+            self._pending_scrollback_anchors = []
         self._pending_scrollback_anchors.append(False)
 
     def _print_turn_recap(self) -> None:
@@ -809,6 +822,7 @@ class _PromptLiveView(_LiveView):
         # flag on the 0->1 transition (super() increments the depth below).
         if isinstance(msg, TurnBegin) and self._active_turn_depth == 0:
             self._committed_scrollback_this_turn = False
+            self._awaiting_input_card_restore_anchor = False
         super().dispatch_wire_message(msg)
 
     def display_suggestion(self, event: Suggestion) -> None:
@@ -950,11 +964,13 @@ class _PromptLiveView(_LiveView):
         ``dispatch_wire_message``), not merely assumed from construction — this
         method must stay correct even if a future change reuses one delegate
         instance across turns instead of building a fresh one per turn."""
-        if self._turn_ended:
-            return False
         if getattr(self, "_scrollback_handoff_depth", 0) > 0:
             return True
-        return not self._committed_scrollback_this_turn
+        if self._turn_ended:
+            return False
+        return not self._committed_scrollback_this_turn or getattr(
+            self, "_awaiting_input_card_restore_anchor", False
+        )
 
     def running_prompt_hide_input_card_chrome(self) -> bool:
         # Do not broaden this hide: the input card must be visible during agent runs.
