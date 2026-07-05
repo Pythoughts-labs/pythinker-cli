@@ -1262,6 +1262,16 @@ class _ToolCallBlock:
     def has_expandable_card(self) -> bool:
         return self._tui_card is not None and self._tui_card.can_expand
 
+    def active_subagent_label(self) -> str | None:
+        if not self._ongoing_subagent_tool_calls:
+            return None
+        call = next(reversed(self._ongoing_subagent_tool_calls.values()))
+        detail = tool_style(call.function.name).label
+        argument = extract_key_argument(call.function.arguments or "", call.function.name)
+        if argument:
+            detail = f"{detail} {argument}"
+        return sanitize_ansi(f"agent {detail}")
+
     def toggle_expanded(self) -> None:
         if self._tui_card is None:
             return

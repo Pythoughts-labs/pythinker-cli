@@ -826,28 +826,26 @@ class _LiveView:
                     self._current_content_block.compose(include_activity=include_content_activity),
                     leading=True,
                 )
-                # When an approval panel is on-screen for a specific tool call, the
-                # panel already previews the same command/diff that the pending tool
-                # card would show. Suppress the matching card to avoid the duplicate.
-                suppressed_tool_call_id: str | None = None
-                if self._current_approval_request_panel is not None:
-                    suppressed_tool_call_id = (
-                        self._current_approval_request_panel.request.tool_call_id
-                    )
-                for tool_call in list(self._tool_call_blocks.values()):
-                    if (
-                        suppressed_tool_call_id is not None
-                        and tool_call.tool_call_id == suppressed_tool_call_id
-                    ):
-                        continue
-                    if tool_call.is_todo_list:
-                        # Todo updates are pinned under the verb spinner; don't also
-                        # render a floating todo tool card above the stream.
-                        continue
-                    # leading=True gives the first live tool card a blank row above
-                    # it too, so a still-running agent is separated from a finished
-                    # one already committed to scrollback.
-                    _append_action_block(blocks, tool_call.compose(), leading=True)
+            # When an approval panel is on-screen for a specific tool call, the
+            # panel already previews the same command/diff that the pending tool
+            # card would show. Suppress the matching card to avoid the duplicate.
+            suppressed_tool_call_id: str | None = None
+            if self._current_approval_request_panel is not None:
+                suppressed_tool_call_id = self._current_approval_request_panel.request.tool_call_id
+            for tool_call in list(self._tool_call_blocks.values()):
+                if (
+                    suppressed_tool_call_id is not None
+                    and tool_call.tool_call_id == suppressed_tool_call_id
+                ):
+                    continue
+                if tool_call.is_todo_list:
+                    # Todo updates are pinned under the verb spinner; don't also
+                    # render a floating todo tool card above the stream.
+                    continue
+                # leading=True gives the first live tool card a blank row above
+                # it too, so a still-running agent is separated from a finished
+                # one already committed to scrollback.
+                _append_action_block(blocks, tool_call.compose(), leading=True)
             for hook_block in getattr(self, "_hook_blocks", {}).values():
                 _append_action_block(blocks, hook_block.compose(), leading=True)
             if (
@@ -973,10 +971,11 @@ class _LiveView:
         now = time.monotonic()
         elapsed = 0.0 if self._turn_start_time is None else now - self._turn_start_time
         width = current_console_width()
+        active_subagent_label = self._active_subagent_activity_label()
         active_todo_title = (
             self._active_todo_title() if getattr(self, "_pinned_todos_visible", True) else None
         )
-        label = active_todo_title or spinner_message(now)
+        label = active_todo_title or active_subagent_label or spinner_message(now)
         todo_block = self._pinned_todo_block(
             width=width,
             elapsed_s=elapsed,
@@ -995,19 +994,27 @@ class _LiveView:
 
         line = activity_status_line(
             ActivitySnapshot(
-                label=spinner_message(now),
+                label=label,
                 elapsed_s=elapsed,
                 tokens=get_turn_output_tokens(),
                 token_rate=self._turn_token_rate(now),
             ),
             width=width,
         )
+        if active_subagent_label is not None:
+            return line
         # During longer waits, surface a rotating CLI-feature tip under the verb.
         if hide_tips or elapsed < _WORKING_TIP_MIN_ELAPSED_S:
             return line
         tip_content = Text("Tip: ", style=tui_rich_style("dim"))
         tip_content.append(current_tip(now), style=tui_rich_style("dim"))
         return Group(line, render_message_response(tip_content))
+
+    def _active_subagent_activity_label(self) -> str | None:
+        for block in reversed(list(getattr(self, "_tool_call_blocks", {}).values())):
+            if label := block.active_subagent_label():
+                return label
+        return None
 
     def _turn_token_rate(self, now: float) -> int | None:
         """Stable recent tokens/sec for the running turn, or None until known.

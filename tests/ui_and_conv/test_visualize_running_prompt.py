@@ -730,6 +730,53 @@ def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
     assert "Composing" in pinned_tail
 
 
+def test_pinned_tail_prefers_active_subagent_tool_over_composing() -> None:
+    import re
+    import time as _time
+    from collections import deque
+
+    from pythinker_core.message import ToolCall
+
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock, _ToolCallBlock
+
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._turn_start_time = _time.monotonic()
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._turn_token_samples = deque()
+
+    block = _ContentBlock(is_think=False)
+    block.append("Writing the consolidated report now.")
+    view._current_content_block = block
+
+    agent_block = _ToolCallBlock(
+        ToolCall(
+            id="agent-1",
+            function=ToolCall.FunctionBody(
+                name="Agent",
+                arguments='{"description":"review","subagent_type":"review","prompt":"scan"}',
+            ),
+        )
+    )
+    sub_call = ToolCall(
+        id="sub-1",
+        function=ToolCall.FunctionBody(
+            name="ReadFile",
+            arguments='{"path":"src/pythinker_code/ui/shell/prompt.py"}',
+        ),
+    )
+    agent_block.append_sub_tool_call(sub_call)
+    agent_block.mark_sub_execution_started("sub-1")
+    view._tool_call_blocks = {"agent-1": agent_block}
+
+    tail = re.sub(r"\x1b\[[0-9;]*m", "", view.render_pinned_status_tail(100).value)
+
+    assert "agent Read src/pythinker_code/ui/shell/prompt.py" in tail
+    assert "Composing" not in tail
+
+
 def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
     view = object.__new__(_PromptLiveView)
     view._turn_ended = True

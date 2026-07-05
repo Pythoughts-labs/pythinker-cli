@@ -905,7 +905,12 @@ class _PromptLiveView(_LiveView):
             return ANSI(body if body else "")
 
         content_block = getattr(self, "_current_content_block", None)
-        if content_block is not None and not content_block.is_think:
+        if self._active_subagent_activity_label() is not None:
+            body = render_to_ansi(
+                self._working_indicator(hide_tips=self._hide_working_tips),
+                columns=columns,
+            ).rstrip("\n")
+        elif content_block is not None and not content_block.is_think:
             body = render_to_ansi(content_block._compose_spinner(), columns=columns).rstrip("\n")
         else:
             body = render_to_ansi(
