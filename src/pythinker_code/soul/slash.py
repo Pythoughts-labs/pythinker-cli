@@ -384,7 +384,10 @@ async def best_practices(soul: PythinkerSoul, args: str):
 
 @registry.command
 async def benchmark(soul: PythinkerSoul, args: str) -> None:
-    """Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>"""
+    """
+    Run native Pythinker Benchmark tasks.
+    Usage: /benchmark <start|compare|estimate|list|show|report>
+    """
     await _benchmark_dispatch(soul, args)
 
 

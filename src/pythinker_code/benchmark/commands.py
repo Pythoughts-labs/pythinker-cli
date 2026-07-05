@@ -227,15 +227,26 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
     raise BenchmarkSyntaxError(benchmark_usage())
 
 
-async def compare_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
+async def compare_benchmark(
+    soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str
+) -> str:
     assert args.models is not None
-    summaries: list[str] = []
     for model_key in args.models:
         _validate_model(soul, model_key)
+    summaries: list[str] = []
+    compare_run_ids: list[str] = []
+    for model_key in args.models:
         model_args = dataclasses.replace(args, model=model_key, models=None, subcommand="start")
-        summaries.append(await start_benchmark(soul, model_args, raw_args=raw_args))
+        summaries.append(
+            await start_benchmark(
+                soul,
+                model_args,
+                raw_args=raw_args,
+                run_ids=compare_run_ids,
+            )
+        )
     suite = args.suite or (None if args.task else DEFAULT_SUITE)
-    report = render_benchmark_report(args.output, suite)
+    report = render_benchmark_report(args.output, suite, run_ids=compare_run_ids)
     return "\n\n".join([*summaries, report])
 
 
@@ -256,7 +267,13 @@ def estimate_benchmark(soul: PythinkerSoul, args: BenchmarkArgs) -> str:
     return render_estimate(estimate)
 
 
-async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
+async def start_benchmark(
+    soul: PythinkerSoul,
+    args: BenchmarkArgs,
+    *,
+    raw_args: str,
+    run_ids: list[str] | None = None,
+) -> str:
     model_key = _resolve_model_key(soul, args.model)
     root = args.output or get_share_dir() / "benchmarks"
     run_summaries: list[str] = []
@@ -267,6 +284,8 @@ async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args:
             assert task_id is not None
             task = load_task(task_id)
             run_id = _run_id(task.id)
+            if run_ids is not None:
+                run_ids.append(run_id)
             recorder = BenchmarkRecorder(root, run_id)
             result = await run_task(
                 soul=soul,
@@ -357,7 +376,9 @@ def show_benchmark(run_id: str, output: Path | None = None) -> str:
     return render_show(run, summary)
 
 
-def render_benchmark_report(output: Path | None = None, suite: str | None = None) -> str:
+def render_benchmark_report(
+    output: Path | None = None, suite: str | None = None, run_ids: list[str] | None = None
+) -> str:
     from pythinker_code.benchmark.compare import readiness_warnings
 
     root = output or get_share_dir() / "benchmarks"
@@ -366,6 +387,9 @@ def render_benchmark_report(output: Path | None = None, suite: str | None = None
     rows: list[BenchmarkReportRow] = []
     for path in sorted(root.glob("*/run.json")):
         run = _read_json_object(path)
+        run_id = run.get("run_id")
+        if run_id is not None and run_ids is not None and run_id not in run_ids:
+            continue
         if suite is None or run.get("suite_name") == suite:
             summary_path = path.parent / "summary.json"
             summary = _read_json_object(summary_path) if summary_path.exists() else {}
