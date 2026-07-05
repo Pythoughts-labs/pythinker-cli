@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, cast
 from pythinker_core.message import Message
 from pythinker_host.path import HostPath
 
+from pythinker_code.benchmark.activity import summarize_benchmark_activity
+from pythinker_code.benchmark.environment import collect_benchmark_environment
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.tasks import BenchmarkTask, materialize_workspace
 from pythinker_code.config import LoopControl
@@ -53,6 +55,8 @@ class BenchmarkResult:
     output_tokens: int
     reasoning_tokens: int
     estimated_cost_usd: float | None
+    activity: dict[str, object]
+    environment: dict[str, object]
 
 
 async def run_task(
@@ -80,6 +84,7 @@ async def run_task(
     workspace = recorder.workspace_dir
     materialize_workspace(task, workspace)
     recorder.record_event("workspace_prepared", {"workspace": str(workspace)})
+    effective_timeout = timeout_seconds or task.limits.timeout_seconds
 
     before = _snapshot_files(workspace)
     started = time.monotonic()
@@ -116,7 +121,7 @@ async def run_task(
         try:
             outcome = await asyncio.wait_for(
                 soul.turn(Message(role="user", content=benchmark_prompt)),  # type: ignore[attr-defined]
-                timeout=timeout_seconds or task.limits.timeout_seconds,
+                timeout=effective_timeout,
             )
         except TimeoutError:
             status = "timeout"
@@ -178,7 +183,9 @@ async def run_task(
         runtime.builtin_args = old_builtin_args
         _restore_benchmark_step_limit(soul, old_loop_control)
 
-    changed_files = _changed_files(workspace, before)
+    after = _snapshot_files(workspace)
+    changed_files = _changed_files_from_snapshots(before, after)
+    activity = summarize_benchmark_activity(before, after, wire_file, wire_offset)
     tool_calls = _count_wire_tool_calls(wire_file, wire_offset)
     usage = _last_wire_usage(wire_file, wire_offset)
     result = BenchmarkResult(
@@ -195,6 +202,13 @@ async def run_task(
         output_tokens=usage["output_tokens"],
         reasoning_tokens=usage["reasoning_tokens"],
         estimated_cost_usd=None,
+        activity=activity,
+        environment=collect_benchmark_environment(
+            repo_root=Path.cwd(),
+            task_timeout_seconds=effective_timeout,
+            task_max_steps=task.limits.max_steps,
+            verification_command=task.verification.command,
+        ),
     )
     recorder.copy_context_and_wire(
         context_file,
@@ -385,9 +399,8 @@ def _snapshot_files(workspace: Path) -> dict[str, str]:
     return snapshot
 
 
-def _changed_files(workspace: Path, before: dict[str, str]) -> list[str]:
+def _changed_files_from_snapshots(before: dict[str, str], after: dict[str, str]) -> list[str]:
     changed: list[str] = []
-    after = _snapshot_files(workspace)
     for name, content in sorted(after.items()):
         if before.get(name) != content:
             changed.append(name)

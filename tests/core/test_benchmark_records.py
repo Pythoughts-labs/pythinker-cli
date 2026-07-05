@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
 from pathlib import Path
+
+import pytest
 
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.runner import BenchmarkResult, VerificationResult
@@ -41,6 +44,8 @@ def test_recorder_writes_required_artifacts_and_redacts(tmp_path: Path) -> None:
         output_tokens=0,
         reasoning_tokens=0,
         estimated_cost_usd=None,
+        activity={},
+        environment={},
     )
 
     recorder.finish_run(result)
@@ -174,3 +179,102 @@ def test_copied_jsonl_artifacts_remain_valid_when_truncated(tmp_path: Path) -> N
     records = [json.loads(line) for line in copied_wire.read_text(encoding="utf-8").splitlines()]
     assert records[0]["message"]["payload"]["text"].endswith("<truncated>")
     assert records[1]["type"] == "invalid_jsonl_line"
+
+
+def test_finish_run_persists_reproducibility_metadata(tmp_path: Path) -> None:
+    from pythinker_code.benchmark.records import BenchmarkRecorder
+    from pythinker_code.benchmark.runner import BenchmarkResult, VerificationResult
+
+    recorder = BenchmarkRecorder(tmp_path, "bench_env")
+    recorder.start_run(
+        command="/benchmark start",
+        model_key="mock-model",
+        provider_key="mock-provider",
+        task_id="core-safe-path-join",
+        suite_name="pythinker-core",
+        repeat_index=1,
+    )
+    result = BenchmarkResult(
+        run_id="bench_env",
+        status="passed",
+        exit_reason="verification_passed",
+        final_answer="done",
+        verification=VerificationResult(
+            status="passed",
+            type="command",
+            exit_code=0,
+            stdout="",
+            stderr="",
+        ),
+        duration_ms=10,
+        steps=1,
+        tool_calls=1,
+        changed_files=["paths.py"],
+        input_tokens=3,
+        output_tokens=2,
+        reasoning_tokens=0,
+        estimated_cost_usd=None,
+        activity={},
+        environment={
+            "git_commit": "abc123",
+            "git_dirty": False,
+            "python_version": "3.14.0",
+            "platform": "test-platform",
+            "task_timeout_seconds": 180,
+            "task_max_steps": 60,
+            "verification_command_sha256": "0" * 64,
+        },
+    )
+
+    recorder.finish_run(result)
+
+    summary = json.loads((tmp_path / "bench_env" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["environment"]["git_commit"] == "abc123"
+    assert summary["environment"]["git_dirty"] is False
+    assert summary["environment"]["task_max_steps"] == 60
+
+
+def test_collect_benchmark_environment_includes_pythinker_version_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.benchmark import environment
+
+    monkeypatch.setattr(
+        "pythinker_code.benchmark.environment.importlib.metadata.version",
+        lambda _distribution_name: "9.9.9",
+    )
+
+    collected = environment.collect_benchmark_environment(
+        repo_root=tmp_path,
+        task_timeout_seconds=4,
+        task_max_steps=8,
+        verification_command="pytest",
+    )
+
+    assert collected["pythinker_version"] == "9.9.9"
+
+
+def test_collect_benchmark_environment_records_none_without_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _missing_package(_distribution_name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        _missing_package,
+    )
+
+    from pythinker_code.benchmark import environment
+
+    collected = environment.collect_benchmark_environment(
+        repo_root=tmp_path,
+        task_timeout_seconds=4,
+        task_max_steps=8,
+        verification_command="pytest",
+    )
+
+    assert collected["pythinker_version"] is None

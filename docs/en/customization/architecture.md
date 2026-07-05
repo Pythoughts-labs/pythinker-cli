@@ -175,7 +175,9 @@ path as a normal session, then execute a verification command and persist artifa
 
 | Path | Purpose | Key entry points and interfaces |
 | --- | --- | --- |
-| `src/pythinker_code/benchmark/commands.py` | Slash-command parser and orchestrator for `start`, `estimate`, `list`, `show`, `report`, and `swe`. | `dispatch_benchmark`, `BenchmarkArgs`, `benchmark_usage` |
+| `src/pythinker_code/benchmark/commands.py` | Slash-command parser and orchestrator for `start`, `estimate`, `list`, `show`, `report`, `export`, `compare`, `discover`, and `swe`. | `dispatch_benchmark`, `BenchmarkArgs`, `benchmark_usage` |
+| `src/pythinker_code/benchmark/compare.py` and `export.py` | Publishability warnings and report-row export formatting for model comparisons. | `readiness_warnings`, `render_export` |
+| `src/pythinker_code/benchmark/discovery.py` | Allowlisted online source discovery and provisional quiz-fixture JSONL conversion. | `discover_benchmark_sources`, `quiz_fixture_from_discovery` |
 | `src/pythinker_code/benchmark/runner.py` | Per-task execution: workspace materialization, work-dir override, temporary task `max_steps` limit, timeout handling, verification, and artifact finalization. | `run_task`, `BenchmarkResult`, `VerificationResult` |
 | `src/pythinker_code/benchmark/tasks.py` | Bundled task schema and workspace materialization. | `BenchmarkTask`, `load_task`, `materialize_workspace` |
 | `src/pythinker_code/benchmark/suites.py` | Bundled suite loading and ordering. | `load_suite`, `list_suite_names` |
@@ -191,6 +193,10 @@ from session config; it does not create a separate provider stack.
 `/benchmark:swe` is intentionally labeled SWE-style local fixture support, not full SWE-bench
 Docker evaluation. It accepts local JSONL records, rejects unsafe workspace paths, and requires
 `--trusted-dataset true` before running dataset-provided verification commands.
+
+`/benchmark discover` only writes provisional review manifests when `--output` ends in
+`.jsonl`; those records are untrusted quiz fixtures with empty workspaces, not runnable
+SWE-style local fixtures.
 
 ## Wire and UI frontends
 

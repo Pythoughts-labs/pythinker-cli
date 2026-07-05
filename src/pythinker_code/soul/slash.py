@@ -384,7 +384,10 @@ async def best_practices(soul: PythinkerSoul, args: str):
 
 @registry.command
 async def benchmark(soul: PythinkerSoul, args: str) -> None:
-    """Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>"""
+    """
+    Run native Pythinker Benchmark tasks.
+    Usage: /benchmark <start|compare|estimate|list|show|report>
+    """
     await _benchmark_dispatch(soul, args)
 
 
@@ -422,6 +425,12 @@ async def benchmark_show(soul: PythinkerSoul, args: str) -> None:
 async def benchmark_report(soul: PythinkerSoul, args: str) -> None:
     """Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]"""
     await _benchmark_dispatch(soul, _join_benchmark_args("report", args))
+
+
+@registry.command(name="benchmark:compare")
+async def benchmark_compare(soul: PythinkerSoul, args: str) -> None:
+    """Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("compare", args))
 
 
 @registry.command(name="benchmark:swe")

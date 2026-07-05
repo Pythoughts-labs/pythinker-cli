@@ -111,6 +111,8 @@ class BenchmarkRecorder:
                 "tool_calls": result.tool_calls,
                 "changed_files": result.changed_files,
             },
+            "activity": result.activity,
+            "environment": result.environment,
         }
         (self.run_dir / "summary.json").write_text(
             dumps_redacted(summary, indent=2) + "\n", encoding="utf-8"

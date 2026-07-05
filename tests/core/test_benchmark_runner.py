@@ -53,7 +53,7 @@ async def test_run_task_records_passed_smoke_task(
                     {
                         "message": {
                             "type": "ToolCall",
-                            "payload": {"id": "call-1"},
+                            "payload": {"id": "call-1", "name": "Bash"},
                         }
                     }
                 )
@@ -74,6 +74,28 @@ async def test_run_task_records_passed_smoke_task(
                 json.dumps(
                     {
                         "message": {
+                            "type": "ToolCall",
+                            "payload": {"id": "call-2", "name": "StrReplaceFile"},
+                        }
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "type": "ToolExecutionStarted",
+                            "payload": {"tool_call_id": "call-2"},
+                        }
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "message": {
                             "type": "StatusUpdate",
                             "payload": {
                                 "token_usage": {
@@ -81,7 +103,7 @@ async def test_run_task_records_passed_smoke_task(
                                     "input_cache_read": 20,
                                     "input_cache_creation": 5,
                                     "output": 7,
-                                }
+                                },
                             },
                         }
                     }
@@ -106,11 +128,16 @@ async def test_run_task_records_passed_smoke_task(
     )
 
     assert result.status == "passed"
+    assert result.tool_calls == 2
+    assert result.activity["tool_calls_by_name"] == {"Bash": 1, "StrReplaceFile": 1}
     assert result.changed_files == ["README.md"]
-    assert result.tool_calls == 1
     assert result.input_tokens == 35
     assert result.output_tokens == 7
     assert (tmp_path / "runs" / "bench_test" / "summary.json").exists()
+    summary = json.loads(
+        (tmp_path / "runs" / "bench_test" / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["activity"]["tool_calls_by_name"] == {"Bash": 1, "StrReplaceFile": 1}
 
 
 async def test_run_task_records_failed_verification(runtime: Runtime, tmp_path: Path) -> None:
@@ -194,3 +221,31 @@ async def test_run_task_applies_and_restores_task_step_limit(
     assert result.status == "passed"
     assert seen_limits == [2]
     assert soul._loop_control.max_steps_per_turn == original_limit  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_run_task_records_timeout_override_for_environment(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    soul.turn = AsyncMock(  # type: ignore[method-assign]
+        return_value=type("Outcome", (), {"step_count": 1, "final_message": None})()
+    )
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    monkeypatch.setattr(
+        "pythinker_code.benchmark.runner.collect_benchmark_environment",
+        lambda *_, task_timeout_seconds, **__: {"task_timeout_seconds": task_timeout_seconds},
+    )
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-edit-readme"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --task smoke-edit-readme",
+        timeout_seconds=5,
+    )
+
+    assert result.environment["task_timeout_seconds"] == 5

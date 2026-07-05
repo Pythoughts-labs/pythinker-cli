@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,9 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code.benchmark.commands import (
     BenchmarkArgs,
+    BenchmarkSyntaxError,
     benchmark_usage,
+    parse_args,
     render_benchmark_report,
     start_benchmark,
 )
@@ -75,9 +78,11 @@ async def test_benchmark_command_registered(runtime: Runtime, tmp_path: Path) ->
     assert "benchmark:list" in names
     assert "benchmark:show" in names
     assert "benchmark:report" in names
+    assert "benchmark:compare" in names
     assert "benchmark:swe" in names
     assert soul_slash_registry.find_command("benchmark") is not None
     assert soul_slash_registry.find_command("benchmark:start") is not None
+    assert soul_slash_registry.find_command("benchmark:compare") is not None
     assert soul_slash_registry.find_command("benchmark:swe") is not None
 
 
@@ -86,6 +91,39 @@ def test_benchmark_usage_documents_trusted_swe_dataset_gate() -> None:
 
     assert "/benchmark swe --dataset <path.jsonl> --trusted-dataset true" in usage
     assert "/benchmark:swe --dataset <path.jsonl> --trusted-dataset true" in usage
+
+
+def test_parse_compare_models() -> None:
+    args = parse_args("compare --models model-a,model-b --suite pythinker-core --repeat 2")
+
+    assert args.subcommand == "compare"
+    assert args.models == ["model-a", "model-b"]
+    assert args.suite == "pythinker-core"
+    assert args.repeat == 2
+
+
+def test_parse_compare_requires_two_models() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="at least two models"):
+        parse_args("compare --models model-a")
+
+
+def test_parse_compare_requires_two_distinct_models() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="at least two distinct models"):
+        parse_args("compare --models model-a,model-a")
+
+
+def test_parse_export_args() -> None:
+    args = parse_args("export --suite pythinker-core --format csv --output ~/benchmarks")
+
+    assert args.subcommand == "export"
+    assert args.suite == "pythinker-core"
+    assert args.format == "csv"
+    assert args.output == Path("~/benchmarks").expanduser()
+
+
+def test_parse_export_rejects_invalid_format() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="--format must be json or csv"):
+        parse_args("export --format markdown")
 
 
 async def test_benchmark_list_shows_bundled_suite(
@@ -178,6 +216,8 @@ async def test_benchmark_start_default_suite_records_suite_name(
             output_tokens=0,
             reasoning_tokens=0,
             estimated_cost_usd=None,
+            activity={},
+            environment={},
         )
 
     monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)
@@ -242,6 +282,228 @@ def test_benchmark_report_aggregates_by_model_and_task(tmp_path: Path) -> None:
     assert "- model-b: 1/1 passed (100.0%)" in report
     assert "- task-one: 2/2 passed (100.0%)" in report
     assert "- task-two: 0/1 passed (0.0%)" in report
+
+
+async def test_benchmark_export_reads_artifact_root(
+    runtime: Runtime, tmp_path: Path, sent: list[TextPart]
+) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_1",
+        model="model-a",
+        task="task-one",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=2,
+        total_tokens=100,
+    )
+
+    await _run(_make_soul(runtime, tmp_path), f"export --suite pythinker-core --output {tmp_path}")
+
+    exported = json.loads("\n".join(part.text for part in sent))
+    assert exported == [
+        {
+            "run_id": "bench_1",
+            "model": "model-a",
+            "task": "task-one",
+            "repeat": 1,
+            "status": "passed",
+            "score": 0.0,
+            "duration_ms": 1000,
+            "steps": 4,
+            "tool_calls": 2,
+            "total_tokens": 100,
+            "estimated_cost_usd": None,
+            "added_lines": 0,
+            "removed_lines": 0,
+            "shell_tool_calls": 0,
+        }
+    ]
+
+
+async def test_benchmark_compare_executes_each_requested_model(
+    runtime: Runtime,
+    tmp_path: Path,
+    sent: list[TextPart],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime.config.models["model-a"] = LLMModel(
+        provider="mock", model="mock", max_context_size=100_000
+    )
+    runtime.config.models["model-b"] = LLMModel(
+        provider="mock", model="mock", max_context_size=100_000
+    )
+    call_order: list[str] = []
+
+    async def fake_run_task(*, model_key: str, **_: object) -> BenchmarkResult:
+        call_order.append(model_key)
+        return BenchmarkResult(
+            run_id="stub",
+            status="passed",
+            exit_reason="verification_passed",
+            final_answer="done",
+            verification=VerificationResult(
+                status="passed",
+                type="command",
+                exit_code=0,
+                stdout="",
+                stderr="",
+            ),
+            duration_ms=1,
+            steps=1,
+            tool_calls=0,
+            changed_files=[],
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            estimated_cost_usd=None,
+            activity={},
+            environment={},
+        )
+
+    monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)
+    await _run(
+        _make_soul(runtime, tmp_path),
+        f"compare --models model-a,model-b --task smoke-edit-readme --output {tmp_path / 'runs'}",
+    )
+    text = "\n".join(part.text for part in sent)
+
+    assert "Pythinker Benchmark finished." in text
+    assert call_order == ["model-a", "model-b"]
+
+
+async def test_benchmark_compare_invalid_model_prevalidation_prevents_run(
+    runtime: Runtime, tmp_path: Path, sent: list[TextPart], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    runtime.config.models["model-a"] = LLMModel(
+        provider="mock", model="mock", max_context_size=100_000
+    )
+    call_count = 0
+
+    async def fake_run_task(**_: object) -> BenchmarkResult:
+        nonlocal call_count
+        call_count += 1
+        return BenchmarkResult(
+            run_id="stub",
+            status="passed",
+            exit_reason="verification_passed",
+            final_answer="done",
+            verification=VerificationResult(
+                status="passed",
+                type="command",
+                exit_code=0,
+                stdout="",
+                stderr="",
+            ),
+            duration_ms=1,
+            steps=1,
+            tool_calls=0,
+            changed_files=[],
+            input_tokens=0,
+            output_tokens=0,
+            reasoning_tokens=0,
+            estimated_cost_usd=None,
+            activity={},
+            environment={},
+        )
+
+    monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)
+    await _run(
+        soul,
+        f"compare --models model-a,unknown-model --task smoke-edit-readme "
+        f"--output {tmp_path / 'runs'}",
+    )
+
+    text = "\n".join(part.text for part in sent)
+    assert "Unknown benchmark model: unknown-model" in text
+    assert call_count == 0
+
+
+def test_benchmark_report_includes_publishability_warnings(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_1",
+        model="model-a",
+        task="task-one",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=2,
+        total_tokens=100,
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core")
+
+    assert "Publishability warnings:" in report
+    assert "- Single model only: do not describe this as a model comparison." in report
+    assert report.index("Publishability warnings:") < report.index("Models:")
+
+
+def test_benchmark_report_filters_run_ids_for_compare(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_compare",
+        model="model-a",
+        task="task-main",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=1,
+        total_tokens=100,
+    )
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_other",
+        model="model-z",
+        task="task-other",
+        status="failed_verification",
+        duration_ms=500,
+        steps=2,
+        tool_calls=1,
+        total_tokens=50,
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core", run_ids=["bench_compare"])
+
+    assert "Runs: 1" in report
+    assert "task-main" in report
+    assert "task-other" not in report
+
+
+def test_benchmark_report_run_id_filter_skips_runs_without_run_id(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_compare",
+        model="model-a",
+        task="task-main",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=1,
+        total_tokens=100,
+    )
+    legacy_dir = tmp_path / "legacy_run"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "run.json").write_text(
+        (
+            "{"
+            '"suite_name": "pythinker-core", '
+            '"task_id": "legacy-task", '
+            '"model_key": "legacy-model", '
+            '"status": "passed", '
+            '"created_at": "2026-07-05T00:00:09+00:00"'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core", run_ids=["bench_compare"])
+
+    assert "Runs: 1" in report
+    assert "task-main" in report
+    assert "legacy-task" not in report
 
 
 def _write_run_summary(
