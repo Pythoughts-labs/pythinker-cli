@@ -3,6 +3,7 @@ from pythinker_code.ui.shell.tui import (
     Container,
     LinePatch,
     RenderScheduler,
+    RunningPromptScene,
     Spacer,
     Text,
     plan_line_diff,
@@ -56,3 +57,22 @@ def test_render_scheduler_coalesces_fast_requests() -> None:
     assert scheduler.request_render(now=1.05) is False
     assert scheduler.request_render(now=1.11) is True
     assert calls == ["invalidate", "invalidate"]
+
+
+def test_running_prompt_scene_keeps_input_card_after_stream_body() -> None:
+    scene = RunningPromptScene(
+        body="streaming\ntext", top_border="──────── ● off", prompt_symbol="❯"
+    )
+
+    assert scene.render(16) == [
+        "streaming       ",
+        "text            ",
+        "──────── ● off  ",
+        "  ❯             ",
+    ]
+
+
+def test_running_prompt_scene_keeps_card_when_body_empty() -> None:
+    scene = RunningPromptScene(body="", top_border="──────── ● off", prompt_symbol="❯")
+
+    assert scene.render(16) == ["──────── ● off  ", "  ❯             "]
