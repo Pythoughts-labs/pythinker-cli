@@ -83,7 +83,9 @@ def test_quiz_fixture_uses_deterministic_answer_check() -> None:
         "expected_substrings": ["terminal-bench", "hard"],
     }
     assert record["trusted"] is False
-    assert record["workspace"]["files"] == {}
+    workspace = record["workspace"]
+    assert isinstance(workspace, dict)
+    assert workspace["files"] == {}
 
 
 def test_discover_rejects_unknown_source() -> None:
