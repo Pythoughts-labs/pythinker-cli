@@ -106,6 +106,11 @@ def test_parse_compare_requires_two_models() -> None:
         parse_args("compare --models model-a")
 
 
+def test_parse_compare_requires_two_distinct_models() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="at least two distinct models"):
+        parse_args("compare --models model-a,model-a")
+
+
 async def test_benchmark_list_shows_bundled_suite(
     runtime: Runtime, tmp_path: Path, sent: list[TextPart]
 ) -> None:
@@ -278,9 +283,7 @@ async def test_benchmark_compare_executes_each_requested_model(
     )
     call_order: list[str] = []
 
-    async def fake_run_task(
-        *, model_key: str, **_: object
-    ) -> BenchmarkResult:
+    async def fake_run_task(*, model_key: str, **_: object) -> BenchmarkResult:
         call_order.append(model_key)
         return BenchmarkResult(
             run_id="stub",
@@ -309,8 +312,7 @@ async def test_benchmark_compare_executes_each_requested_model(
     monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)
     await _run(
         _make_soul(runtime, tmp_path),
-        f"compare --models model-a,model-b --task smoke-edit-readme "
-        f"--output {tmp_path / 'runs'}",
+        f"compare --models model-a,model-b --task smoke-edit-readme --output {tmp_path / 'runs'}",
     )
     text = "\n".join(part.text for part in sent)
 
@@ -415,6 +417,40 @@ def test_benchmark_report_filters_run_ids_for_compare(tmp_path: Path) -> None:
     assert "Runs: 1" in report
     assert "task-main" in report
     assert "task-other" not in report
+
+
+def test_benchmark_report_run_id_filter_skips_runs_without_run_id(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_compare",
+        model="model-a",
+        task="task-main",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=1,
+        total_tokens=100,
+    )
+    legacy_dir = tmp_path / "legacy_run"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "run.json").write_text(
+        (
+            "{"
+            '"suite_name": "pythinker-core", '
+            '"task_id": "legacy-task", '
+            '"model_key": "legacy-model", '
+            '"status": "passed", '
+            '"created_at": "2026-07-05T00:00:09+00:00"'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core", run_ids=["bench_compare"])
+
+    assert "Runs: 1" in report
+    assert "task-main" in report
+    assert "legacy-task" not in report
 
 
 def _write_run_summary(

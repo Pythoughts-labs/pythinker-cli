@@ -134,6 +134,8 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
     models = _model_list(models_value) if models_value is not None else None
     if str(values["subcommand"]) == "compare" and (models is None or len(models) < 2):
         raise BenchmarkSyntaxError("--models must include at least two models")
+    if str(values["subcommand"]) == "compare" and models is not None and len(set(models)) < 2:
+        raise BenchmarkSyntaxError("--models must include at least two distinct models")
     repeat = _positive_int(values.get("repeat", "1"), "--repeat")
     max_concurrency = _positive_int(values.get("max_concurrency", "1"), "--max-concurrency")
     timeout = values.get("timeout_seconds")
@@ -172,7 +174,6 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         trusted_dataset=trusted_dataset,
         run_id=_optional_str(values.get("run_id")),
     )
-
 
 
 def _model_list(value: object) -> list[str]:
@@ -227,9 +228,7 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
     raise BenchmarkSyntaxError(benchmark_usage())
 
 
-async def compare_benchmark(
-    soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str
-) -> str:
+async def compare_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
     assert args.models is not None
     for model_key in args.models:
         _validate_model(soul, model_key)
@@ -388,7 +387,7 @@ def render_benchmark_report(
     for path in sorted(root.glob("*/run.json")):
         run = _read_json_object(path)
         run_id = run.get("run_id")
-        if run_id is not None and run_ids is not None and run_id not in run_ids:
+        if run_ids is not None and run_id not in run_ids:
             continue
         if suite is None or run.get("suite_name") == suite:
             summary_path = path.parent / "summary.json"
