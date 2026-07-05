@@ -178,6 +178,8 @@ async def test_benchmark_start_default_suite_records_suite_name(
             output_tokens=0,
             reasoning_tokens=0,
             estimated_cost_usd=None,
+            activity={},
+            environment={},
         )
 
     monkeypatch.setattr("pythinker_code.benchmark.commands.run_task", fake_run_task)

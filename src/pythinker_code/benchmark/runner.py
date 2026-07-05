@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 from pythinker_core.message import Message
 from pythinker_host.path import HostPath
 
+from pythinker_code.benchmark.environment import collect_benchmark_environment
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.tasks import BenchmarkTask, materialize_workspace
 from pythinker_code.config import LoopControl
@@ -53,6 +54,8 @@ class BenchmarkResult:
     output_tokens: int
     reasoning_tokens: int
     estimated_cost_usd: float | None
+    activity: dict[str, object]
+    environment: dict[str, object]
 
 
 async def run_task(
@@ -195,6 +198,13 @@ async def run_task(
         output_tokens=usage["output_tokens"],
         reasoning_tokens=usage["reasoning_tokens"],
         estimated_cost_usd=None,
+        activity={},
+        environment=collect_benchmark_environment(
+            repo_root=Path.cwd(),
+            task_timeout_seconds=task.limits.timeout_seconds,
+            task_max_steps=task.limits.max_steps,
+            verification_command=task.verification.command,
+        ),
     )
     recorder.copy_context_and_wire(
         context_file,
