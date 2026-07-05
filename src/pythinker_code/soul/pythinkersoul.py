@@ -87,6 +87,7 @@ from pythinker_code.soul.dynamic_injection import (
     injection_budget_from_runtime,
     normalize_history,
 )
+from pythinker_code.soul.dynamic_injections.active_skills import ActiveSkillInjectionProvider
 from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
 from pythinker_code.soul.dynamic_injections.auto_mode import AutoModeInjectionProvider
 from pythinker_code.soul.dynamic_injections.git_status import GitStatusInjectionProvider
@@ -565,6 +566,9 @@ class PythinkerSoul:
             # Self-filtering: root-only; flags inline /command references in the
             # latest user message that the shell could not have executed.
             InlineCommandReminderProvider(),
+            # Self-filtering: keeps explicitly invoked skills active across turns
+            # without repasting full skill bodies into every prompt.
+            ActiveSkillInjectionProvider(),
             # Self-filtering: root-only; nudges substantial normal-mode tasks toward
             # direct tools, todos, RunAgents, and verification.
             OrchestrationInjectionProvider(),

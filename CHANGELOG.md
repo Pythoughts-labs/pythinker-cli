@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Explicitly invoked skills now remain active across later turns through a
+  compact reminder, and can be cleared with a named stop request or "normal mode".
+
 - **No more ghost/duplicate input prompt while the agent works.** After
   submitting a prompt, the editable input row is no longer fossilized above the
   stream as a second, ghostly prompt. The top border stays visible while the
