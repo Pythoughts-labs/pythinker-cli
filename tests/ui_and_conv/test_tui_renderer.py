@@ -2,6 +2,7 @@ from pythinker_code.ui.shell.tui import (
     Box,
     Container,
     LinePatch,
+    RenderScheduler,
     Spacer,
     Text,
     plan_line_diff,
@@ -45,3 +46,13 @@ def test_plan_line_diff_handles_growth_and_shrink() -> None:
 
 def test_synchronized_output_wraps_payload() -> None:
     assert synchronized_output("abc") == "\x1b[?2026habc\x1b[?2026l"
+
+
+def test_render_scheduler_coalesces_fast_requests() -> None:
+    calls: list[str] = []
+    scheduler = RenderScheduler(lambda: calls.append("invalidate"), min_interval_seconds=0.1)
+
+    assert scheduler.request_render(now=1.0) is True
+    assert scheduler.request_render(now=1.05) is False
+    assert scheduler.request_render(now=1.11) is True
+    assert calls == ["invalidate", "invalidate"]
