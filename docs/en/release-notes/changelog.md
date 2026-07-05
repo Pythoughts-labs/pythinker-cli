@@ -17,6 +17,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Added publishability-focused benchmark comparison planning for multi-model
+  runs, activity metrics, exportable reports, and safe online source discovery.
 - Stream file write/edit activity in a compact live shelf so changed files update in place during agent runs instead of adding noisy terminal rows.
 - Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
   underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`

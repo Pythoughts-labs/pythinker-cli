@@ -33,21 +33,39 @@ Inspect available tasks and saved runs:
 /benchmark report --suite pythinker-core
 ```
 
-Namespaced aliases are available for interactive completion: `/benchmark:start`, `/benchmark:all`, `/benchmark:estimate`, `/benchmark:list`, `/benchmark:show`, `/benchmark:report`, and `/benchmark:swe`.
+Compare configured models and export report data:
+
+```sh
+/benchmark compare --models model-a,model-b --suite pythinker-core --repeat 3
+/benchmark export --suite pythinker-core --format csv
+```
+
+Discover candidate tasks from an allowlisted online source:
+
+```sh
+/benchmark discover --source terminal-bench --difficulty hard --limit 5 --output ./candidate-tasks.jsonl
+```
+
+Namespaced aliases are available for interactive completion: `/benchmark:start`, `/benchmark:all`, `/benchmark:estimate`, `/benchmark:list`, `/benchmark:show`, `/benchmark:report`, `/benchmark:compare`, and `/benchmark:swe`. There is no `/benchmark:export` or `/benchmark:discover` alias.
 
 The supported flags are:
 
 | Flag | Applies to | Behavior |
 | --- | --- | --- |
 | `--model <model-key>` | `start`, `estimate`, `swe` | Uses a configured model instead of the active/default model. |
-| `--task <task-id>` | `start`, `estimate` | Runs or estimates one bundled task. Mutually exclusive with `--suite`. |
-| `--suite <suite-name>` | `start`, `estimate`, `report` | Selects a bundled suite or filters report output. |
-| `--repeat <n>` | `start`, `estimate`, `swe` | Runs each selected task multiple times. |
-| `--timeout-seconds <n>` | `start`, `swe` | Overrides the task timeout for the agent turn. |
-| `--output <path>` | all commands that read or write runs | Uses a custom benchmark artifact root instead of the Pythinker share directory. |
+| `--models <model-a,model-b>` | `compare` | Runs each selected task for at least two distinct configured models. |
+| `--task <task-id>` | `start`, `estimate`, `compare` | Runs, estimates, or compares one bundled task. Mutually exclusive with `--suite`. |
+| `--suite <suite-name>` | `start`, `estimate`, `report`, `export`, `compare` | Selects a bundled suite or filters report/export output. |
+| `--repeat <n>` | `start`, `estimate`, `compare`, `swe` | Runs or estimates each selected task multiple times. |
+| `--timeout-seconds <n>` | `start`, `compare`, `swe` | Overrides the task timeout for the agent turn. |
+| `--format json\|csv` | `export` | Selects the export format. |
+| `--output <path>` | `start`, `compare`, `show`, `report`, `export`, `swe`; `.jsonl` only for `discover` | Uses a custom benchmark artifact root for run/report/export commands. For `discover`, it only writes a provisional manifest when the path suffix is `.jsonl`. |
 | `--dataset <path.jsonl>` | `swe` | Loads SWE-style local fixture records from a JSONL file. |
 | `--instance <instance-id>` | `swe` | Runs only one instance from the dataset. |
 | `--trusted-dataset true` | `swe` | Required acknowledgement before dataset verification commands can run. |
+| `--source <allowlisted>` | `discover` | Selects an allowlisted benchmark source such as `terminal-bench`. |
+| `--difficulty <difficulty>` | `discover` | Filters discovered candidates by difficulty. Defaults to `hard`. |
+| `--limit <n>` | `discover` | Limits discovered candidates. Defaults to `5`. |
 
 `--max-concurrency` is parsed but must remain `1` in the current implementation. `--judges` is parsed but only `off` is supported.
 
@@ -107,9 +125,31 @@ A bundled task JSON object contains:
 
 Workspace paths must be relative, non-empty, and must not contain `..` path segments. Verification type is currently `command`.
 
+## Publishable comparisons
+
+Use `/benchmark compare` when comparing configured models:
+
+```sh
+/benchmark compare --models model-a,model-b --suite pythinker-core --repeat 3
+```
+
+Export the saved report rows when you need machine-readable results:
+
+```sh
+/benchmark export --suite pythinker-core --format csv
+```
+
+Reports include publishability warnings. Treat warnings as blockers for public claims, not as lint. Local fixture runs are useful for regression and internal comparison, but they are not SWE-bench Docker evaluations.
+
 ## Online discovery and quiz fixtures
 
-`/benchmark discover` can write provisional JSONL records from allowlisted online benchmark sources. These records preserve the source URL and are marked `trusted: false`. Online quiz fixture records use deterministic review metadata:
+`/benchmark discover` fetches metadata from allowlisted benchmark sources and writes provisional manifests. It does not execute source-provided commands and does not make discovered tasks trusted:
+
+```sh
+/benchmark discover --source terminal-bench --difficulty hard --limit 5 --output ./candidate-tasks.jsonl
+```
+
+The `--output` flag writes a manifest only when the path suffix is `.jsonl`. These JSONL records preserve the source URL and are marked `trusted: false`. Online quiz fixture records use deterministic review metadata:
 
 ```json
 {

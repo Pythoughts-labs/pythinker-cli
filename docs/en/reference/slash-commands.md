@@ -249,16 +249,21 @@ Usage:
 
 - `/benchmark start [--model <model-key>] [--task <task-id> | --suite <suite-name>]`
 - `/benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]`
+- `/benchmark compare --models <model-a,model-b> [--task <task-id> | --suite <suite-name>] [--repeat <n>]`
 - `/benchmark list`
 - `/benchmark show <run-id>`
 - `/benchmark report [--suite <suite-name>]`
+- `/benchmark export [--suite <suite-name>] [--format json|csv] [--output <path>]`
+- `/benchmark discover --source <allowlisted> --difficulty hard --limit 5 [--output <path.jsonl>]`
 - `/benchmark swe --dataset <path.jsonl> --trusted-dataset true [--instance <instance-id>]`
 
-Namespaced aliases are also registered: `/benchmark:start`, `/benchmark:all`, `/benchmark:estimate`, `/benchmark:list`, `/benchmark:show`, `/benchmark:report`, and `/benchmark:swe`.
+Namespaced aliases are also registered: `/benchmark:start`, `/benchmark:all`, `/benchmark:estimate`, `/benchmark:list`, `/benchmark:show`, `/benchmark:report`, `/benchmark:compare`, and `/benchmark:swe`. `/benchmark export` and `/benchmark discover` do not have namespaced aliases.
 
 ::: warning
 `/benchmark:swe` executes verification commands from a local JSONL dataset. Use it only with trusted local fixture datasets and pass `--trusted-dataset true` explicitly.
 :::
+
+`/benchmark discover --output <path.jsonl>` writes provisional quiz-fixture JSONL records with `verification.type` set to `answer_contains`, `trusted: false`, and an empty `workspace.files` object. Review and convert them offline before using `/benchmark:swe`.
 
 See [Pythinker Benchmark](./pythinker-benchmark.md) for task schema, artifact layout, and implementation boundaries.
 
