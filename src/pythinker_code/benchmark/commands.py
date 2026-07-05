@@ -5,9 +5,13 @@ import shlex
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from pythinker_code.benchmark.errors import BenchmarkSyntaxError, UnknownBenchmarkModelError
+from pythinker_code.benchmark.errors import (
+    BenchmarkInternalError,
+    BenchmarkSyntaxError,
+    UnknownBenchmarkModelError,
+)
 from pythinker_code.benchmark.estimate import estimate_benchmark as build_estimate
 from pythinker_code.benchmark.estimate import render_estimate
 from pythinker_code.benchmark.records import BenchmarkRecorder, load_run
@@ -38,6 +42,15 @@ class BenchmarkArgs:
     sandbox: str = DEFAULT_SANDBOX
     output: Path | None = None
     run_id: str | None = None
+
+
+JsonObject = dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkReportRow:
+    run: JsonObject
+    summary: JsonObject
 
 
 def benchmark_usage() -> str:
@@ -243,17 +256,112 @@ def render_benchmark_report(output: Path | None = None, suite: str | None = None
     root = output or get_share_dir() / "benchmarks"
     if not root.exists():
         return "Pythinker Benchmark\n\nNo benchmark runs found."
-    rows: list[dict[str, object]] = []
+    rows: list[BenchmarkReportRow] = []
     for path in sorted(root.glob("*/run.json")):
-        run = json.loads(path.read_text(encoding="utf-8"))
+        run = _read_json_object(path)
         if suite is None or run.get("suite_name") == suite:
-            rows.append(run)
+            summary_path = path.parent / "summary.json"
+            summary = _read_json_object(summary_path) if summary_path.exists() else {}
+            rows.append(BenchmarkReportRow(run=run, summary=summary))
     if not rows:
         return "Pythinker Benchmark\n\nNo matching benchmark runs found."
-    lines = ["Pythinker Benchmark report", ""]
-    for row in rows:
-        lines.append(f"- {row.get('run_id')}: {row.get('status')} ({row.get('model_key')})")
+    passed = sum(1 for row in rows if _row_status(row) == "passed")
+    lines = [
+        "Pythinker Benchmark report",
+        "",
+        f"Suite: {suite or 'all'}",
+        f"Runs: {len(rows)}",
+        f"Passed: {passed}/{len(rows)} ({_percent(passed, len(rows))})",
+        "",
+        "Models:",
+    ]
+    for model, model_rows in _group_rows(rows, "model_key").items():
+        model_passed = sum(1 for row in model_rows if _row_status(row) == "passed")
+        lines.append(
+            "- "
+            f"{model}: {model_passed}/{len(model_rows)} passed "
+            f"({_percent(model_passed, len(model_rows))}), "
+            f"avg {_avg_duration(model_rows)}, "
+            f"avg steps {_avg_number(model_rows, 'steps')}, "
+            f"avg tools {_avg_number(model_rows, 'tool_calls')}, "
+            f"avg tokens {_avg_tokens(model_rows)}"
+        )
+    lines.extend(["", "Tasks:"])
+    for task, task_rows in _group_rows(rows, "task_id").items():
+        task_passed = sum(1 for row in task_rows if _row_status(row) == "passed")
+        lines.append(
+            f"- {task}: {task_passed}/{len(task_rows)} passed "
+            f"({_percent(task_passed, len(task_rows))})"
+        )
+    lines.extend(["", "Recent runs:"])
+    for row in sorted(rows, key=lambda item: str(item.run.get("created_at", "")))[-10:]:
+        run = row.run
+        lines.append(
+            "- "
+            f"{run.get('run_id')}: {_row_status(row)} "
+            f"({run.get('model_key')}, {run.get('task_id')})"
+        )
     return "\n".join(lines)
+
+
+def _read_json_object(path: Path) -> JsonObject:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise BenchmarkInternalError(f"Malformed benchmark artifact: {path}")
+    return cast(JsonObject, data)
+
+
+def _row_status(row: BenchmarkReportRow) -> str:
+    if row.summary.get("status"):
+        return str(row.summary["status"])
+    return str(row.run.get("status", "unknown"))
+
+
+def _group_rows(
+    rows: list[BenchmarkReportRow], run_key: str
+) -> dict[str, list[BenchmarkReportRow]]:
+    grouped: dict[str, list[BenchmarkReportRow]] = {}
+    for row in rows:
+        key = str(row.run.get(run_key) or "unknown")
+        grouped.setdefault(key, []).append(row)
+    return dict(sorted(grouped.items()))
+
+
+def _percent(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "0.0%"
+    return f"{(numerator / denominator) * 100:.1f}%"
+
+
+def _runtime(row: BenchmarkReportRow) -> JsonObject:
+    runtime = row.summary.get("runtime")
+    return cast(JsonObject, runtime) if isinstance(runtime, dict) else {}
+
+
+def _usage(row: BenchmarkReportRow) -> JsonObject:
+    usage = row.summary.get("usage")
+    return cast(JsonObject, usage) if isinstance(usage, dict) else {}
+
+
+def _avg_number(rows: list[BenchmarkReportRow], key: str) -> str:
+    values = [value for row in rows if isinstance((value := _runtime(row).get(key)), int)]
+    if not values:
+        return "0.0"
+    return f"{sum(values) / len(values):.1f}"
+
+
+def _avg_duration(rows: list[BenchmarkReportRow]) -> str:
+    values = [value for row in rows if isinstance((value := _runtime(row).get("duration_ms")), int)]
+    if not values:
+        return "0.0s"
+    return f"{(sum(values) / len(values)) / 1000:.1f}s"
+
+
+def _avg_tokens(rows: list[BenchmarkReportRow]) -> str:
+    values = [value for row in rows if isinstance((value := _usage(row).get("total_tokens")), int)]
+    if not values:
+        return "0"
+    return f"{sum(values) / len(values):.0f}"
 
 
 def _validate_model(soul: PythinkerSoul, model_key: str) -> None:

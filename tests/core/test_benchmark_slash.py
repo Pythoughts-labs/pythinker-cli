@@ -7,7 +7,11 @@ import pytest
 from pydantic import SecretStr
 from pythinker_core.tooling.empty import EmptyToolset
 
-from pythinker_code.benchmark.commands import BenchmarkArgs, start_benchmark
+from pythinker_code.benchmark.commands import (
+    BenchmarkArgs,
+    render_benchmark_report,
+    start_benchmark,
+)
 from pythinker_code.benchmark.runner import BenchmarkResult, VerificationResult
 from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.soul.agent import Agent, Runtime
@@ -183,3 +187,88 @@ async def test_benchmark_start_default_suite_records_suite_name(
         "pythinker-core",
         "pythinker-core",
     ]
+
+
+def test_benchmark_report_aggregates_by_model_and_task(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_1",
+        model="model-a",
+        task="task-one",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=2,
+        total_tokens=100,
+    )
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_2",
+        model="model-a",
+        task="task-two",
+        status="failed_verification",
+        duration_ms=3000,
+        steps=6,
+        tool_calls=4,
+        total_tokens=300,
+    )
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_3",
+        model="model-b",
+        task="task-one",
+        status="passed",
+        duration_ms=2000,
+        steps=2,
+        tool_calls=1,
+        total_tokens=50,
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core")
+
+    assert "Runs: 3" in report
+    assert "Passed: 2/3 (66.7%)" in report
+    assert "- model-a: 1/2 passed (50.0%)" in report
+    assert "- model-b: 1/1 passed (100.0%)" in report
+    assert "- task-one: 2/2 passed (100.0%)" in report
+    assert "- task-two: 0/1 passed (0.0%)" in report
+
+
+def _write_run_summary(
+    root: Path,
+    *,
+    run_id: str,
+    model: str,
+    task: str,
+    status: str,
+    duration_ms: int,
+    steps: int,
+    tool_calls: int,
+    total_tokens: int,
+) -> None:
+    run_dir = root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        (
+            "{"
+            f'"run_id": "{run_id}", '
+            '"suite_name": "pythinker-core", '
+            f'"task_id": "{task}", '
+            f'"model_key": "{model}", '
+            f'"status": "{status}", '
+            f'"created_at": "2026-07-05T00:00:0{run_id[-1]}+00:00"'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.json").write_text(
+        (
+            "{"
+            f'"status": "{status}", '
+            f'"runtime": {{"duration_ms": {duration_ms}, "steps": {steps}, '
+            f'"tool_calls": {tool_calls}}}, '
+            f'"usage": {{"total_tokens": {total_tokens}}}'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
