@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
-from pythinker_code.benchmark.types import BenchmarkReportRow
+from pythinker_code.benchmark.types import BenchmarkReportRow, JsonObject
 
 
 def readiness_warnings(rows: Sequence[BenchmarkReportRow]) -> list[str]:
@@ -38,14 +39,16 @@ def _missing_cost(row: BenchmarkReportRow) -> bool:
     usage = row.summary.get("usage")
     if not isinstance(usage, dict):
         return True
-    return usage.get("estimated_cost_usd") is None
+    usage_data = cast(JsonObject, usage)
+    return usage_data.get("estimated_cost_usd") is None
 
 
 def _dirty(row: BenchmarkReportRow) -> bool | None:
     environment = row.summary.get("environment")
     if not isinstance(environment, dict):
         return None
-    value = environment.get("git_dirty")
+    environment_data = cast(JsonObject, environment)
+    value = environment_data.get("git_dirty")
     return value if isinstance(value, bool) else None
 
 

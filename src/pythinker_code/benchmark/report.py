@@ -41,9 +41,10 @@ def render_run_report(
         if all(isinstance(activity.get(field), int) for field in required_int_fields):
             tool_calls_by_name = activity.get("tool_calls_by_name")
             if isinstance(tool_calls_by_name, dict):
+                tool_counts = cast(dict[object, object], tool_calls_by_name)
                 by_name = [
                     f"{name}: {count}"
-                    for name, count in sorted(tool_calls_by_name.items())
+                    for name, count in sorted(tool_counts.items())
                     if isinstance(name, str) and isinstance(count, int)
                 ]
                 activity_lines = [
