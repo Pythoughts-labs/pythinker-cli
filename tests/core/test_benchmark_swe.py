@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from pydantic import SecretStr
 from pythinker_core.tooling.empty import EmptyToolset
 
-from pythinker_code.benchmark.commands import BenchmarkArgs, start_swe_benchmark
+from pythinker_code.benchmark.commands import BenchmarkArgs, parse_args, start_swe_benchmark
+from pythinker_code.benchmark.errors import BenchmarkSyntaxError
 from pythinker_code.benchmark.swe import load_swe_instances, swe_instance_to_task
 from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.soul.agent import Agent, Runtime
@@ -73,6 +75,7 @@ def test_load_swe_jsonl_instance_converts_to_benchmark_task(tmp_path: Path) -> N
     assert "FAIL_TO_PASS" in task.prompt
     assert task.workspace.files["mathlib.py"].startswith("def add_one")
     assert task.verification.command == "python -m pytest test_math.py -q"
+    assert "local fixture" in task.description
 
 
 async def test_start_swe_benchmark_runs_one_instance(
@@ -107,6 +110,7 @@ async def test_start_swe_benchmark_runs_one_instance(
             dataset=dataset,
             instance="demo__project-1",
             repeat=2,
+            trusted_dataset=True,
         ),
         raw_args=f"swe --dataset {dataset} --instance demo__project-1",
     )
@@ -115,3 +119,25 @@ async def test_start_swe_benchmark_runs_one_instance(
     assert "Pythinker Benchmark finished." in output
     assert "- Task: demo__project-1" in output
     assert "- Changed files: mathlib.py" in output
+
+
+async def test_start_swe_benchmark_rejects_untrusted_dataset(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    dataset = tmp_path / "swe.jsonl"
+    _write_swe_jsonl(dataset)
+    soul = _make_soul(runtime, tmp_path)
+
+    with pytest.raises(BenchmarkSyntaxError, match="--trusted-dataset true"):
+        await start_swe_benchmark(
+            soul,
+            BenchmarkArgs(subcommand="swe", output=tmp_path / "runs", dataset=dataset),
+            raw_args=f"swe --dataset {dataset}",
+        )
+
+
+def test_parse_swe_trusted_dataset_flag() -> None:
+    args = parse_args("swe --dataset cases.jsonl --trusted-dataset true")
+
+    assert args.dataset == Path("cases.jsonl")
+    assert args.trusted_dataset is True

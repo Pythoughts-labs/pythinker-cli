@@ -426,7 +426,10 @@ async def benchmark_report(soul: PythinkerSoul, args: str) -> None:
 
 @registry.command(name="benchmark:swe")
 async def benchmark_swe(soul: PythinkerSoul, args: str) -> None:
-    """Run SWE-style Pythinker Benchmark tasks. Usage: /benchmark:swe --dataset <path>"""
+    """Run trusted SWE-style local fixture benchmark tasks.
+
+    Usage: /benchmark:swe --dataset <path> --trusted-dataset true
+    """
     await _benchmark_dispatch(soul, _join_benchmark_args("swe", args))
 
 

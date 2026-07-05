@@ -9,6 +9,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code.benchmark.commands import (
     BenchmarkArgs,
+    benchmark_usage,
     render_benchmark_report,
     start_benchmark,
 )
@@ -78,6 +79,13 @@ async def test_benchmark_command_registered(runtime: Runtime, tmp_path: Path) ->
     assert soul_slash_registry.find_command("benchmark") is not None
     assert soul_slash_registry.find_command("benchmark:start") is not None
     assert soul_slash_registry.find_command("benchmark:swe") is not None
+
+
+def test_benchmark_usage_documents_trusted_swe_dataset_gate() -> None:
+    usage = benchmark_usage()
+
+    assert "/benchmark swe --dataset <path.jsonl> --trusted-dataset true" in usage
+    assert "/benchmark:swe --dataset <path.jsonl> --trusted-dataset true" in usage
 
 
 async def test_benchmark_list_shows_bundled_suite(

@@ -44,6 +44,7 @@ class BenchmarkArgs:
     output: Path | None = None
     dataset: Path | None = None
     instance: str | None = None
+    trusted_dataset: bool = False
     run_id: str | None = None
 
 
@@ -71,8 +72,10 @@ def benchmark_usage() -> str:
             "  /benchmark:show <run-id>",
             "  /benchmark report [--suite <suite-name>]",
             "  /benchmark:report [--suite <suite-name>]",
-            "  /benchmark swe --dataset <path.jsonl> [--instance <instance-id>]",
-            "  /benchmark:swe --dataset <path.jsonl> [--instance <instance-id>]",
+            "  /benchmark swe --dataset <path.jsonl> --trusted-dataset true "
+            "[--instance <instance-id>]",
+            "  /benchmark:swe --dataset <path.jsonl> --trusted-dataset true "
+            "[--instance <instance-id>]",
         ]
     )
 
@@ -111,6 +114,7 @@ def parse_args(args: str) -> BenchmarkArgs:
             "output",
             "dataset",
             "instance",
+            "trusted_dataset",
         }:
             raise BenchmarkSyntaxError(f"Unknown benchmark flag: {token}\n{benchmark_usage()}")
         if i + 1 >= len(tokens):
@@ -147,6 +151,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         raise BenchmarkSyntaxError("--max-concurrency > 1 is not supported in v1")
     output = Path(str(values["output"])).expanduser() if values.get("output") else None
     dataset = Path(str(values["dataset"])).expanduser() if values.get("dataset") else None
+    trusted_dataset = _bool_flag(values.get("trusted_dataset", False), "--trusted-dataset")
     return BenchmarkArgs(
         subcommand=str(values["subcommand"]),
         model=_optional_str(values.get("model")),
@@ -160,6 +165,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         output=output,
         dataset=dataset,
         instance=_optional_str(values.get("instance")),
+        trusted_dataset=trusted_dataset,
         run_id=_optional_str(values.get("run_id")),
     )
 
@@ -179,6 +185,17 @@ def _positive_int(value: object, flag: str) -> int:
     if parsed < 1:
         raise BenchmarkSyntaxError(f"{flag} must be >= 1")
     return parsed
+
+
+def _bool_flag(value: object, flag: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise BenchmarkSyntaxError(f"{flag} must be true or false")
 
 
 async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
@@ -261,6 +278,11 @@ async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args:
 async def start_swe_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
     if args.dataset is None:
         raise BenchmarkSyntaxError("--dataset is required for /benchmark:swe")
+    if not args.trusted_dataset:
+        raise BenchmarkSyntaxError(
+            "/benchmark:swe runs verification commands from the dataset. "
+            "Only run trusted local fixture datasets; pass --trusted-dataset true to continue."
+        )
     model_key = _resolve_model_key(soul, args.model)
     root = args.output or get_share_dir() / "benchmarks"
     instances = load_swe_instances(args.dataset)

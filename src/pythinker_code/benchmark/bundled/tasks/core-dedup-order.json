@@ -2,11 +2,11 @@
   "id": "core-dedup-order",
   "title": "Stable Deduplication",
   "description": "Preserve first-seen order while removing duplicates.",
-  "prompt": "Fix seqkit.py. unique(items) must return unique values in first-seen order. It must support unhashable values such as dictionaries and must not mutate the input.",
+  "prompt": "Fix seqkit.py. unique(items) must return unique values from any iterable in first-seen order. It must support unhashable values such as dictionaries and must not mutate the input.",
   "workspace": {
     "files": {
       "seqkit.py": "def unique(items):\n    return sorted(set(items))\n",
-      "test_seqkit.py": "from seqkit import unique\n\n\ndef test_unique_preserves_first_seen_order():\n    assert unique(['b', 'a', 'b', 'c', 'a']) == ['b', 'a', 'c']\n\n\ndef test_unique_supports_unhashable_dicts():\n    first = {'id': 1, 'name': 'first'}\n    duplicate = {'id': 1, 'name': 'first'}\n    second = {'id': 2, 'name': 'second'}\n    assert unique([first, duplicate, second, first]) == [first, second]\n\n\ndef test_unique_does_not_mutate_input():\n    values = ['b', 'a', 'b']\n    assert unique(values) == ['b', 'a']\n    assert values == ['b', 'a', 'b']\n"
+      "test_seqkit.py": "from seqkit import unique\n\n\ndef test_unique_preserves_first_seen_order():\n    assert unique(['b', 'a', 'b', 'c', 'a']) == ['b', 'a', 'c']\n\n\ndef test_unique_supports_unhashable_dicts():\n    first = {'id': 1, 'name': 'first'}\n    duplicate = {'id': 1, 'name': 'first'}\n    second = {'id': 2, 'name': 'second'}\n    assert unique([first, duplicate, second, first]) == [first, second]\n\n\ndef test_unique_does_not_mutate_input():\n    values = ['b', 'a', 'b']\n    assert unique(values) == ['b', 'a']\n    assert values == ['b', 'a', 'b']\n\n\ndef test_unique_accepts_generators():\n    assert unique(x for x in ['a', 'a', 'b']) == ['a', 'b']\n\n\ndef test_unique_keeps_falsey_values_distinct():\n    assert unique([0, False, '', None, 0, None]) == [0, '', None]\n"
     }
   },
   "verification": {

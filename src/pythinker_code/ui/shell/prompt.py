@@ -2284,6 +2284,7 @@ class CustomPromptSession:
         thinking_effort_cycle_callback: Callable[[], Awaitable[str | None]] | None = None,
         history_enabled: bool = True,
         statusline_config: StatusLineConfig | None = None,
+        sticky_input: bool = True,
     ) -> None:
         from pythinker_code.ui.shell.statusline import (
             RateSampler,
@@ -2347,6 +2348,8 @@ class CustomPromptSession:
         # fossilizes above the stream. Cleared on attach/detach. See
         # _input_card_hidden_pre_stream.
         self._turn_starting: bool = False
+        self._sticky_input = sticky_input
+        self._previous_full_screen: bool | None = None
         self._latest_todos: tuple[TodoDisplayItem, ...] = ()
         self._modal_delegates: list[RunningPromptDelegate] = []
         self._shortcut_help_open = False
@@ -3165,7 +3168,27 @@ class CustomPromptSession:
     def _sync_erase_when_done(self) -> None:
         app = getattr(self._session, "app", None)
         if app is not None:
-            app.erase_when_done = self._mode == PromptMode.AGENT
+            app.erase_when_done = getattr(
+                self, "_mode", PromptMode.AGENT
+            ) == PromptMode.AGENT and not getattr(app, "full_screen", False)
+
+    def _set_running_fullscreen(self, active: bool) -> None:
+        if not getattr(self, "_sticky_input", True):
+            return
+        app = getattr(getattr(self, "_session", None), "app", None)
+        if app is None:
+            return
+        if active:
+            if getattr(self, "_previous_full_screen", None) is None:
+                self._previous_full_screen = bool(getattr(app, "full_screen", False))
+            app.full_screen = True
+            self._sync_erase_when_done()
+            return
+        previous = getattr(self, "_previous_full_screen", None)
+        self._previous_full_screen = None
+        if previous is not None:
+            app.full_screen = previous
+        self._sync_erase_when_done()
 
     def _active_modal_delegate(self) -> RunningPromptDelegate | None:
         modal_delegates = getattr(self, "_modal_delegates", [])
@@ -3358,7 +3381,16 @@ class CustomPromptSession:
         # delegate attaches, hide only editable buffer content while keeping the
         # two-line input card visible (see _input_card_hidden_pre_stream).
         if self._input_card_hidden_pre_stream():
-            if self._turn_starting:
+            running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
+            hide_chrome = self._turn_starting or (
+                running_prompt_delegate is not None
+                and getattr(
+                    running_prompt_delegate,
+                    "running_prompt_hide_input_card_chrome",
+                    lambda: False,
+                )()
+            )
+            if hide_chrome:
                 return fragments
             if is_card_style():
                 ensure_prompt_newline(fragments)
@@ -3902,6 +3934,7 @@ class CustomPromptSession:
         # not cost an extra repaint.
         if not self._turn_starting:
             self._turn_starting = True
+            self._set_running_fullscreen(True)
             self.invalidate()
 
     def clear_turn_starting(self) -> None:
@@ -3913,6 +3946,7 @@ class CustomPromptSession:
         without reaching into the private ``_turn_starting`` attribute.
         """
         self._turn_starting = False
+        self._set_running_fullscreen(False)
 
     def attach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
         current = getattr(self, "_running_prompt_delegate", None)
@@ -3925,6 +3959,7 @@ class CustomPromptSession:
         self._turn_starting = False
         self._mode = PromptMode.AGENT
         self._apply_mode()
+        self._set_running_fullscreen(True)
         self.invalidate()
 
     def detach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
@@ -3937,6 +3972,7 @@ class CustomPromptSession:
         if previous_mode is not None:
             self._mode = previous_mode
         self._apply_mode()
+        self._set_running_fullscreen(False)
         self.invalidate()
 
     def attach_modal(self, delegate: RunningPromptDelegate) -> None:

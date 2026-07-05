@@ -983,6 +983,14 @@ class TUIConfig(BaseModel):
             "Off by default; enable with `/config recaps on`."
         ),
     )
+    sticky_input: bool = Field(
+        default=True,
+        description=(
+            "Keep the prompt composer pinned to the bottom of the terminal while "
+            "an agent turn is running. Disable for terminals that mishandle "
+            "prompt_toolkit fullscreen rendering."
+        ),
+    )
     code_theme: str = Field(
         default="catppuccin-adaptive",
         description=(

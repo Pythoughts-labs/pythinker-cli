@@ -322,6 +322,22 @@ def test_input_card_pre_first_commit_keeps_prompt_row_via_delegate() -> None:
     assert session._should_render_input_buffer() is True
 
 
+def test_sticky_input_still_hides_pre_attach_buffer_window() -> None:
+    session = _card_session(turn_starting=True, delegate=None)
+    session._sticky_input = True
+
+    assert session._input_card_hidden_pre_stream() is True
+    assert session._should_render_input_buffer() is False
+
+
+def test_sticky_input_keeps_delegate_prompt_marker_after_attach() -> None:
+    session = _card_session(delegate=_hiding_delegate(True))
+    session._sticky_input = True
+
+    assert session._input_card_hidden_pre_stream() is True
+    assert session._should_render_input_buffer() is True
+
+
 def test_input_card_shown_after_first_commit() -> None:
     """Once the turn has committed, the delegate stops hiding and the card
     repaints so the user can see where to steer."""
@@ -388,6 +404,43 @@ def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None
     session._turn_starting = True
     session.detach_running_prompt(cast(Any, delegate))
     assert session._turn_starting is False
+
+
+def test_sticky_input_turn_start_enables_fullscreen_once() -> None:
+    from types import SimpleNamespace
+
+    session = object.__new__(CustomPromptSession)
+    app = SimpleNamespace(full_screen=False, erase_when_done=True)
+    session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
+    session._sticky_input = True
+    session._previous_full_screen = None
+    session._turn_starting = False
+    invalidations: list[int] = []
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
+
+    session.mark_turn_starting()
+    session.mark_turn_starting()
+
+    assert app.full_screen is True
+    assert app.erase_when_done is False
+    assert session._previous_full_screen is False
+    assert len(invalidations) == 1
+
+
+def test_sticky_input_clear_turn_starting_restores_fullscreen_on_pre_attach_error() -> None:
+    from types import SimpleNamespace
+
+    session = object.__new__(CustomPromptSession)
+    app = SimpleNamespace(full_screen=True, erase_when_done=False)
+    session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
+    session._sticky_input = True
+    session._previous_full_screen = False
+    session._turn_starting = True
+
+    session.clear_turn_starting()
+
+    assert session._turn_starting is False
+    assert app.full_screen is False
 
 
 def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup() -> None:
@@ -540,6 +593,21 @@ def test_render_pinned_status_tail_finalizing_during_scrollback_handoff() -> Non
     view._current_content_block = None
 
     assert view.render_pinned_status_tail(80).value == ""
+
+
+def test_scrollback_handoff_suppresses_transient_prompt_layers() -> None:
+    view = object.__new__(_PromptLiveView)
+    view._turn_ended = False
+    view._active_turn_depth = 1
+    view._scrollback_handoff_depth = 1
+    view._current_question_panel = None
+    view._current_approval_request_panel = None
+    view._committed_scrollback_this_turn = True
+
+    assert view.render_agent_status(80).value == ""
+    assert view.render_pinned_status_tail(80).value == ""
+    assert view.running_prompt_hide_input_card() is True
+    assert view.running_prompt_hide_input_card_chrome() is True
 
 
 def test_render_pinned_status_tail_no_elapsed_spinner_during_midturn_handoff() -> None:
@@ -886,6 +954,86 @@ def test_render_pinned_status_tail_empty_while_question_panel_open() -> None:
     )
 
     assert view.render_pinned_status_tail(80).value == ""
+
+
+def test_file_activity_shelf_renders_compact_rows() -> None:
+    from rich.console import Console
+
+    from pythinker_code.ui.shell.visualize._blocks import FileActivityShelf
+
+    shelf = FileActivityShelf(max_rows=2)
+    shelf.mark("src/one.py", "created")
+    shelf.mark("src/two.py", "updated")
+    shelf.mark("src/three.py", "writing")
+
+    console = Console(width=80, record=True, color_system=None)
+    rendered = shelf.render(80)
+    assert rendered is not None
+    console.print(rendered)
+    plain = console.export_text()
+
+    assert "Files" in plain
+    assert "updated" in plain
+    assert "src/two.py" in plain
+    assert "writing" in plain
+    assert "src/three.py" in plain
+    assert "+1 more" in plain
+    assert "src/one.py" not in plain
+
+
+def test_file_activity_tracks_write_tool_until_result() -> None:
+    import json
+
+    from pythinker_core.message import ToolCall
+    from pythinker_core.tooling import ToolResult, ToolReturnValue
+    from rich.console import Console
+
+    from pythinker_code.tools.display import DiffDisplayBlock
+
+    class _PromptSession:
+        def update_pinned_todos(self, _items) -> None:  # noqa: ANN001
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    call = ToolCall(
+        id="write-1",
+        function=ToolCall.FunctionBody(
+            name="WriteFile",
+            arguments=json.dumps({"path": "src/new_file.py", "content": "print(1)"}),
+        ),
+    )
+
+    view.append_tool_call(call)
+    live = view._file_activity_shelf.render(80)
+    assert live is not None
+    console = Console(width=80, record=True, color_system=None)
+    console.print(live)
+    assert "writing" in console.export_text()
+
+    view.append_tool_result(
+        ToolResult(
+            tool_call_id="write-1",
+            return_value=ToolReturnValue(
+                is_error=False,
+                output="ok",
+                message="ok",
+                display=[
+                    DiffDisplayBlock(path="src/new_file.py", old_text="", new_text="print(1)")
+                ],
+            ),
+        )
+    )
+    console = Console(width=80, record=True, color_system=None)
+    updated = view._file_activity_shelf.render(80)
+    assert updated is not None
+    console.print(updated)
+    plain = console.export_text()
+    assert "updated" in plain
+    assert "src/new_file.py" in plain
 
 
 def test_pinned_tail_stays_visible_while_foreground_tool_executes() -> None:

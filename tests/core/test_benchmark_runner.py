@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -11,7 +12,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.runner import run_task
-from pythinker_code.benchmark.tasks import load_task
+from pythinker_code.benchmark.tasks import BenchmarkLimits, load_task
 from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
@@ -157,3 +158,39 @@ async def test_run_task_changed_files_ignore_verification_artifacts(
 
     assert result.status == "passed"
     assert result.changed_files == ["strings.py"]
+
+
+async def test_run_task_applies_and_restores_task_step_limit(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    original_limit = soul._loop_control.max_steps_per_turn  # pyright: ignore[reportPrivateUsage]
+    seen_limits: list[int] = []
+
+    async def fake_turn(message: Message):
+        seen_limits.append(
+            soul._loop_control.max_steps_per_turn  # pyright: ignore[reportPrivateUsage]
+        )
+        workspace = Path(str(soul.runtime.work_dir))
+        (workspace / "strings.py").write_text(
+            "def slugify(text):\n    return text.strip().lower().replace(' ', '-')\n",
+            encoding="utf-8",
+        )
+        return type("Outcome", (), {"step_count": 1, "final_message": message})()
+
+    soul.turn = AsyncMock(side_effect=fake_turn)  # type: ignore[method-assign]
+    task = load_task("smoke-add-small-function")
+    task = dataclasses.replace(task, limits=BenchmarkLimits(timeout_seconds=120, max_steps=2))
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    result = await run_task(
+        soul=soul,
+        task=task,
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --task smoke-add-small-function",
+    )
+
+    assert result.status == "passed"
+    assert seen_limits == [2]
+    assert soul._loop_control.max_steps_per_turn == original_limit  # pyright: ignore[reportPrivateUsage]

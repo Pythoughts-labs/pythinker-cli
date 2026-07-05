@@ -160,6 +160,7 @@ class _PromptLiveView(_LiveView):
         self._btw_run_task: asyncio.Task[None] | None = None
         self._status_refresh_task: asyncio.Task[None] | None = None
         self._pending_scrollback: list[tuple[RenderableType, bool]] = []
+        self._pending_scrollback_anchors: list[bool] = []
         self._scrollback_handoff_depth: int = 0
         self._scrollback_flush_lock = asyncio.Lock()
         self._last_terminal_size: tuple[int, int] | None = None
@@ -273,9 +274,6 @@ class _PromptLiveView(_LiveView):
                 await run_in_terminal(emit)
             else:
                 emit()
-            # This turn has now committed to scrollback; the input card may
-            # repaint from here on (see running_prompt_hide_input_card).
-            self._committed_scrollback_this_turn = True
         except Exception as exc:
             _handoff_trace(f"HANDOFF_FAIL\t{reason}\t{type(exc).__name__}:{exc}")
             # The teardown/erase may have half-completed; force an absolute
@@ -448,6 +446,7 @@ class _PromptLiveView(_LiveView):
                 )
                 return
             batch = self._pending_scrollback[:]
+            anchor_batch = self._pending_scrollback_anchors[: len(batch)]
 
             def emit() -> None:
                 for renderable, blank_row in batch:
@@ -465,24 +464,33 @@ class _PromptLiveView(_LiveView):
                 return
 
             del self._pending_scrollback[: len(batch)]
+            del self._pending_scrollback_anchors[: len(batch)]
+            if any(anchor_batch):
+                self._committed_scrollback_this_turn = True
             self._safe_prompt_invalidate()
 
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))
+        self._pending_scrollback_anchors.append(False)
 
     def _emit_action_block(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, True))
+        self._pending_scrollback_anchors.append(True)
 
     def _emit_steer_echo(self, renderable: RenderableType) -> None:
         self._pending_scrollback.append((renderable, False))
+        self._pending_scrollback_anchors.append(False)
 
     def _print_turn_recap(self) -> None:
         block = self._build_turn_recap_block()
         if block is None:
             return
         self._pending_scrollback.append((Text(""), False))
+        self._pending_scrollback_anchors.append(False)
         self._pending_scrollback.append((block, False))
+        self._pending_scrollback_anchors.append(False)
         self._pending_scrollback.append((Text(""), False))
+        self._pending_scrollback_anchors.append(False)
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
         _handoff_trace(f"TRANSITION\t{reason.name}")
@@ -944,7 +952,12 @@ class _PromptLiveView(_LiveView):
         instance across turns instead of building a fresh one per turn."""
         if self._turn_ended:
             return False
+        if getattr(self, "_scrollback_handoff_depth", 0) > 0:
+            return True
         return not self._committed_scrollback_this_turn
+
+    def running_prompt_hide_input_card_chrome(self) -> bool:
+        return getattr(self, "_scrollback_handoff_depth", 0) > 0
 
     def running_prompt_allows_text_input(self) -> bool:
         if self._current_approval_request_panel is not None:

@@ -15,6 +15,17 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Stream file write/edit activity in a compact live shelf so changed files update in place during agent runs instead of adding noisy terminal rows.
+- Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
+  underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`
+  because trusted local fixture datasets execute verification commands.
+- Strengthened the bundled `pythinker-core` benchmark suite with edge-case
+  fixtures for atomic rollback, iterable de-duplication, explicit falsey
+  metadata values, and safe path joins across absolute, sibling-prefix, parent,
+  and symlink escapes.
+
+- Keep the terminal input composer pinned to the bottom during agent runs with a fullscreen prompt mode to reduce TUI flicker.
+
 - Explicitly invoked skills now remain active across later turns through a
   compact reminder, and can be cleared with a named stop request or "normal mode".
 

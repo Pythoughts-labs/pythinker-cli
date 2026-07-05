@@ -166,6 +166,32 @@ Provider modules in `auth/`: `openai`, `anthropic_direct`, `opencode_go`, `minim
 follow `<platform_id>/<model_id>`. Provider-aware code derives the provider from the active
 model; `/usage` defaults to the active provider, with `/usage all` as the explicit aggregate.
 
+## Benchmark runner
+
+Native benchmark execution lives under `src/pythinker_code/benchmark/` and is surfaced through
+the slash-command registry in `src/pythinker_code/soul/slash.py`. It is a local-fixture harness:
+tasks materialize files into a per-run workspace, run through the same `PythinkerSoul.turn`
+path as a normal session, then execute a verification command and persist artifacts.
+
+| Path | Purpose | Key entry points and interfaces |
+| --- | --- | --- |
+| `src/pythinker_code/benchmark/commands.py` | Slash-command parser and orchestrator for `start`, `estimate`, `list`, `show`, `report`, and `swe`. | `dispatch_benchmark`, `BenchmarkArgs`, `benchmark_usage` |
+| `src/pythinker_code/benchmark/runner.py` | Per-task execution: workspace materialization, work-dir override, temporary task `max_steps` limit, timeout handling, verification, and artifact finalization. | `run_task`, `BenchmarkResult`, `VerificationResult` |
+| `src/pythinker_code/benchmark/tasks.py` | Bundled task schema and workspace materialization. | `BenchmarkTask`, `load_task`, `materialize_workspace` |
+| `src/pythinker_code/benchmark/suites.py` | Bundled suite loading and ordering. | `load_suite`, `list_suite_names` |
+| `src/pythinker_code/benchmark/swe.py` | Trusted local SWE-style JSONL fixture loading. | `load_swe_instances`, `swe_instance_to_task` |
+| `src/pythinker_code/benchmark/records.py` and `report.py` | Per-run artifact writing and report rendering. | `BenchmarkRecorder`, `render_run_report`, `render_show` |
+
+The bundled suite files live in `src/pythinker_code/benchmark/bundled/suites/`; bundled task
+definitions live in `src/pythinker_code/benchmark/bundled/tasks/`. The `pythinker-core` suite
+targets common agent failure modes: transactional rollback, ordered de-duplication, explicit
+`None` versus falsey metadata, and safe path joins. The runner uses the active model provider
+from session config; it does not create a separate provider stack.
+
+`/benchmark:swe` is intentionally labeled SWE-style local fixture support, not full SWE-bench
+Docker evaluation. It accepts local JSONL records, rejects unsafe workspace paths, and requires
+`--trusted-dataset true` before running dataset-provided verification commands.
+
 ## Wire and UI frontends
 
 | Path | Purpose | Key entry points and interfaces |

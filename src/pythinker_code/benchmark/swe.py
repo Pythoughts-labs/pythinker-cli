@@ -57,7 +57,9 @@ def swe_instance_to_task(instance: SweBenchmarkInstance) -> BenchmarkTask:
     return BenchmarkTask(
         id=f"swe-{instance.instance_id}",
         title=instance.instance_id,
-        description=f"SWE-style task from {instance.repo} at {instance.base_commit}",
+        description=(
+            f"SWE-style local fixture task from {instance.repo} at {instance.base_commit}"
+        ),
         prompt=_prompt(instance),
         workspace=BenchmarkWorkspace(files=instance.workspace_files),
         verification=BenchmarkVerification(type="command", command=instance.verification_command),
@@ -164,7 +166,9 @@ def _prompt(instance: SweBenchmarkInstance) -> str:
     pass_to_pass = "\n".join(f"- {test}" for test in instance.pass_to_pass) or "- (none)"
     return "\n".join(
         [
-            f"Resolve SWE-style instance {instance.instance_id}.",
+            f"Resolve SWE-style local fixture instance {instance.instance_id}.",
+            "",
+            "This is an offline local workspace fixture, not a full SWE-bench Docker run.",
             "",
             f"Repository: {instance.repo}",
             f"Base commit: {instance.base_commit}",

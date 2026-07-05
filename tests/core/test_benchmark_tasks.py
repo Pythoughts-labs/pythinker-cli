@@ -74,3 +74,52 @@ def test_materialize_workspace_writes_files(tmp_path: Path) -> None:
     materialize_workspace(task, tmp_path)
 
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "# Example Project\n\n"
+
+
+@pytest.mark.parametrize(
+    ("task_id", "test_file", "required_snippets"),
+    [
+        (
+            "core-atomic-transfer",
+            "test_ledger.py",
+            [
+                "test_missing_source_rolls_back",
+                "ledger.transfer('missing', 'b', 1)",
+                "[0, -1]",
+            ],
+        ),
+        (
+            "core-dedup-order",
+            "test_seqkit.py",
+            [
+                "test_unique_accepts_generators",
+                "unique(x for x in ['a', 'a', 'b'])",
+            ],
+        ),
+        (
+            "core-explicit-none-metadata",
+            "test_metadata.py",
+            [
+                "test_falsey_explicit_values_are_preserved",
+                "name=False",
+                "version=0",
+            ],
+        ),
+        (
+            "core-safe-path-join",
+            "test_paths.py",
+            [
+                "test_safe_join_rejects_sibling_prefix_absolute_path",
+                "test_safe_join_rejects_symlink_escape",
+            ],
+        ),
+    ],
+)
+def test_core_benchmark_tasks_cover_reviewed_edge_cases(
+    task_id: str, test_file: str, required_snippets: list[str]
+) -> None:
+    task = load_task(task_id)
+    test_source = task.workspace.files[test_file]
+
+    for snippet in required_snippets:
+        assert snippet in test_source

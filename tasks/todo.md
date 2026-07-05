@@ -2,6 +2,27 @@
 
 ## Active
 
+### Review: benchmark hardening (2026-07-05)
+
+- [x] Enforce per-task benchmark `max_steps` by temporarily applying it to the
+      underlying soul loop control and restoring the previous limit after the
+      run.
+- [x] Require explicit `--trusted-dataset true` for `/benchmark:swe`, because
+      SWE-style local fixture datasets contain verification shell commands.
+- [x] Label SWE-style tasks as local fixtures, not full SWE-bench Docker
+      evaluation.
+- [x] Strengthen bundled `pythinker-core` tasks with reviewed edge cases for
+      atomic rollback, generator de-duplication, falsey explicit metadata, and
+      absolute/sibling/symlink path escapes.
+- [x] Document the benchmark integration architecture across the public
+      reference docs, repository map, changelog, and slash-command docs.
+- Verification: red tests confirmed the benchmark gaps first. Final focused
+  gates passed locally: benchmark pytest group, pyinstaller manifest tests,
+  benchmark task/suite metadata load, ruff format/check, pyright, ty, docs
+  build, and targeted `git diff --check`. Full `make check-pythinker-code`
+  is blocked by unrelated dirty formatting in
+  `src/pythinker_code/ui/shell/prompt.py`.
+
 - [ ] Agent-harness adoption arc (`feat/agent-harness-enhancements`): executing
       `tasks/agent-harness-adoption-plan.md` (124 verified items, tiers 1-4).
       DONE: all 5 Tier-1 high/S + first high/M — `047a0b29` orchestration

@@ -9,11 +9,12 @@ Rich renderable via ``compose()``.  The Rich ``Live`` context drives refresh.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from typing import Literal
+from typing import Literal, cast
 
 from pythinker_core.message import Message
 from pythinker_core.tooling import ToolError, ToolOk, ToolReturnValue
@@ -63,6 +64,7 @@ from pythinker_code.ui.shell.visualize._approval_panel import (
 from pythinker_code.ui.shell.visualize._blocks import (
     _TOKEN_RATE_MIN_SAMPLES,
     _TOKEN_RATE_WINDOW_S,
+    FileActivityShelf,
     FlushReason,
     Markdown,
     _CompactionBlock,
@@ -242,6 +244,8 @@ class _LiveView:
         self._recap_tool_counts: Counter[str] = Counter()
         self._recap_files_modified: set[str] = set()
         self._pending_turn_recap = False
+        self._file_activity_shelf = FileActivityShelf()
+        self._tool_file_paths: dict[str, str] = {}
 
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
@@ -820,6 +824,9 @@ class _LiveView:
                     self._current_content_block.compose(include_activity=include_content_activity),
                     leading=True,
                 )
+            file_activity = self._file_activity_shelf.render(current_console_width())
+            if file_activity is not None:
+                _append_action_block(blocks, file_activity, leading=True)
             # When an approval panel is on-screen for a specific tool call, the
             # panel already previews the same command/diff that the pending tool
             # card would show. Suppress the matching card to avoid the duplicate.
@@ -865,6 +872,46 @@ class _LiveView:
         for block in getattr(result.return_value, "display", []) or []:
             if isinstance(block, DiffDisplayBlock) and block.path:
                 self._recap_files_modified.add(block.path)
+
+    @staticmethod
+    def _tool_call_path(tool_call: ToolCall) -> str | None:
+        name = tool_call.function.name.lower()
+        if name not in {"applypatch", "edit", "replace", "strreplacefile", "write", "writefile"}:
+            return None
+        try:
+            args = json.loads(tool_call.function.arguments or "{}", strict=False)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(args, dict):
+            return None
+        data = cast(dict[str, object], args)
+        path = data.get("path") or data.get("file_path")
+        return str(path) if path else None
+
+    @staticmethod
+    def _tool_result_paths(result: ToolResult) -> list[str]:
+        return [
+            block.path
+            for block in getattr(result.return_value, "display", []) or []
+            if isinstance(block, DiffDisplayBlock) and block.path
+        ]
+
+    def _mark_file_activity_started(self, tool_call: ToolCall) -> None:
+        path = self._tool_call_path(tool_call)
+        if path is None:
+            return
+        self._tool_file_paths[tool_call.id] = path
+        self._file_activity_shelf.mark(path, "writing")
+
+    def _mark_file_activity_finished(self, result: ToolResult) -> None:
+        paths = self._tool_result_paths(result)
+        if not paths:
+            stored_path = self._tool_file_paths.get(result.tool_call_id)
+            paths = [stored_path] if stored_path else []
+        if not paths:
+            return
+        status = "failed" if result.return_value.is_error else "updated"
+        self._file_activity_shelf.mark_many(paths, status)
 
     def _build_turn_recap_block(self) -> RenderableType | None:
         if not self._show_turn_recaps:
@@ -1170,6 +1217,8 @@ class _LiveView:
                     self._recap_text_parts.clear()
                     self._recap_tool_counts.clear()
                     self._recap_files_modified.clear()
+                    self._file_activity_shelf.clear()
+                    self._tool_file_paths.clear()
                     self._pending_turn_recap = False
                 self._active_turn_depth += 1
                 self.flush_content(FlushReason.TURN_END)
@@ -1605,6 +1654,7 @@ class _LiveView:
     def append_tool_call(self, tool_call: ToolCall) -> None:
         self._current_step_retry = None
         self.flush_content(FlushReason.TOOL_START)
+        self._mark_file_activity_started(tool_call)
         self._tool_call_blocks[tool_call.id] = _ToolCallBlock(tool_call)
         self._last_tool_call_block = self._tool_call_blocks[tool_call.id]
         self.refresh_soon()
@@ -1628,6 +1678,7 @@ class _LiveView:
             self.refresh_soon()
 
     def append_tool_result(self, result: ToolResult) -> None:
+        self._mark_file_activity_finished(result)
         if block := self._tool_call_blocks.get(result.tool_call_id):
             self._record_todo_display(result.return_value)
             if block.is_todo_list and not result.return_value.is_error:

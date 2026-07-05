@@ -128,6 +128,22 @@ Swap providers and models per-session: `--model openai/gpt-5.5`, hosted Pythinke
 
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+
+### 📊 Local Benchmarks
+
+Run `/benchmark` to execute deterministic local coding tasks through the active Pythinker session, with replayable artifacts and verification reports.
+
+</td>
+<td width="50%" valign="top">
+
+### 🧪 SWE-Style Fixtures
+
+Run trusted local JSONL fixtures with `/benchmark:swe --trusted-dataset true` when you want SWE-style task inputs without a hosted evaluator.
+
+</td>
+</tr>
 </table>
 
 > [!NOTE]
@@ -618,6 +634,7 @@ Pythinker is a small, extensible runtime — not a monolith. Build on it.
 | 🌊 **Flows** | `/flow:<name>` executes bundled prompt flows | bundled & user-defined |
 | 🪝 **Hooks** | Observe or block tool execution; integrate policy or automation | hook events API |
 | 🧩 **Plugins** | Installable extension packages | `pythinker plugin` |
+| 📊 **Benchmarks** | Deterministic local coding tasks with verification reports | `/benchmark`, `src/pythinker_code/benchmark/` |
 
 ---
 

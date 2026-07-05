@@ -961,6 +961,11 @@ class Shell:
                 if isinstance(self.soul, PythinkerSoul)
                 else True
             ),
+            sticky_input=(
+                self.soul.runtime.config.tui.sticky_input
+                if isinstance(self.soul, PythinkerSoul)
+                else True
+            ),
             statusline_config=(
                 self.soul.runtime.config.tui.statusline
                 if isinstance(self.soul, PythinkerSoul)

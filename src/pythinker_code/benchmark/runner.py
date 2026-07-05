@@ -14,6 +14,7 @@ from pythinker_host.path import HostPath
 
 from pythinker_code.benchmark.records import BenchmarkRecorder
 from pythinker_code.benchmark.tasks import BenchmarkTask, materialize_workspace
+from pythinker_code.config import LoopControl
 
 if TYPE_CHECKING:
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -100,6 +101,7 @@ async def run_task(
     )
     old_override = runtime.work_dir_override
     old_builtin_args = runtime.builtin_args
+    old_loop_control = _set_benchmark_step_limit(soul, task.limits.max_steps)
     benchmark_work_dir = HostPath.unsafe_from_local_path(workspace)
     _set_work_dir_override(soul, benchmark_work_dir)
     runtime.builtin_args = dataclasses.replace(
@@ -174,6 +176,7 @@ async def run_task(
     finally:
         _set_work_dir_override(soul, old_override)
         runtime.builtin_args = old_builtin_args
+        _restore_benchmark_step_limit(soul, old_loop_control)
 
     changed_files = _changed_files(workspace, before)
     tool_calls = _count_wire_tool_calls(wire_file, wire_offset)
@@ -255,6 +258,18 @@ def _set_work_dir_override(soul: PythinkerSoul, work_dir: HostPath | None) -> No
         setter(work_dir)
     else:
         soul.runtime.work_dir_override = work_dir
+
+
+def _set_benchmark_step_limit(soul: PythinkerSoul, max_steps: int) -> LoopControl:
+    old_loop_control = soul._loop_control  # pyright: ignore[reportPrivateUsage]
+    soul._loop_control = old_loop_control.model_copy(  # pyright: ignore[reportPrivateUsage]
+        update={"max_steps_per_turn": max_steps}
+    )
+    return old_loop_control
+
+
+def _restore_benchmark_step_limit(soul: PythinkerSoul, loop_control: LoopControl) -> None:
+    soul._loop_control = loop_control  # pyright: ignore[reportPrivateUsage]
 
 
 def _benchmark_prompt(task_prompt: str, workspace: Path) -> str:

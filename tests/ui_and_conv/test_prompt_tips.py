@@ -1571,6 +1571,7 @@ def test_attach_running_prompt_enables_erase_when_done_and_detach_restores_state
     prompt_session._mode = PromptMode.SHELL
     prompt_session._running_prompt_delegate = None
     prompt_session._running_prompt_previous_mode = None
+    prompt_session._sticky_input = False
     prompt_session._session = cast(Any, SimpleNamespace(app=SimpleNamespace(erase_when_done=False)))
 
     delegate = _DummyRunningPrompt()
