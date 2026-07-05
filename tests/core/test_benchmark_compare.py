@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pythinker_code.benchmark.compare import readiness_warnings
+from pythinker_code.benchmark.export import export_rows
 from pythinker_code.benchmark.types import BenchmarkReportRow
 
 
@@ -110,3 +111,37 @@ def test_readiness_warnings_flag_smoke_suite_as_local_fixture() -> None:
     warnings = readiness_warnings([row])
 
     assert "local fixture" in " ".join(warnings).lower()
+
+
+def test_export_rows_flatten_runtime_usage_and_activity() -> None:
+    rows = [
+        BenchmarkReportRow(
+            run={"run_id": "r1", "model_key": "m1", "task_id": "t1", "repeat_index": 1},
+            summary={
+                "status": "passed",
+                "score": 1.0,
+                "runtime": {"duration_ms": 10, "steps": 2, "tool_calls": 3},
+                "usage": {"total_tokens": 42, "estimated_cost_usd": 0.01},
+                "activity": {"added_lines": 4, "removed_lines": 1, "shell_tool_calls": 1},
+            },
+        )
+    ]
+
+    assert export_rows(rows) == [
+        {
+            "run_id": "r1",
+            "model": "m1",
+            "task": "t1",
+            "repeat": 1,
+            "status": "passed",
+            "score": 1.0,
+            "duration_ms": 10,
+            "steps": 2,
+            "tool_calls": 3,
+            "total_tokens": 42,
+            "estimated_cost_usd": 0.01,
+            "added_lines": 4,
+            "removed_lines": 1,
+            "shell_tool_calls": 1,
+        }
+    ]

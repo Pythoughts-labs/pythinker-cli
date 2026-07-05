@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -109,6 +110,20 @@ def test_parse_compare_requires_two_models() -> None:
 def test_parse_compare_requires_two_distinct_models() -> None:
     with pytest.raises(BenchmarkSyntaxError, match="at least two distinct models"):
         parse_args("compare --models model-a,model-a")
+
+
+def test_parse_export_args() -> None:
+    args = parse_args("export --suite pythinker-core --format csv --output ~/benchmarks")
+
+    assert args.subcommand == "export"
+    assert args.suite == "pythinker-core"
+    assert args.format == "csv"
+    assert args.output == Path("~/benchmarks").expanduser()
+
+
+def test_parse_export_rejects_invalid_format() -> None:
+    with pytest.raises(BenchmarkSyntaxError, match="--format must be json or csv"):
+        parse_args("export --format markdown")
 
 
 async def test_benchmark_list_shows_bundled_suite(
@@ -267,6 +282,44 @@ def test_benchmark_report_aggregates_by_model_and_task(tmp_path: Path) -> None:
     assert "- model-b: 1/1 passed (100.0%)" in report
     assert "- task-one: 2/2 passed (100.0%)" in report
     assert "- task-two: 0/1 passed (0.0%)" in report
+
+
+async def test_benchmark_export_reads_artifact_root(
+    runtime: Runtime, tmp_path: Path, sent: list[TextPart]
+) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_1",
+        model="model-a",
+        task="task-one",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=2,
+        total_tokens=100,
+    )
+
+    await _run(_make_soul(runtime, tmp_path), f"export --suite pythinker-core --output {tmp_path}")
+
+    exported = json.loads("\n".join(part.text for part in sent))
+    assert exported == [
+        {
+            "run_id": "bench_1",
+            "model": "model-a",
+            "task": "task-one",
+            "repeat": 1,
+            "status": "passed",
+            "score": 0.0,
+            "duration_ms": 1000,
+            "steps": 4,
+            "tool_calls": 2,
+            "total_tokens": 100,
+            "estimated_cost_usd": None,
+            "added_lines": 0,
+            "removed_lines": 0,
+            "shell_tool_calls": 0,
+        }
+    ]
 
 
 async def test_benchmark_compare_executes_each_requested_model(

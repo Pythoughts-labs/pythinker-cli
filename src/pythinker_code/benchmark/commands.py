@@ -15,6 +15,7 @@ from pythinker_code.benchmark.errors import (
 )
 from pythinker_code.benchmark.estimate import estimate_benchmark as build_estimate
 from pythinker_code.benchmark.estimate import render_estimate
+from pythinker_code.benchmark.export import render_export
 from pythinker_code.benchmark.records import BenchmarkRecorder, load_run
 from pythinker_code.benchmark.report import render_show
 from pythinker_code.benchmark.runner import run_task
@@ -44,6 +45,7 @@ class BenchmarkArgs:
     timeout_seconds: int | None = None
     judges: str = "off"
     sandbox: str = DEFAULT_SANDBOX
+    format: str = "json"
     output: Path | None = None
     dataset: Path | None = None
     instance: str | None = None
@@ -70,6 +72,7 @@ def benchmark_usage() -> str:
             "  /benchmark:show <run-id>",
             "  /benchmark report [--suite <suite-name>]",
             "  /benchmark:report [--suite <suite-name>]",
+            "  /benchmark export [--suite <suite-name>] [--format json|csv] [--output <path>]",
             "  /benchmark swe --dataset <path.jsonl> --trusted-dataset true "
             "[--instance <instance-id>]",
             "  /benchmark:swe --dataset <path.jsonl> --trusted-dataset true "
@@ -86,7 +89,16 @@ def parse_args(args: str) -> BenchmarkArgs:
     if not tokens:
         raise BenchmarkSyntaxError(benchmark_usage())
     subcommand = tokens.pop(0)
-    if subcommand not in {"start", "estimate", "list", "show", "report", "swe", "compare"}:
+    if subcommand not in {
+        "start",
+        "estimate",
+        "list",
+        "show",
+        "report",
+        "export",
+        "swe",
+        "compare",
+    }:
         raise BenchmarkSyntaxError(
             f"Unknown benchmark subcommand: {subcommand}\n{benchmark_usage()}"
         )
@@ -110,6 +122,7 @@ def parse_args(args: str) -> BenchmarkArgs:
             "timeout_seconds",
             "judges",
             "sandbox",
+            "format",
             "output",
             "dataset",
             "instance",
@@ -152,6 +165,9 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         raise BenchmarkSyntaxError(
             "--sandbox only supports current-pythinker-approval-runtime in v1"
         )
+    export_format = str(values.get("format", "json")).lower()
+    if export_format not in {"json", "csv"}:
+        raise BenchmarkSyntaxError("--format must be json or csv")
     if max_concurrency > 1:
         raise BenchmarkSyntaxError("--max-concurrency > 1 is not supported in v1")
     output = Path(str(values["output"])).expanduser() if values.get("output") else None
@@ -168,6 +184,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         timeout_seconds=timeout_seconds,
         judges=judges,
         sandbox=sandbox,
+        format=export_format,
         output=output,
         dataset=dataset,
         instance=_optional_str(values.get("instance")),
@@ -219,6 +236,8 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
         return show_benchmark(parsed.run_id, parsed.output)
     if parsed.subcommand == "report":
         return render_benchmark_report(parsed.output, parsed.suite)
+    if parsed.subcommand == "export":
+        return export_benchmark(parsed.output, parsed.suite, parsed.format)
     if parsed.subcommand == "swe":
         return await start_swe_benchmark(soul, parsed, raw_args=args)
     if parsed.subcommand == "start":
@@ -383,16 +402,7 @@ def render_benchmark_report(
     root = output or get_share_dir() / "benchmarks"
     if not root.exists():
         return "Pythinker Benchmark\n\nNo benchmark runs found."
-    rows: list[BenchmarkReportRow] = []
-    for path in sorted(root.glob("*/run.json")):
-        run = _read_json_object(path)
-        run_id = run.get("run_id")
-        if run_ids is not None and run_id not in run_ids:
-            continue
-        if suite is None or run.get("suite_name") == suite:
-            summary_path = path.parent / "summary.json"
-            summary = _read_json_object(summary_path) if summary_path.exists() else {}
-            rows.append(BenchmarkReportRow(run=run, summary=summary))
+    rows = _load_report_rows(root, suite=suite, run_ids=run_ids)
     if not rows:
         return "Pythinker Benchmark\n\nNo matching benchmark runs found."
     passed = sum(1 for row in rows if _row_status(row) == "passed")
@@ -435,6 +445,34 @@ def render_benchmark_report(
             f"({run.get('model_key')}, {run.get('task_id')})"
         )
     return "\n".join(lines)
+
+
+def export_benchmark(
+    output: Path | None = None, suite: str | None = None, fmt: str = "json"
+) -> str:
+    if fmt not in {"json", "csv"}:
+        raise BenchmarkSyntaxError("--format must be json or csv")
+    root = output or get_share_dir() / "benchmarks"
+    rows = _load_report_rows(root, suite=suite, run_ids=None)
+    return render_export(rows, fmt)
+
+
+def _load_report_rows(
+    root: Path, *, suite: str | None, run_ids: list[str] | None
+) -> list[BenchmarkReportRow]:
+    rows: list[BenchmarkReportRow] = []
+    if not root.exists():
+        return rows
+    for path in sorted(root.glob("*/run.json")):
+        run = _read_json_object(path)
+        run_id = run.get("run_id")
+        if run_ids is not None and run_id not in run_ids:
+            continue
+        if suite is None or run.get("suite_name") == suite:
+            summary_path = path.parent / "summary.json"
+            summary = _read_json_object(summary_path) if summary_path.exists() else {}
+            rows.append(BenchmarkReportRow(run=run, summary=summary))
+    return rows
 
 
 def _read_json_object(path: Path) -> JsonObject:
