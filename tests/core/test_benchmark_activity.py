@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pythinker_core.message import ToolCall
+
 from pythinker_code.benchmark.activity import summarize_benchmark_activity
 from pythinker_code.benchmark.report import render_run_report
+from pythinker_code.wire.serde import serialize_wire_message
 
 
 def test_summarize_activity_counts_changed_lines_and_tools(tmp_path: Path) -> None:
@@ -14,18 +17,24 @@ def test_summarize_activity_counts_changed_lines_and_tools(tmp_path: Path) -> No
             [
                 json.dumps(
                     {
-                        "message": {
-                            "type": "ToolCall",
-                            "payload": {"id": "call-1", "name": "StrReplaceFile"},
-                        }
+                        "message": serialize_wire_message(
+                            ToolCall(
+                                id="call-1",
+                                function=ToolCall.FunctionBody(
+                                    name="StrReplaceFile", arguments="{}"
+                                ),
+                            )
+                        )
                     }
                 ),
                 json.dumps(
                     {
-                        "message": {
-                            "type": "ToolCall",
-                            "payload": {"id": "call-2", "name": "Bash"},
-                        }
+                        "message": serialize_wire_message(
+                            ToolCall(
+                                id="call-2",
+                                function=ToolCall.FunctionBody(name="Bash", arguments="{}"),
+                            )
+                        )
                     }
                 ),
             ]

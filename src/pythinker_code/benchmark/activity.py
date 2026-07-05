@@ -15,12 +15,15 @@ def summarize_benchmark_activity(
 ) -> dict[str, object]:
     added, removed = _changed_line_counts(before, after)
     tool_calls_by_name = _tool_calls_by_name(wire_file, wire_offset)
+    shell_tool_calls = sum(
+        count for name, count in tool_calls_by_name.items() if name.casefold() in {"bash", "shell"}
+    )
     return {
         "changed_files_count": len(_changed_file_names(before, after)),
         "added_lines": added,
         "removed_lines": removed,
         "tool_calls_by_name": dict(sorted(tool_calls_by_name.items())),
-        "shell_tool_calls": tool_calls_by_name.get("Bash", 0) + tool_calls_by_name.get("Shell", 0),
+        "shell_tool_calls": shell_tool_calls,
     }
 
 
@@ -68,9 +71,18 @@ def _tool_calls_by_name(wire_file: Path, offset: int) -> dict[str, int]:
                 payload = message_data.get("payload")
                 if not isinstance(payload, dict):
                     continue
-                name = cast(dict[str, object], payload).get("name")
+                name = _tool_name(cast(dict[str, object], payload))
                 if isinstance(name, str) and name:
                     counts[name] = counts.get(name, 0) + 1
     except OSError:
         return {}
     return counts
+
+
+def _tool_name(payload: Mapping[str, object]) -> str | None:
+    function = payload.get("function")
+    if isinstance(function, dict):
+        name = cast(dict[str, object], function).get("name")
+        return name if isinstance(name, str) else None
+    legacy_name = payload.get("name")
+    return legacy_name if isinstance(legacy_name, str) else None
