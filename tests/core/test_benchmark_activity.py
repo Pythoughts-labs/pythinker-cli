@@ -92,3 +92,25 @@ def test_render_run_report_missing_activity_shows_unavailable(tmp_path: Path) ->
 
     assert "- Activity: unavailable" in run_report
     assert "  - changed files:" not in run_report
+
+
+def test_render_run_report_includes_publishability_warnings(tmp_path: Path) -> None:
+    run_report = render_run_report(
+        run={
+            "run_id": "run-id",
+            "model_key": "mock",
+            "provider_key": "provider",
+            "task_id": "task",
+            "suite_name": "pythinker-core",
+            "repeat_index": 1,
+        },
+        summary={
+            "usage": {"estimated_cost_usd": None},
+            "environment": {"git_dirty": False},
+        },
+        artifact_root=tmp_path,
+    )
+
+    assert "Publishability warnings:" in run_report
+    assert "- Single model only:" in run_report
+    assert "- Single repeat only:" in run_report

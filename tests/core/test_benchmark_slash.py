@@ -246,6 +246,25 @@ def test_benchmark_report_aggregates_by_model_and_task(tmp_path: Path) -> None:
     assert "- task-two: 0/1 passed (0.0%)" in report
 
 
+def test_benchmark_report_includes_publishability_warnings(tmp_path: Path) -> None:
+    _write_run_summary(
+        tmp_path,
+        run_id="bench_1",
+        model="model-a",
+        task="task-one",
+        status="passed",
+        duration_ms=1000,
+        steps=4,
+        tool_calls=2,
+        total_tokens=100,
+    )
+
+    report = render_benchmark_report(tmp_path, suite="pythinker-core")
+
+    assert "Publishability warnings:" in report
+    assert "- Single model only: do not describe this as a model comparison." in report
+
+
 def _write_run_summary(
     root: Path,
     *,

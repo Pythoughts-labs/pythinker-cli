@@ -43,6 +43,17 @@ def test_readiness_warnings_allow_multi_model_repeated_costed_run() -> None:
     assert not any("single repeat" in warning.lower() for warning in warnings)
 
 
+def test_readiness_warnings_flag_single_repeat_per_model() -> None:
+    warnings = readiness_warnings(
+        [
+            _row("model-a", "task-a", 1, 0.01),
+            _row("model-b", "task-b", 2, 0.02),
+        ]
+    )
+
+    assert "single repeat" in " ".join(warnings).lower()
+
+
 def test_readiness_warnings_flag_missing_dirty_metadata() -> None:
     row = BenchmarkReportRow(
         run={

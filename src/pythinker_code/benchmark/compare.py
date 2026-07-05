@@ -10,11 +10,14 @@ def readiness_warnings(rows: Sequence[BenchmarkReportRow]) -> list[str]:
         return []
     warnings: list[str] = []
     models = {str(row.run.get("model_key") or "unknown") for row in rows}
-    repeats = {int(row.run.get("repeat_index") or 1) for row in rows}
+    repeats_by_model: dict[str, set[int]] = {}
+    for row in rows:
+        model = str(row.run.get("model_key") or "unknown")
+        repeats_by_model.setdefault(model, set()).add(_repeat_index(row))
     suites = {str(row.run.get("suite_name") or "") for row in rows}
     if len(models) < 2:
         warnings.append("Single model only: do not describe this as a model comparison.")
-    if len(repeats) < 2:
+    if any(len(repeats) < 2 for repeats in repeats_by_model.values()):
         warnings.append(
             "Single repeat only: report this as a smoke result, not a stable estimate."
         )
@@ -46,3 +49,15 @@ def _dirty(row: BenchmarkReportRow) -> bool | None:
         return None
     value = environment.get("git_dirty")
     return value if isinstance(value, bool) else None
+
+
+def _repeat_index(row: BenchmarkReportRow) -> int:
+    repeat = row.run.get("repeat_index", 1)
+    if isinstance(repeat, int):
+        return repeat
+    if isinstance(repeat, str):
+        try:
+            return int(repeat)
+        except ValueError:
+            return 1
+    return 1

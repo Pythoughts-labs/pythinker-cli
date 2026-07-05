@@ -68,6 +68,12 @@ def render_run_report(
         estimated_cost = f"${float(usage['estimated_cost_usd']):.4f}"
     verification_output = _verification_output(verification)
     final_excerpt = _excerpt(final_answer)
+    from pythinker_code.benchmark.commands import BenchmarkReportRow
+    from pythinker_code.benchmark.compare import readiness_warnings
+
+    warnings = readiness_warnings(
+        [BenchmarkReportRow(run=dict(run), summary=dict(summary))]
+    )
 
     lines = [
         "# Pythinker Benchmark",
@@ -88,6 +94,8 @@ def render_run_report(
         f"- Artifacts: {artifact_root}",
         "",
     ]
+    if warnings:
+        lines.extend(["Publishability warnings:", *(f"- {warning}" for warning in warnings), ""])
     if has_valid_activity:
         lines.extend(["- Activity:", *activity_lines])
     else:
