@@ -335,6 +335,8 @@ def show_benchmark(run_id: str, output: Path | None = None) -> str:
 
 
 def render_benchmark_report(output: Path | None = None, suite: str | None = None) -> str:
+    from pythinker_code.benchmark.compare import readiness_warnings
+
     root = output or get_share_dir() / "benchmarks"
     if not root.exists():
         return "Pythinker Benchmark\n\nNo benchmark runs found."
@@ -357,6 +359,10 @@ def render_benchmark_report(output: Path | None = None, suite: str | None = None
         "",
         "Models:",
     ]
+    warnings = readiness_warnings(rows)
+    if warnings:
+        lines.extend(["", "Publishability warnings:"])
+        lines.extend(f"- {warning}" for warning in warnings)
     for model, model_rows in _group_rows(rows, "model_key").items():
         model_passed = sum(1 for row in model_rows if _row_status(row) == "passed")
         lines.append(
