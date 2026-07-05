@@ -31,6 +31,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Expanded `/benchmark start` to use a richer default core suite, isolate file
   edits through the active toolset workspace override, and exclude generated
   verification caches from changed-file reports.
+- Added `/benchmark:swe` for native SWE-style JSONL benchmark tasks that run
+  through Pythinker's existing model, tool, verification, and artifact path.
 
 ## 0.56.0 (2026-07-02)
 

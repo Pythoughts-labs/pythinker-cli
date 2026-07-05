@@ -74,8 +74,10 @@ async def test_benchmark_command_registered(runtime: Runtime, tmp_path: Path) ->
     assert "benchmark:list" in names
     assert "benchmark:show" in names
     assert "benchmark:report" in names
+    assert "benchmark:swe" in names
     assert soul_slash_registry.find_command("benchmark") is not None
     assert soul_slash_registry.find_command("benchmark:start") is not None
+    assert soul_slash_registry.find_command("benchmark:swe") is not None
 
 
 async def test_benchmark_list_shows_bundled_suite(

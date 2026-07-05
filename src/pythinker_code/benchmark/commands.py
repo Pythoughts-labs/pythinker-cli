@@ -18,6 +18,7 @@ from pythinker_code.benchmark.records import BenchmarkRecorder, load_run
 from pythinker_code.benchmark.report import render_show
 from pythinker_code.benchmark.runner import run_task
 from pythinker_code.benchmark.suites import list_suite_names, load_suite
+from pythinker_code.benchmark.swe import load_swe_instances, swe_instance_to_task
 from pythinker_code.benchmark.tasks import list_task_ids, load_task
 from pythinker_code.share import get_share_dir
 
@@ -41,6 +42,8 @@ class BenchmarkArgs:
     judges: str = "off"
     sandbox: str = DEFAULT_SANDBOX
     output: Path | None = None
+    dataset: Path | None = None
+    instance: str | None = None
     run_id: str | None = None
 
 
@@ -68,6 +71,8 @@ def benchmark_usage() -> str:
             "  /benchmark:show <run-id>",
             "  /benchmark report [--suite <suite-name>]",
             "  /benchmark:report [--suite <suite-name>]",
+            "  /benchmark swe --dataset <path.jsonl> [--instance <instance-id>]",
+            "  /benchmark:swe --dataset <path.jsonl> [--instance <instance-id>]",
         ]
     )
 
@@ -80,7 +85,7 @@ def parse_args(args: str) -> BenchmarkArgs:
     if not tokens:
         raise BenchmarkSyntaxError(benchmark_usage())
     subcommand = tokens.pop(0)
-    if subcommand not in {"start", "estimate", "list", "show", "report"}:
+    if subcommand not in {"start", "estimate", "list", "show", "report", "swe"}:
         raise BenchmarkSyntaxError(
             f"Unknown benchmark subcommand: {subcommand}\n{benchmark_usage()}"
         )
@@ -104,6 +109,8 @@ def parse_args(args: str) -> BenchmarkArgs:
             "judges",
             "sandbox",
             "output",
+            "dataset",
+            "instance",
         }:
             raise BenchmarkSyntaxError(f"Unknown benchmark flag: {token}\n{benchmark_usage()}")
         if i + 1 >= len(tokens):
@@ -139,6 +146,7 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
     if max_concurrency > 1:
         raise BenchmarkSyntaxError("--max-concurrency > 1 is not supported in v1")
     output = Path(str(values["output"])).expanduser() if values.get("output") else None
+    dataset = Path(str(values["dataset"])).expanduser() if values.get("dataset") else None
     return BenchmarkArgs(
         subcommand=str(values["subcommand"]),
         model=_optional_str(values.get("model")),
@@ -150,6 +158,8 @@ def _coerce_args(values: dict[str, object]) -> BenchmarkArgs:
         judges=judges,
         sandbox=sandbox,
         output=output,
+        dataset=dataset,
+        instance=_optional_str(values.get("instance")),
         run_id=_optional_str(values.get("run_id")),
     )
 
@@ -182,6 +192,8 @@ async def dispatch_benchmark(soul: PythinkerSoul, args: str) -> str:
         return show_benchmark(parsed.run_id, parsed.output)
     if parsed.subcommand == "report":
         return render_benchmark_report(parsed.output, parsed.suite)
+    if parsed.subcommand == "swe":
+        return await start_swe_benchmark(soul, parsed, raw_args=args)
     if parsed.subcommand == "start":
         return await start_benchmark(soul, parsed, raw_args=args)
     raise BenchmarkSyntaxError(benchmark_usage())
@@ -232,6 +244,54 @@ async def start_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args:
                         "Pythinker Benchmark finished.",
                         "",
                         f"- Run: {run_id}",
+                        f"- Status: {result.status}",
+                        f"- Duration: {result.duration_ms / 1000:.1f}s",
+                        f"- Steps: {result.steps}",
+                        f"- Tool calls: {result.tool_calls}",
+                        "- Changed files: "
+                        + (", ".join(result.changed_files) if result.changed_files else "(none)"),
+                        "- Estimated cost: unavailable",
+                        f"- Report: {recorder.run_dir / 'report.md'}",
+                    ]
+                )
+            )
+    return "\n\n".join(run_summaries)
+
+
+async def start_swe_benchmark(soul: PythinkerSoul, args: BenchmarkArgs, *, raw_args: str) -> str:
+    if args.dataset is None:
+        raise BenchmarkSyntaxError("--dataset is required for /benchmark:swe")
+    model_key = _resolve_model_key(soul, args.model)
+    root = args.output or get_share_dir() / "benchmarks"
+    instances = load_swe_instances(args.dataset)
+    if args.instance is not None:
+        instances = [instance for instance in instances if instance.instance_id == args.instance]
+    if not instances:
+        raise BenchmarkSyntaxError(f"Unknown SWE benchmark instance: {args.instance}")
+    run_summaries: list[str] = []
+    suite_name = f"swe:{args.dataset.stem}"
+    for repeat_index in range(1, args.repeat + 1):
+        for instance in instances:
+            task = swe_instance_to_task(instance)
+            run_id = _run_id(task.id)
+            recorder = BenchmarkRecorder(root, run_id)
+            result = await run_task(
+                soul=soul,
+                task=task,
+                recorder=recorder,
+                model_key=model_key,
+                command=f"/benchmark {raw_args}",
+                suite_name=suite_name,
+                repeat_index=repeat_index,
+                timeout_seconds=args.timeout_seconds,
+            )
+            run_summaries.append(
+                "\n".join(
+                    [
+                        "Pythinker Benchmark finished.",
+                        "",
+                        f"- Run: {run_id}",
+                        f"- Task: {instance.instance_id}",
                         f"- Status: {result.status}",
                         f"- Duration: {result.duration_ms / 1000:.1f}s",
                         f"- Steps: {result.steps}",
