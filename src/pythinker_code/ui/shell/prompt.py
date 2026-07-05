@@ -3001,7 +3001,7 @@ class CustomPromptSession:
         # (see _effort_label_fragments) rather than recoloring the whole bar.
         return "class:compact-input.frame"
 
-    def _effort_label_fragments(self) -> list[tuple[str, str]]:
+    def _effort_label_fragments(self) -> StyleAndTextTuples:
         """Dot + level label shown at the right end of the input's top border.
 
         Returns ``[]`` when there is no effort to choose: non-AGENT modes,
@@ -3019,7 +3019,7 @@ class CustomPromptSession:
             ("class:compact-input.effort", level),
         ]
 
-    def _render_input_top_border(self, columns: int, fallback: str) -> list[tuple[str, str]]:
+    def _render_input_top_border(self, columns: int, fallback: str) -> StyleAndTextTuples:
         """Static-grey top border for the input card, effort label flushed right.
 
         The rule is shortened by the measured label width so the line never
@@ -3031,7 +3031,7 @@ class CustomPromptSession:
         if not label:
             return [(border_style, rule)]
         gap = 2
-        label_width = sum(get_cwidth(ch) for _, text in label for ch in text)
+        label_width = sum(get_cwidth(ch) for fragment in label for ch in fragment[1])
         if len(rule) <= gap + label_width:
             # Too narrow for the label plus its gap; a flushed-right label here
             # would overflow and wrap, so fall back to the plain full-width rule.
@@ -3345,12 +3345,17 @@ class CustomPromptSession:
         running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
         if not modal_active and running_prompt_delegate is not None and is_card_style():
             input_card_hidden = self._input_card_hidden_pre_stream()
-            render_running_body = getattr(
+            render_running_body_attr = getattr(
                 running_prompt_delegate, "render_running_prompt_body", None
+            )
+            render_running_body = (
+                cast(Callable[[int], AnyFormattedText], render_running_body_attr)
+                if callable(render_running_body_attr)
+                else None
             )
             running_body = (
                 to_formatted_text(render_running_body(columns))
-                if callable(render_running_body)
+                if render_running_body is not None
                 else FormattedText()
             )
             preamble = FormattedText()
@@ -3387,12 +3392,17 @@ class CustomPromptSession:
             top_border = fragment_list_to_text(
                 self._render_input_top_border(columns, tc.separator)
             ).rstrip("\n")
-            render_placeholder = getattr(
+            render_placeholder_attr = getattr(
                 running_prompt_delegate, "running_prompt_placeholder", None
             )
-            placeholder_value = (
+            render_placeholder = (
+                cast(Callable[[], AnyFormattedText | None], render_placeholder_attr)
+                if callable(render_placeholder_attr)
+                else None
+            )
+            placeholder_value: AnyFormattedText | None = (
                 render_placeholder()
-                if not input_card_hidden and callable(render_placeholder)
+                if not input_card_hidden and render_placeholder is not None
                 else FormattedText()
             )
             placeholder = fragment_list_to_text(to_formatted_text(placeholder_value)).strip()

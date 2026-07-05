@@ -142,6 +142,9 @@ def test_input_card_never_fossilizes_above_the_stream(tmp_path: Path) -> None:
             # running, and the final text has not arrived — yet the card shows.
             mid_turn = "Command executed successfully." in joined and "All done." not in joined
             if mid_turn and any(_is_input_card_border(r) for r in rows):
+                output = "\n".join(row for row in rows if _PROMPT_TEXT not in row)
+                assert output.count("❯") == 1
+                assert "────────" in output
                 live_card_seen_mid_turn = True
             # Detect completion from the full byte stream (it may scroll off screen).
             if "All done." in shell.normalized_text():

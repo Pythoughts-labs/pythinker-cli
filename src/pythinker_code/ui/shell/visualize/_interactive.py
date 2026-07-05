@@ -957,9 +957,12 @@ class _PromptLiveView(_LiveView):
         return not self._committed_scrollback_this_turn
 
     def running_prompt_hide_input_card_chrome(self) -> bool:
-        # NEVER hide this chrome: the prompt card is a stable, always-mounted surface
-        # so users always see the input area during agent runs.
-        return False
+        if self._turn_ended:
+            return False
+        return (
+            not self._committed_scrollback_this_turn
+            or getattr(self, "_scrollback_handoff_depth", 0) > 0
+        )
 
     def running_prompt_allows_text_input(self) -> bool:
         if self._current_approval_request_panel is not None:

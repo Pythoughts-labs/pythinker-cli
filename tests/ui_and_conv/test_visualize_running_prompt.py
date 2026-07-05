@@ -394,15 +394,23 @@ def test_running_prompt_hide_input_card_flips_on_first_commit() -> None:
     a finalizing/ended turn always shows it."""
     view = object.__new__(_PromptLiveView)
     view._turn_ended = False
+    view._scrollback_handoff_depth = 0
     view._committed_scrollback_this_turn = False
     assert view.running_prompt_hide_input_card() is True
+    assert view.running_prompt_hide_input_card_chrome() is True
 
     view._committed_scrollback_this_turn = True
     assert view.running_prompt_hide_input_card() is False
+    assert view.running_prompt_hide_input_card_chrome() is False
 
+    view._scrollback_handoff_depth = 1
+    assert view.running_prompt_hide_input_card_chrome() is True
+
+    view._scrollback_handoff_depth = 0
     view._committed_scrollback_this_turn = False
     view._turn_ended = True
     assert view.running_prompt_hide_input_card() is False
+    assert view.running_prompt_hide_input_card_chrome() is False
 
 
 def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None:
@@ -503,6 +511,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
     session._modal_delegates = []
     session._shortcut_help_open = False
     session._turn_starting = False
+    session._running_prompt_delegate = None
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
@@ -534,7 +543,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buf
     from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
-    session = _card_session(delegate=_hiding_delegate(True))
+    session = _card_session(delegate=_body_delegate("", hide_card=True))
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
@@ -573,10 +582,10 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
     assert frame == f"assistant chunk\n{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
 
-def test_render_agent_prompt_message_keeps_prompt_marker_when_live_view_hides_buffer(
+def test_render_agent_prompt_message_hides_live_view_chrome_before_first_commit(
     monkeypatch,
 ) -> None:
-    """Starting a turn keeps the input-card chrome even before first commit."""
+    """The real live view hides chrome until the first scrollback commit."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -589,6 +598,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_live_view_hides_bu
     view._scrollback_handoff_depth = 0
     view._turn_ended = False
     view._committed_scrollback_this_turn = False
+    view._current_approval_request_panel = None
     view._transient_command_output = None
     view._queued_messages = []
 
@@ -601,6 +611,11 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_live_view_hides_bu
     monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
     monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
 
+    frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    assert frame == ""
+
+    view._committed_scrollback_this_turn = True
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
@@ -694,7 +709,7 @@ def test_scrollback_handoff_suppresses_transient_prompt_layers() -> None:
     assert view.render_agent_status(80).value == ""
     assert view.render_pinned_status_tail(80).value == ""
     assert view.running_prompt_hide_input_card() is True
-    assert view.running_prompt_hide_input_card_chrome() is False
+    assert view.running_prompt_hide_input_card_chrome() is True
 
 
 def test_render_pinned_status_tail_no_elapsed_spinner_during_midturn_handoff() -> None:

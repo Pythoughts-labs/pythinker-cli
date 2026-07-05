@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Ported the running agent TUI toward Pi's stable diff-rendered scene model so streamed output keeps the input card visible without prompt jumps.
 - Stream file write/edit activity in a compact live shelf so changed files update in place during agent runs instead of adding noisy terminal rows.
 - Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
   underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`
