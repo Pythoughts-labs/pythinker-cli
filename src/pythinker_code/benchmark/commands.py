@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from pythinker_code.benchmark.discovery import discover_benchmark_sources
+from pythinker_code.benchmark.discovery import (
+    DiscoveredBenchmarkTask,
+    discover_benchmark_sources,
+    quiz_fixture_from_discovery,
+)
 from pythinker_code.benchmark.errors import (
     BenchmarkInternalError,
     BenchmarkSyntaxError,
@@ -319,11 +323,24 @@ def discover_benchmark(args: BenchmarkArgs) -> str:
         lines.append(f"No benchmark tasks found for {args.source} at difficulty {args.difficulty}.")
     if args.output is not None and args.output.suffix == ".jsonl":
         args.output.write_text(
-            "".join(task.to_json_line() + "\n" for task in tasks),
+            "".join(
+                json.dumps(_quiz_fixture_record(task), sort_keys=True) + "\n" for task in tasks
+            ),
             encoding="utf-8",
         )
         lines.append(f"\nWrote provisional manifest: {args.output}")
     return "\n".join(lines)
+
+
+def _quiz_fixture_record(task: DiscoveredBenchmarkTask) -> dict[str, object]:
+    return quiz_fixture_from_discovery(
+        task,
+        question=(
+            "Review this discovered benchmark candidate and identify its source "
+            "and declared difficulty before converting it into a runnable local fixture."
+        ),
+        expected_substrings=[task.source, task.difficulty],
+    )
 
 
 async def start_benchmark(

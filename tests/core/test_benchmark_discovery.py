@@ -151,7 +151,15 @@ def test_discover_benchmark_writes_jsonl_only_for_jsonl_output(
         )
     )
 
-    assert json.loads(jsonl_output.read_text(encoding="utf-8"))["trusted"] is False
+    written_record = json.loads(jsonl_output.read_text(encoding="utf-8"))
+    assert written_record["trusted"] is False
+    assert written_record["verification"] == {
+        "type": "answer_contains",
+        "expected_substrings": ["terminal-bench", "hard"],
+    }
+    written_workspace = written_record["workspace"]
+    assert isinstance(written_workspace, dict)
+    assert written_workspace["files"] == {}
     assert "Wrote provisional manifest" in jsonl_text
     assert not artifact_root_output.exists()
     assert "Wrote provisional manifest" not in artifact_root_text
