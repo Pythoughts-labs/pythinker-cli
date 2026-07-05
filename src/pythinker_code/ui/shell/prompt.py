@@ -3218,14 +3218,14 @@ class CustomPromptSession:
         return PromptUIState.NORMAL_INPUT
 
     def _input_card_hidden_pre_stream(self) -> bool:
-        """Gate editable pre-stream input while keeping the input card visible.
+        """Gate the empty pre-stream input surface until the first commit.
 
-        The first lazy-load frame should still render the two-line card (top
-        border + ``❯`` row). This gate only marks the empty editable content as
-        pre-stream-hidden from turn-start until the first scrollback commit, so
-        prompt_toolkit keeps the prompt row geometry stable without dropping the
-        visible marker. Skipped when the user has typed (non-empty buffer) or a
-        modal owns the input line.
+        Most running frames keep the input card visible. The only exception is
+        the first transition into committed scrollback: prompt_toolkit can
+        otherwise fossilize the card above the stream. Once that first commit
+        establishes the stream geometry, the card repaints below the stream.
+        Skipped when the user has typed (non-empty buffer) or a modal owns the
+        input line.
         """
         if self._active_modal_delegate() is not None:
             return False
@@ -3460,9 +3460,9 @@ class CustomPromptSession:
         if modal_active:
             return fragments
 
-        # Hide the pre-attach race frame entirely; once the running-prompt
-        # delegate attaches, hide only editable buffer content while keeping the
-        # two-line input card visible (see _input_card_hidden_pre_stream).
+        # Hide only the narrow pre-stream/first-handoff frame that can fossilize
+        # prompt chrome above the stream. Normal running frames repaint the card
+        # below streamed output (see _input_card_hidden_pre_stream).
         if self._input_card_hidden_pre_stream():
             running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
             hide_chrome = self._turn_starting or (

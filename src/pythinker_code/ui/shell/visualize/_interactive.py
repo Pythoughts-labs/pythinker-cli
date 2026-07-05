@@ -957,6 +957,9 @@ class _PromptLiveView(_LiveView):
         return not self._committed_scrollback_this_turn
 
     def running_prompt_hide_input_card_chrome(self) -> bool:
+        # Do not broaden this hide: the input card must be visible during agent runs.
+        # This narrow first-commit/handoff exception prevents stale prompt chrome from
+        # fossilizing above streamed content, then the card immediately repaints below it.
         if self._turn_ended:
             return False
         return (
