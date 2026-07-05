@@ -1,0 +1,11 @@
+{
+  "name": "pythinker-core",
+  "title": "Pythinker Core Suite",
+  "description": "Deterministic local coding tasks covering common agent benchmark failure modes.",
+  "tasks": [
+    "core-atomic-transfer",
+    "core-dedup-order",
+    "core-explicit-none-metadata",
+    "core-safe-path-join"
+  ]
+}

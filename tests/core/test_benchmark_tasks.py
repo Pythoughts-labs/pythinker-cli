@@ -34,6 +34,18 @@ def test_load_bundled_smoke_suite_preserves_order() -> None:
     ]
 
 
+def test_load_bundled_core_suite_preserves_order() -> None:
+    suite = load_suite("pythinker-core")
+
+    assert suite.name == "pythinker-core"
+    assert suite.tasks == [
+        "core-atomic-transfer",
+        "core-dedup-order",
+        "core-explicit-none-metadata",
+        "core-safe-path-join",
+    ]
+
+
 def test_unknown_task_raises_typed_error() -> None:
     with pytest.raises(UnknownBenchmarkTaskError, match="missing-task"):
         load_task("missing-task")

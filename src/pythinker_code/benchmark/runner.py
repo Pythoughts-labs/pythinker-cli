@@ -19,6 +19,15 @@ if TYPE_CHECKING:
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
 
+_GENERATED_DIRS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+}
+_GENERATED_SUFFIXES = {".pyc", ".pyo"}
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationResult:
     status: str
@@ -91,10 +100,11 @@ async def run_task(
     )
     old_override = runtime.work_dir_override
     old_builtin_args = runtime.builtin_args
-    runtime.work_dir_override = HostPath.unsafe_from_local_path(workspace)
+    benchmark_work_dir = HostPath.unsafe_from_local_path(workspace)
+    _set_work_dir_override(soul, benchmark_work_dir)
     runtime.builtin_args = dataclasses.replace(
-        old_builtin_args,
-        PYTHINKER_WORK_DIR=HostPath.unsafe_from_local_path(workspace),
+        runtime.builtin_args,
+        PYTHINKER_WORK_DIR=benchmark_work_dir,
         PYTHINKER_WORK_DIR_LS="",
         PYTHINKER_AGENTS_MD="",
     )
@@ -161,7 +171,7 @@ async def run_task(
             {"status": status, "error": str(exc)},
         )
     finally:
-        runtime.work_dir_override = old_override
+        _set_work_dir_override(soul, old_override)
         runtime.builtin_args = old_builtin_args
 
     changed_files = _changed_files(workspace, before)
@@ -237,6 +247,14 @@ def _timeout_output(value: str | bytes | None) -> str:
     return value
 
 
+def _set_work_dir_override(soul: PythinkerSoul, work_dir: HostPath | None) -> None:
+    setter = getattr(soul.agent.toolset, "set_work_dir_override", None)
+    if callable(setter):
+        setter(work_dir)
+    else:
+        soul.runtime.work_dir_override = work_dir
+
+
 def _count_wire_tool_calls(wire_file: Path, offset: int) -> int:
     if not wire_file.exists():
         return 0
@@ -279,6 +297,8 @@ def _snapshot_files(workspace: Path) -> dict[str, str]:
     for path in workspace.rglob("*"):
         if path.is_file():
             rel = path.relative_to(workspace).as_posix()
+            if _is_generated_artifact(rel):
+                continue
             snapshot[rel] = path.read_text(encoding="utf-8", errors="replace")
     return snapshot
 
@@ -292,3 +312,10 @@ def _changed_files(workspace: Path, before: dict[str, str]) -> list[str]:
     for name in sorted(set(before) - set(after)):
         changed.append(name)
     return changed
+
+
+def _is_generated_artifact(path: str) -> bool:
+    rel = Path(path)
+    if any(part in _GENERATED_DIRS for part in rel.parts):
+        return True
+    return rel.suffix in _GENERATED_SUFFIXES

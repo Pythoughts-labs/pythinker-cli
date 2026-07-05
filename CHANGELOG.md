@@ -29,6 +29,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Added native `/benchmark` slash command for deterministic local Pythinker
   model evaluation with bundled smoke tasks, replayable artifacts, and branded
   markdown reports.
+- Expanded `/benchmark start` to use a richer default core suite, isolate file
+  edits through the active toolset workspace override, and exclude generated
+  verification caches from changed-file reports.
 
 ## 0.56.0 (2026-07-02)
 

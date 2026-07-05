@@ -106,3 +106,31 @@ async def test_run_task_records_failed_verification(runtime: Runtime, tmp_path: 
 
     assert result.status == "failed_verification"
     assert result.verification.exit_code != 0
+
+
+async def test_run_task_changed_files_ignore_verification_artifacts(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+
+    async def fake_turn(message: Message):
+        workspace = Path(str(soul.runtime.work_dir))
+        (workspace / "strings.py").write_text(
+            "def slugify(text):\n    return text.strip().lower().replace(' ', '-')\n",
+            encoding="utf-8",
+        )
+        return type("Outcome", (), {"step_count": 1, "final_message": message})()
+
+    soul.turn = AsyncMock(side_effect=fake_turn)  # type: ignore[method-assign]
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-add-small-function"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --task smoke-add-small-function",
+    )
+
+    assert result.status == "passed"
+    assert result.changed_files == ["strings.py"]

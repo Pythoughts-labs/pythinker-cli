@@ -106,8 +106,28 @@ def test_pyinstaller_datas():
         ("src/pythinker_code/agents/default/verifier.yaml", "pythinker_code/agents/default"),
         ("src/pythinker_code/agents/okabe/agent.yaml", "pythinker_code/agents/okabe"),
         (
+            "src/pythinker_code/benchmark/bundled/suites/pythinker-core.json",
+            "pythinker_code/benchmark/bundled/suites",
+        ),
+        (
             "src/pythinker_code/benchmark/bundled/suites/pythinker-smoke.json",
             "pythinker_code/benchmark/bundled/suites",
+        ),
+        (
+            "src/pythinker_code/benchmark/bundled/tasks/core-atomic-transfer.json",
+            "pythinker_code/benchmark/bundled/tasks",
+        ),
+        (
+            "src/pythinker_code/benchmark/bundled/tasks/core-dedup-order.json",
+            "pythinker_code/benchmark/bundled/tasks",
+        ),
+        (
+            "src/pythinker_code/benchmark/bundled/tasks/core-explicit-none-metadata.json",
+            "pythinker_code/benchmark/bundled/tasks",
+        ),
+        (
+            "src/pythinker_code/benchmark/bundled/tasks/core-safe-path-join.json",
+            "pythinker_code/benchmark/bundled/tasks",
         ),
         (
             "src/pythinker_code/benchmark/bundled/tasks/smoke-add-small-function.json",

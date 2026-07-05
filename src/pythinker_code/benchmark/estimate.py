@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pythinker_code.benchmark.suites import load_suite
 from pythinker_code.benchmark.tasks import load_task
 
+DEFAULT_SUITE = "pythinker-core"
+
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkEstimate:
@@ -30,7 +32,7 @@ def estimate_benchmark(
         target_kind = "Task"
         target_name = task_id
     else:
-        suite = load_suite(suite_name or "pythinker-smoke")
+        suite = load_suite(suite_name or DEFAULT_SUITE)
         tasks = [load_task(tid) for tid in suite.tasks]
         target_kind = "Suite"
         target_name = suite.name

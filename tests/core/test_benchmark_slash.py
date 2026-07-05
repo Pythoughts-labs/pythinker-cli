@@ -68,6 +68,7 @@ async def test_benchmark_list_shows_bundled_suite(
 
     text = "\n".join(part.text for part in sent)
     assert "Pythinker Benchmark" in text
+    assert "pythinker-core" in text
     assert "pythinker-smoke" in text
     assert "smoke-edit-readme" in text
 
@@ -146,4 +147,9 @@ async def test_benchmark_start_default_suite_records_suite_name(
         raw_args="start",
     )
 
-    assert seen_suite_names == ["pythinker-smoke", "pythinker-smoke", "pythinker-smoke"]
+    assert seen_suite_names == [
+        "pythinker-core",
+        "pythinker-core",
+        "pythinker-core",
+        "pythinker-core",
+    ]

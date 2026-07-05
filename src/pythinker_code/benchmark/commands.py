@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
 
-DEFAULT_SUITE = "pythinker-smoke"
+DEFAULT_SUITE = "pythinker-core"
 DEFAULT_SANDBOX = "current-pythinker-approval-runtime"
 
 
