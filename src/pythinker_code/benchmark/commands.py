@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
 from pythinker_code.benchmark.discovery import (
     DiscoveredBenchmarkTask,
@@ -618,4 +619,5 @@ def _resolve_model_key(soul: PythinkerSoul, requested_model: str | None) -> str:
 
 def _run_id(task_id: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
-    return f"bench_{stamp}_{task_id.replace('-', '_')}"
+    suffix = uuid4().hex[:8]
+    return f"bench_{stamp}_{suffix}_{task_id.replace('-', '_')}"

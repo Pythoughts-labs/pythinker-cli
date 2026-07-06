@@ -3374,14 +3374,11 @@ class CustomPromptSession:
                 fragments.extend(preamble)
 
             if input_card_hidden:
-                hide_chrome = (
-                    self._turn_starting
-                    or getattr(
-                        running_prompt_delegate,
-                        "running_prompt_hide_input_card_chrome",
-                        lambda: False,
-                    )()
-                )
+                hide_chrome = getattr(
+                    running_prompt_delegate,
+                    "running_prompt_hide_input_card_chrome",
+                    lambda: False,
+                )()
                 if hide_chrome:
                     return fragments
 
@@ -3458,7 +3455,7 @@ class CustomPromptSession:
         # below streamed output (see _input_card_hidden_pre_stream).
         if self._input_card_hidden_pre_stream():
             running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
-            hide_chrome = self._turn_starting or (
+            hide_chrome = (
                 running_prompt_delegate is not None
                 and getattr(
                     running_prompt_delegate,
@@ -3473,6 +3470,8 @@ class CustomPromptSession:
                 tc = get_toolbar_colors()
                 fragments.extend(self._render_input_top_border(columns, tc.separator))
                 fragments.append(("", "\n"))
+                if self._turn_starting:
+                    return fragments
                 fragments.append(("", _card_side_indent()))
                 fragments.append(
                     (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")

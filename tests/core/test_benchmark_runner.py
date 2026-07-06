@@ -249,3 +249,54 @@ async def test_run_task_records_timeout_override_for_environment(
     )
 
     assert result.environment["task_timeout_seconds"] == 5
+
+
+async def test_run_task_restores_runtime_when_setup_mutation_fails(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    original_work_dir = runtime.work_dir
+    original_builtin_args = runtime.builtin_args
+    original_loop_limit = soul._loop_control.max_steps_per_turn  # pyright: ignore[reportPrivateUsage]
+    recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+
+    def fail_replace(*args: object, **kwargs: object) -> object:
+        raise TypeError("boom")
+
+    monkeypatch.setattr("pythinker_code.benchmark.runner.dataclasses.replace", fail_replace)
+
+    result = await run_task(
+        soul=soul,
+        task=load_task("smoke-edit-readme"),
+        recorder=recorder,
+        model_key="mock-model",
+        command="/benchmark start --task smoke-edit-readme",
+    )
+
+    assert result.status == "internal_benchmark_error"
+    assert runtime.work_dir == original_work_dir
+    assert runtime.builtin_args == original_builtin_args
+    assert soul._loop_control.max_steps_per_turn == original_loop_limit  # pyright: ignore[reportPrivateUsage]
+
+
+def test_run_verification_does_not_use_login_shell(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.benchmark import runner
+
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object):
+        captured.append(cmd)
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    result = runner._run_verification(load_task("smoke-edit-readme"), tmp_path)  # pyright: ignore[reportPrivateUsage]
+
+    assert result.status == "passed"
+    assert captured
+    assert captured[0][1] == "-c"

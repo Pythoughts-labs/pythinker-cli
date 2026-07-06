@@ -97,7 +97,10 @@ def test_initialize_handshake(tmp_path) -> None:
                         },
                         {
                             "name": "benchmark",
-                            "description": "Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>",
+                            "description": """\
+Run native Pythinker Benchmark tasks.
+Usage: /benchmark <start|compare|estimate|list|show|report>\
+""",
                             "aliases": [],
                         },
                         {
@@ -128,6 +131,11 @@ def test_initialize_handshake(tmp_path) -> None:
                         {
                             "name": "benchmark:report",
                             "description": "Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:compare",
+                            "description": "Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>",
                             "aliases": [],
                         },
                         {
@@ -366,7 +374,10 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         },
                         {
                             "name": "benchmark",
-                            "description": "Run native Pythinker Benchmark tasks. Usage: /benchmark <start|estimate|list|show|report>",
+                            "description": """\
+Run native Pythinker Benchmark tasks.
+Usage: /benchmark <start|compare|estimate|list|show|report>\
+""",
                             "aliases": [],
                         },
                         {
@@ -397,6 +408,11 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         {
                             "name": "benchmark:report",
                             "description": "Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:compare",
+                            "description": "Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>",
                             "aliases": [],
                         },
                         {

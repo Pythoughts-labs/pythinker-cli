@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -148,7 +149,27 @@ def _verification_command(raw: dict[str, object], line_number: int, path: Path) 
         raise MalformedBenchmarkTaskError(
             f"SWE benchmark line {line_number} verification must be a command: {path}"
         )
+    if not _is_safe_verification_command(command):
+        raise MalformedBenchmarkTaskError(
+            f"SWE benchmark line {line_number} has unsafe verification command: {path}"
+        )
     return command
+
+
+def _is_safe_verification_command(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if len(tokens) < 3:
+        return False
+    if tokens[:3] not in (["python", "-m", "pytest"], ["python", "-m", "unittest"]):
+        return False
+    return not any(_has_shell_metachar(token) for token in tokens)
+
+
+def _has_shell_metachar(token: str) -> bool:
+    return any(ch in token for ch in ";&|`$<>\n\r")
 
 
 def _string_list(value: object) -> list[str]:

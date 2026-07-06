@@ -9,6 +9,10 @@ class BenchmarkSyntaxError(BenchmarkError):
     """Raised when benchmark slash-command arguments are invalid."""
 
 
+class BenchmarkDiscoveryError(BenchmarkError):
+    """Raised when online benchmark discovery cannot safely fetch a source."""
+
+
 class UnknownBenchmarkModelError(BenchmarkError):
     """Raised when a requested model key is not configured."""
 

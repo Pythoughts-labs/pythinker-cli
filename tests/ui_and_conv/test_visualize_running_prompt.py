@@ -496,15 +496,16 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     assert session._turn_starting is False
 
 
-def test_render_agent_prompt_message_hides_top_border_during_first_load(
+def test_render_agent_prompt_message_keeps_top_border_during_first_load(
     monkeypatch,
 ) -> None:
-    """The pre-attach loading frame hides chrome to avoid scrollback fossils."""
+    """The first loading frame keeps the card's top border while hiding input."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     session = _card_session(turn_starting=True, delegate=None)
@@ -518,7 +519,8 @@ def test_render_agent_prompt_message_hides_top_border_during_first_load(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == ""
+    assert frame == f"{border}\n"
+    assert PROMPT_SYMBOL_AGENT_INPUT not in frame
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_buffer(

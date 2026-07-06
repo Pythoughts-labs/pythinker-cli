@@ -25,6 +25,11 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
   underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`
   because trusted local fixture datasets execute verification commands.
+- Hardened benchmark and active-skill security edges: SWE verification commands
+  are shape-validated before execution, benchmark discovery requires explicit
+  network opt-in, benchmark run IDs avoid clock collisions, runtime overrides
+  restore after setup failures, and active-skill deactivation persistence
+  failures are surfaced instead of swallowed.
 - Strengthened the bundled `pythinker-core` benchmark suite with edge-case
   fixtures for atomic rollback, iterable de-duplication, explicit falsey
   metadata values, and safe path joins across absolute, sibling-prefix, parent,

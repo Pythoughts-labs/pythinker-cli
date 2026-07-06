@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 from pythinker_code.benchmark.commands import (
     BenchmarkArgs,
     BenchmarkSyntaxError,
+    _run_id,
     benchmark_usage,
     parse_args,
     render_benchmark_report,
@@ -124,6 +126,20 @@ def test_parse_export_args() -> None:
 def test_parse_export_rejects_invalid_format() -> None:
     with pytest.raises(BenchmarkSyntaxError, match="--format must be json or csv"):
         parse_args("export --format markdown")
+
+
+def test_run_id_is_unique_when_clock_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pythinker_code.benchmark.commands as commands
+
+    class FixedDatetime:
+        @classmethod
+        def now(cls, tz: object) -> datetime:
+            assert tz is UTC
+            return datetime(2026, 7, 5, 12, 0, 0, 1, tzinfo=UTC)
+
+    monkeypatch.setattr(commands, "datetime", FixedDatetime)
+
+    assert _run_id("same-task") != _run_id("same-task")
 
 
 async def test_benchmark_list_shows_bundled_suite(

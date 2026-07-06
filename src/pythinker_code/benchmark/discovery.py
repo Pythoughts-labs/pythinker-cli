@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
+
+from pythinker_code.benchmark.errors import BenchmarkDiscoveryError
 
 SOURCE_URLS = {
     "terminal-bench": "https://www.tbench.ai/",
@@ -15,6 +19,8 @@ SOURCE_URLS = {
     "deepswe": "https://deepswe.datacurve.ai/",
 }
 
+DISCOVER_NETWORK_ENV = "PYTHINKER_BENCHMARK_DISCOVER_NETWORK"
+_ALLOWED_HOSTS = frozenset(urllib.parse.urlparse(url).hostname for url in SOURCE_URLS.values())
 _DIFFICULTY_LABELED_SOURCES = {"terminal-bench"}
 _TITLE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_ ./:'()&+-]{8,160}")
 
@@ -85,9 +91,20 @@ def quiz_fixture_from_discovery(
 
 
 def _fetch_text(url: str) -> str:
+    if os.environ.get(DISCOVER_NETWORK_ENV) != "1":
+        raise BenchmarkDiscoveryError(
+            f"/benchmark discover network fetch is disabled. Set {DISCOVER_NETWORK_ENV}=1 "
+            "after reviewing the allowlisted source hosts."
+        )
+    host = urllib.parse.urlparse(url).hostname
+    if host not in _ALLOWED_HOSTS:
+        raise BenchmarkDiscoveryError(f"Unsupported benchmark source host: {host or '(none)'}")
     request = urllib.request.Request(url, headers={"User-Agent": "pythinker-benchmark-discovery"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        raw = response.read(500_000)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read(500_000)
+    except OSError as exc:
+        raise BenchmarkDiscoveryError(f"Failed to fetch benchmark source {url}: {exc}") from exc
     return raw.decode("utf-8", errors="replace")
 
 

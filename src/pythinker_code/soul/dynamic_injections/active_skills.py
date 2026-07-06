@@ -89,8 +89,9 @@ def _apply_deactivation_intent(
     soul.runtime.session.state.active_skills = remaining
     try:
         soul.runtime.session.save_state()
-    except Exception:
+    except OSError:
         logger.warning("Failed to persist active skill deactivation", exc_info=True)
+        raise
     return remaining, True
 
 

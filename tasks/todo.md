@@ -2,6 +2,15 @@
 
 ## Active
 
+### Plan: publishable benchmark comparison (2026-07-05)
+
+- [ ] Execute `docs/superpowers/plans/2026-07-05-publishable-benchmark-comparison.md`
+      with `/tdd` discipline. Scope: multi-model comparison, coding activity
+      metrics, publishability warnings, exportable reports, and safe online
+      source discovery for provisional benchmark manifests. Guardrail: online
+      content stays untrusted and must not execute verifier commands without
+      explicit `--trusted-dataset true`.
+
 ### Review: benchmark hardening (2026-07-05)
 
 - [x] Enforce per-task benchmark `max_steps` by temporarily applying it to the

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+import pytest
 from pythinker_core.message import Message, TextPart
 
 from pythinker_code.soul.dynamic_injections.active_skills import (
@@ -28,6 +29,19 @@ def _reminder(text: str) -> Message:
 def _soul(active_skills: list[str]) -> MagicMock:
     session = SimpleNamespace(
         state=SimpleNamespace(active_skills=active_skills), save_state=lambda: None
+    )
+    runtime = SimpleNamespace(session=session)
+    soul = MagicMock()
+    soul.runtime = runtime
+    return soul
+
+
+def _soul_with_save_error(active_skills: list[str]) -> MagicMock:
+    def save_state() -> None:
+        raise OSError("read-only session")
+
+    session = SimpleNamespace(
+        state=SimpleNamespace(active_skills=active_skills), save_state=save_state
     )
     runtime = SimpleNamespace(session=session)
     soul = MagicMock()
@@ -95,3 +109,10 @@ async def test_normal_mode_deactivates_all_active_skills() -> None:
     assert result == []
     active = cast(Any, soul.runtime).session.state.active_skills
     assert active == []
+
+
+async def test_deactivation_persistence_failure_is_visible() -> None:
+    provider = ActiveSkillInjectionProvider()
+
+    with pytest.raises(OSError, match="read-only session"):
+        await provider.get_injections([_user("stop ponytail")], _soul_with_save_error(["ponytail"]))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -12,11 +13,13 @@ from pythinker_code.benchmark.commands import (
     parse_args,
 )
 from pythinker_code.benchmark.discovery import (
+    DISCOVER_NETWORK_ENV,
     SOURCE_URLS,
     DiscoveredBenchmarkTask,
     discover_benchmark_sources,
     quiz_fixture_from_discovery,
 )
+from pythinker_code.benchmark.errors import BenchmarkDiscoveryError
 
 
 def test_discover_terminal_bench_from_allowlisted_source() -> None:
@@ -174,3 +177,26 @@ def test_discover_benchmark_reports_no_tasks(monkeypatch: pytest.MonkeyPatch) ->
     text = discover_benchmark(BenchmarkArgs(subcommand="discover", source="terminal-bench"))
 
     assert "No benchmark tasks found for terminal-bench at difficulty hard." in text
+
+
+def test_fetch_text_requires_explicit_network_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.benchmark.discovery import _fetch_text
+
+    monkeypatch.delenv(DISCOVER_NETWORK_ENV, raising=False)
+
+    with pytest.raises(BenchmarkDiscoveryError, match=DISCOVER_NETWORK_ENV):
+        _fetch_text(SOURCE_URLS["terminal-bench"])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_fetch_text_wraps_url_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.benchmark.discovery import _fetch_text
+
+    monkeypatch.setenv(DISCOVER_NETWORK_ENV, "1")
+
+    def fail_urlopen(*args: object, **kwargs: object) -> object:
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr("pythinker_code.benchmark.discovery.urllib.request.urlopen", fail_urlopen)
+
+    with pytest.raises(BenchmarkDiscoveryError, match="Failed to fetch benchmark source"):
+        _fetch_text(SOURCE_URLS["terminal-bench"])  # pyright: ignore[reportPrivateUsage]

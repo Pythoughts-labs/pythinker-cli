@@ -83,6 +83,13 @@ Format: trigger → rule.
   NOT `.claude/` config. Transcripts showing `~/.pythinker/sessions/` paths
   are pythinker runs; behavioral fixes belong in the product.
 
+## TUI prompt chrome
+
+- **When hiding the first-load editable input row to prevent ghost prompts**,
+  keep the card chrome decision separate: `_turn_starting` should suppress the
+  `❯` row, not the input card's top border. Only a live-view delegate's explicit
+  `running_prompt_hide_input_card_chrome()` handoff should hide the full chrome.
+
 ## Spec/profile consistency
 
 - **When adding or tightening a permission gate** (network, MCP, shell,

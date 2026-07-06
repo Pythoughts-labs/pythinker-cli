@@ -106,17 +106,18 @@ async def run_task(
     )
     old_override = runtime.work_dir_override
     old_builtin_args = runtime.builtin_args
-    old_loop_control = _set_benchmark_step_limit(soul, task.limits.max_steps)
+    old_loop_control = soul._loop_control  # pyright: ignore[reportPrivateUsage]
     benchmark_work_dir = HostPath.unsafe_from_local_path(workspace)
-    _set_work_dir_override(soul, benchmark_work_dir)
-    runtime.builtin_args = dataclasses.replace(
-        runtime.builtin_args,
-        PYTHINKER_WORK_DIR=benchmark_work_dir,
-        PYTHINKER_WORK_DIR_LS="",
-        PYTHINKER_AGENTS_MD="",
-    )
     benchmark_prompt = _benchmark_prompt(task.prompt, workspace)
     try:
+        old_loop_control = _set_benchmark_step_limit(soul, task.limits.max_steps)
+        _set_work_dir_override(soul, benchmark_work_dir)
+        runtime.builtin_args = dataclasses.replace(
+            runtime.builtin_args,
+            PYTHINKER_WORK_DIR=benchmark_work_dir,
+            PYTHINKER_WORK_DIR_LS="",
+            PYTHINKER_AGENTS_MD="",
+        )
         recorder.record_event("user_message", {"content": benchmark_prompt})
         try:
             outcome = await asyncio.wait_for(
@@ -225,7 +226,7 @@ async def run_task(
 def _run_verification(task: BenchmarkTask, workspace: Path) -> VerificationResult:
     try:
         completed = subprocess.run(
-            ["/bin/bash", "-lc", task.verification.command],
+            ["/bin/bash", "-c", task.verification.command],
             cwd=workspace,
             capture_output=True,
             text=True,
