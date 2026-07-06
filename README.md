@@ -53,7 +53,7 @@ It speaks the [**Agent Client Protocol (ACP)**](https://github.com/agentclientpr
 ## 🆕 What's New in 0.57.0
 
 - **No more ghost/duplicate input prompt while the agent works.** The input card no longer fossilizes above the stream as a second, ghostly prompt; the prompt bar and top border stay visible through turn-start and lazy-load frames; running-agent output renders through a stable diff-rendered scene (ported from Pi); and an experimental Focus TUI mode (`tui.focus_mode`) pins the composer and hides file activity behind a compact live shelf.
-- **Added a native `/benchmark` command suite.** Run deterministic local Pythinker model evaluations with bundled smoke tasks and SWE-style JSONL tasks (`/benchmark:swe`), plus compare, export, and source-discovery subcommands with replayable artifacts and branded markdown reports.
+- **Added a native `/benchmark` command suite.** Run deterministic local Pythinker model evaluations with bundled smoke tasks and SWE-style JSONL tasks (`/benchmark:swe`), plus `/benchmark compare`, `/benchmark export`, and `/benchmark discover` actions with replayable artifacts and branded markdown reports.
 - **Hardened benchmark and skill security edges.** SWE verification commands are shape-validated before execution, benchmark discovery requires explicit network opt-in, and active-skill deactivation failures now surface instead of being swallowed.
 
 Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.57.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
@@ -190,10 +190,11 @@ pythinker                      # start the interactive TUI
 
 ### 🪟 Windows — native installer
 
-`PythinkerSetup-0.57.0.exe` is a signed* Inno Setup wizard. Installs per-user
-into `%LOCALAPPDATA%\Programs\Pythinker`, registers `pythinker` on your user
-PATH (`HKCU\Environment`), broadcasts `WM_SETTINGCHANGE` so new shells see
-the change. **No UAC prompt.**
+`PythinkerSetup-0.57.0.exe` is an Inno Setup wizard. Release builds are signed
+when Authenticode secrets are configured in CI; otherwise the installer ships
+unsigned. Installs per-user into `%LOCALAPPDATA%\Programs\Pythinker`, registers
+`pythinker` on your user PATH (`HKCU\Environment`), broadcasts
+`WM_SETTINGCHANGE` so new shells see the change. **No UAC prompt.**
 
 ```powershell
 # One-line install (downloads the native .exe, verifies SHA-256, runs per-user)
@@ -211,14 +212,14 @@ pythinker --version
 installs to `%ProgramFiles%\Pythinker` and writes PATH to HKLM (requires admin).
 
 **Upgrade:** `pythinker update` from inside the running app — it downloads
-the newest installer, verifies SHA-256, and launches the signed Inno installer
+the newest installer, verifies SHA-256, and launches the Inno installer
 with visible progress (`/SILENT /NORESTART /CURRENTUSER /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS`).
 
 **Uninstall:** Apps & Features → *Pythinker Code* → Uninstall reverts both
 the files and the PATH edit.
 
-> 🛡 **First-launch SmartScreen warning** — \*until the Authenticode cert is
-> provisioned in CI, the installer ships unsigned and Windows shows
+> 🛡 **First-launch SmartScreen warning** — Until Authenticode secrets are
+> configured in CI for a release, the installer ships unsigned and Windows shows
 > *"Windows protected your PC."* Click **More info → Run anyway**. Use the
 > published `.sha256` as your integrity check until signing comes online.
 

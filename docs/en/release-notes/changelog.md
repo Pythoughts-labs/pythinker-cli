@@ -30,9 +30,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
   status tail instead of a generic composing spinner.
 - **Added a native `/benchmark` command suite.** Run deterministic local
   Pythinker model evaluations with bundled smoke tasks and SWE-style JSONL
-  tasks (`/benchmark:swe`), plus compare, export, and source-discovery
-  subcommands that produce replayable artifacts, activity metrics, and
-  branded markdown reports.
+  tasks (`/benchmark:swe`), plus `/benchmark compare`, `/benchmark export`,
+  and `/benchmark discover` actions that produce replayable artifacts,
+  activity metrics, and branded markdown reports.
 - **Hardened benchmark and skill security edges.** SWE verification commands
   are shape-validated before execution, benchmark discovery requires explicit
   network opt-in, run IDs avoid clock collisions, runtime overrides restore
