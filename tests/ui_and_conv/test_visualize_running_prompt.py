@@ -8,9 +8,9 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.document import Document
 from rich.text import Text
 
+import pythinker_code.ui.shell.prompt as prompt_module
 from pythinker_code.tools.display import TodoDisplayItem
 from pythinker_code.ui.shell.motion import _SHIMMER_BASE, _SHIMMER_HIGHLIGHT, _SHIMMER_MID
-from pythinker_code.ui.shell.prompt import BgTaskCounts, CustomPromptSession, PromptMode, UserInput
 from pythinker_code.ui.shell.spacing import PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT
 from pythinker_code.wire.types import (
     ApprovalRequest,
@@ -287,12 +287,12 @@ def test_render_pinned_status_tail_returns_spinner_when_turn_active() -> None:
 
 def _card_session(
     *, text: str = "", turn_starting: bool = False, delegate: object | None = None
-) -> CustomPromptSession:
+) -> prompt_module.CustomPromptSession:
     """A CustomPromptSession stub with exactly the attrs the input-card gate reads
     via direct access (so an init regression would fail loudly, not silently)."""
     from types import SimpleNamespace
 
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._modal_delegates = []
     session._turn_starting = turn_starting
     session._running_prompt_delegate = cast(Any, delegate)
@@ -418,7 +418,7 @@ def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None
     """The shell sets the hint on dispatch (once — idempotent); attach (delegate
     takes over) and detach (turn ended / error-before-attach) both clear it so
     the idle prompt is never left collapsed."""
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._turn_starting = False
     invalidations: list[int] = []
     session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
@@ -432,7 +432,7 @@ def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None
     # attach clears the hint (delegate becomes source of truth)
     session._running_prompt_delegate = None
     session._running_prompt_previous_mode = None
-    session._mode = PromptMode.AGENT
+    session._mode = prompt_module.PromptMode.AGENT
     session._apply_mode = lambda: None  # type: ignore[method-assign]
     delegate = object()
     session.attach_running_prompt(cast(Any, delegate))
@@ -447,7 +447,7 @@ def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None
 def test_sticky_input_turn_start_enables_fullscreen_once() -> None:
     from types import SimpleNamespace
 
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     app = SimpleNamespace(full_screen=False, erase_when_done=True)
     session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
     session._sticky_input = True
@@ -468,7 +468,7 @@ def test_sticky_input_turn_start_enables_fullscreen_once() -> None:
 def test_sticky_input_clear_turn_starting_restores_fullscreen_on_pre_attach_error() -> None:
     from types import SimpleNamespace
 
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     app = SimpleNamespace(full_screen=True, erase_when_done=False)
     session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
     session._sticky_input = True
@@ -488,7 +488,7 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     """The shell's run_soul_command finally block must clear a stale hint on an
     error-before-attach path without reaching into the private ``_turn_starting``
     attribute — this is the public method it calls instead."""
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._turn_starting = True
     invalidations: list[int] = []
     session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
@@ -510,8 +510,6 @@ def test_render_agent_prompt_message_keeps_empty_card_during_first_load(
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
-
-    import pythinker_code.ui.shell.prompt as prompt_module
 
     border = "──────── ● off"
     session = _card_session(turn_starting=True, delegate=None)
@@ -536,10 +534,8 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
 
     from prompt_toolkit.formatted_text import FormattedText
 
-    import pythinker_code.ui.shell.prompt as prompt_module
-
     border = "──────── ● off"
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._modal_delegates = []
     session._shortcut_help_open = False
     session._turn_starting = False
@@ -568,8 +564,6 @@ def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_st
 ) -> None:
     from prompt_toolkit.formatted_text import FormattedText
 
-    import pythinker_code.ui.shell.prompt as prompt_module
-
     session = _card_session(turn_starting=True, delegate=None)
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
@@ -589,8 +583,6 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buf
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
-
-    import pythinker_code.ui.shell.prompt as prompt_module
 
     border = "──────── ● off"
     session = _card_session(delegate=_body_delegate("", hide_card=True))
@@ -614,8 +606,6 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
 
     from prompt_toolkit.formatted_text import FormattedText
 
-    import pythinker_code.ui.shell.prompt as prompt_module
-
     border = "──────── ● off"
     session = _card_session(delegate=_body_delegate("assistant chunk", hide_card=True))
     session._shortcut_help_open = False
@@ -635,8 +625,6 @@ def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
-
-    import pythinker_code.ui.shell.prompt as prompt_module
 
     class _StyledDelegate:
         def render_running_prompt_body(self, columns: int) -> FormattedText:
@@ -693,8 +681,6 @@ def test_render_agent_prompt_message_keeps_live_view_chrome_before_first_commit(
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
-
-    import pythinker_code.ui.shell.prompt as prompt_module
 
     border = "──────── ● off"
     view = object.__new__(_PromptLiveView)
@@ -1443,7 +1429,7 @@ def test_pinned_tail_survives_preamble_clip() -> None:
     preamble = FormattedText([("", "\n".join(f"line {i}" for i in range(40)))])
     pinned = FormattedText([("", "Pondering…\n"), ("", "  ⎿ Tip: do the thing")])
 
-    out = CustomPromptSession._fit_preamble_with_pinned_tail(
+    out = prompt_module.CustomPromptSession._fit_preamble_with_pinned_tail(
         preamble, pinned, columns=80, max_rows=6
     )
     text = "".join(fragment for _, fragment, *_ in out)
@@ -1458,7 +1444,7 @@ def test_pinned_tail_absent_falls_back_to_plain_clip() -> None:
     from prompt_toolkit.formatted_text import FormattedText
 
     preamble = FormattedText([("", "\n".join(f"line {i}" for i in range(40)))])
-    out = CustomPromptSession._fit_preamble_with_pinned_tail(
+    out = prompt_module.CustomPromptSession._fit_preamble_with_pinned_tail(
         preamble, FormattedText(), columns=80, max_rows=6
     )
     text = "".join(fragment for _, fragment, *_ in out)
@@ -1468,7 +1454,7 @@ def test_pinned_tail_absent_falls_back_to_plain_clip() -> None:
 def test_pinned_tail_has_blank_row_after_preamble() -> None:
     from prompt_toolkit.formatted_text import FormattedText
 
-    out = CustomPromptSession._fit_preamble_with_pinned_tail(
+    out = prompt_module.CustomPromptSession._fit_preamble_with_pinned_tail(
         FormattedText([("", "tool output")]),
         FormattedText([("", "Actioning…")]),
         columns=80,
@@ -1482,7 +1468,7 @@ def test_pinned_tail_has_blank_row_after_preamble() -> None:
 def test_pinned_tail_has_blank_row_below_before_prompt() -> None:
     from prompt_toolkit.formatted_text import FormattedText
 
-    out = CustomPromptSession._fit_preamble_with_pinned_tail(
+    out = prompt_module.CustomPromptSession._fit_preamble_with_pinned_tail(
         FormattedText([("", "tool output")]),
         FormattedText([("", "Actioning…")]),
         columns=80,
@@ -1498,7 +1484,7 @@ def test_pinned_tail_has_blank_row_below_before_prompt() -> None:
 def test_pinned_tail_has_initial_blank_row_when_first_visible_status() -> None:
     from prompt_toolkit.formatted_text import FormattedText
 
-    out = CustomPromptSession._fit_preamble_with_pinned_tail(
+    out = prompt_module.CustomPromptSession._fit_preamble_with_pinned_tail(
         FormattedText(),
         FormattedText([("", "Actioning…")]),
         columns=80,
@@ -1510,12 +1496,12 @@ def test_pinned_tail_has_initial_blank_row_when_first_visible_status() -> None:
 
 
 def test_prompt_status_shows_working_spinner_for_background_tasks() -> None:
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._running_prompt_delegate = None
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=2)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=2)
     session._status_block_provider = None
 
-    rendered = CustomPromptSession._render_agent_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert "…" in text
@@ -1528,19 +1514,18 @@ def test_prompt_status_block_renders_above_agent_input_preamble() -> None:
     def _status_block(_columns: int) -> FormattedText:
         return FormattedText([("", "• Booting MCP server: context7")])
 
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._running_prompt_delegate = None
     session._background_task_count_provider = None
     session._status_block_provider = _status_block
 
-    rendered = CustomPromptSession._render_agent_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert text.startswith("• Booting MCP server: context7")
 
 
 def test_background_status_splits_verb_and_count_styles(monkeypatch) -> None:
-    import pythinker_code.ui.shell.prompt as prompt_module
     from pythinker_code.ui.theme import get_active_theme, set_active_theme
 
     monkeypatch.setattr(prompt_module.time, "monotonic", lambda: 0.88)
@@ -1550,10 +1535,10 @@ def test_background_status_splits_verb_and_count_styles(monkeypatch) -> None:
     saved_theme = get_active_theme()
     try:
         set_active_theme("dark")
-        session = object.__new__(CustomPromptSession)
-        session._background_task_count_provider = lambda: BgTaskCounts(agent=2)
+        session = object.__new__(prompt_module.CustomPromptSession)
+        session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=2)
 
-        rendered = CustomPromptSession._render_background_working_status(session, 80)
+        rendered = prompt_module.CustomPromptSession._render_background_working_status(session, 80)
     finally:
         set_active_theme(saved_theme)
 
@@ -1571,8 +1556,8 @@ def test_background_status_splits_verb_and_count_styles(monkeypatch) -> None:
 
 
 def test_prompt_status_falls_back_to_background_spinner_after_turn_end() -> None:
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=1)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=1)
     session._status_block_provider = None
     session._latest_todos = ()
 
@@ -1582,7 +1567,7 @@ def test_prompt_status_falls_back_to_background_spinner_after_turn_end() -> None
 
     session._running_prompt_delegate = cast(Any, _EndedDelegate())
 
-    rendered = CustomPromptSession._render_agent_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert "…" in text
@@ -1590,8 +1575,8 @@ def test_prompt_status_falls_back_to_background_spinner_after_turn_end() -> None
 
 
 def test_prompt_status_keeps_background_spinner_during_blocking_task_output() -> None:
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=2)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=2)
     session._status_block_provider = None
     session._latest_todos = ()
 
@@ -1604,7 +1589,7 @@ def test_prompt_status_keeps_background_spinner_during_blocking_task_output() ->
 
     session._running_prompt_delegate = cast(Any, _BlockingTaskOutputDelegate())
 
-    rendered = CustomPromptSession._render_agent_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert "TaskOutput(agent-reviewer" in text
@@ -1613,16 +1598,16 @@ def test_prompt_status_keeps_background_spinner_during_blocking_task_output() ->
 
 
 def test_prompt_status_keeps_todos_visible_during_background_tasks() -> None:
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._running_prompt_delegate = None
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=3)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=3)
     session._status_block_provider = None
     session._latest_todos = (
         TodoDisplayItem(title="Security vulnerability scan", status="in_progress"),
         TodoDisplayItem(title="Code quality review", status="pending"),
     )
 
-    rendered = CustomPromptSession._render_agent_status(session, 100)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 100)
     text = "".join(item[1] for item in rendered)
 
     assert "3 background agents" not in text
@@ -1631,7 +1616,7 @@ def test_prompt_status_keeps_todos_visible_during_background_tasks() -> None:
 
 
 def test_prompt_background_todo_rows_align_icons_and_titles() -> None:
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     session._latest_todos = (
         TodoDisplayItem(
             title="Launch parallel deep scan agents (overengineering, simplicity, architecture, bug hunt)",
@@ -1643,7 +1628,7 @@ def test_prompt_background_todo_rows_align_icons_and_titles() -> None:
         ),
     )
 
-    rendered = CustomPromptSession._render_background_todo_rows(session, 120)
+    rendered = prompt_module.CustomPromptSession._render_background_todo_rows(session, 120)
     lines = "".join(item[1] for item in rendered).splitlines()
 
     assert lines[0].startswith("  ⎿  ■ ")
@@ -1656,8 +1641,8 @@ def test_prompt_background_todo_rows_align_icons_and_titles() -> None:
 def test_background_status_drops_verb_when_working_indicator_pinned() -> None:
     """During an active turn the pinned working indicator owns the verb, so the
     background-task line must show the count *without* repeating it."""
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=3)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=3)
     session._status_block_provider = None
 
     class _ActiveDelegate:
@@ -1669,7 +1654,7 @@ def test_background_status_drops_verb_when_working_indicator_pinned() -> None:
 
     session._running_prompt_delegate = cast(Any, _ActiveDelegate())
 
-    rendered = CustomPromptSession._render_agent_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_agent_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     # The pinned tail owns the verb and the footer owns the count — nothing
@@ -1682,8 +1667,8 @@ def test_background_status_omits_todos_when_verb_pinned() -> None:
     """When the pinned status tail is active (show_verb=False) it already renders
     the todo list under the verb spinner; the background-task line must NOT repeat
     it, or the same todo list renders twice while the agent works."""
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=3)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=3)
     session._status_block_provider = None
     session._latest_todos = (
         TodoDisplayItem(title="Security vulnerability scan", status="in_progress"),
@@ -1692,7 +1677,7 @@ def test_background_status_omits_todos_when_verb_pinned() -> None:
 
     # Between turns (no pinned tail) the background line is the only surface,
     # so it must carry the todos — but never a count (the footer owns that).
-    standalone = CustomPromptSession._render_background_working_status(session, 100)
+    standalone = prompt_module.CustomPromptSession._render_background_working_status(session, 100)
     standalone_text = "".join(item[1] for item in standalone)
     assert "Security vulnerability scan" in standalone_text
     assert "Code quality review" in standalone_text
@@ -2243,8 +2228,8 @@ def test_handle_local_input_queues_message_by_default() -> None:
     view._queued_messages = []
     view._prompt_session = MagicMock()
 
-    user_in = UserInput(
-        mode=PromptMode.AGENT,
+    user_in = prompt_module.UserInput(
+        mode=prompt_module.PromptMode.AGENT,
         command="[Pasted text #1 +3 lines]",
         resolved_command="line1\nline2\nline3",
         content=[TextPart(text="line1\nline2\nline3")],
@@ -2263,8 +2248,8 @@ def test_handle_local_input_ignores_finished_turn(monkeypatch) -> None:
     view._flush_prompt_refresh = lambda: None
 
     view.handle_local_input(
-        UserInput(
-            mode=PromptMode.AGENT,
+        prompt_module.UserInput(
+            mode=prompt_module.PromptMode.AGENT,
             command="ignored",
             resolved_command="ignored",
             content=[TextPart(text="ignored")],
@@ -2903,12 +2888,11 @@ async def test_approval_request_feedback_available_before_wait():
 def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     """The line above the input carries (elapsed, ↓ tokens, t/s) — the same
     metadata design as the live view's working indicator."""
-    import pythinker_code.ui.shell.prompt as prompt_module
     from pythinker_code.soul import live_tokens
 
     live_tokens.reset_for_tests()
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(agent=2)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(agent=2)
     session._latest_todos = ()
     state = {"now": 100.0, "output_tokens": 0}
     monkeypatch.setattr(prompt_module.time, "monotonic", lambda: state["now"])
@@ -2919,7 +2903,7 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     )
 
     def render() -> str:
-        rendered = CustomPromptSession._render_background_working_status(session, 120)
+        rendered = prompt_module.CustomPromptSession._render_background_working_status(session, 120)
         return "".join(item[1] for item in rendered)
 
     first = render()
@@ -2941,7 +2925,7 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     assert "(<1s, ↓ 40.8k tokens, 1000 t/s)" in third
 
     # Draining background work resets the trackers.
-    session._background_task_count_provider = lambda: BgTaskCounts()
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts()
     assert render() == ""
     assert session._bg_status_started_at is None
     assert session._bg_status_start_tokens is None
@@ -2951,10 +2935,10 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
 def test_background_pure_bash_uses_fixed_label_not_verb_spinner() -> None:
     """Pure-bash background work (npm dev, docker run) shows a fixed label,
     not the agent verb spinner ('Composing…' / 'Brewing…')."""
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(bash=1)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(bash=1)
 
-    rendered = CustomPromptSession._render_background_working_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_background_working_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert "Running in background…" in text
@@ -2968,13 +2952,12 @@ def test_background_pure_bash_uses_fixed_label_not_verb_spinner() -> None:
 def test_background_mixed_bash_agent_keeps_verb_spinner(monkeypatch) -> None:
     """When agent work is also running, the verb spinner stays — the agent
     is actively working."""
-    import pythinker_code.ui.shell.prompt as prompt_module
 
     monkeypatch.setattr(prompt_module.time, "monotonic", lambda: 0.5)
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(bash=1, agent=1)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(bash=1, agent=1)
 
-    rendered = CustomPromptSession._render_background_working_status(session, 80)
+    rendered = prompt_module.CustomPromptSession._render_background_working_status(session, 80)
     text = "".join(item[1] for item in rendered)
 
     assert "Running in background…" not in text
@@ -2982,15 +2965,13 @@ def test_background_mixed_bash_agent_keeps_verb_spinner(monkeypatch) -> None:
 
 
 def test_background_status_truncates_after_dropping_metadata(monkeypatch) -> None:
-    import pythinker_code.ui.shell.prompt as prompt_module
-
     monkeypatch.setattr(prompt_module.time, "monotonic", lambda: 0.0)
-    session = object.__new__(CustomPromptSession)
-    session._background_task_count_provider = lambda: BgTaskCounts(bash=1)
+    session = object.__new__(prompt_module.CustomPromptSession)
+    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts(bash=1)
     session._background_status_metadata = lambda now: "metadata"
     session._latest_todos = ()
 
-    rendered = CustomPromptSession._render_background_working_status(session, 8)
+    rendered = prompt_module.CustomPromptSession._render_background_working_status(session, 8)
     text = "".join(item[1] for item in rendered)
 
     assert "metadata" not in text
@@ -3000,9 +2981,8 @@ def test_background_status_truncates_after_dropping_metadata(monkeypatch) -> Non
 def test_bg_refresh_active_drops_to_idle_when_quiet(monkeypatch) -> None:
     """A quiet background task (no token flow past the threshold) signals the
     refresh loop to drop from 0.1s to 1.0s."""
-    import pythinker_code.ui.shell.prompt as prompt_module
 
-    session = object.__new__(CustomPromptSession)
+    session = object.__new__(prompt_module.CustomPromptSession)
     base = prompt_module.time.monotonic()
     session._bg_last_active_at = base
 
@@ -3056,8 +3036,8 @@ def test_transient_command_output_dismissed_by_new_input() -> None:
     assert "menu line" in view.render_running_prompt_body(80).value
 
     view.handle_local_input(
-        UserInput(
-            mode=PromptMode.AGENT,
+        prompt_module.UserInput(
+            mode=prompt_module.PromptMode.AGENT,
             command="continue please",
             resolved_command="continue please",
             content=[TextPart(text="continue please")],
@@ -3084,8 +3064,8 @@ def test_transient_panel_renders_alongside_queued_messages() -> None:
     view = _make_prompt_live_view()
     view._show_transient_command_output("panel content")
     view._queued_messages.append(
-        UserInput(
-            mode=PromptMode.AGENT,
+        prompt_module.UserInput(
+            mode=prompt_module.PromptMode.AGENT,
             command="queued msg",
             resolved_command="queued msg",
             content=[TextPart(text="queued msg")],
@@ -3108,8 +3088,8 @@ async def test_intercepted_shell_command_output_is_captured_not_printed(capsys) 
     view = _make_prompt_live_view(shell_command_runner=runner)
     view._turn_ended = False
     consumed = view._intercept_shell_command(
-        UserInput(
-            mode=PromptMode.AGENT,
+        prompt_module.UserInput(
+            mode=prompt_module.PromptMode.AGENT,
             command="/version",
             resolved_command="/version",
             content=[TextPart(text="/version")],
