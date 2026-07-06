@@ -13,7 +13,7 @@ import re
 import time
 from collections import Counter, deque
 from enum import Enum
-from typing import Any, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
 import streamingjson  # type: ignore[reportMissingTypeStubs]
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
@@ -30,7 +30,11 @@ from pythinker_code.ui.shell.components.markdown import (
 from pythinker_code.ui.shell.components.markdown import (
     markdown_commit_boundary,
 )
-from pythinker_code.ui.shell.components.render_utils import render_message_response, sanitize_ansi
+from pythinker_code.ui.shell.components.render_utils import (
+    render_message_response,
+    sanitize_ansi,
+    truncate_to_width,
+)
 from pythinker_code.ui.shell.components.report import render_agent_body
 from pythinker_code.ui.shell.components.report_update import (
     ReportUpdateComponent,
@@ -119,6 +123,7 @@ _MAX_RUNNING_ROWS = 2
 _MAX_SUB_OUTPUT_CHARS = 200
 _MAX_SUBAGENT_ROLLUP_TOOLS = 6
 _MAX_SUBAGENT_CHANGED_FILES = 5
+_MAX_FILE_ACTIVITY_ROWS = 5
 
 # Background-agent statuses that mean "still running" — the tool call result
 # has arrived but the spawned agent has not yet finished.  Blocks with this
@@ -164,6 +169,70 @@ def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
         values = _parse_tool_result_top_fields(result_text)
         return values.get("mode") == "background" and values.get("tool_status") == "launched"
     return False
+
+
+FileActivityStatus = Literal["writing", "created", "updated", "failed"]
+
+
+class FileActivityShelf:
+    """Compact in-place ledger for files touched during the active turn."""
+
+    _LABELS: dict[FileActivityStatus, tuple[str, str]] = {
+        "writing": ("…", "writing"),
+        "created": ("✓", "created"),
+        "updated": ("✓", "updated"),
+        "failed": ("×", "failed"),
+    }
+
+    def __init__(self, *, max_rows: int = _MAX_FILE_ACTIVITY_ROWS) -> None:
+        self._max_rows = max_rows
+        self._order: list[str] = []
+        self._statuses: dict[str, FileActivityStatus] = {}
+
+    def clear(self) -> None:
+        self._order.clear()
+        self._statuses.clear()
+
+    def mark(self, path: str | None, status: FileActivityStatus) -> None:
+        if not path:
+            return
+        clean = sanitize_ansi(path).strip()
+        if not clean:
+            return
+        if clean not in self._statuses:
+            self._order.append(clean)
+        self._statuses[clean] = status
+
+    def mark_many(self, paths: list[str], status: FileActivityStatus) -> None:
+        for path in paths:
+            self.mark(path, status)
+
+    @property
+    def visible(self) -> bool:
+        return bool(self._order)
+
+    def render(self, width: int) -> RenderableType | None:
+        if not self._order:
+            return None
+        width = max(24, width)
+        rows: list[Text] = [Text("Files", style=tui_rich_style("muted") + Style(bold=True))]
+        visible = self._order[-self._max_rows :]
+        hidden = max(0, len(self._order) - len(visible))
+        label_width = 8
+        path_width = max(8, width - 6 - label_width)
+        for path in visible:
+            status = self._statuses[path]
+            icon, label = self._LABELS[status]
+            style_name = (
+                "error" if status == "failed" else "success" if status != "writing" else "muted"
+            )
+            line = Text(f"  {icon} ", style=tui_rich_style(style_name))
+            line.append(label.ljust(label_width), style=tui_rich_style("muted"))
+            line.append(truncate_to_width(path, path_width), style=tui_rich_style("text"))
+            rows.append(line)
+        if hidden:
+            rows.append(Text(f"  +{hidden} more", style=tui_rich_style("muted")))
+        return Group(*rows)
 
 
 _PREVIEW_FIELD_LINE_RE = re.compile(r"^(\s*)-\s+([^:]+):\s*(.*)$")
@@ -1192,6 +1261,16 @@ class _ToolCallBlock:
     @property
     def has_expandable_card(self) -> bool:
         return self._tui_card is not None and self._tui_card.can_expand
+
+    def active_subagent_label(self) -> str | None:
+        if not self._ongoing_subagent_tool_calls:
+            return None
+        call = next(reversed(self._ongoing_subagent_tool_calls.values()))
+        detail = tool_style(call.function.name).label
+        argument = extract_key_argument(call.function.arguments or "", call.function.name)
+        if argument:
+            detail = f"{detail} {argument}"
+        return sanitize_ansi(f"agent {detail}")
 
     def toggle_expanded(self) -> None:
         if self._tui_card is None:

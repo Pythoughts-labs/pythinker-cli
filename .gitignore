@@ -65,6 +65,7 @@ static/
 !.claude/hooks/
 !.claude/hooks/**
 .pythinker/
+.pi-subagents/
 .worktrees/
 reference-scan/
 blackbox/

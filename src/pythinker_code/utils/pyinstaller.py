@@ -50,6 +50,7 @@ datas = (
         includes=[
             "agents/**/*.yaml",
             "agents/**/*.md",
+            "benchmark/bundled/**/*.json",
             "deps/bin/**",
             "prompts/**/*.md",
             "skills/**",

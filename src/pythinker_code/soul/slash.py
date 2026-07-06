@@ -382,6 +382,81 @@ async def best_practices(soul: PythinkerSoul, args: str):
     )
 
 
+@registry.command
+async def benchmark(soul: PythinkerSoul, args: str) -> None:
+    """
+    Run native Pythinker Benchmark tasks.
+    Usage: /benchmark <start|compare|estimate|list|show|report>
+    """
+    await _benchmark_dispatch(soul, args)
+
+
+@registry.command(name="benchmark:start")
+async def benchmark_start(soul: PythinkerSoul, args: str) -> None:
+    """Start Pythinker Benchmark. Usage: /benchmark:start [--task <id> | --suite <name>]"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("start", args))
+
+
+@registry.command(name="benchmark:all")
+async def benchmark_all(soul: PythinkerSoul, args: str) -> None:
+    """Run the default Pythinker Benchmark suite. Usage: /benchmark:all"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("start", args))
+
+
+@registry.command(name="benchmark:estimate")
+async def benchmark_estimate(soul: PythinkerSoul, args: str) -> None:
+    """Estimate Pythinker Benchmark. Usage: /benchmark:estimate [--task <id> | --suite <name>]"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("estimate", args))
+
+
+@registry.command(name="benchmark:list")
+async def benchmark_list(soul: PythinkerSoul, args: str) -> None:
+    """List Pythinker Benchmark tasks and suites. Usage: /benchmark:list"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("list", args))
+
+
+@registry.command(name="benchmark:show")
+async def benchmark_show(soul: PythinkerSoul, args: str) -> None:
+    """Show a Pythinker Benchmark run. Usage: /benchmark:show <run-id>"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("show", args))
+
+
+@registry.command(name="benchmark:report")
+async def benchmark_report(soul: PythinkerSoul, args: str) -> None:
+    """Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("report", args))
+
+
+@registry.command(name="benchmark:compare")
+async def benchmark_compare(soul: PythinkerSoul, args: str) -> None:
+    """Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>"""
+    await _benchmark_dispatch(soul, _join_benchmark_args("compare", args))
+
+
+@registry.command(name="benchmark:swe")
+async def benchmark_swe(soul: PythinkerSoul, args: str) -> None:
+    """Run trusted SWE-style local fixture benchmark tasks.
+
+    Usage: /benchmark:swe --dataset <path> --trusted-dataset true
+    """
+    await _benchmark_dispatch(soul, _join_benchmark_args("swe", args))
+
+
+async def _benchmark_dispatch(soul: PythinkerSoul, args: str) -> None:
+    from pythinker_code.benchmark.commands import benchmark_usage, dispatch_benchmark
+    from pythinker_code.benchmark.errors import BenchmarkError
+
+    try:
+        text = await dispatch_benchmark(soul, args)
+    except BenchmarkError as exc:
+        text = str(exc) or benchmark_usage()
+    wire_send(TextPart(text=text))
+
+
+def _join_benchmark_args(subcommand: str, args: str) -> str:
+    return f"{subcommand} {args}".strip()
+
+
 def _best_practices_headings() -> list[str]:
     return [
         line.removeprefix("## ").strip()

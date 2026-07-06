@@ -2284,6 +2284,7 @@ class CustomPromptSession:
         thinking_effort_cycle_callback: Callable[[], Awaitable[str | None]] | None = None,
         history_enabled: bool = True,
         statusline_config: StatusLineConfig | None = None,
+        sticky_input: bool = True,
     ) -> None:
         from pythinker_code.ui.shell.statusline import (
             RateSampler,
@@ -2340,6 +2341,15 @@ class CustomPromptSession:
         self._input_activity_event: asyncio.Event = asyncio.Event()
         self._running_prompt_previous_mode: PromptMode | None = None
         self._running_prompt_delegate: RunningPromptDelegate | None = None
+        # Set by the shell the instant an agent turn is dispatched, before the
+        # running-prompt delegate attaches. Bridges the race where the prompt is
+        # resumed (and can repaint the input card) before the delegate exists —
+        # without it, the pre-attach frame paints the card chrome that then
+        # fossilizes above the stream. Cleared on attach/detach. See
+        # _input_card_hidden_pre_stream.
+        self._turn_starting: bool = False
+        self._sticky_input = sticky_input
+        self._previous_full_screen: bool | None = None
         self._latest_todos: tuple[TodoDisplayItem, ...] = ()
         self._modal_delegates: list[RunningPromptDelegate] = []
         self._shortcut_help_open = False
@@ -2989,7 +2999,7 @@ class CustomPromptSession:
         # (see _effort_label_fragments) rather than recoloring the whole bar.
         return "class:compact-input.frame"
 
-    def _effort_label_fragments(self) -> list[tuple[str, str]]:
+    def _effort_label_fragments(self) -> StyleAndTextTuples:
         """Dot + level label shown at the right end of the input's top border.
 
         Returns ``[]`` when there is no effort to choose: non-AGENT modes,
@@ -3007,7 +3017,7 @@ class CustomPromptSession:
             ("class:compact-input.effort", level),
         ]
 
-    def _render_input_top_border(self, columns: int, fallback: str) -> list[tuple[str, str]]:
+    def _render_input_top_border(self, columns: int, fallback: str) -> StyleAndTextTuples:
         """Static-grey top border for the input card, effort label flushed right.
 
         The rule is shortened by the measured label width so the line never
@@ -3019,7 +3029,7 @@ class CustomPromptSession:
         if not label:
             return [(border_style, rule)]
         gap = 2
-        label_width = sum(get_cwidth(ch) for _, text in label for ch in text)
+        label_width = sum(get_cwidth(ch) for fragment in label for ch in fragment[1])
         if len(rule) <= gap + label_width:
             # Too narrow for the label plus its gap; a flushed-right label here
             # would overflow and wrap, so fall back to the plain full-width rule.
@@ -3158,7 +3168,27 @@ class CustomPromptSession:
     def _sync_erase_when_done(self) -> None:
         app = getattr(self._session, "app", None)
         if app is not None:
-            app.erase_when_done = self._mode == PromptMode.AGENT
+            app.erase_when_done = getattr(
+                self, "_mode", PromptMode.AGENT
+            ) == PromptMode.AGENT and not getattr(app, "full_screen", False)
+
+    def _set_running_fullscreen(self, active: bool) -> None:
+        if not getattr(self, "_sticky_input", True):
+            return
+        app = getattr(getattr(self, "_session", None), "app", None)
+        if app is None:
+            return
+        if active:
+            if getattr(self, "_previous_full_screen", None) is None:
+                self._previous_full_screen = bool(getattr(app, "full_screen", False))
+            app.full_screen = True
+            self._sync_erase_when_done()
+            return
+        previous = getattr(self, "_previous_full_screen", None)
+        self._previous_full_screen = None
+        if previous is not None:
+            app.full_screen = previous
+        self._sync_erase_when_done()
 
     def _active_modal_delegate(self) -> RunningPromptDelegate | None:
         modal_delegates = getattr(self, "_modal_delegates", [])
@@ -3185,8 +3215,43 @@ class CustomPromptSession:
             return PromptUIState.MODAL_TEXT_INPUT
         return PromptUIState.NORMAL_INPUT
 
+    def _input_card_hidden_pre_stream(self) -> bool:
+        """Gate the empty pre-stream input surface until the first commit.
+
+        Most running frames keep the input card visible. The only exception is
+        the first transition into committed scrollback: prompt_toolkit can
+        otherwise fossilize the card above the stream. Once that first commit
+        establishes the stream geometry, the card repaints below the stream.
+        Skipped when the user has typed (non-empty buffer) or a modal owns the
+        input line.
+        """
+        if self._active_modal_delegate() is not None:
+            return False
+        # Direct attribute access (not getattr-with-default): these are set in
+        # __init__, so an init regression should fail loudly, not silently drop
+        # the input guard and re-introduce the ghost. The delegate method stays a
+        # getattr: it is an optional RunningPromptDelegate extension only the
+        # live view implements.
+        if self._turn_starting:
+            hide = True
+        else:
+            delegate = self._running_prompt_delegate
+            hide = (
+                delegate is not None
+                and getattr(delegate, "running_prompt_hide_input_card", lambda: False)()
+            )
+        if not hide:
+            return False
+        return not self._session.default_buffer.text
+
     def _should_render_input_buffer(self) -> bool:
-        return self._active_ui_state() != PromptUIState.MODAL_HIDDEN_INPUT
+        if self._active_ui_state() == PromptUIState.MODAL_HIDDEN_INPUT:
+            return False
+        # Before the running-prompt delegate attaches, there is no pinned spinner
+        # frame to own the geometry; hiding this window prevents the prompt row
+        # from fossilizing above the spinner. After attach, keep it visible
+        # because prompt_toolkit renders the ❯ marker in this buffer window.
+        return not (self._turn_starting and not self._session.default_buffer.text)
 
     def _should_handle_running_prompt_key(self, key: str) -> bool:
         delegate = self._active_prompt_delegate()
@@ -3275,6 +3340,79 @@ class CustomPromptSession:
             fragments.extend(self._render_shortcut_help(columns))
             ensure_prompt_newline(fragments)
 
+        running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
+        if not modal_active and running_prompt_delegate is not None and is_card_style():
+            input_card_hidden = self._input_card_hidden_pre_stream()
+            render_running_body_attr = getattr(
+                running_prompt_delegate, "render_running_prompt_body", None
+            )
+            render_running_body = (
+                cast(Callable[[int], AnyFormattedText], render_running_body_attr)
+                if callable(render_running_body_attr)
+                else None
+            )
+            running_body = (
+                to_formatted_text(render_running_body(columns))
+                if render_running_body is not None
+                else FormattedText()
+            )
+            preamble = FormattedText()
+            if agent_status and any(text for _, text, *_ in agent_status):
+                preamble.extend(agent_status)
+                ensure_prompt_newline(preamble)
+            if running_body and any(text for _, text, *_ in running_body):
+                preamble.extend(running_body)
+                ensure_prompt_newline(preamble)
+            if (preamble and any(text for _, text, *_ in preamble)) or pinned_rows:
+                preamble = self._fit_preamble_with_pinned_tail(
+                    preamble,
+                    pinned,
+                    columns,
+                    max_rows,
+                )
+            if preamble and any(text for _, text, *_ in preamble):
+                fragments.extend(preamble)
+
+            if input_card_hidden:
+                hide_chrome = getattr(
+                    running_prompt_delegate,
+                    "running_prompt_hide_input_card_chrome",
+                    lambda: False,
+                )()
+                if hide_chrome:
+                    return fragments
+
+            tc = get_toolbar_colors()
+            scene_fragments: FormattedText = FormattedText()
+            if fragments and any(text for _, text, *_ in fragments):
+                scene_fragments.extend(fragments)
+                ensure_prompt_newline(scene_fragments)
+
+            render_placeholder_attr = getattr(
+                running_prompt_delegate, "running_prompt_placeholder", None
+            )
+            render_placeholder = (
+                cast(Callable[[], AnyFormattedText | None], render_placeholder_attr)
+                if callable(render_placeholder_attr)
+                else None
+            )
+            placeholder_value: AnyFormattedText | None = (
+                render_placeholder()
+                if not input_card_hidden and render_placeholder is not None
+                else FormattedText()
+            )
+            placeholder_fragments = to_formatted_text(placeholder_value)
+
+            scene_fragments.extend(self._render_input_top_border(columns, tc.separator))
+            scene_fragments.append(("", "\n"))
+            scene_fragments.append(("", _card_side_indent()))
+            scene_fragments.append(
+                (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
+            )
+            if placeholder_fragments:
+                scene_fragments.extend(placeholder_fragments)
+            return scene_fragments
+
         if modal_active and body:
             status_budget = max(0, max_rows - body_rows - pinned_rows)
             if agent_status and status_budget > 0:
@@ -3310,6 +3448,34 @@ class CustomPromptSession:
 
         # 3. When a modal is active, skip the normal input chrome.
         if modal_active:
+            return fragments
+
+        # Hide editable input content during the narrow pre-stream/first-handoff
+        # frame, but keep the empty card chrome visible so the prompt bar does not
+        # disappear while the agent is loading.
+        if self._input_card_hidden_pre_stream():
+            running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
+            hide_chrome = (
+                running_prompt_delegate is not None
+                and getattr(
+                    running_prompt_delegate,
+                    "running_prompt_hide_input_card_chrome",
+                    lambda: False,
+                )()
+            )
+            if hide_chrome:
+                return fragments
+            if is_card_style():
+                ensure_prompt_newline(fragments)
+                tc = get_toolbar_colors()
+                fragments.extend(self._render_input_top_border(columns, tc.separator))
+                fragments.append(("", "\n"))
+                fragments.append(("", _card_side_indent()))
+            else:
+                fragments.append(("", "\n"))
+            fragments.append(
+                (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
+            )
             return fragments
 
         if is_card_style():
@@ -3830,6 +3996,34 @@ class CustomPromptSession:
         await self._input_activity_event.wait()
         self._input_activity_event.clear()
 
+    def mark_turn_starting(self) -> None:
+        """Collapse the input card immediately, before the delegate attaches.
+
+        The shell calls this the moment it dispatches an agent turn — right
+        before it resumes the prompt read — so the first repaint after the turn
+        starts never paints the input-card chrome (which would fossilize above
+        the stream). Superseded by the delegate once :meth:`attach_running_prompt`
+        runs; cleared there and on detach.
+        """
+        # Idempotent: a repeat call (e.g. two dispatches before an attach) must
+        # not cost an extra repaint.
+        if not self._turn_starting:
+            self._turn_starting = True
+            self._set_running_fullscreen(True)
+            self.invalidate()
+
+    def clear_turn_starting(self) -> None:
+        """Drop the pre-attach turn-starting hint without an attach/detach.
+
+        Public counterpart to :meth:`mark_turn_starting`, for callers (the shell's
+        ``run_soul_command`` ``finally``) that need to clear the hint on an error
+        path that occurred before the running-prompt delegate ever attached —
+        without reaching into the private ``_turn_starting`` attribute.
+        """
+        self._turn_starting = False
+        self._set_running_fullscreen(False)
+        self.invalidate()
+
     def attach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
         current = getattr(self, "_running_prompt_delegate", None)
         if current is delegate:
@@ -3837,8 +4031,11 @@ class CustomPromptSession:
         if current is None:
             self._running_prompt_previous_mode = self._mode
         self._running_prompt_delegate = delegate
+        # The delegate is the source of truth now; drop the pre-attach hint.
+        self._turn_starting = False
         self._mode = PromptMode.AGENT
         self._apply_mode()
+        self._set_running_fullscreen(True)
         self.invalidate()
 
     def detach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
@@ -3847,9 +4044,11 @@ class CustomPromptSession:
         previous_mode = getattr(self, "_running_prompt_previous_mode", None)
         self._running_prompt_delegate = None
         self._running_prompt_previous_mode = None
+        self._turn_starting = False
         if previous_mode is not None:
             self._mode = previous_mode
         self._apply_mode()
+        self._set_running_fullscreen(False)
         self.invalidate()
 
     def attach_modal(self, delegate: RunningPromptDelegate) -> None:

@@ -961,6 +961,11 @@ class Shell:
                 if isinstance(self.soul, PythinkerSoul)
                 else True
             ),
+            sticky_input=(
+                self.soul.runtime.config.tui.sticky_input
+                if isinstance(self.soul, PythinkerSoul)
+                else True
+            ),
             statusline_config=(
                 self.soul.runtime.config.tui.statusline
                 if isinstance(self.soul, PythinkerSoul)
@@ -1387,6 +1392,17 @@ class Shell:
         """
         logger.info("Running soul with user input: {user_input}", user_input=user_input)
 
+        # Collapse the input card before the running-prompt delegate attaches, so
+        # a repaint in that gap cannot fossilize the card chrome above the stream
+        # (see CustomPromptSession.mark_turn_starting / _input_card_hidden_pre_stream).
+        # Set here — the single funnel for every dispatch path — rather than at
+        # each call site: this runs synchronously on coroutine entry, before the
+        # first await lets the just-resumed prompt task repaint. Cleared in this
+        # method's finally and on delegate attach/detach.
+        prompt_session = self._prompt_session
+        if prompt_session is not None:
+            prompt_session.mark_turn_starting()
+
         cancel_event = asyncio.Event()
 
         def _handler():
@@ -1409,6 +1425,7 @@ class Shell:
             runtime = self.soul.runtime if isinstance(self.soul, PythinkerSoul) else None
             show_thinking_stream = runtime.config.show_thinking_stream if runtime else False
             show_turn_recaps = runtime.config.tui.turn_recaps if runtime else False
+            focus_mode = runtime.config.tui.focus_mode if runtime else False
             # Capture view reference via closure — _clear_active_view sets
             # _active_view=None inside visualize()'s finally (before run_soul
             # returns), so we must capture the view object independently.
@@ -1443,6 +1460,7 @@ class Shell:
                     on_view_closed=self._clear_active_view,
                     show_thinking_stream=show_thinking_stream,
                     show_turn_recaps=show_turn_recaps,
+                    focus_mode=focus_mode,
                 ),
                 cancel_event,
                 runtime.session.wire_file if runtime else None,
@@ -1475,6 +1493,8 @@ class Shell:
                     break
                 queued = pending.pop(0)
                 console.print(render_user_echo_text(queued.resolved_command))
+                if prompt_session is not None:
+                    prompt_session.mark_turn_starting()
                 if runtime is not None:
                     runtime.background_tasks.begin_turn()
                 await run_soul(
@@ -1499,6 +1519,7 @@ class Shell:
                         on_view_closed=self._clear_active_view,
                         show_thinking_stream=show_thinking_stream,
                         show_turn_recaps=show_turn_recaps,
+                        focus_mode=focus_mode,
                     ),
                     cancel_event,
                     runtime.session.wire_file if runtime else None,
@@ -1688,6 +1709,11 @@ class Shell:
             )
             raise  # re-raise unknown error
         finally:
+            # Belt-and-suspenders: clear the turn-starting hint in case the turn
+            # errored before the delegate attached (detach clears it on the
+            # normal path). A stale hint would leave the idle prompt collapsed.
+            if prompt_session is not None:
+                prompt_session.clear_turn_starting()
             # Clean up btw modal if it's still attached (exception skipped wait_for_btw_dismiss)
             if captured_view is not None:
                 captured_view._dismiss_btw()  # pyright: ignore[reportPrivateUsage]

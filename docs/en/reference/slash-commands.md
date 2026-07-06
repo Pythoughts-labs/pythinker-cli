@@ -239,6 +239,34 @@ Show the current context, checkpoint, and compaction status: context tokens, con
 
 List the tools available to the agent along with the active permission posture (the permission profile name, whether file and shell mutations are allowed, and each tool's description). Append `audit` (`/tools audit`) for a note on how external MCP/wire/plugin tools are gated in read-only, plan, review, and verify profiles.
 
+## Benchmarks
+
+### `/benchmark`
+
+Run deterministic local benchmark tasks through the active Pythinker session. The default suite is `pythinker-core`, which materializes a throwaway workspace, asks the agent to fix the task, runs the task's verification command, and writes replayable artifacts under the benchmark output directory.
+
+Usage:
+
+- `/benchmark start [--model <model-key>] [--task <task-id> | --suite <suite-name>]`
+- `/benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]`
+- `/benchmark compare --models <model-a,model-b> [--task <task-id> | --suite <suite-name>] [--repeat <n>]`
+- `/benchmark list`
+- `/benchmark show <run-id>`
+- `/benchmark report [--suite <suite-name>]`
+- `/benchmark export [--suite <suite-name>] [--format json|csv] [--output <path>]`
+- `/benchmark discover --source <allowlisted> --difficulty hard --limit 5 [--output <path.jsonl>]`
+- `/benchmark swe --dataset <path.jsonl> --trusted-dataset true [--instance <instance-id>]`
+
+Namespaced aliases are also registered: `/benchmark:start`, `/benchmark:all`, `/benchmark:estimate`, `/benchmark:list`, `/benchmark:show`, `/benchmark:report`, `/benchmark:compare`, and `/benchmark:swe`. `/benchmark export` and `/benchmark discover` do not have namespaced aliases.
+
+::: warning
+`/benchmark:swe` executes verification commands from a local JSONL dataset. Use it only with trusted local fixture datasets and pass `--trusted-dataset true` explicitly.
+:::
+
+`/benchmark discover --output <path.jsonl>` writes provisional quiz-fixture JSONL records with `verification.type` set to `answer_contains`, `trusted: false`, and an empty `workspace.files` object. Review and convert them offline before using `/benchmark:swe`.
+
+See [Pythinker Benchmark](./pythinker-benchmark.md) for task schema, artifact layout, and implementation boundaries.
+
 ## Session management
 
 ### `/new`

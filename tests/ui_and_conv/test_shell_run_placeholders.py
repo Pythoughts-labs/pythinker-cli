@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.ui.shell as shell_module
 from pythinker_code.soul import Soul
+from pythinker_code.soul.agent import Agent, Runtime
+from pythinker_code.soul.context import Context
+from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.ui.shell.prompt import PromptMode, UserInput
 from pythinker_code.utils.slashcmd import SlashCommand, SlashCommandCall
 from pythinker_code.wire.types import TextPart
@@ -24,6 +29,7 @@ class _FakePromptSession:
     responses: deque[UserInput | BaseException] = deque()
 
     def __init__(self, *args, **kwargs) -> None:
+        self.kwargs = kwargs
         self.prompt_calls = 0
         self.last_submission_was_running = False
         _FakePromptSession.instances.append(self)
@@ -45,6 +51,9 @@ class _FakePromptSession:
         return None
 
     def detach_running_prompt(self, delegate) -> None:
+        return None
+
+    def mark_turn_starting(self) -> None:
         return None
 
 
@@ -71,6 +80,16 @@ def _make_fake_soul():
         thinking=False,
         status=SimpleNamespace(context_usage=0.0, context_tokens=0, max_context_tokens=0),
     )
+
+
+def _make_pythinker_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    return PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
 
 
 def _noop(app: object, args: str) -> None:
@@ -124,6 +143,29 @@ def _patched_shell_run(monkeypatch):
         lambda text="": printed.append(getattr(text, "plain", str(text))),
     )
     return printed
+
+
+@pytest.mark.asyncio
+async def test_shell_run_passes_sticky_input_config(
+    monkeypatch, runtime: Runtime, tmp_path: Path, _patched_shell_run
+) -> None:
+    _FakePromptSession.responses = deque([EOFError()])
+    runtime.config.tui.sticky_input = False
+    monkeypatch.setattr(shell_module.Shell, "_schedule_startup_update_task", lambda self: None)
+    monkeypatch.setattr(shell_module, "replay_recent_history", AsyncMock())
+
+    def _close_background_coro(self, coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr(shell_module.Shell, "_start_background_task", _close_background_coro)
+
+    shell = shell_module.Shell(_make_pythinker_soul(runtime, tmp_path))
+
+    result = await shell.run()
+
+    assert result is True
+    assert _FakePromptSession.instances[0].kwargs["sticky_input"] is False
 
 
 @pytest.mark.asyncio

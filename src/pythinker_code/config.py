@@ -983,6 +983,14 @@ class TUIConfig(BaseModel):
             "Off by default; enable with `/config recaps on`."
         ),
     )
+    sticky_input: bool = Field(
+        default=True,
+        description=(
+            "Keep the prompt composer pinned to the bottom of the terminal while "
+            "an agent turn is running. Disable for terminals that mishandle "
+            "prompt_toolkit fullscreen rendering."
+        ),
+    )
     code_theme: str = Field(
         default="catppuccin-adaptive",
         description=(
@@ -1004,6 +1012,13 @@ class TUIConfig(BaseModel):
             "Pace streamed assistant text so it reveals smoothly instead of "
             "landing in bursty delta-sized clumps. Keeps up with the model "
             "(bounded catch-up). Set false to reveal each delta immediately."
+        ),
+    )
+    focus_mode: bool = Field(
+        default=False,
+        description=(
+            "Use the fullscreen Focus TUI during active agent turns. Focus TUI "
+            "owns the viewport to avoid terminal jump/fossilized prompt rows."
         ),
     )
 

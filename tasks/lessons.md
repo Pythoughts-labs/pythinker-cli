@@ -83,6 +83,13 @@ Format: trigger → rule.
   NOT `.claude/` config. Transcripts showing `~/.pythinker/sessions/` paths
   are pythinker runs; behavioral fixes belong in the product.
 
+## TUI prompt chrome
+
+- **When hiding the first-load editable input row to prevent ghost prompts**,
+  keep the empty card visible: `_turn_starting` and the live-view first-commit
+  gate may suppress editable content, but the top border and `❯` row should
+  remain visible so the prompt bar does not disappear while the agent loads.
+
 ## Spec/profile consistency
 
 - **When adding or tightening a permission gate** (network, MCP, shell,

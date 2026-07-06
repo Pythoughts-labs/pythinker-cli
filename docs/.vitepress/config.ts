@@ -83,6 +83,7 @@ export default withMermaid(defineConfig({
                 { text: 'pythinker term Subcommand', link: '/en/reference/pythinker-term' },
                 { text: 'pythinker dashboard Subcommand', link: '/en/reference/pythinker-dashboard' },
                 { text: 'pythinker web Subcommand', link: '/en/reference/pythinker-web' },
+                { text: 'Pythinker Benchmark', link: '/en/reference/pythinker-benchmark' },
                 { text: 'Slash Commands', link: '/en/reference/slash-commands' },
                 { text: 'Keyboard Shortcuts', link: '/en/reference/keyboard' },
               ],

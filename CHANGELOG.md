@@ -15,6 +15,52 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Show active subagent tool work in the pinned TUI status tail instead of
+  leaving long foreground agent runs on the generic composing spinner.
+- Keep the TUI prompt bar visible while an agent turn is starting so the
+  empty composer does not disappear during lazy-load frames.
+- Ported the running agent TUI toward Pi's stable diff-rendered scene model so streamed output keeps the input card visible without prompt jumps.
+- Added publishability-focused benchmark comparison planning for multi-model
+  runs, activity metrics, exportable reports, and safe online source discovery.
+- Added an experimental Focus TUI mode for active agent turns, keeping the composer pinned, hiding file activity by default, and rendering live output without terminal scrollback jumps.
+- Stream file write/edit activity in a compact live shelf so changed files update in place during agent runs instead of adding noisy terminal rows.
+- Hardened `/benchmark` local fixture runs: task `max_steps` now caps the
+  underlying agent turn, and `/benchmark:swe` requires `--trusted-dataset true`
+  because trusted local fixture datasets execute verification commands.
+- Hardened benchmark and active-skill security edges: SWE verification commands
+  are shape-validated before execution, benchmark discovery requires explicit
+  network opt-in, benchmark run IDs avoid clock collisions, runtime overrides
+  restore after setup failures, and active-skill deactivation persistence
+  failures are surfaced instead of swallowed.
+- Strengthened the bundled `pythinker-core` benchmark suite with edge-case
+  fixtures for atomic rollback, iterable de-duplication, explicit falsey
+  metadata values, and safe path joins across absolute, sibling-prefix, parent,
+  and symlink escapes.
+
+- Keep the terminal input composer pinned to the bottom during agent runs with a fullscreen prompt mode to reduce TUI flicker.
+
+- Explicitly invoked skills now remain active across later turns through a
+  compact reminder, and can be cleared with a named stop request or "normal mode".
+
+- **No more ghost/duplicate input prompt while the agent works.** After
+  submitting a prompt, the editable input row is no longer fossilized above the
+  stream as a second, ghostly prompt. The top border stays visible while the
+  pre-attach race frame still collapses before the running-prompt delegate
+  exists, preventing prompt chrome from fossilizing above the spinner. Once the
+  running frame owns the prompt, the `❯` marker stays visible while only the
+  editable buffer is hidden until the first scrollback commit, avoiding the
+  collapsed one-line card under the lazy-load spinner; the full editable row
+  remains below the live stream so you can still see where to steer.
+
+- Added native `/benchmark` slash command for deterministic local Pythinker
+  model evaluation with bundled smoke tasks, replayable artifacts, and branded
+  markdown reports.
+- Expanded `/benchmark start` to use a richer default core suite, isolate file
+  edits through the active toolset workspace override, and exclude generated
+  verification caches from changed-file reports.
+- Added `/benchmark:swe` for native SWE-style JSONL benchmark tasks that run
+  through Pythinker's existing model, tool, verification, and artifact path.
+
 ## 0.56.0 (2026-07-02)
 
 - **Windows shell UI recovers from mid-session console blanking.** The TUI's

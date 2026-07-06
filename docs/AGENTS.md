@@ -9,7 +9,7 @@ This repository uses VitePress for the documentation site. Most pages now contai
   - Guides: getting-started, use-cases, interaction, sessions, ides, integrations
   - Customization: mcp, plugins, hooks, skills, agents, print-mode, wire-mode
   - Configuration: config-files, providers, overrides, env-vars, data-locations
-  - Reference: pythinker-command, pythinker-info, pythinker-acp, pythinker-mcp, pythinker-term, pythinker-dashboard, pythinker-web, slash-commands, keyboard
+  - Reference: pythinker-command, pythinker-info, pythinker-acp, pythinker-mcp, pythinker-term, pythinker-dashboard, pythinker-web, pythinker-benchmark, slash-commands, keyboard
   - FAQ: faq
   - Release notes: changelog, breaking-changes
 - Navigation and sidebar are defined in `docs/.vitepress/config.ts`. Any new or renamed page must be wired there.

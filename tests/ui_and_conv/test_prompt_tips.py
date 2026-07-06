@@ -1005,6 +1005,7 @@ def test_running_prompt_uses_shared_toolbar_and_bottom_input_layout(monkeypatch:
     prompt_session._mode = PromptMode.AGENT
     prompt_session._model_name = None
     prompt_session._running_prompt_delegate = _DummyRunningPrompt()
+    prompt_session._turn_starting = False
     prompt_session._status_provider = lambda: StatusSnapshot(context_usage=0.0)
     prompt_session._background_task_count_provider = None
     prompt_session._thinking = False
@@ -1054,6 +1055,7 @@ def test_running_prompt_preamble_is_clipped_on_short_terminals(monkeypatch: Any)
             return "\n".join(f"line {i}" for i in range(20))
 
     prompt_session._running_prompt_delegate = _TallRunningPrompt()
+    prompt_session._turn_starting = False
     prompt_session._modal_delegates = []
 
     class _DummyOutput:
@@ -1095,6 +1097,7 @@ def test_clipped_agent_status_preserves_thinking_indicator(monkeypatch: Any) -> 
             return ""
 
     prompt_session._running_prompt_delegate = _TallAgentStatus()
+    prompt_session._turn_starting = False
     prompt_session._modal_delegates = []
 
     class _DummyOutput:
@@ -1514,6 +1517,7 @@ def test_idle_agent_prompt_uses_same_bottom_input_layout(monkeypatch: Any) -> No
     width = 64
     prompt_session = object.__new__(CustomPromptSession)
     prompt_session._running_prompt_delegate = None
+    prompt_session._turn_starting = False
     prompt_session._status_provider = lambda: StatusSnapshot(context_usage=0.0)
     prompt_session._thinking = False
 
@@ -1567,6 +1571,7 @@ def test_attach_running_prompt_enables_erase_when_done_and_detach_restores_state
     prompt_session._mode = PromptMode.SHELL
     prompt_session._running_prompt_delegate = None
     prompt_session._running_prompt_previous_mode = None
+    prompt_session._sticky_input = False
     prompt_session._session = cast(Any, SimpleNamespace(app=SimpleNamespace(erase_when_done=False)))
 
     delegate = _DummyRunningPrompt()

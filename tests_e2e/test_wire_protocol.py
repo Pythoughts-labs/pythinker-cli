@@ -96,6 +96,58 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": ["bp"],
                         },
                         {
+                            "name": "benchmark",
+                            "description": """\
+Run native Pythinker Benchmark tasks.
+Usage: /benchmark <start|compare|estimate|list|show|report>\
+""",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:start",
+                            "description": "Start Pythinker Benchmark. Usage: /benchmark:start [--task <id> | --suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:all",
+                            "description": "Run the default Pythinker Benchmark suite. Usage: /benchmark:all",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:estimate",
+                            "description": "Estimate Pythinker Benchmark. Usage: /benchmark:estimate [--task <id> | --suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:list",
+                            "description": "List Pythinker Benchmark tasks and suites. Usage: /benchmark:list",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:show",
+                            "description": "Show a Pythinker Benchmark run. Usage: /benchmark:show <run-id>",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:report",
+                            "description": "Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:compare",
+                            "description": "Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:swe",
+                            "description": """\
+Run trusted SWE-style local fixture benchmark tasks.
+
+Usage: /benchmark:swe --dataset <path> --trusted-dataset true\
+""",
+                            "aliases": [],
+                        },
+                        {
                             "name": "add-dir",
                             "description": "Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs",
                             "aliases": [],
@@ -319,6 +371,58 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                             "name": "best-practices",
                             "description": "Inject engineering best practices (code changes, testing, todos, debugging) into context",
                             "aliases": ["bp"],
+                        },
+                        {
+                            "name": "benchmark",
+                            "description": """\
+Run native Pythinker Benchmark tasks.
+Usage: /benchmark <start|compare|estimate|list|show|report>\
+""",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:start",
+                            "description": "Start Pythinker Benchmark. Usage: /benchmark:start [--task <id> | --suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:all",
+                            "description": "Run the default Pythinker Benchmark suite. Usage: /benchmark:all",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:estimate",
+                            "description": "Estimate Pythinker Benchmark. Usage: /benchmark:estimate [--task <id> | --suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:list",
+                            "description": "List Pythinker Benchmark tasks and suites. Usage: /benchmark:list",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:show",
+                            "description": "Show a Pythinker Benchmark run. Usage: /benchmark:show <run-id>",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:report",
+                            "description": "Show Pythinker Benchmark report index. Usage: /benchmark:report [--suite <name>]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:compare",
+                            "description": "Compare Pythinker Benchmark models. Usage: /benchmark:compare --models <a,b>",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "benchmark:swe",
+                            "description": """\
+Run trusted SWE-style local fixture benchmark tasks.
+
+Usage: /benchmark:swe --dataset <path> --trusted-dataset true\
+""",
+                            "aliases": [],
                         },
                         {
                             "name": "add-dir",

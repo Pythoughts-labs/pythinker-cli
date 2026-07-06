@@ -1,0 +1,21 @@
+{
+  "id": "core-safe-path-join",
+  "title": "Safe Path Join",
+  "description": "Reject path traversal while keeping normal relative paths usable.",
+  "prompt": "Fix paths.py. safe_join(root, user_path) must return a Path inside root for normal relative paths, and reject absolute paths, sibling-prefix paths, parent traversal, or symlink traversal outside root with ValueError.",
+  "workspace": {
+    "files": {
+      "paths.py": "from pathlib import Path\n\n\ndef safe_join(root, user_path):\n    return Path(root) / user_path\n",
+      "test_paths.py": "from pathlib import Path\n\nimport pytest\n\nfrom paths import safe_join\n\n\ndef test_safe_join_allows_nested_relative_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    assert safe_join(root, 'logs/app.txt') == root.resolve() / 'logs/app.txt'\n\n\ndef test_safe_join_allows_root_relative_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    assert safe_join(root, '.') == root.resolve()\n\n\ndef test_safe_join_rejects_parent_traversal(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, '../secret.txt')\n\n\ndef test_safe_join_rejects_absolute_path(tmp_path):\n    root = tmp_path / 'root'\n    root.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, Path('/tmp/secret.txt'))\n\n\ndef test_safe_join_rejects_sibling_prefix_absolute_path(tmp_path):\n    root = tmp_path / 'root'\n    sibling = tmp_path / 'root-sibling'\n    root.mkdir()\n    sibling.mkdir()\n    with pytest.raises(ValueError):\n        safe_join(root, sibling / 'secret.txt')\n\n\ndef test_safe_join_rejects_symlink_escape(tmp_path):\n    root = tmp_path / 'root'\n    outside = tmp_path / 'outside'\n    root.mkdir()\n    outside.mkdir()\n    link = root / 'link'\n    try:\n        link.symlink_to(outside, target_is_directory=True)\n    except OSError:\n        pytest.skip('symlinks unavailable')\n    with pytest.raises(ValueError):\n        safe_join(root, 'link/secret.txt')\n"
+    }
+  },
+  "verification": {
+    "type": "command",
+    "command": "python -m pytest test_paths.py -q"
+  },
+  "limits": {
+    "timeout_seconds": 180,
+    "max_steps": 60
+  },
+  "tags": ["core", "python", "security", "deterministic"]
+}

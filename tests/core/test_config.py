@@ -129,6 +129,7 @@ def test_default_config_dump():
                 "style": "card",
                 "prompt_history_enabled": True,
                 "turn_recaps": False,
+                "sticky_input": True,
                 "code_theme": "catppuccin-adaptive",
                 "statusline": {
                     "enabled": True,
@@ -153,9 +154,18 @@ def test_default_config_dump():
                     "cost_budget": None,
                 },
                 "smooth_streaming": True,
+                "focus_mode": False,
             },
         }
     )
+
+
+def test_tui_focus_mode_default_off() -> None:
+    assert get_default_config().tui.focus_mode is False
+
+
+def test_tui_sticky_input_default_on() -> None:
+    assert get_default_config().tui.sticky_input is True
 
 
 def test_turn_recaps_default_off():

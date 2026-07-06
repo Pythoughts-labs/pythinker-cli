@@ -63,6 +63,7 @@ from pythinker_code.wire.types import (
     SteerInput,
     StepInterrupted,
     Suggestion,
+    TurnBegin,
     TurnEnd,
     WireMessage,
 )
@@ -159,10 +160,17 @@ class _PromptLiveView(_LiveView):
         self._btw_run_task: asyncio.Task[None] | None = None
         self._status_refresh_task: asyncio.Task[None] | None = None
         self._pending_scrollback: list[tuple[RenderableType, bool]] = []
+        self._pending_scrollback_anchors: list[bool] = []
         self._scrollback_handoff_depth: int = 0
         self._scrollback_flush_lock = asyncio.Lock()
         self._last_terminal_size: tuple[int, int] | None = None
         self._resize_recovery_remaining: int = 0
+        # True once this turn has committed anything to scrollback via a
+        # run_in_terminal handoff. Editable input content is hidden until then
+        # (see running_prompt_hide_input_card), while the empty card chrome stays
+        # visible so the prompt bar does not disappear while the agent is loading.
+        self._committed_scrollback_this_turn: bool = False
+        self._awaiting_input_card_restore_anchor: bool = False
 
     # -- Helpers -------------------------------------------------------------
 
@@ -437,6 +445,12 @@ class _PromptLiveView(_LiveView):
                 )
                 return
             batch = self._pending_scrollback[:]
+            anchor_batch = self._pending_scrollback_anchors[: len(batch)]
+            if self.focus_model is not None and self._active_turn_depth > 0:
+                del self._pending_scrollback[: len(batch)]
+                del self._pending_scrollback_anchors[: len(batch)]
+                self._safe_prompt_invalidate()
+                return
 
             def emit() -> None:
                 for renderable, blank_row in batch:
@@ -454,24 +468,44 @@ class _PromptLiveView(_LiveView):
                 return
 
             del self._pending_scrollback[: len(batch)]
+            del self._pending_scrollback_anchors[: len(batch)]
+            first_commit = not self._committed_scrollback_this_turn
+            if any(anchor_batch):
+                self._committed_scrollback_this_turn = True
+                if first_commit:
+                    self._awaiting_input_card_restore_anchor = True
+                elif self._awaiting_input_card_restore_anchor:
+                    self._awaiting_input_card_restore_anchor = False
+            elif self._awaiting_input_card_restore_anchor:
+                self._awaiting_input_card_restore_anchor = False
             self._safe_prompt_invalidate()
 
+    def _append_pending_scrollback(
+        self, renderable: RenderableType, *, blank_row: bool, anchored: bool
+    ) -> None:
+        if not hasattr(self, "_pending_scrollback"):
+            self._pending_scrollback = []
+        if not hasattr(self, "_pending_scrollback_anchors"):
+            self._pending_scrollback_anchors = []
+        self._pending_scrollback.append((renderable, blank_row))
+        self._pending_scrollback_anchors.append(anchored)
+
     def _emit_final_scrollback(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, True))
+        self._append_pending_scrollback(renderable, blank_row=True, anchored=False)
 
     def _emit_action_block(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, True))
+        self._append_pending_scrollback(renderable, blank_row=True, anchored=True)
 
     def _emit_steer_echo(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, False))
+        self._append_pending_scrollback(renderable, blank_row=False, anchored=False)
 
     def _print_turn_recap(self) -> None:
         block = self._build_turn_recap_block()
         if block is None:
             return
-        self._pending_scrollback.append((Text(""), False))
-        self._pending_scrollback.append((block, False))
-        self._pending_scrollback.append((Text(""), False))
+        self._append_pending_scrollback(Text(""), blank_row=False, anchored=False)
+        self._append_pending_scrollback(block, blank_row=False, anchored=False)
+        self._append_pending_scrollback(Text(""), blank_row=False, anchored=False)
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
         _handoff_trace(f"TRANSITION\t{reason.name}")
@@ -786,6 +820,11 @@ class _PromptLiveView(_LiveView):
             # prompt, where they can look like part of the previous assistant
             # answer.
             return
+        # A fresh turn starts hidden-carded until its first commit — reset the
+        # flag on the 0->1 transition (super() increments the depth below).
+        if isinstance(msg, TurnBegin) and self._active_turn_depth == 0:
+            self._committed_scrollback_this_turn = False
+            self._awaiting_input_card_restore_anchor = False
         super().dispatch_wire_message(msg)
 
     def display_suggestion(self, event: Suggestion) -> None:
@@ -868,7 +907,12 @@ class _PromptLiveView(_LiveView):
             return ANSI(body if body else "")
 
         content_block = getattr(self, "_current_content_block", None)
-        if content_block is not None and not content_block.is_think:
+        if self._active_subagent_activity_label() is not None:
+            body = render_to_ansi(
+                self._working_indicator(hide_tips=self._hide_working_tips),
+                columns=columns,
+            ).rstrip("\n")
+        elif content_block is not None and not content_block.is_think:
             body = render_to_ansi(content_block._compose_spinner(), columns=columns).rstrip("\n")
         else:
             body = render_to_ansi(
@@ -907,6 +951,38 @@ class _PromptLiveView(_LiveView):
 
     def running_prompt_hides_input_buffer(self) -> bool:
         return False
+
+    def running_prompt_hide_input_card(self) -> bool:
+        """True while the input card must stay hidden to avoid fossilizing it.
+
+        The card is hidden from turn-start until this turn's first scrollback
+        commit. That first commit's ``run_in_terminal`` teardown fossilizes
+        whatever chrome sits in the pre-handoff frame (the erase-height drifts on
+        the first transition into streaming); keeping the card out of that frame
+        is the only reliable prevention — suppressing it merely *during* the
+        handoff is too late, because the erase runs before the repaint. Once the
+        turn has committed, the layout is established and the card repaints for
+        the rest of the turn so the user can see where to steer.
+
+        No ``_active_turn_depth`` guard: the flag must hide the card from the
+        moment the delegate attaches — which can precede the ``TurnBegin`` that
+        raises the depth — through the first commit. ``_committed_scrollback_this_turn``
+        is explicitly reset to False on each ``TurnBegin`` (see
+        ``dispatch_wire_message``), not merely assumed from construction — this
+        method must stay correct even if a future change reuses one delegate
+        instance across turns instead of building a fresh one per turn."""
+        if getattr(self, "_scrollback_handoff_depth", 0) > 0:
+            return True
+        if self._turn_ended:
+            return False
+        return not self._committed_scrollback_this_turn or getattr(
+            self, "_awaiting_input_card_restore_anchor", False
+        )
+
+    def running_prompt_hide_input_card_chrome(self) -> bool:
+        return getattr(self, "_scrollback_handoff_depth", 0) > 0 or bool(
+            getattr(self, "_pending_scrollback", None)
+        )
 
     def running_prompt_allows_text_input(self) -> bool:
         if self._current_approval_request_panel is not None:

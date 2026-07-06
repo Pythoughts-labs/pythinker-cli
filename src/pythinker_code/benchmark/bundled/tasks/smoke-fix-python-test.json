@@ -1,0 +1,21 @@
+{
+  "id": "smoke-fix-python-test",
+  "title": "Fix Python Test",
+  "description": "Fix a small Python function so the included test passes.",
+  "prompt": "Fix calc.py so python -m pytest test_calc.py passes. Keep the change minimal.",
+  "workspace": {
+    "files": {
+      "calc.py": "def add(a, b):\n    return a - b\n",
+      "test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+    }
+  },
+  "verification": {
+    "type": "command",
+    "command": "python -m pytest test_calc.py -q"
+  },
+  "limits": {
+    "timeout_seconds": 120,
+    "max_steps": 30
+  },
+  "tags": ["smoke", "offline", "deterministic"]
+}
