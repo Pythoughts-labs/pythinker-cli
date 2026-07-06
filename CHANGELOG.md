@@ -17,6 +17,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 - Show active subagent tool work in the pinned TUI status tail instead of
   leaving long foreground agent runs on the generic composing spinner.
+- Keep the TUI prompt bar visible while an agent turn is starting so the
+  empty composer does not disappear during lazy-load frames.
 - Ported the running agent TUI toward Pi's stable diff-rendered scene model so streamed output keeps the input card visible without prompt jumps.
 - Added publishability-focused benchmark comparison planning for multi-model
   runs, activity metrics, exportable reports, and safe online source discovery.
