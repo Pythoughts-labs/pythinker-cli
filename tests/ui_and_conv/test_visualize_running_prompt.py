@@ -512,7 +512,6 @@ def test_render_agent_prompt_message_keeps_empty_card_during_first_load(
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     session = _card_session(turn_starting=True, delegate=None)
@@ -526,7 +525,7 @@ def test_render_agent_prompt_message_keeps_empty_card_during_first_load(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_buffer(
@@ -538,7 +537,6 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     session = object.__new__(CustomPromptSession)
@@ -558,11 +556,11 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
         return "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     hidden_frame = _rendered(True)
-    assert hidden_frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert hidden_frame == f"{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
     shown_frame = _rendered(False)
     assert border in shown_frame
-    assert PROMPT_SYMBOL_AGENT_INPUT in shown_frame
+    assert prompt_module.PROMPT_SYMBOL_AGENT_INPUT in shown_frame
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_stream(
@@ -571,7 +569,6 @@ def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_st
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     session = _card_session(turn_starting=True, delegate=None)
     session._shortcut_help_open = False
@@ -582,7 +579,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_st
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"\n{PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"\n{prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buffer(
@@ -594,7 +591,6 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buf
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     session = _card_session(delegate=_body_delegate("", hide_card=True))
@@ -608,7 +604,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buf
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
@@ -619,7 +615,6 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     session = _card_session(delegate=_body_delegate("assistant chunk", hide_card=True))
@@ -633,7 +628,7 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"assistant chunk\n{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"assistant chunk\n{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch) -> None:
@@ -642,7 +637,6 @@ def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     class _StyledDelegate:
         def render_running_prompt_body(self, columns: int) -> FormattedText:
@@ -688,7 +682,7 @@ def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch
     assert ("class:placeholder", "keep typing") in fragments
     assert (
         session._thinking_prompt_prefix_style(),
-        f"{PROMPT_SYMBOL_AGENT_INPUT} ",
+        f"{prompt_module.PROMPT_SYMBOL_AGENT_INPUT} ",
     ) in fragments
 
 
@@ -701,7 +695,6 @@ def test_render_agent_prompt_message_keeps_live_view_chrome_before_first_commit(
     from prompt_toolkit.formatted_text import FormattedText
 
     import pythinker_code.ui.shell.prompt as prompt_module
-    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
 
     border = "──────── ● off"
     view = object.__new__(_PromptLiveView)
@@ -724,12 +717,12 @@ def test_render_agent_prompt_message_keeps_live_view_chrome_before_first_commit(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
     view._committed_scrollback_this_turn = True
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
+    assert frame == f"{border}\n  {prompt_module.PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:

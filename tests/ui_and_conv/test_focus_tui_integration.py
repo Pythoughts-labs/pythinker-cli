@@ -11,7 +11,6 @@ import pythinker_code.ui.shell as shell_module
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
-from pythinker_code.ui.shell import Shell
 from pythinker_code.ui.shell.focus_model import FocusTuiModel
 from pythinker_code.ui.shell.focus_surface import FocusTuiSurface
 from pythinker_code.ui.shell.visualize import _PromptLiveView, visualize
@@ -50,7 +49,7 @@ class _PromptSession:
         self.modals.remove(delegate)
 
 
-def _make_shell(runtime: Runtime, tmp_path: Path) -> Shell:
+def _make_shell(runtime: Runtime, tmp_path: Path) -> shell_module.Shell:
     agent = Agent(
         name="Test Agent",
         system_prompt="Test system prompt.",
@@ -58,7 +57,7 @@ def _make_shell(runtime: Runtime, tmp_path: Path) -> Shell:
         runtime=runtime,
     )
     soul = PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
-    return Shell(soul)
+    return shell_module.Shell(soul)
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,7 @@ def _make_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
 async def _run(soul: PythinkerSoul, args: str) -> None:
     result = benchmark(soul, args)
     if result is not None:
-        await result
+        _ = await result
 
 
 async def _run_registered(soul: PythinkerSoul, name: str, args: str = "") -> None:
@@ -58,7 +58,7 @@ async def _run_registered(soul: PythinkerSoul, name: str, args: str = "") -> Non
     assert command is not None
     result = command.func(soul, args)
     if result is not None:
-        await result
+        _ = await result
 
 
 @pytest.fixture
@@ -129,15 +129,13 @@ def test_parse_export_rejects_invalid_format() -> None:
 
 
 def test_run_id_is_unique_when_clock_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pythinker_code.benchmark.commands as commands
-
     class FixedDatetime:
         @classmethod
         def now(cls, tz: object) -> datetime:
             assert tz is UTC
             return datetime(2026, 7, 5, 12, 0, 0, 1, tzinfo=UTC)
 
-    monkeypatch.setattr(commands, "datetime", FixedDatetime)
+    monkeypatch.setattr("pythinker_code.benchmark.commands.datetime", FixedDatetime)
 
     assert _run_id("same-task") != _run_id("same-task")
 
