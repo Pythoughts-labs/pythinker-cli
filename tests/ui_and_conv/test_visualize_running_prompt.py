@@ -398,7 +398,7 @@ def test_running_prompt_hide_input_card_flips_on_first_commit() -> None:
     view._committed_scrollback_this_turn = False
     view._awaiting_input_card_restore_anchor = False
     assert view.running_prompt_hide_input_card() is True
-    assert view.running_prompt_hide_input_card_chrome() is True
+    assert view.running_prompt_hide_input_card_chrome() is False
 
     view._committed_scrollback_this_turn = True
     assert view.running_prompt_hide_input_card() is False
@@ -496,10 +496,10 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     assert session._turn_starting is False
 
 
-def test_render_agent_prompt_message_keeps_top_border_during_first_load(
+def test_render_agent_prompt_message_keeps_empty_card_during_first_load(
     monkeypatch,
 ) -> None:
-    """The first loading frame keeps the card's top border while hiding input."""
+    """The first loading frame keeps the empty card chrome visible."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -519,8 +519,7 @@ def test_render_agent_prompt_message_keeps_top_border_during_first_load(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == f"{border}\n"
-    assert PROMPT_SYMBOL_AGENT_INPUT not in frame
+    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_buffer(
@@ -666,10 +665,10 @@ def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch
     ) in fragments
 
 
-def test_render_agent_prompt_message_hides_live_view_chrome_before_first_commit(
+def test_render_agent_prompt_message_keeps_live_view_chrome_before_first_commit(
     monkeypatch,
 ) -> None:
-    """The real live view hides chrome until the first scrollback commit."""
+    """The real live view keeps the empty card visible before first scrollback commit."""
     from types import SimpleNamespace
 
     from prompt_toolkit.formatted_text import FormattedText
@@ -698,7 +697,7 @@ def test_render_agent_prompt_message_hides_live_view_chrome_before_first_commit(
 
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
-    assert frame == ""
+    assert frame == f"{border}\n  {PROMPT_SYMBOL_AGENT_INPUT} "
 
     view._committed_scrollback_this_turn = True
     frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())

@@ -3450,9 +3450,9 @@ class CustomPromptSession:
         if modal_active:
             return fragments
 
-        # Hide only the narrow pre-stream/first-handoff frame that can fossilize
-        # prompt chrome above the stream. Normal running frames repaint the card
-        # below streamed output (see _input_card_hidden_pre_stream).
+        # Hide editable input content during the narrow pre-stream/first-handoff
+        # frame, but keep the empty card chrome visible so the prompt bar does not
+        # disappear while the agent is loading.
         if self._input_card_hidden_pre_stream():
             running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
             hide_chrome = (
@@ -3470,8 +3470,6 @@ class CustomPromptSession:
                 tc = get_toolbar_colors()
                 fragments.extend(self._render_input_top_border(columns, tc.separator))
                 fragments.append(("", "\n"))
-                if self._turn_starting:
-                    return fragments
                 fragments.append(("", _card_side_indent()))
                 fragments.append(
                     (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")

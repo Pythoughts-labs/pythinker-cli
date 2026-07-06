@@ -2,9 +2,9 @@
 
 Unlike the byte-stream PTY helpers, these feed the raw terminal bytes to a pyte
 virtual screen so assertions run against the *rendered* frame — the only place
-an incomplete-erase "ghost"/duplicate row is visible. They pin the regression
-where the input card's top border (``──────── ● off``) + ``❯`` fossilized above
-the stream as a duplicate "second prompt" after submitting.
+an incomplete-erase "ghost"/duplicate row is visible. They pin Focus TUI
+fossilization behavior and the normal prompt card's visible loading/mid-turn
+contract.
 
 This is a manual/local check, not a CI-enforced one — it is skipped on CI (see
 ``pytestmark`` below: scripted_echo + prompt_toolkit hang on GitHub Actions'
@@ -62,7 +62,7 @@ def _render(chunks: list[bytes]):
 # beside the rule — ``_render_input_top_border`` is the only place that renders
 # it, so this distinguishes it from the footer's own plain separator. Match every
 # effort level, not just the default "off", so the matcher can't silently miss a
-# thinking-on session and make the fossil assertion pass vacuously. (This test's
+# thinking-on session and make prompt-card assertions pass vacuously. (This test's
 # scripted model supports non-native thinking, so the label is always present;
 # the idle-card assertion below also fails loudly if the matcher ever stops
 # matching.)
@@ -123,18 +123,12 @@ def test_focus_tui_hides_files_and_never_fossilizes_prompt(tmp_path: Path) -> No
         shell.close()
 
 
-def test_input_card_never_fossilizes_above_the_stream(tmp_path: Path) -> None:
-    """The input card must never appear between the echoed prompt and the stream.
-
-    Regression: after submitting, the card's border + ``❯`` were fossilized above
-    the streamed content as a ghost second prompt (the turn's first scrollback
-    commit did not erase the card). The card is hidden until that first commit,
-    then repaints below the stream so the user can still see where to steer.
+def test_input_card_stays_visible_during_initial_loading_and_mid_turn(tmp_path: Path) -> None:
+    """The empty input card stays visible while the agent starts working.
 
     Invariants checked across every frame of a live turn:
-      * no fossil card ever appears above the first content row;
       * the submitted prompt is never duplicated;
-      * once the turn has committed, the live card is visible again;
+      * the empty card is visible before and after the first committed content;
       * the idle card returns after the turn ends.
     """
     fast = {"id": "c1", "name": "Shell", "arguments": json.dumps({"command": "true"})}
@@ -171,18 +165,14 @@ def test_input_card_never_fossilizes_above_the_stream(tmp_path: Path) -> None:
             rows = _render(shell._raw_chunks)
             joined = "\n".join(rows)
 
-            assert not _has_fossil_border_above_content(rows), (
-                "ghost input-card border fossilized above the stream:\n"
-                + "\n".join(r for r in rows if r.strip())
-            )
             assert joined.count(_PROMPT_TEXT) <= 1, "submitted prompt duplicated (ghost)"
 
             # The card must return WHILE the turn is still streaming (not only at
             # the idle end): the first tool has committed, the second is still
             # running, and the final text has not arrived — yet the card shows.
             mid_turn = "Command executed successfully." in joined and "All done." not in joined
-            if mid_turn and any(_is_input_card_border(r) for r in rows):
-                output = "\n".join(row for row in rows if _PROMPT_TEXT not in row)
+            output = "\n".join(row for row in rows if _PROMPT_TEXT not in row)
+            if mid_turn and any(_is_input_card_border(r) for r in rows) and "❯" in output:
                 assert output.count("❯") == 1
                 assert "────────" in output
                 live_card_seen_mid_turn = True

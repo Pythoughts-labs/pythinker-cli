@@ -86,9 +86,9 @@ Format: trigger → rule.
 ## TUI prompt chrome
 
 - **When hiding the first-load editable input row to prevent ghost prompts**,
-  keep the card chrome decision separate: `_turn_starting` should suppress the
-  `❯` row, not the input card's top border. Only a live-view delegate's explicit
-  `running_prompt_hide_input_card_chrome()` handoff should hide the full chrome.
+  keep the empty card visible: `_turn_starting` and the live-view first-commit
+  gate may suppress editable content, but the top border and `❯` row should
+  remain visible so the prompt bar does not disappear while the agent loads.
 
 ## Spec/profile consistency
 

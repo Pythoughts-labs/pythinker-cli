@@ -166,11 +166,9 @@ class _PromptLiveView(_LiveView):
         self._last_terminal_size: tuple[int, int] | None = None
         self._resize_recovery_remaining: int = 0
         # True once this turn has committed anything to scrollback via a
-        # run_in_terminal handoff. The input card is hidden until then (see
-        # running_prompt_hide_input_card): the turn's FIRST commit is the one
-        # whose teardown erase-height drifts and fossilizes the card above the
-        # stream, so the card must be absent from that pre-handoff frame. Reset
-        # at each turn's start.
+        # run_in_terminal handoff. Editable input content is hidden until then
+        # (see running_prompt_hide_input_card), while the empty card chrome stays
+        # visible so the prompt bar does not disappear while the agent is loading.
         self._committed_scrollback_this_turn: bool = False
         self._awaiting_input_card_restore_anchor: bool = False
 
@@ -978,14 +976,8 @@ class _PromptLiveView(_LiveView):
         )
 
     def running_prompt_hide_input_card_chrome(self) -> bool:
-        # Do not broaden this hide: the input card must be visible during agent runs.
-        # This narrow first-commit/handoff exception prevents stale prompt chrome from
-        # fossilizing above streamed content, then the card immediately repaints below it.
-        if self._turn_ended:
-            return False
-        return (
-            not self._committed_scrollback_this_turn
-            or getattr(self, "_scrollback_handoff_depth", 0) > 0
+        return getattr(self, "_scrollback_handoff_depth", 0) > 0 or bool(
+            getattr(self, "_pending_scrollback", None)
         )
 
     def running_prompt_allows_text_input(self) -> bool:
