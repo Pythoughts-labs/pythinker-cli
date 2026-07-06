@@ -469,39 +469,43 @@ class _PromptLiveView(_LiveView):
 
             del self._pending_scrollback[: len(batch)]
             del self._pending_scrollback_anchors[: len(batch)]
+            first_commit = not self._committed_scrollback_this_turn
             if any(anchor_batch):
-                first_commit = not self._committed_scrollback_this_turn
                 self._committed_scrollback_this_turn = True
                 if first_commit:
                     self._awaiting_input_card_restore_anchor = True
                 elif self._awaiting_input_card_restore_anchor:
                     self._awaiting_input_card_restore_anchor = False
+            elif self._awaiting_input_card_restore_anchor:
+                self._awaiting_input_card_restore_anchor = False
             self._safe_prompt_invalidate()
 
-    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, True))
-        self._pending_scrollback_anchors.append(False)
-
-    def _emit_action_block(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, True))
-        self._pending_scrollback_anchors.append(True)
-
-    def _emit_steer_echo(self, renderable: RenderableType) -> None:
-        self._pending_scrollback.append((renderable, False))
+    def _append_pending_scrollback(
+        self, renderable: RenderableType, *, blank_row: bool, anchored: bool
+    ) -> None:
+        if not hasattr(self, "_pending_scrollback"):
+            self._pending_scrollback = []
         if not hasattr(self, "_pending_scrollback_anchors"):
             self._pending_scrollback_anchors = []
-        self._pending_scrollback_anchors.append(False)
+        self._pending_scrollback.append((renderable, blank_row))
+        self._pending_scrollback_anchors.append(anchored)
+
+    def _emit_final_scrollback(self, renderable: RenderableType) -> None:
+        self._append_pending_scrollback(renderable, blank_row=True, anchored=False)
+
+    def _emit_action_block(self, renderable: RenderableType) -> None:
+        self._append_pending_scrollback(renderable, blank_row=True, anchored=True)
+
+    def _emit_steer_echo(self, renderable: RenderableType) -> None:
+        self._append_pending_scrollback(renderable, blank_row=False, anchored=False)
 
     def _print_turn_recap(self) -> None:
         block = self._build_turn_recap_block()
         if block is None:
             return
-        self._pending_scrollback.append((Text(""), False))
-        self._pending_scrollback_anchors.append(False)
-        self._pending_scrollback.append((block, False))
-        self._pending_scrollback_anchors.append(False)
-        self._pending_scrollback.append((Text(""), False))
-        self._pending_scrollback_anchors.append(False)
+        self._append_pending_scrollback(Text(""), blank_row=False, anchored=False)
+        self._append_pending_scrollback(block, blank_row=False, anchored=False)
+        self._append_pending_scrollback(Text(""), blank_row=False, anchored=False)
 
     async def _drain_content_for_transition(self, reason: FlushReason) -> None:
         _handoff_trace(f"TRANSITION\t{reason.name}")

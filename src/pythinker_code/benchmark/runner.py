@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 
 _GENERATED_DIRS = {
+    ".git",
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
@@ -84,7 +85,9 @@ async def run_task(
     workspace = recorder.workspace_dir
     materialize_workspace(task, workspace)
     recorder.record_event("workspace_prepared", {"workspace": str(workspace)})
-    effective_timeout = timeout_seconds or task.limits.timeout_seconds
+    effective_timeout = (
+        timeout_seconds if timeout_seconds is not None else task.limits.timeout_seconds
+    )
 
     before = _snapshot_files(workspace)
     started = time.monotonic()
@@ -151,7 +154,9 @@ async def run_task(
                 final_answer = final_message.extract_text(" ")
             recorder.record_event("model_message", {"content": final_answer})
 
-            verification = await asyncio.to_thread(_run_verification, task, workspace)
+            verification = await asyncio.to_thread(
+                _run_verification, task, workspace, effective_timeout
+            )
             recorder.record_event(
                 "verification_finished",
                 {
@@ -221,7 +226,12 @@ async def run_task(
     return result
 
 
-def _run_verification(task: BenchmarkTask, workspace: Path) -> VerificationResult:
+def _run_verification(
+    task: BenchmarkTask, workspace: Path, timeout_seconds: int | None = None
+) -> VerificationResult:
+    effective_timeout = (
+        timeout_seconds if timeout_seconds is not None else task.limits.timeout_seconds
+    )
     try:
         completed = subprocess.run(
             ["/bin/bash", "-c", task.verification.command],
@@ -230,7 +240,7 @@ def _run_verification(task: BenchmarkTask, workspace: Path) -> VerificationResul
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=task.limits.timeout_seconds,
+            timeout=effective_timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:

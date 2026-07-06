@@ -3471,9 +3471,11 @@ class CustomPromptSession:
                 fragments.extend(self._render_input_top_border(columns, tc.separator))
                 fragments.append(("", "\n"))
                 fragments.append(("", _card_side_indent()))
-                fragments.append(
-                    (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
-                )
+            else:
+                fragments.append(("", "\n"))
+            fragments.append(
+                (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
+            )
             return fragments
 
         if is_card_style():
@@ -4020,6 +4022,7 @@ class CustomPromptSession:
         """
         self._turn_starting = False
         self._set_running_fullscreen(False)
+        self.invalidate()
 
     def attach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
         current = getattr(self, "_running_prompt_delegate", None)

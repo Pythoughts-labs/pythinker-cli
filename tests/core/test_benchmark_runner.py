@@ -233,11 +233,18 @@ async def test_run_task_records_timeout_override_for_environment(
         return_value=type("Outcome", (), {"step_count": 1, "final_message": None})()
     )
     recorder = BenchmarkRecorder(tmp_path / "runs", "bench_test")
+    captured_timeout: list[object] = []
+
+    def fake_run(cmd: list[str], **kwargs: object):
+        _ = cmd
+        captured_timeout.append(kwargs.get("timeout"))
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(
         "pythinker_code.benchmark.runner.collect_benchmark_environment",
         lambda *_, task_timeout_seconds, **__: {"task_timeout_seconds": task_timeout_seconds},
     )
+    monkeypatch.setattr("pythinker_code.benchmark.runner.subprocess.run", fake_run)
 
     result = await run_task(
         soul=soul,
@@ -249,6 +256,7 @@ async def test_run_task_records_timeout_override_for_environment(
     )
 
     assert result.environment["task_timeout_seconds"] == 5
+    assert captured_timeout == [5]
 
 
 async def test_run_task_restores_runtime_when_setup_mutation_fails(
@@ -300,3 +308,36 @@ def test_run_verification_does_not_use_login_shell(
     assert result.status == "passed"
     assert captured
     assert captured[0][1] == "-c"
+
+
+def test_run_verification_honors_explicit_zero_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.benchmark import runner
+
+    captured_timeout: list[object] = []
+
+    def fake_run(cmd: list[str], **kwargs: object):
+        _ = cmd
+        captured_timeout.append(kwargs.get("timeout"))
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    result = runner._run_verification(load_task("smoke-edit-readme"), tmp_path, 0)  # pyright: ignore[reportPrivateUsage]
+
+    assert result.status == "passed"
+    assert captured_timeout == [0]
+
+
+def test_snapshot_files_excludes_vcs_metadata(tmp_path: Path) -> None:
+    from pythinker_code.benchmark import runner
+
+    (tmp_path / ".git" / "objects").mkdir(parents=True)
+    (tmp_path / ".git" / "objects" / "pack").write_text("large git data", encoding="utf-8")
+    (tmp_path / "README.md").write_text("content", encoding="utf-8")
+
+    snapshot = runner._snapshot_files(tmp_path)  # pyright: ignore[reportPrivateUsage]
+
+    assert snapshot == {"README.md": "content"}

@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any, cast
 
 from pythinker_code.ui.shell.focus_model import FocusTuiModel
@@ -49,6 +50,15 @@ def test_focus_surface_application_is_fullscreen() -> None:
     app = surface.create_application()
 
     assert app.full_screen is True
+
+
+def test_focus_surface_uses_application_width() -> None:
+    surface = FocusTuiSurface(FocusTuiModel())
+    surface._app = cast(
+        Any, SimpleNamespace(output=SimpleNamespace(get_size=lambda: SimpleNamespace(columns=123)))
+    )  # pyright: ignore[reportPrivateUsage]
+
+    assert surface._render_width() == 123  # pyright: ignore[reportPrivateUsage]
 
 
 def test_focus_surface_modal_delegate_forwards_running_keys() -> None:

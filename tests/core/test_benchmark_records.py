@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from pythinker_code.benchmark.records import BenchmarkRecorder
+from pythinker_code.benchmark.records import BenchmarkRecorder, load_run
 from pythinker_code.benchmark.runner import BenchmarkResult, VerificationResult
 
 
@@ -96,6 +96,15 @@ def test_trace_payload_is_size_capped(tmp_path: Path) -> None:
     trace = (tmp_path / "bench_test" / "trace.jsonl").read_text(encoding="utf-8")
     assert len(trace) < 12_000
     assert "truncated" in trace
+
+
+@pytest.mark.parametrize("run_id", ["../escape", "/tmp/escape", "nested/run", r"nested\run", ""])
+def test_run_ids_reject_path_components(tmp_path: Path, run_id: str) -> None:
+    with pytest.raises(ValueError, match="Invalid benchmark run id"):
+        BenchmarkRecorder(tmp_path, run_id)
+
+    with pytest.raises(ValueError, match="Invalid benchmark run id"):
+        load_run(tmp_path, run_id)
 
 
 def test_context_and_wire_copy_only_tail_and_redact(tmp_path: Path) -> None:

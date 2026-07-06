@@ -200,3 +200,29 @@ def test_fetch_text_wraps_url_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(BenchmarkDiscoveryError, match="Failed to fetch benchmark source"):
         _fetch_text(SOURCE_URLS["terminal-bench"])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_fetch_text_rejects_redirect_to_untrusted_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.benchmark.discovery import _fetch_text
+
+    class _Response:
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return "https://evil.example/redirected"
+
+        def read(self, _limit: int) -> bytes:
+            raise AssertionError("untrusted redirected response must not be read")
+
+    monkeypatch.setenv(DISCOVER_NETWORK_ENV, "1")
+    monkeypatch.setattr(
+        "pythinker_code.benchmark.discovery.urllib.request.urlopen",
+        lambda *_, **__: _Response(),
+    )
+
+    with pytest.raises(BenchmarkDiscoveryError, match="Unsupported benchmark source host"):
+        _fetch_text(SOURCE_URLS["terminal-bench"])  # pyright: ignore[reportPrivateUsage]

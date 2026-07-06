@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from pythinker_code.benchmark.redact import dumps_redacted, redact_text
 from pythinker_code.benchmark.report import render_run_report
+
+if TYPE_CHECKING:
+    from pythinker_code.benchmark.runner import BenchmarkResult
+
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def utc_now() -> str:
@@ -15,6 +21,7 @@ def utc_now() -> str:
 
 class BenchmarkRecorder:
     def __init__(self, root: Path, run_id: str) -> None:
+        _validate_run_id(run_id)
         self.root = root
         self.run_id = run_id
         self.run_dir = root / run_id
@@ -79,7 +86,7 @@ class BenchmarkRecorder:
         self._copy_jsonl_tail_redacted(context_file, self.run_dir / "context.jsonl", context_offset)
         self._copy_jsonl_tail_redacted(wire_file, self.run_dir / "wire.jsonl", wire_offset)
 
-    def finish_run(self, result: Any) -> None:
+    def finish_run(self, result: BenchmarkResult) -> None:
         self.record_event(
             "run_finished",
             {"status": result.status, "exit_reason": result.exit_reason},
@@ -161,6 +168,7 @@ class BenchmarkRecorder:
 
 
 def load_run(root: Path, run_id: str) -> tuple[dict[str, object], dict[str, object] | None]:
+    _validate_run_id(run_id)
     run_dir = root / run_id
     run = cast(dict[str, object], json.loads((run_dir / "run.json").read_text(encoding="utf-8")))
     summary_path = run_dir / "summary.json"
@@ -170,3 +178,14 @@ def load_run(root: Path, run_id: str) -> tuple[dict[str, object], dict[str, obje
         else None
     )
     return run, summary
+
+
+def _validate_run_id(run_id: str) -> None:
+    if (
+        not run_id
+        or run_id in {".", ".."}
+        or "/" in run_id
+        or "\\" in run_id
+        or not _RUN_ID_RE.fullmatch(run_id)
+    ):
+        raise ValueError(f"Invalid benchmark run id: {run_id!r}")

@@ -65,8 +65,9 @@ def render_run_report(
     if verification:
         verification_status = str(verification.get("status", "unknown"))
     estimated_cost = "unavailable"
-    if usage.get("estimated_cost_usd") is not None:
-        estimated_cost = f"${float(usage['estimated_cost_usd']):.4f}"
+    raw_estimated_cost = usage.get("estimated_cost_usd")
+    if isinstance(raw_estimated_cost, (int, float)) and not isinstance(raw_estimated_cost, bool):
+        estimated_cost = f"${raw_estimated_cost:.4f}"
     verification_output = _verification_output(verification)
     final_excerpt = _excerpt(final_answer)
     lines = [

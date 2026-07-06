@@ -123,3 +123,20 @@ def test_render_run_report_does_not_include_publishability_warnings(tmp_path: Pa
     assert "Publishability warnings:" not in run_report
     assert "- Single model only:" not in run_report
     assert "- Single repeat only:" not in run_report
+
+
+def test_render_run_report_ignores_malformed_estimated_cost(tmp_path: Path) -> None:
+    run_report = render_run_report(
+        run={"model_key": "mock", "provider_key": "mock"},
+        summary={
+            "run_id": "bench_bad_cost",
+            "status": "passed",
+            "score": 1.0,
+            "usage": {"estimated_cost_usd": "not-a-number"},
+            "verification": {"status": "passed"},
+            "runtime": {},
+        },
+        artifact_root=tmp_path,
+    )
+
+    assert "- Estimated cost: unavailable" in run_report

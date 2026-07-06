@@ -474,11 +474,14 @@ def test_sticky_input_clear_turn_starting_restores_fullscreen_on_pre_attach_erro
     session._sticky_input = True
     session._previous_full_screen = False
     session._turn_starting = True
+    invalidations: list[int] = []
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
 
     session.clear_turn_starting()
 
     assert session._turn_starting is False
     assert app.full_screen is False
+    assert invalidations == [1]
 
 
 def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup() -> None:
@@ -487,13 +490,17 @@ def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup()
     attribute — this is the public method it calls instead."""
     session = object.__new__(CustomPromptSession)
     session._turn_starting = True
+    invalidations: list[int] = []
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
 
     session.clear_turn_starting()
     assert session._turn_starting is False
+    assert invalidations == [1]
 
     # Idempotent by construction (plain assignment): a repeat call is harmless.
     session.clear_turn_starting()
     assert session._turn_starting is False
+    assert invalidations == [1, 1]
 
 
 def test_render_agent_prompt_message_keeps_empty_card_during_first_load(
@@ -556,6 +563,26 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
     shown_frame = _rendered(False)
     assert border in shown_frame
     assert PROMPT_SYMBOL_AGENT_INPUT in shown_frame
+
+
+def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_stream(
+    monkeypatch,
+) -> None:
+    from prompt_toolkit.formatted_text import FormattedText
+
+    import pythinker_code.ui.shell.prompt as prompt_module
+    from pythinker_code.ui.shell.prompt import PROMPT_SYMBOL_AGENT_INPUT
+
+    session = _card_session(turn_starting=True, delegate=None)
+    session._shortcut_help_open = False
+    monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
+    monkeypatch.setattr(prompt_module, "is_card_style", lambda: False)
+
+    frame = "".join(text for _style, text, *_ in session._render_agent_prompt_message())
+
+    assert frame == f"\n{PROMPT_SYMBOL_AGENT_INPUT} "
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_when_delegate_hides_buffer(
@@ -1097,6 +1124,38 @@ async def test_flush_pending_scrollback_forced_on_turn_end_during_resize_recover
     assert isinstance(printed[0], Text)
     assert printed[0].plain == "Smoke turn one completed."
     assert view._pending_scrollback == []
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_scrollback_restores_input_card_after_next_successful_flush(
+    monkeypatch,
+) -> None:
+    class _PromptSession:
+        def invalidate(self) -> None:
+            pass
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "print", lambda *args, **kwargs: None)
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    view._emit_action_block(Text("first committed action"))
+
+    await view._flush_pending_scrollback()
+
+    assert view._awaiting_input_card_restore_anchor is True
+
+    view._emit_final_scrollback(Text("next scrollback block"))
+
+    await view._flush_pending_scrollback()
+
+    assert view._awaiting_input_card_restore_anchor is False
 
 
 @pytest.mark.asyncio

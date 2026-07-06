@@ -13,10 +13,7 @@ class RunningPromptScene:
     placeholder: str = ""
 
     def render(self, width: int) -> list[str]:
-        lines: list[str] = []
-        for line in self.body.splitlines():
-            if line:
-                lines.append(pad_line(line, width))
+        lines = [pad_line(line, width) for line in self.body.splitlines()]
         lines.append(pad_line(self.top_border, width))
         prompt_line = f"  {self.prompt_symbol} {self.placeholder}".rstrip()
         lines.append(pad_line(prompt_line, width))

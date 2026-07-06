@@ -34,6 +34,11 @@ class FocusTuiSurface:
         footer = f"model · cwd · ctx · files: {self.model.visible_file_count()}"
         return f"{body}\n────────────────\n❯\n{footer}"
 
+    def _render_width(self) -> int:
+        if self._app is None:
+            return 80
+        return max(20, self._app.output.get_size().columns)
+
     def toggle_files(self) -> None:
         self.model.toggle_files()
         self.invalidate()
@@ -77,7 +82,9 @@ class FocusTuiSurface:
             self.toggle_files()
             event.app.invalidate()
 
-        control = FormattedTextControl(lambda: FormattedText([("", self.renderer_text(80))]))
+        control = FormattedTextControl(
+            lambda: FormattedText([("", self.renderer_text(self._render_width()))])
+        )
         app: Application[str] = Application(
             layout=Layout(HSplit([Window(content=control, wrap_lines=False)])),
             key_bindings=kb,

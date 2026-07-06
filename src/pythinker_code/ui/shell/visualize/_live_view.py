@@ -63,6 +63,7 @@ from pythinker_code.ui.shell.visualize._approval_panel import (
     show_approval_in_pager,
 )
 from pythinker_code.ui.shell.visualize._blocks import (
+    _MUTATING_TOOL_NAMES,
     _TOKEN_RATE_MIN_SAMPLES,
     _TOKEN_RATE_WINDOW_S,
     FileActivityShelf,
@@ -875,7 +876,7 @@ class _LiveView:
     @staticmethod
     def _tool_call_path(tool_call: ToolCall) -> str | None:
         name = tool_call.function.name.lower()
-        if name not in {"applypatch", "edit", "replace", "strreplacefile", "write", "writefile"}:
+        if name not in _MUTATING_TOOL_NAMES:
             return None
         try:
             args = json.loads(tool_call.function.arguments or "{}", strict=False)

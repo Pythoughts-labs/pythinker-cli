@@ -41,6 +41,10 @@ class BenchmarkTask:
     tags: list[str]
 
 
+class WorkspaceFileError(ValueError):
+    pass
+
+
 def _bundled_tasks_root() -> Path:
     return Path(str(resources.files("pythinker_code.benchmark.bundled.tasks")))
 
@@ -100,24 +104,10 @@ def _parse_task(raw: dict[str, object], task_id: str) -> BenchmarkTask:
         raise MalformedBenchmarkTaskError(f"Benchmark task {task_id!r} has invalid workspace")
     workspace_data = cast(dict[str, object], workspace)
     files = workspace_data.get("files")
-    if not isinstance(files, dict) or not files:
-        raise MalformedBenchmarkTaskError(f"Benchmark task {task_id!r} workspace has no files")
-    parsed_files: dict[str, str] = {}
-    for name, content in cast(dict[object, object], files).items():
-        if (
-            not isinstance(name, str)
-            or not name
-            or name.startswith("/")
-            or ".." in Path(name).parts
-        ):
-            raise MalformedBenchmarkTaskError(
-                f"Benchmark task {task_id!r} has unsafe workspace path"
-            )
-        if not isinstance(content, str):
-            raise MalformedBenchmarkTaskError(
-                f"Benchmark task {task_id!r} file {name!r} content must be text"
-            )
-        parsed_files[name] = content
+    try:
+        parsed_files = parse_workspace_files(files)
+    except WorkspaceFileError as exc:
+        raise MalformedBenchmarkTaskError(f"Benchmark task {task_id!r} {exc}") from exc
 
     parsed_verification = _parse_verification(verification, task_id)
     parsed_limits = _parse_limits(limits, task_id)
@@ -149,6 +139,24 @@ def _parse_verification(value: object, task_id: str) -> BenchmarkVerification:
             f"Benchmark task {task_id!r} verification must be a command"
         )
     return BenchmarkVerification(type="command", command=command)
+
+
+def parse_workspace_files(files: object) -> dict[str, str]:
+    if not isinstance(files, dict) or not files:
+        raise WorkspaceFileError("workspace.files must be non-empty")
+    parsed_files: dict[str, str] = {}
+    for name, content in cast(dict[object, object], files).items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or name.startswith("/")
+            or ".." in Path(name).parts
+        ):
+            raise WorkspaceFileError("has unsafe workspace path")
+        if not isinstance(content, str):
+            raise WorkspaceFileError(f"file {name!r} content must be text")
+        parsed_files[name] = content
+    return parsed_files
 
 
 def _positive_int(mapping: dict[str, Any], key: str, task_id: str) -> int:

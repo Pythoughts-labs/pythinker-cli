@@ -97,7 +97,12 @@ def _apply_deactivation_intent(
 
 def _asks_to_deactivate_skill(folded_text: str, skill_name: str) -> bool:
     escaped_name = re.escape(skill_name.casefold())
-    return bool(re.search(rf"\b{_DEACTIVATE_VERBS}\s+(?:using\s+)?{escaped_name}\b", folded_text))
+    return bool(
+        re.search(
+            rf"(?<![\w-]){_DEACTIVATE_VERBS}\s+(?:using\s+)?{escaped_name}(?![\w-])",
+            folded_text,
+        )
+    )
 
 
 def _latest_real_user_index(history: Sequence[Message]) -> int | None:

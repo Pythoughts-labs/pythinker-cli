@@ -91,6 +91,15 @@ async def test_stop_named_skill_deactivates_only_that_skill() -> None:
     assert active == ["test-driven-development"]
 
 
+async def test_stop_hyphenated_skill_does_not_deactivate_prefix_skill() -> None:
+    provider = ActiveSkillInjectionProvider()
+    soul = _soul(["test", "test-driven-development"])
+    result = await provider.get_injections([_user("stop test-driven-development")], soul)
+    assert result == []
+    active = cast(Any, soul.runtime).session.state.active_skills
+    assert active == ["test"]
+
+
 async def test_stop_word_without_named_skill_command_keeps_skill_active() -> None:
     provider = ActiveSkillInjectionProvider()
     soul = _soul(["ponytail"])

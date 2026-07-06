@@ -76,3 +76,15 @@ def test_running_prompt_scene_keeps_card_when_body_empty() -> None:
     scene = RunningPromptScene(body="", top_border="──────── ● off", prompt_symbol="❯")
 
     assert scene.render(16) == ["──────── ● off  ", "  ❯             "]
+
+
+def test_running_prompt_scene_preserves_blank_body_lines() -> None:
+    scene = RunningPromptScene(body="a\n\nb", top_border="──────── ● off", prompt_symbol="❯")
+
+    assert scene.render(16) == [
+        "a               ",
+        "                ",
+        "b               ",
+        "──────── ● off  ",
+        "  ❯             ",
+    ]

@@ -140,7 +140,7 @@ Run `/benchmark` to execute deterministic local coding tasks through the active 
 
 ### 🧪 SWE-Style Fixtures
 
-Run trusted local JSONL fixtures with `/benchmark:swe --trusted-dataset true` when you want SWE-style task inputs without a hosted evaluator.
+Run trusted local JSONL fixtures with `/benchmark:swe --dataset <path> --trusted-dataset true` when you want SWE-style task inputs without a hosted evaluator.
 
 </td>
 </tr>

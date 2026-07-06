@@ -6,12 +6,16 @@ from typing import Any, cast
 
 _MAX_STRING_CHARS = 8_000
 _SECRET_PATTERNS = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s\"']+"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(cookie\s*:\s*)[^\n\r]+"),
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s\"']+"),
     re.compile(r"(?i)(access[_-]?token\s*[=:]\s*)[^\s\"']+"),
     re.compile(r"(?i)(refresh[_-]?token\s*[=:]\s*)[^\s\"']+"),
+    re.compile(r"(?i)(passw(?:or)?d\s*[=:]\s*)[^\s\"']+"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{6,}\b"),
 ]
 

@@ -12,6 +12,8 @@ from pythinker_code.benchmark.tasks import (
     BenchmarkTask,
     BenchmarkVerification,
     BenchmarkWorkspace,
+    WorkspaceFileError,
+    parse_workspace_files,
 )
 
 
@@ -113,27 +115,12 @@ def _workspace_files(raw: dict[str, object], line_number: int, path: Path) -> di
             f"SWE benchmark line {line_number} needs local workspace.files: {path}"
         )
     files = cast(dict[str, object], workspace).get("files")
-    if not isinstance(files, dict) or not files:
+    try:
+        return parse_workspace_files(files)
+    except WorkspaceFileError as exc:
         raise MalformedBenchmarkTaskError(
-            f"SWE benchmark line {line_number} workspace.files must be non-empty: {path}"
-        )
-    parsed: dict[str, str] = {}
-    for name, content in cast(dict[object, object], files).items():
-        if (
-            not isinstance(name, str)
-            or not name
-            or name.startswith("/")
-            or ".." in Path(name).parts
-        ):
-            raise MalformedBenchmarkTaskError(
-                f"SWE benchmark line {line_number} has unsafe workspace path: {path}"
-            )
-        if not isinstance(content, str):
-            raise MalformedBenchmarkTaskError(
-                f"SWE benchmark line {line_number} file {name!r} must contain text: {path}"
-            )
-        parsed[name] = content
-    return parsed
+            f"SWE benchmark line {line_number} {exc}: {path}"
+        ) from exc
 
 
 def _verification_command(raw: dict[str, object], line_number: int, path: Path) -> str:

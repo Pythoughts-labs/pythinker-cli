@@ -1493,6 +1493,8 @@ class Shell:
                     break
                 queued = pending.pop(0)
                 console.print(render_user_echo_text(queued.resolved_command))
+                if prompt_session is not None:
+                    prompt_session.mark_turn_starting()
                 if runtime is not None:
                     runtime.background_tasks.begin_turn()
                 await run_soul(

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from pythinker_code.benchmark.errors import BenchmarkDiscoveryError
@@ -33,9 +32,6 @@ class DiscoveredBenchmarkTask:
     source_url: str
     trusted: bool
     notes: str
-
-    def to_json_line(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
 
 
 def discover_benchmark_sources(
@@ -96,16 +92,23 @@ def _fetch_text(url: str) -> str:
             f"/benchmark discover network fetch is disabled. Set {DISCOVER_NETWORK_ENV}=1 "
             "after reviewing the allowlisted source hosts."
         )
-    host = urllib.parse.urlparse(url).hostname
-    if host not in _ALLOWED_HOSTS:
-        raise BenchmarkDiscoveryError(f"Unsupported benchmark source host: {host or '(none)'}")
+    _validate_source_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": "pythinker-benchmark-discovery"})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
+            _validate_source_url(response.geturl())
             raw = response.read(500_000)
     except OSError as exc:
         raise BenchmarkDiscoveryError(f"Failed to fetch benchmark source {url}: {exc}") from exc
     return raw.decode("utf-8", errors="replace")
+
+
+def _validate_source_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_HOSTS:
+        raise BenchmarkDiscoveryError(
+            f"Unsupported benchmark source host: {parsed.hostname or '(none)'}"
+        )
 
 
 def _candidate_titles(text: str, *, source: str, difficulty: str) -> list[str]:
