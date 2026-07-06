@@ -44,7 +44,7 @@ On Windows, run the PowerShell bootstrap. It downloads the native installer, ver
 irm https://pythinker.com/install.ps1 | iex
 ```
 
-You can also download `PythinkerSetup-0.56.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+You can also download `PythinkerSetup-0.57.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 Verify the installation:
 
