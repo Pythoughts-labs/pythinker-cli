@@ -71,10 +71,14 @@ def benchmark_usage() -> str:
             "  /benchmark:all [--model <model-key>]",
             "  /benchmark estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
             "  /benchmark:estimate [--model <model-key>] [--task <task-id> | --suite <suite-name>]",
-            "  /benchmark compare --models <model-a,model-b> [--task <task-id> | "
-            "--suite <suite-name>] [--repeat <n>]",
-            "  /benchmark:compare --models <model-a,model-b> [--task <task-id> | "
-            "--suite <suite-name>] [--repeat <n>]",
+            (
+                "  /benchmark compare --models <model-a,model-b> [--task <task-id> | "
+                + "--suite <suite-name>] [--repeat <n>]"
+            ),
+            (
+                "  /benchmark:compare --models <model-a,model-b> [--task <task-id> | "
+                + "--suite <suite-name>] [--repeat <n>]"
+            ),
             "  /benchmark list",
             "  /benchmark:list",
             "  /benchmark show <run-id>",
@@ -82,12 +86,18 @@ def benchmark_usage() -> str:
             "  /benchmark report [--suite <suite-name>]",
             "  /benchmark:report [--suite <suite-name>]",
             "  /benchmark export [--suite <suite-name>] [--format json|csv] [--output <path>]",
-            "  /benchmark discover --source <allowlisted> --difficulty hard --limit 5 "
-            "[--output <path.jsonl>]",
-            "  /benchmark swe --dataset <path.jsonl> --trusted-dataset true "
-            "[--instance <instance-id>]",
-            "  /benchmark:swe --dataset <path.jsonl> --trusted-dataset true "
-            "[--instance <instance-id>]",
+            (
+                "  /benchmark discover --source <allowlisted> --difficulty hard --limit 5 "
+                + "[--output <path.jsonl>]"
+            ),
+            (
+                "  /benchmark swe --dataset <path.jsonl> --trusted-dataset true "
+                + "[--instance <instance-id>]"
+            ),
+            (
+                "  /benchmark:swe --dataset <path.jsonl> --trusted-dataset true "
+                + "[--instance <instance-id>]"
+            ),
         ]
     )
 

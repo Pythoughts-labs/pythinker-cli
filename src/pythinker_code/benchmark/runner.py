@@ -94,8 +94,6 @@ async def run_task(
     wire_offset = _file_size(wire_file)
     steps = 0
     final_answer = ""
-    status = "internal_benchmark_error"
-    exit_reason = "internal_error"
     cancelled = False
     verification = VerificationResult(
         status="not_run",

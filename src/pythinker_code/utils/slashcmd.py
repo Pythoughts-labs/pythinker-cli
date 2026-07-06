@@ -1,3 +1,4 @@
+import inspect
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -70,7 +71,7 @@ class SlashCommandRegistry[F: Callable[..., None | Awaitable[None]]]:
             # Create the primary command with aliases
             cmd = SlashCommand[F](
                 name=primary,
-                description=(f.__doc__ or "").strip(),
+                description=inspect.cleandoc(f.__doc__ or "").strip(),
                 func=f,
                 aliases=alias_list,
                 available_during_task=available_during_task,

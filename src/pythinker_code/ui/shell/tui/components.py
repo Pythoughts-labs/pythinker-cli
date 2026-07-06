@@ -8,9 +8,11 @@ from pythinker_code.ui.shell.tui.width import pad_line, wrap_plain_text
 
 
 class Component(Protocol):
-    def render(self, width: int) -> list[str]: ...
+    def render(self, width: int) -> list[str]:
+        raise NotImplementedError
 
-    def invalidate(self) -> None: ...
+    def invalidate(self) -> None:
+        raise NotImplementedError
 
 
 def _empty_children() -> list[Component]:

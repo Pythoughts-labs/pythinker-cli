@@ -14,9 +14,11 @@ from pythinker_code.ui.shell.focus_model import FocusTuiModel
 
 
 class _KeyDelegate(Protocol):
-    def should_handle_running_prompt_key(self, key: str) -> bool: ...
+    def should_handle_running_prompt_key(self, key: str) -> bool:
+        raise NotImplementedError
 
-    def handle_running_prompt_key(self, key: str, event: KeyPressEvent) -> None: ...
+    def handle_running_prompt_key(self, key: str, event: KeyPressEvent) -> None:
+        raise NotImplementedError
 
 
 class FocusTuiSurface:
