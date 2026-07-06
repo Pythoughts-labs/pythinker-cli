@@ -2925,7 +2925,7 @@ def test_background_status_shows_elapsed_tokens_and_rate(monkeypatch) -> None:
     assert "(<1s, ↓ 40.8k tokens, 1000 t/s)" in third
 
     # Draining background work resets the trackers.
-    session._background_task_count_provider = lambda: prompt_module.BgTaskCounts()
+    session._background_task_count_provider = prompt_module.BgTaskCounts
     assert render() == ""
     assert session._bg_status_started_at is None
     assert session._bg_status_start_tokens is None
