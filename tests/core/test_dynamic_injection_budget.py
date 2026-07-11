@@ -35,6 +35,24 @@ def test_collect_within_budget_truncates_deterministically():
     assert (out[0].token_estimate or 0) <= 10
 
 
+def test_collect_within_budget_recomputes_untrusted_candidate_estimate():
+    out = collect_within_budget(
+        [
+            InjectionCandidate(
+                type="understated",
+                content="x" * 40,
+                priority=10,
+                token_estimate=1,
+            )
+        ],
+        budget_tokens=5,
+    )
+
+    assert len(out) == 1
+    assert out[0].content.endswith("…")
+    assert out[0].token_estimate == 5
+
+
 def test_context_budget_uses_ceiling_and_available_context():
     assert (
         ContextBudget(

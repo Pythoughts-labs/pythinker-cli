@@ -78,51 +78,38 @@ def collect_within_budget(
     Oversize candidates are truncated at a line boundary when possible; otherwise they are
     dropped if no useful prefix fits. The input order is the tie-breaker for equal priorities.
     """
-    if budget_tokens <= 0:
-        return []
-    ordered = sorted(enumerate(candidates), key=lambda item: (-item[1].priority, item[0]))
-    out: list[InjectionCandidate] = []
-    used = 0
-    truncation_used = False
-    for _index, candidate in ordered:
-        estimate = candidate.token_estimate or estimate_injection_tokens(candidate.content)
-        if estimate <= 0:
-            continue
-        if used + estimate <= budget_tokens:
-            out.append(replace(candidate, token_estimate=estimate))
-            used += estimate
-            continue
-        # Whole-fit failed. Truncate at most once per call, for the first
-        # (highest-priority) candidate that didn't whole-fit. Lower-priority
-        # candidates further down the loop may still whole-fit in remaining
-        # budget; don't break — keep scanning.
-        if truncation_used:
-            continue
-        truncation_used = True
-        remaining = budget_tokens - used
-        if remaining <= 0:
-            continue
-        truncated = _truncate_to_tokens(candidate.content, remaining)
-        if not truncated:
-            continue
-        truncated_estimate = estimate_injection_tokens(truncated)
-        if truncated_estimate <= 0 or used + truncated_estimate > budget_tokens:
-            continue
-        out.append(replace(candidate, content=truncated, token_estimate=truncated_estimate))
-        used += truncated_estimate
-    return out
+    from pythinker_code.soul.request_assembly import (
+        FragmentPersistence,
+        FragmentRequirement,
+        FragmentStatus,
+        RequestFragment,
+        admit_fragments,
+    )
 
-
-def _truncate_to_tokens(text: str, budget_tokens: int) -> str:
-    max_chars = max(0, budget_tokens * 4)
-    if max_chars <= 1:
-        return ""
-    truncated = text[: max_chars - 1].rstrip()
-    if "\n" in truncated:
-        truncated = truncated.rsplit("\n", 1)[0].rstrip()
-    if not truncated:
-        return ""
-    return f"{truncated}\n…"
+    fragments = tuple(
+        RequestFragment(
+            key=f"legacy_{index}",
+            content=candidate.content,
+            source=f"legacy_{index}",
+            requirement=FragmentRequirement.BEST_EFFORT,
+            persistence=FragmentPersistence.HISTORY,
+            priority=candidate.priority,
+            truncatable=True,
+        )
+        for index, candidate in enumerate(candidates)
+    )
+    source_order = tuple(fragment.source for fragment in fragments)
+    admissions = admit_fragments(fragments, max(0, budget_tokens), source_order)
+    candidates_by_key = {f"legacy_{index}": candidate for index, candidate in enumerate(candidates)}
+    return [
+        replace(
+            candidates_by_key[admission.fragment.key],
+            content=admission.fragment.content,
+            token_estimate=admission.outcome.admitted_tokens,
+        )
+        for admission in admissions
+        if admission.outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
+    ]
 
 
 def dynamic_to_candidate(injection: DynamicInjection, *, priority: int = 100) -> InjectionCandidate:
