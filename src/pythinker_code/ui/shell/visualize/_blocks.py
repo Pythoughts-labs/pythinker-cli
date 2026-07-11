@@ -43,6 +43,7 @@ from pythinker_code.ui.shell.components.report_update import (
 )
 from pythinker_code.ui.shell.console import current_console_width
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER, TRANSCRIPT_STATUS_MARKER
+from pythinker_code.ui.shell.markdown.fences import iter_fence_aware_lines
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
 from pythinker_code.ui.shell.motion import (
     ActivitySnapshot,
@@ -559,6 +560,33 @@ def _tail_lines(text: str, n: int) -> str:
         if pos == -1:
             return text
     return text[pos + 1 :]
+
+
+_COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--.*?-->[ \t]*(?=\r?$)")
+
+
+def _render_thinking_preview(preview: str) -> RenderableType | None:
+    segments: list[str] = []
+    unfenced: list[str] = []
+
+    def flush_unfenced() -> None:
+        if not unfenced:
+            return
+        segments.append(_COMPLETE_HTML_COMMENT_BLOCK_RE.sub("", "".join(unfenced)))
+        unfenced.clear()
+
+    for line, inside_fence in iter_fence_aware_lines(preview):
+        if inside_fence:
+            flush_unfenced()
+            segments.append(line)
+        else:
+            unfenced.append(line)
+    flush_unfenced()
+
+    cleaned = "".join(segments)
+    if not cleaned.strip():
+        return None
+    return render_agent_body(cleaned)
 
 
 def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
@@ -1123,12 +1151,15 @@ class _ContentBlock:
         if not pending:
             return spinner
         preview = self._build_preview(pending, max_lines=_THINKING_PREVIEW_LINES)
+        rendered_preview = _render_thinking_preview(preview)
+        if rendered_preview is None:
+            return spinner
         preview_style = tui_rich_style("thinking_text") + Style(italic=True)
         return Group(
             spinner,
             BLANK_ROW,
             BulletColumns(
-                Text(preview, style=preview_style),
+                rendered_preview,
                 bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=preview_style),
             ),
         )

@@ -386,7 +386,7 @@ def test_thinking_stream_preview_has_standard_gap_after_activity_line():
     _assert_blank_line_after_activity(console.export_text(), "Thinking")
 
 
-def test_thinking_stream_preview_uses_transcript_bullet_after_activity_line():
+def test_thinking_stream_preview_renders_complete_markdown():
     block = _ContentBlock(is_think=True, show_thinking_stream=True)
     block.append("**Preparing report generation**")
     console = Console(record=True, width=120, color_system=None)
@@ -394,7 +394,42 @@ def test_thinking_stream_preview_uses_transcript_bullet_after_activity_line():
     output = console.export_text()
 
     assert "Thinking" in output
-    assert "\n\n⏺ **Preparing report generation**" in output
+    assert "\n\n⏺ Preparing report generation" in output
+    assert "**Preparing report generation**" not in output
+
+
+def test_thinking_stream_preview_hides_complete_top_level_html_comments():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("Visible before.\n\n<!-- internal separator -->\n\nVisible after.")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "Visible before." in output
+    assert "Visible after." in output
+    assert "internal separator" not in output
+    assert "<!--" not in output
+    assert "-->" not in output
+
+
+def test_thinking_stream_preview_preserves_incomplete_markup():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("**Planning agent\n\n<!-- incomplete")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "**Planning agent" in output
+    assert "<!-- incomplete" in output
+
+
+def test_thinking_stream_preview_preserves_comment_example_in_fenced_code():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("```markdown\n<!-- literal example -->\n```")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+
+    assert "<!-- literal example -->" in console.export_text()
 
 
 def _style_for(renderable: Text, text: str) -> Style:
