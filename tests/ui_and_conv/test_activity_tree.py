@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from rich.console import Console
+from rich.console import Console, Group, RenderableType
+from rich.style import Style
+from rich.text import Text
 
-from pythinker_code.ui.shell.design_system import status_icon
+from pythinker_code.ui.shell.design_system import ShellTone, shell_style, status_icon
 from pythinker_code.ui.shell.visualize._activity_tree import ActivityRow, render_activity_tree
+from pythinker_code.ui.theme import tui_rich_style
 
 _RUNNING_GLYPH = status_icon("running").plain
 
@@ -70,3 +73,32 @@ def test_non_running_row_marker_does_not_pulse(monkeypatch):
     off_phase = _plain(render_activity_tree(rows, width=80, now=0.8))
     assert completed_glyph in on_phase
     assert completed_glyph in off_phase
+
+
+def _detail_style(renderable: RenderableType, detail: str) -> Style:
+    assert isinstance(renderable, Group)
+    row = renderable.renderables[0]
+    assert isinstance(row, Text)
+    console = Console(color_system="truecolor")
+    return row.get_style_at_offset(console, row.plain.index(detail))
+
+
+def test_running_activity_detail_is_static_muted_text(monkeypatch):
+    for flag in (
+        "NO_COLOR",
+        "PYTHINKER_REDUCED_MOTION",
+        "PYTHINKER_NO_ANIMATION",
+        "PYTHINKER_STATIC_OUTPUT",
+    ):
+        monkeypatch.delenv(flag, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    rows = [ActivityRow(label="agent", detail="Shell uv run pytest", state="running")]
+
+    first = _detail_style(render_activity_tree(rows, width=80, now=0.88), "Shell")
+    later = _detail_style(render_activity_tree(rows, width=80, now=1.18), "Shell")
+
+    assert first.color == shell_style(ShellTone.MUTED).color
+    assert later.color == shell_style(ShellTone.MUTED).color
+    assert first.color != tui_rich_style("activity_verb").color
+    assert later.color != tui_rich_style("activity_verb").color
