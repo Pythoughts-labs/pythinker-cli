@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +25,33 @@ _LOST_RESULT_NOTE = (
     "Tool call result was lost before it could be recorded (the session ended "
     "unexpectedly). Re-run the tool if its output is still needed."
 )
+
+_ContextRecord = Message | dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _ContextState:
+    history: tuple[Message, ...]
+    token_count: int
+    pending_messages: tuple[Message, ...]
+    pending_token_estimate: int
+    next_checkpoint_id: int
+    system_prompt: str | None
+    tail_repaired: bool
+
+
+def _empty_context_state() -> _ContextState:
+    return _ContextState((), 0, (), 0, 0, None, False)
+
+
+def _serialize_context_records(records: Sequence[_ContextRecord]) -> str:
+    serialized: list[str] = []
+    for record in records:
+        if isinstance(record, Message):
+            serialized.append(record.model_dump_json(exclude_none=True))
+        else:
+            serialized.append(json.dumps(record))
+    return "".join(f"{record}\n" for record in serialized)
 
 
 def repair_history_invariants(history: Sequence[Message]) -> list[Message]:
@@ -78,66 +106,209 @@ def repair_history_invariants(history: Sequence[Message]) -> list[Message]:
     return repaired
 
 
+def _reduce_context_records(
+    state: _ContextState,
+    records: Sequence[Message | dict[str, Any]],
+    *,
+    file_backend: Path,
+    line_numbers: Sequence[int] | None = None,
+) -> tuple[_ContextState, tuple[bool, ...]]:
+    history = list(state.history)
+    pending_messages = list(state.pending_messages)
+    pending_token_estimate = state.pending_token_estimate
+    pending_segment: list[Message] = []
+    token_count = state.token_count
+    next_checkpoint_id = state.next_checkpoint_id
+    system_prompt = state.system_prompt
+    accepted: list[bool] = []
+
+    for index, record in enumerate(records):
+        line_no = line_numbers[index] if line_numbers is not None else 0
+        if isinstance(record, Message):
+            history.append(record)
+            pending_messages.append(record)
+            pending_segment.append(record)
+            accepted.append(True)
+            continue
+
+        role = record.get("role")
+        if not isinstance(role, str):
+            logger.warning(
+                "Skipping context line {line_no} in {file}: missing or invalid role",
+                line_no=line_no,
+                file=file_backend,
+            )
+            accepted.append(False)
+            continue
+        if role == "_system_prompt":
+            content = record.get("content")
+            if not isinstance(content, str):
+                logger.warning(
+                    "Skipping invalid system prompt line {line_no} in {file}",
+                    line_no=line_no,
+                    file=file_backend,
+                )
+                accepted.append(False)
+                continue
+            system_prompt = content
+            accepted.append(True)
+            continue
+        if role == "_usage":
+            usage_token_count = record.get("token_count")
+            if not isinstance(usage_token_count, int):
+                logger.warning(
+                    "Skipping invalid usage line {line_no} in {file}",
+                    line_no=line_no,
+                    file=file_backend,
+                )
+                accepted.append(False)
+                continue
+            token_count = usage_token_count
+            pending_messages.clear()
+            pending_token_estimate = 0
+            pending_segment.clear()
+            accepted.append(True)
+            continue
+        if role == "_checkpoint":
+            checkpoint_id = record.get("id")
+            if not isinstance(checkpoint_id, int):
+                logger.warning(
+                    "Skipping invalid checkpoint line {line_no} in {file}",
+                    line_no=line_no,
+                    file=file_backend,
+                )
+                accepted.append(False)
+                continue
+            next_checkpoint_id = checkpoint_id + 1
+            accepted.append(True)
+            continue
+        try:
+            message = Message.model_validate(record)
+        except ValidationError as exc:
+            logger.warning(
+                "Skipping invalid context message line {line_no} in {file}: {error}",
+                line_no=line_no,
+                file=file_backend,
+                error=exc,
+            )
+            accepted.append(False)
+            continue
+        history.append(message)
+        pending_messages.append(message)
+        pending_segment.append(message)
+        accepted.append(True)
+
+    pending_token_estimate += estimate_text_tokens(pending_segment)
+    return (
+        _ContextState(
+            history=tuple(history),
+            token_count=token_count,
+            pending_messages=tuple(pending_messages),
+            pending_token_estimate=pending_token_estimate,
+            next_checkpoint_id=next_checkpoint_id,
+            system_prompt=system_prompt,
+            tail_repaired=state.tail_repaired,
+        ),
+        tuple(accepted),
+    )
+
+
+def _repair_context_state(state: _ContextState) -> _ContextState:
+    history = tuple(repair_history_invariants(state.history))
+    pending_messages = tuple(repair_history_invariants(state.pending_messages))
+    return replace(
+        state,
+        history=history,
+        pending_messages=pending_messages,
+        pending_token_estimate=estimate_text_tokens(pending_messages),
+    )
+
+
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
         self._history: list[Message] = []
         self._token_count: int = 0
+        self._pending_messages: tuple[Message, ...] = ()
         self._pending_token_estimate: int = 0
         self._next_checkpoint_id: int = 0
         """The ID of the next checkpoint, starting from 0, incremented after each checkpoint."""
         self._system_prompt: str | None = None
         self._tail_repaired: bool = False
+        self._mutation_lock = asyncio.Lock()
 
-    def _tail_repair_prefix(self) -> str:
+    def _tail_repair_prefix(self, state: _ContextState) -> str:
         """One-time torn-line terminator for the append paths.
 
         A crash mid-append can leave an unterminated final line; without the
         repair the next record glues onto it and readers skip both lines.
         """
-        if self._tail_repaired:
+        if state.tail_repaired:
             return ""
-        self._tail_repaired = True
         return "" if ends_with_newline(self._file_backend) else "\n"
 
+    def _state(self) -> _ContextState:
+        return _ContextState(
+            history=tuple(self._history),
+            token_count=self._token_count,
+            pending_messages=self._pending_messages,
+            pending_token_estimate=self._pending_token_estimate,
+            next_checkpoint_id=self._next_checkpoint_id,
+            system_prompt=self._system_prompt,
+            tail_repaired=self._tail_repaired,
+        )
+
+    def _swap_state(self, state: _ContextState) -> None:
+        self._history[:] = state.history
+        self._token_count = state.token_count
+        self._pending_messages = state.pending_messages
+        self._pending_token_estimate = state.pending_token_estimate
+        self._next_checkpoint_id = state.next_checkpoint_id
+        self._system_prompt = state.system_prompt
+        self._tail_repaired = state.tail_repaired
+
     async def restore(self) -> bool:
-        logger.debug("Restoring context from file: {file_backend}", file_backend=self._file_backend)
-        if self._history:
-            logger.error("The context storage is already modified")
-            raise RuntimeError("The context storage is already modified")
-        if not self._file_backend.exists():
-            logger.debug("No context file found, skipping restoration")
-            return False
-        if self._file_backend.stat().st_size == 0:
-            logger.debug("Empty context file, skipping restoration")
-            return False
+        async with self._mutation_lock:
+            logger.debug(
+                "Restoring context from file: {file_backend}", file_backend=self._file_backend
+            )
+            if self._history:
+                logger.error("The context storage is already modified")
+                raise RuntimeError("The context storage is already modified")
+            if not self._file_backend.exists():
+                logger.debug("No context file found, skipping restoration")
+                return False
+            if self._file_backend.stat().st_size == 0:
+                logger.debug("Empty context file, skipping restoration")
+                return False
 
-        messages_after_last_usage: list[Message] = []
-        async with aiofiles.open(self._file_backend, encoding="utf-8", errors="replace") as f:
-            line_no = 0
-            async for line in f:
-                line_no += 1
-                if not line.strip():
-                    continue
-                line_json = self._parse_context_line(
-                    line,
-                    file_backend=self._file_backend,
-                    line_no=line_no,
-                )
-                if line_json is None:
-                    continue
-                self._apply_context_record(
-                    line_json,
-                    history=self._history,
-                    messages_after_last_usage=messages_after_last_usage,
-                    file_backend=self._file_backend,
-                    line_no=line_no,
-                )
+            state = _empty_context_state()
+            records: list[dict[str, Any]] = []
+            line_numbers: list[int] = []
+            async with aiofiles.open(self._file_backend, encoding="utf-8", errors="replace") as f:
+                line_no = 0
+                async for line in f:
+                    line_no += 1
+                    if not line.strip():
+                        continue
+                    line_json = self._parse_context_line(
+                        line,
+                        file_backend=self._file_backend,
+                        line_no=line_no,
+                    )
+                    if line_json is None:
+                        continue
+                    records.append(line_json)
+                    line_numbers.append(line_no)
 
-        self._history[:] = repair_history_invariants(self._history)
-        messages_after_last_usage[:] = repair_history_invariants(messages_after_last_usage)
-        self._pending_token_estimate = estimate_text_tokens(messages_after_last_usage)
-        return True
+            state, _ = _reduce_context_records(
+                state,
+                records,
+                file_backend=self._file_backend,
+                line_numbers=line_numbers,
+            )
+            self._swap_state(_repair_context_state(state))
+            return True
 
     @property
     def history(self) -> Sequence[Message]:
@@ -171,11 +342,14 @@ class Context:
         temporary file to avoid corruption on crash and avoid loading the entire file
         into memory.
         """
-        prompt_line = json.dumps({"role": "_system_prompt", "content": prompt}) + "\n"
+        prompt_record: dict[str, object] = {"role": "_system_prompt", "content": prompt}
+        prompt_line = _serialize_context_records((prompt_record,))
 
         def _write_system_prompt_sync() -> None:
             if not self._file_backend.exists() or self._file_backend.stat().st_size == 0:
-                self._file_backend.write_text(prompt_line, encoding="utf-8")
+                with self._file_backend.open("w", encoding="utf-8") as prompt_file:
+                    prompt_file.write(prompt_line)
+                    prompt_file.flush()
                 return
 
             # Unique temp name (NOT a fixed .tmp suffix): two processes
@@ -196,33 +370,71 @@ class Context:
                         if not chunk:
                             break
                         tmp_f.write(chunk)
+                    tmp_f.flush()
                 tmp_path.replace(self._file_backend)
             except BaseException:
                 with contextlib.suppress(OSError):
                     tmp_path.unlink()
                 raise
 
-        await asyncio.to_thread(_write_system_prompt_sync)
-
-        self._system_prompt = prompt
-
-    async def checkpoint(self, add_user_message: bool):
-        checkpoint_id = self._next_checkpoint_id
-        self._next_checkpoint_id += 1
-        logger.debug("Checkpointing, ID: {id}", id=checkpoint_id)
-
-        async with aiofiles.open(self._file_backend, "a", encoding="utf-8") as f:
-            await f.write(
-                self._tail_repair_prefix()
-                + json.dumps({"role": "_checkpoint", "id": checkpoint_id})
-                + "\n"
+        async with self._mutation_lock:
+            state, _ = _reduce_context_records(
+                self._state(),
+                (prompt_record,),
+                file_backend=self._file_backend,
             )
-        if add_user_message:
-            await self.append_message(
-                Message(role="user", content=[system(f"CHECKPOINT {checkpoint_id}")])
-            )
+            await asyncio.to_thread(_write_system_prompt_sync)
+            self._swap_state(state)
 
-    async def revert_to(self, checkpoint_id: int):
+    async def _append_serialized(self, payload: str, state: _ContextState) -> None:
+        original_size = self._file_backend.stat().st_size if self._file_backend.exists() else 0
+        append_payload = self._tail_repair_prefix(state) + payload
+        async with aiofiles.open(self._file_backend, "a", encoding="utf-8") as context_file:
+            try:
+                await context_file.write(append_payload)
+                await context_file.flush()
+            except BaseException as append_error:
+                try:
+                    await context_file.truncate(original_size)
+                except BaseException as rollback_error:
+                    raise BaseExceptionGroup(
+                        "Context append and rollback both failed",
+                        (append_error, rollback_error),
+                    ) from append_error
+                raise
+
+    async def checkpoint(self, add_user_message: bool) -> None:
+        async with self._mutation_lock:
+            state = self._state()
+            checkpoint_id = state.next_checkpoint_id
+            logger.debug("Checkpointing, ID: {id}", id=checkpoint_id)
+            checkpoint_record: dict[str, object] = {
+                "role": "_checkpoint",
+                "id": checkpoint_id,
+            }
+            records: tuple[_ContextRecord, ...]
+            if add_user_message:
+                records = (
+                    checkpoint_record,
+                    Message(role="user", content=[system(f"CHECKPOINT {checkpoint_id}")]),
+                )
+            else:
+                records = (checkpoint_record,)
+            payload = _serialize_context_records(records)
+            next_state, _ = _reduce_context_records(
+                state,
+                records,
+                file_backend=self._file_backend,
+            )
+            next_state = replace(next_state, tail_repaired=True)
+            await self._append_serialized(payload, state)
+            self._swap_state(next_state)
+
+    async def revert_to(self, checkpoint_id: int) -> None:
+        async with self._mutation_lock:
+            await self._revert_to(checkpoint_id)
+
+    async def _revert_to(self, checkpoint_id: int) -> None:
         """
         Revert the context to the specified checkpoint.
         After this, the specified checkpoint and all subsequent content will be
@@ -289,9 +501,14 @@ class Context:
 
         self._history[:] = repair_history_invariants(self._history)
         messages_after_last_usage[:] = repair_history_invariants(messages_after_last_usage)
+        self._pending_messages = tuple(messages_after_last_usage)
         self._pending_token_estimate = estimate_text_tokens(messages_after_last_usage)
 
-    async def clear(self):
+    async def clear(self) -> None:
+        async with self._mutation_lock:
+            await self._clear()
+
+    async def _clear(self) -> None:
         """
         Clear the context history.
         This is almost equivalent to revert_to(0), but without relying on the assumption
@@ -317,32 +534,44 @@ class Context:
 
         self._history.clear()
         self._token_count = 0
+        self._pending_messages = ()
         self._pending_token_estimate = 0
         self._next_checkpoint_id = 0
         self._system_prompt = None
 
-    async def append_message(self, message: Message | Sequence[Message]):
-        logger.debug("Appending message(s) to context: {message}", message=message)
-        messages = [message] if isinstance(message, Message) else message
-        self._history.extend(messages)
-        self._pending_token_estimate += estimate_text_tokens(messages)
+    async def append_message(self, message: Message | Sequence[Message]) -> None:
+        messages = (message,) if isinstance(message, Message) else message
+        await self.append_messages(messages)
 
-        async with aiofiles.open(self._file_backend, "a", encoding="utf-8") as f:
-            await f.write(self._tail_repair_prefix())
-            for message in messages:
-                await f.write(message.model_dump_json(exclude_none=True) + "\n")
-
-    async def update_token_count(self, token_count: int):
-        logger.debug("Updating token count in context: {token_count}", token_count=token_count)
-        self._token_count = token_count
-        self._pending_token_estimate = 0
-
-        async with aiofiles.open(self._file_backend, "a", encoding="utf-8") as f:
-            await f.write(
-                self._tail_repair_prefix()
-                + json.dumps({"role": "_usage", "token_count": token_count})
-                + "\n"
+    async def append_messages(self, messages: Sequence[Message]) -> None:
+        logger.debug("Appending messages to context: {messages}", messages=messages)
+        message_batch = tuple(messages)
+        payload = _serialize_context_records(message_batch)
+        async with self._mutation_lock:
+            state = self._state()
+            next_state, _ = _reduce_context_records(
+                state,
+                message_batch,
+                file_backend=self._file_backend,
             )
+            next_state = replace(next_state, tail_repaired=True)
+            await self._append_serialized(payload, state)
+            self._swap_state(next_state)
+
+    async def update_token_count(self, token_count: int) -> None:
+        logger.debug("Updating token count in context: {token_count}", token_count=token_count)
+        usage_record: dict[str, object] = {"role": "_usage", "token_count": token_count}
+        payload = _serialize_context_records((usage_record,))
+        async with self._mutation_lock:
+            state = self._state()
+            next_state, _ = _reduce_context_records(
+                state,
+                (usage_record,),
+                file_backend=self._file_backend,
+            )
+            next_state = replace(next_state, tail_repaired=True)
+            await self._append_serialized(payload, state)
+            self._swap_state(next_state)
 
     def _parse_context_line(
         self,
@@ -379,58 +608,24 @@ class Context:
         file_backend: Path,
         line_no: int,
     ) -> bool:
-        role = line_json.get("role")
-        if not isinstance(role, str):
-            logger.warning(
-                "Skipping context line {line_no} in {file}: missing or invalid role",
-                line_no=line_no,
-                file=file_backend,
-            )
-            return False
-        if role == "_system_prompt":
-            content = line_json.get("content")
-            if not isinstance(content, str):
-                logger.warning(
-                    "Skipping invalid system prompt line {line_no} in {file}",
-                    line_no=line_no,
-                    file=file_backend,
-                )
-                return False
-            self._system_prompt = content
-            return True
-        if role == "_usage":
-            token_count = line_json.get("token_count")
-            if not isinstance(token_count, int):
-                logger.warning(
-                    "Skipping invalid usage line {line_no} in {file}",
-                    line_no=line_no,
-                    file=file_backend,
-                )
-                return False
-            self._token_count = token_count
-            messages_after_last_usage.clear()
-            return True
-        if role == "_checkpoint":
-            checkpoint_id = line_json.get("id")
-            if not isinstance(checkpoint_id, int):
-                logger.warning(
-                    "Skipping invalid checkpoint line {line_no} in {file}",
-                    line_no=line_no,
-                    file=file_backend,
-                )
-                return False
-            self._next_checkpoint_id = checkpoint_id + 1
-            return True
-        try:
-            message = Message.model_validate(line_json)
-        except ValidationError as exc:
-            logger.warning(
-                "Skipping invalid context message line {line_no} in {file}: {error}",
-                line_no=line_no,
-                file=file_backend,
-                error=exc,
-            )
-            return False
-        history.append(message)
-        messages_after_last_usage.append(message)
-        return True
+        state = _ContextState(
+            history=tuple(history),
+            token_count=self._token_count,
+            pending_messages=tuple(messages_after_last_usage),
+            pending_token_estimate=estimate_text_tokens(messages_after_last_usage),
+            next_checkpoint_id=self._next_checkpoint_id,
+            system_prompt=self._system_prompt,
+            tail_repaired=self._tail_repaired,
+        )
+        next_state, accepted = _reduce_context_records(
+            state,
+            (line_json,),
+            file_backend=file_backend,
+            line_numbers=(line_no,),
+        )
+        history[:] = next_state.history
+        messages_after_last_usage[:] = next_state.pending_messages
+        self._token_count = next_state.token_count
+        self._next_checkpoint_id = next_state.next_checkpoint_id
+        self._system_prompt = next_state.system_prompt
+        return accepted[0]
