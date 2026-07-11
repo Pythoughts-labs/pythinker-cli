@@ -107,6 +107,10 @@ Format: trigger → rule.
 
 ## Verification gates
 
+- **When a repo-required skill is absent from the advertised Codex skill roots**, check the
+  project-documented legacy skill roots (especially `~/.claude/skills/`) before reporting it as
+  unavailable; an incomplete root search is not evidence that the skill is missing.
+
 - **When running a gate command (make check, pytest, ruff) through a pipe or
   in the background**, the pipeline exit code is the LAST command's (e.g.
   `tail`), and background notifications report that masked code. Never claim

@@ -215,6 +215,61 @@ def test_name_phrase_requires_contiguous_normalized_tokens_not_substrings(tmp_pa
     ]
 
 
+@pytest.mark.parametrize(
+    "query",
+    ["$github:gh-fix-ci", "/skill:github:gh-fix-ci", "github:gh-fix-ci"],
+)
+def test_search_promotes_complete_qualified_alias_to_exact_name(
+    query: str,
+    tmp_path: Path,
+) -> None:
+    catalog = SkillCatalog(
+        {
+            "gh-fix-ci": _skill_for_catalog(
+                tmp_path / "gh-fix-ci" / "SKILL.md", "gh-fix-ci", "GitHub CI"
+            ),
+            "github-helper": _skill_for_catalog(
+                tmp_path / "github-helper" / "SKILL.md",
+                "github-helper",
+                "Fix GitHub CI failures",
+            ),
+        },
+        (),
+    )
+
+    matches = catalog.search(query, limit=2)
+
+    assert [match.skill.name for match in matches] == ["gh-fix-ci", "github-helper"]
+    assert matches[0].tier is SkillRelevanceTier.EXACT_NAME
+    assert matches[0].reasons == ("exact_alias",)
+
+
+@pytest.mark.parametrize("query", ["deploy", "release deploy safely"])
+def test_relevance_beats_scope_with_limit_one(query: str, tmp_path: Path) -> None:
+    catalog = SkillCatalog(
+        {
+            "deploy": _skill_for_catalog(
+                tmp_path / "builtin" / "SKILL.md",
+                "deploy",
+                "Ship releases",
+                "builtin",
+            ),
+            "project-helper": _skill_for_catalog(
+                tmp_path / "project" / "SKILL.md",
+                "project-helper",
+                "deploy release safely",
+                "project",
+            ),
+        },
+        (),
+    )
+
+    match = catalog.search(query, limit=1)[0]
+
+    assert match.skill.name == "deploy"
+    assert match.tier in (SkillRelevanceTier.EXACT_NAME, SkillRelevanceTier.NAME_PHRASE)
+
+
 @pytest.mark.asyncio
 async def test_search_is_stable_under_reversed_insertion_order(tmp_path: Path) -> None:
     skills = {
@@ -332,7 +387,7 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
             f"fixture-{index:04d}",
             f"generic capability {index}",
         )
-        for index in range(1_000)
+        for index in range(1_000 - len(fixture["skills"]))
     }
     for item in fixture["skills"]:
         skills[item["name"]] = _skill_for_catalog(
@@ -343,9 +398,11 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
         )
     catalog = SkillCatalog(skills, ())
 
+    assert len(skills) == 1_000
     for item in fixture["cases"]:
-        names = {match.skill.name for match in catalog.search(item["query"], limit=8)}
-        assert set(item["expected"]) <= names
+        matches = catalog.search(item["query"], limit=8)
+        assert [match.skill.name for match in matches[: len(item["expected"])]] == item["expected"]
+        assert matches[0].tier.name == item["winner_tier"]
 
     catalog.search("release deployment", limit=8)
     durations: list[float] = []
@@ -354,7 +411,9 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
         search_result = catalog.search_with_metrics("release deployment", limit=8)
         durations.append(time.perf_counter() - started)
         assert search_result.metrics.candidates_evaluated == len(skills)
-        assert search_result.metrics.token_comparisons <= len(skills) * 250
+        assert search_result.metrics.match_work_units <= len(skills) * 250
+        assert search_result.metrics.sort_items <= len(skills)
+        assert search_result.metrics.sort_comparison_bound <= len(skills) ** 2
         assert len(search_result.matches) <= 8
     assert statistics.median(durations) < 0.1
 
@@ -414,7 +473,7 @@ async def test_concurrent_search_metrics_are_local_and_deterministic(tmp_path: P
     )
 
     assert len({result.metrics.candidates_evaluated for result in results}) == 1
-    assert all(result.metrics.matches_sorted >= len(result.matches) for result in results)
+    assert all(result.metrics.sort_items >= len(result.matches) for result in results)
     assert not hasattr(catalog, "last_search_operation_count")
 
 
@@ -437,6 +496,35 @@ def test_catalogue_snapshot_stays_coherent_when_legacy_mapping_skill_is_mutated(
     outcome = catalog.prompt_view("deploy applications", max_characters=8_000)
     assert outcome.view is not None
     assert "mutated" not in render_skill_prompt_view(outcome.view).casefold()
+
+
+def test_public_resolve_and_search_results_cannot_mutate_catalogue_state(tmp_path: Path) -> None:
+    catalog = SkillCatalog(
+        {
+            "deploy": _skill_for_catalog(
+                tmp_path / "deploy" / "SKILL.md", "deploy", "Deploy applications"
+            )
+        },
+        (),
+    )
+
+    resolved = catalog.resolve("deploy")
+    searched = catalog.search("deploy applications", limit=1)[0].skill
+    assert resolved is not None
+    resolved.name = "resolve-mutated"
+    resolved.description = "resolve-mutated"
+    searched.name = "search-mutated"
+    searched.description = "search-mutated"
+
+    repeated_resolve = catalog.resolve("deploy")
+    repeated_search = catalog.search("deploy applications", limit=1)
+    outcome = catalog.prompt_view("deploy applications", max_characters=8_000)
+    assert repeated_resolve is not None
+    assert repeated_resolve.name == "deploy"
+    assert repeated_search[0].skill.name == "deploy"
+    assert outcome.view is not None
+    rendered = render_skill_prompt_view(outcome.view)
+    assert "mutated" not in rendered
 
 
 def test_root_and_subagent_runtime_share_catalogue_identity(runtime) -> None:
