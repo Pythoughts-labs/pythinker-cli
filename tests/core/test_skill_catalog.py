@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import statistics
 import time
@@ -14,6 +15,7 @@ from pythinker_code.skill.catalog import (
     SkillCatalog,
     SkillDiagnosticCategory,
     SkillProjectionStatus,
+    SkillRelevanceTier,
     SkillSourceKind,
     render_skill_prompt_view,
 )
@@ -171,6 +173,48 @@ async def test_search_ranks_relevance_before_scope_with_stable_ties(tmp_path: Pa
     ]
 
 
+def test_search_tiers_cannot_be_crossed_by_more_than_one_hundred_token_overlaps(
+    tmp_path: Path,
+) -> None:
+    tokens = [f"token{index}" for index in range(120)]
+    query = "target " + " ".join(tokens)
+    catalog = SkillCatalog(
+        {
+            "target-tool": _skill_for_catalog(
+                tmp_path / "target-tool" / "SKILL.md", "target-tool", "unrelated"
+            ),
+            "description-heavy": _skill_for_catalog(
+                tmp_path / "description-heavy" / "SKILL.md",
+                "description-heavy",
+                " ".join(tokens),
+            ),
+        },
+        (),
+    )
+
+    matches = catalog.search(query, limit=2)
+
+    assert [match.skill.name for match in matches] == ["target-tool", "description-heavy"]
+    assert matches[0].tier is SkillRelevanceTier.NAME_TOKEN
+    assert matches[1].tier is SkillRelevanceTier.DESCRIPTION_TOKEN
+
+
+def test_name_phrase_requires_contiguous_normalized_tokens_not_substrings(tmp_path: Path) -> None:
+    catalog = SkillCatalog(
+        {
+            "art": _skill_for_catalog(tmp_path / "art" / "SKILL.md", "art", "drawing"),
+            "cartography": _skill_for_catalog(
+                tmp_path / "cartography" / "SKILL.md", "cartography", "maps"
+            ),
+        },
+        (),
+    )
+
+    assert [match.skill.name for match in catalog.search("cartography", limit=10)] == [
+        "cartography"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_search_is_stable_under_reversed_insertion_order(tmp_path: Path) -> None:
     skills = {
@@ -290,15 +334,16 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
         )
         for index in range(1_000)
     }
-    for item in fixture:
+    for item in fixture["skills"]:
         skills[item["name"]] = _skill_for_catalog(
             tmp_path / item["name"] / "SKILL.md",
             item["name"],
             item["description"],
+            item.get("scope", "user"),
         )
     catalog = SkillCatalog(skills, ())
 
-    for item in fixture:
+    for item in fixture["cases"]:
         names = {match.skill.name for match in catalog.search(item["query"], limit=8)}
         assert set(item["expected"]) <= names
 
@@ -306,15 +351,97 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
     durations: list[float] = []
     for _ in range(25):
         started = time.perf_counter()
-        matches = catalog.search("release deployment", limit=8)
+        search_result = catalog.search_with_metrics("release deployment", limit=8)
         durations.append(time.perf_counter() - started)
-        assert catalog.last_search_operation_count <= len(skills) * 3
-        assert len(matches) <= 8
+        assert search_result.metrics.candidates_evaluated == len(skills)
+        assert search_result.metrics.token_comparisons <= len(skills) * 250
+        assert len(search_result.matches) <= 8
     assert statistics.median(durations) < 0.1
+
+
+@pytest.mark.asyncio
+async def test_recall_fixture_shadowed_duplicate_uses_project_winner(tmp_path: Path) -> None:
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "skill_catalog_recall.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    item = next(skill for skill in fixture["skills"] if "shadowed" in skill)
+    project_root = tmp_path / "project"
+    user_root = tmp_path / "user"
+    _write_skill(
+        project_root,
+        item["name"],
+        name=item["name"],
+        description=item["description"],
+    )
+    _write_skill(
+        user_root,
+        item["name"],
+        name=item["name"],
+        description=item["shadowed"],
+    )
+
+    catalog = await SkillCatalog.discover(
+        [_root(project_root, "project"), _root(user_root, "user")]
+    )
+
+    winner = catalog.resolve(item["name"])
+    assert winner is not None
+    assert winner.scope == "project"
+    assert winner.description == item["description"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_search_metrics_are_local_and_deterministic(tmp_path: Path) -> None:
+    catalog = SkillCatalog(
+        {
+            f"skill-{index}": _skill_for_catalog(
+                tmp_path / f"skill-{index}" / "SKILL.md",
+                f"skill-{index}",
+                "release workflow",
+            )
+            for index in range(100)
+        },
+        (),
+    )
+
+    results = await asyncio.gather(
+        *(
+            asyncio.to_thread(catalog.search_with_metrics, query, limit=8)
+            for query in ("release", "skill 9") * 10
+        )
+    )
+
+    assert len({result.metrics.candidates_evaluated for result in results}) == 1
+    assert all(result.metrics.matches_sorted >= len(result.matches) for result in results)
+    assert not hasattr(catalog, "last_search_operation_count")
+
+
+def test_catalogue_snapshot_stays_coherent_when_legacy_mapping_skill_is_mutated(
+    tmp_path: Path,
+) -> None:
+    exposed = _skill_for_catalog(tmp_path / "deploy" / "SKILL.md", "deploy", "Deploy applications")
+    catalog = SkillCatalog({"deploy": exposed}, ())
+
+    catalog.exhaustive_mapping()["deploy"].name = "mutated-name"
+    catalog.exhaustive_mapping()["deploy"].description = "Mutated description"
+
+    resolved = catalog.resolve("deploy")
+    assert resolved is not None
+    assert resolved.name == "deploy"
+    assert catalog.resolve("mutated-name") is None
+    assert [match.skill.name for match in catalog.search("deploy applications", limit=8)] == [
+        "deploy"
+    ]
+    outcome = catalog.prompt_view("deploy applications", max_characters=8_000)
+    assert outcome.view is not None
+    assert "mutated" not in render_skill_prompt_view(outcome.view).casefold()
 
 
 def test_root_and_subagent_runtime_share_catalogue_identity(runtime) -> None:
     child = runtime.copy_for_subagent(agent_id="child", subagent_type="coder")
 
     assert child.skill_catalog is runtime.skill_catalog
-    assert child.skills == runtime.skill_catalog.exhaustive_mapping()
+    assert runtime.skills is runtime.skill_catalog.exhaustive_mapping()
+    assert child.skills is runtime.skills

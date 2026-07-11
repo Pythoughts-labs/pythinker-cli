@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -410,7 +410,7 @@ def local_specialization_name(name: str) -> str:
     return f"{name}{LOCAL_SPECIALIZATION_SUFFIX}"
 
 
-def get_local_specialization(skill: Skill, skills_by_name: dict[str, Skill]) -> Skill | None:
+def get_local_specialization(skill: Skill, skills_by_name: Mapping[str, Skill]) -> Skill | None:
     """Return the ``<skill>-local`` companion, if one is available.
 
     Local specializations are additive supplements to a core workflow skill, not
@@ -422,7 +422,7 @@ def get_local_specialization(skill: Skill, skills_by_name: dict[str, Skill]) -> 
 
 
 async def read_skill_text_with_local_specialization(
-    skill: Skill, skills_by_name: dict[str, Skill]
+    skill: Skill, skills_by_name: Mapping[str, Skill]
 ) -> str | None:
     """Read a skill body for injection into the model context.
 

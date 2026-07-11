@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -232,7 +232,7 @@ class Runtime:
     notifications: NotificationManager
     background_tasks: BackgroundTaskManager
     skill_catalog: SkillCatalog
-    skills: dict[str, Skill]
+    skills: Mapping[str, Skill]
     additional_dirs: list[HostPath]
     skills_dirs: list[HostPath]
     prompt_templates: dict[str, PromptTemplate] = field(default_factory=dict[str, PromptTemplate])
@@ -304,7 +304,7 @@ class Runtime:
         )
         # Canonicalize so symlinked skill directories match resolved paths
         skills_roots_canonical = [s.root.canonical() for s in scoped_roots]
-        skills_by_name = dict(skill_catalog.exhaustive_mapping())
+        skills_by_name = skill_catalog.exhaustive_mapping()
         logger.info("Discovered {count} skill(s)", count=len(skills_by_name))
 
         prompt_templates = await discover_prompt_templates(session.work_dir)

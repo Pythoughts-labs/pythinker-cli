@@ -1,26 +1,25 @@
-[
-  {
-    "query": "deploy the release safely",
-    "expected": ["release-deploy"],
-    "name": "release-deploy",
-    "description": "Deploy release artifacts safely"
-  },
-  {
-    "query": "review this pull request",
-    "expected": ["review-pr"],
-    "name": "review-pr",
-    "description": "Review pull requests for correctness"
-  },
-  {
-    "query": "create a polished spreadsheet workbook",
-    "expected": ["spreadsheets"],
-    "name": "spreadsheets",
-    "description": "Create and edit polished spreadsheet workbooks"
-  },
-  {
-    "query": "debug a failing continuous integration job",
-    "expected": ["diagnose-ci-failures"],
-    "name": "diagnose-ci-failures",
-    "description": "Diagnose failing continuous integration jobs"
-  }
-]
+{
+  "skills": [
+    {"name": "release-deploy", "description": "Deploy release artifacts safely", "scope": "builtin"},
+    {"name": "review-pr", "description": "Review pull requests for correctness"},
+    {"name": "spreadsheets", "description": "Create polished spreadsheet workbooks"},
+    {"name": "diagnose-ci-failures", "description": "Diagnose failing continuous integration jobs"},
+    {"name": "gh-fix-ci", "description": "Fix GitHub continuous integration failures"},
+    {"name": "art", "description": "Create illustrations and drawings"},
+    {"name": "cartography", "description": "Create geographic maps"},
+    {"name": "release-notes", "description": "Write release documentation", "scope": "builtin"},
+    {"name": "generic-release", "description": "General release workflow", "scope": "project"},
+    {"name": "shadowed", "description": "Project winning specialization", "scope": "project", "shadowed": "User losing specialization"}
+  ],
+  "cases": [
+    {"query": "deploy the release safely", "expected": ["release-deploy"]},
+    {"query": "review this pull request", "expected": ["review-pr"]},
+    {"query": "create a polished spreadsheet workbook", "expected": ["spreadsheets"]},
+    {"query": "debug a failing continuous integration job", "expected": ["diagnose-ci-failures"]},
+    {"query": "/skill:github:gh-fix-ci", "expected": ["gh-fix-ci"]},
+    {"query": "cartography", "expected": ["cartography"]},
+    {"query": "release notes", "expected": ["release-notes"]},
+    {"query": "release workflow", "expected": ["generic-release", "release-notes"]},
+    {"query": "project winning specialization", "expected": ["shadowed"]}
+  ]
+}

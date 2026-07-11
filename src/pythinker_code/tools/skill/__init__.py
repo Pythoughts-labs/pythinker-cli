@@ -76,7 +76,10 @@ class ReadSkillTool(CallableTool2[Params]):
                     }
                 )
                 if servers:
-                    mcp_hint = f" Connected MCP servers: {', '.join(servers)}."
+                    shown_servers = servers[:5]
+                    omitted = len(servers) - len(shown_servers)
+                    omission = f"; {omitted} omitted" if omitted else ""
+                    mcp_hint = f" Connected MCP servers: {', '.join(shown_servers)}{omission}."
             return ToolError(
                 message=(
                     f"status: not_found\nSkill not found: {skill_name}. "
@@ -88,7 +91,11 @@ class ReadSkillTool(CallableTool2[Params]):
         content = await read_skill_text_with_local_specialization(skill, self._runtime.skills)
         if content is None:
             return ToolError(
-                message=f"Failed to read skill: {skill.name}", brief="Skill read failed"
+                message=(
+                    f"status: unavailable\nSkill unavailable: {skill.name}. "
+                    "Skill source could not be read."
+                ),
+                brief="Skill unavailable",
             )
 
         return ToolReturnValue(

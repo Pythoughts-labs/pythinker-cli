@@ -162,7 +162,7 @@ if TYPE_CHECKING:
 
 
 SKILL_COMMAND_PREFIX = "skill:"
-_EXPLICIT_SKILL_RE = re.compile(r"(?:\$|/skill:)([\w.-]+)", re.IGNORECASE)
+_EXPLICIT_SKILL_RE = re.compile(r"(?:\$|/skill:)([\w.:-]+)", re.IGNORECASE)
 
 
 def _safe_cwd(fallback: str) -> str:

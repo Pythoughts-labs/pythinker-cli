@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from types import MappingProxyType
 
 from pythinker_host.path import HostPath
@@ -23,8 +23,29 @@ from pythinker_code.skill import (
 @dataclass(frozen=True, slots=True)
 class SkillMatch:
     skill: Skill
+    tier: SkillRelevanceTier
     score: int
     reasons: tuple[str, ...]
+
+
+class SkillRelevanceTier(IntEnum):
+    EXACT_NAME = 0
+    NAME_PHRASE = 1
+    NAME_TOKEN = 2
+    DESCRIPTION_TOKEN = 3
+
+
+@dataclass(frozen=True, slots=True)
+class SkillSearchMetrics:
+    candidates_evaluated: int
+    token_comparisons: int
+    matches_sorted: int
+
+
+@dataclass(frozen=True, slots=True)
+class SkillSearchResult:
+    matches: tuple[SkillMatch, ...]
+    metrics: SkillSearchMetrics
 
 
 class SkillDiagnosticCategory(StrEnum):
@@ -80,11 +101,16 @@ class SkillCatalog:
         diagnostics: Sequence[SkillSourceDiagnostic],
     ) -> None:
         ordered_skills = sorted(skills_by_name.values(), key=lambda skill: skill.name)
-        self._skills_by_name = MappingProxyType(
+        self._compatibility_mapping = MappingProxyType(
             {normalize_skill_name(skill.name): skill for skill in ordered_skills}
         )
+        self._skills_by_name = MappingProxyType(
+            {
+                normalize_skill_name(skill.name): skill.model_copy(deep=True)
+                for skill in ordered_skills
+            }
+        )
         self.diagnostics = tuple(diagnostics)
-        self.last_search_operation_count = 0
 
     @classmethod
     async def discover(cls, roots: Sequence[ScopedSkillsRoot]) -> SkillCatalog:
@@ -111,25 +137,33 @@ class SkillCatalog:
 
     def exhaustive_mapping(self) -> Mapping[str, Skill]:
         """Return the immutable normalized compatibility mapping."""
-        return self._skills_by_name
+        return self._compatibility_mapping
 
     def search(self, query: str, *, limit: int) -> tuple[SkillMatch, ...]:
         """Return deterministic matches from the complete winning catalogue."""
+        return self.search_with_metrics(query, limit=limit).matches
+
+    def search_with_metrics(self, query: str, *, limit: int) -> SkillSearchResult:
+        """Return matches with immutable, call-local deterministic work metrics."""
         if limit <= 0:
-            self.last_search_operation_count = 0
-            return ()
-        query_text = _normalize_search_text(query)
-        query_tokens = _tokens(query_text)
+            return SkillSearchResult((), SkillSearchMetrics(0, 0, 0))
+        query_tokens = _tokens(query)
         matches: list[SkillMatch] = []
-        operations = 0
+        comparisons = 0
         for skill in self._skills_by_name.values():
-            operations += 1
-            match = _match_skill(skill, query_text, query_tokens)
+            match, candidate_comparisons = _match_skill(skill, query_tokens)
+            comparisons += candidate_comparisons
             if match is not None:
                 matches.append(match)
-        self.last_search_operation_count = operations
         matches.sort(key=_match_sort_key)
-        return tuple(matches[:limit])
+        return SkillSearchResult(
+            matches=tuple(matches[:limit]),
+            metrics=SkillSearchMetrics(
+                candidates_evaluated=len(self._skills_by_name),
+                token_comparisons=comparisons,
+                matches_sorted=len(matches),
+            ),
+        )
 
     def prompt_view(
         self,
@@ -158,7 +192,14 @@ class SkillCatalog:
             if normalized in seen:
                 return
             seen.add(normalized)
-            ordered.append(SkillMatch(skill=skill, score=500, reasons=(reason,)))
+            ordered.append(
+                SkillMatch(
+                    skill=skill,
+                    tier=SkillRelevanceTier.EXACT_NAME,
+                    score=500,
+                    reasons=(reason,),
+                )
+            )
 
         for name in explicit_names:
             _add_priority(name, "explicit")
@@ -246,42 +287,76 @@ _SCOPE_ORDER: Mapping[SkillScope, int] = {
 }
 
 
-def _normalize_search_text(text: str) -> str:
-    return " ".join(_TOKEN_RE.findall(text.casefold()))
-
-
-def _tokens(text: str) -> frozenset[str]:
-    return frozenset(_TOKEN_RE.findall(text))
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(_TOKEN_RE.findall(text.casefold()))
 
 
 def _match_skill(
     skill: Skill,
-    query_text: str,
-    query_tokens: frozenset[str],
-) -> SkillMatch | None:
-    name_text = _normalize_search_text(skill.name)
-    name_tokens = _tokens(name_text)
-    description_tokens = _tokens(_normalize_search_text(skill.description))
-    if query_text == name_text:
-        return SkillMatch(skill=skill, score=400, reasons=("exact_name",))
-    if name_text and name_text in query_text:
-        return SkillMatch(skill=skill, score=300, reasons=("name_phrase",))
-    name_overlap = len(query_tokens & name_tokens)
-    if name_overlap:
-        return SkillMatch(skill=skill, score=200 + name_overlap, reasons=("name_token",))
-    description_overlap = len(query_tokens & description_tokens)
-    if description_overlap:
-        return SkillMatch(
-            skill=skill,
-            score=100 + description_overlap,
-            reasons=("description_token",),
+    query_tokens: tuple[str, ...],
+) -> tuple[SkillMatch | None, int]:
+    name_tokens = _tokens(skill.name)
+    description_tokens = _tokens(skill.description)
+    comparisons = len(query_tokens) + len(name_tokens) + len(description_tokens)
+    if query_tokens == name_tokens:
+        return (
+            SkillMatch(
+                skill=skill,
+                tier=SkillRelevanceTier.EXACT_NAME,
+                score=len(name_tokens),
+                reasons=("exact_name",),
+            ),
+            comparisons,
         )
-    return None
+    if name_tokens and _contains_sequence(query_tokens, name_tokens):
+        return (
+            SkillMatch(
+                skill=skill,
+                tier=SkillRelevanceTier.NAME_PHRASE,
+                score=len(name_tokens),
+                reasons=("name_phrase",),
+            ),
+            comparisons,
+        )
+    query_token_set = frozenset(query_tokens)
+    name_overlap = len(query_token_set & frozenset(name_tokens))
+    if name_overlap:
+        return (
+            SkillMatch(
+                skill=skill,
+                tier=SkillRelevanceTier.NAME_TOKEN,
+                score=name_overlap,
+                reasons=("name_token",),
+            ),
+            comparisons,
+        )
+    description_overlap = len(query_token_set & frozenset(description_tokens))
+    if description_overlap:
+        return (
+            SkillMatch(
+                skill=skill,
+                tier=SkillRelevanceTier.DESCRIPTION_TOKEN,
+                score=description_overlap,
+                reasons=("description_token",),
+            ),
+            comparisons,
+        )
+    return None, comparisons
 
 
-def _match_sort_key(match: SkillMatch) -> tuple[int, int, str, str]:
+def _contains_sequence(haystack: tuple[str, ...], needle: tuple[str, ...]) -> bool:
+    if len(needle) > len(haystack):
+        return False
+    return any(
+        haystack[index : index + len(needle)] == needle
+        for index in range(len(haystack) - len(needle) + 1)
+    )
+
+
+def _match_sort_key(match: SkillMatch) -> tuple[int, int, int, str, str]:
     skill = match.skill
     return (
+        int(match.tier),
         -match.score,
         _SCOPE_ORDER[skill.scope],
         normalize_skill_name(skill.name),
