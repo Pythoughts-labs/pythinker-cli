@@ -186,6 +186,48 @@ async def test_optional_source_failure_degrades_without_prompt_content() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget_tokens", "expected_status", "expected_admitted", "expected_appends"),
+    [
+        (0, FragmentStatus.OMITTED_BUDGET, 0, 0),
+        (1, FragmentStatus.INCLUDED, 1, 1),
+    ],
+)
+async def test_provided_empty_optional_content_uses_minimum_token_accounting(
+    budget_tokens: int,
+    expected_status: FragmentStatus,
+    expected_admitted: int,
+    expected_appends: int,
+) -> None:
+    plan = _policy("plan", "plan")
+
+    assembled = await RequestAssembler((plan,), (_provided(plan, ""),)).assemble(
+        _request(budget_tokens=budget_tokens)
+    )
+
+    outcome = assembled.manifest.outcomes[0]
+    assert outcome.status is expected_status
+    assert outcome.estimated_tokens == 1
+    assert outcome.admitted_tokens == expected_admitted
+    assert assembled.manifest.budgeted_admitted_tokens == expected_admitted
+    assert len(assembled.history_appends) == expected_appends
+
+
+@pytest.mark.asyncio
+async def test_provided_empty_required_content_remains_fail_closed() -> None:
+    permission = _policy("permissions", "permission", requirement=FragmentRequirement.REQUIRED)
+
+    with pytest.raises(RequestAssemblyError) as caught:
+        await RequestAssembler((permission,), (_provided(permission, ""),)).assemble(
+            _request(budget_tokens=1)
+        )
+
+    assert caught.value.reason_code == "required_source_invalid"
+    assert caught.value.manifest.status is RequestStatus.FAILED
+    assert caught.value.manifest.outcomes[0].status is FragmentStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_required_source_failure_raises_with_matching_safe_reason() -> None:
     permission = _policy(
         "permissions",
@@ -202,6 +244,41 @@ async def test_required_source_failure_raises_with_matching_safe_reason() -> Non
     assert caught.value.reason_code == "permission_state_unavailable"
     assert caught.value.manifest.reason_code == caught.value.reason_code
     assert caught.value.manifest.outcomes[0].status is FragmentStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_multiple_required_fragments_include_when_estimated_sum_equals_budget() -> None:
+    permission = _policy("permissions", "permission", requirement=FragmentRequirement.REQUIRED)
+    defense = _policy("model_defense", "model_defense", requirement=FragmentRequirement.REQUIRED)
+
+    assembled = await RequestAssembler(
+        (permission, defense),
+        (_provided(permission, "p" * 20), _provided(defense, "d" * 20)),
+    ).assemble(_request(budget_tokens=10))
+
+    assert [outcome.status for outcome in assembled.manifest.outcomes] == [
+        FragmentStatus.INCLUDED,
+        FragmentStatus.INCLUDED,
+    ]
+    assert assembled.manifest.budgeted_admitted_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_multiple_required_fragments_fail_when_budget_is_one_below_sum() -> None:
+    permission = _policy("permissions", "permission", requirement=FragmentRequirement.REQUIRED)
+    defense = _policy("model_defense", "model_defense", requirement=FragmentRequirement.REQUIRED)
+
+    with pytest.raises(RequestAssemblyError) as caught:
+        await RequestAssembler(
+            (permission, defense),
+            (_provided(permission, "p" * 20), _provided(defense, "d" * 20)),
+        ).assemble(_request(budget_tokens=9))
+
+    assert caught.value.reason_code == "required_content_exceeds_budget"
+    assert caught.value.manifest.status is RequestStatus.FAILED
+    assert all(
+        outcome.status is FragmentStatus.FAILED for outcome in caught.value.manifest.outcomes
+    )
 
 
 @pytest.mark.asyncio

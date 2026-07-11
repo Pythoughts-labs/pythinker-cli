@@ -367,18 +367,15 @@ def _initial_admission(
     fragment = source_result.fragment
     if fragment is None:
         raise _AssemblyFailure("internal_invariant_violation", ())
-    if not fragment.content:
-        status = (
-            FragmentStatus.FAILED
-            if policy.requirement is FragmentRequirement.REQUIRED
-            else FragmentStatus.DEGRADED
+    if not fragment.content and policy.requirement is FragmentRequirement.REQUIRED:
+        outcome = _outcome(
+            policy,
+            FragmentStatus.FAILED,
+            0,
+            0,
+            "required_source_invalid",
         )
-        reason_code = (
-            "required_source_invalid"
-            if policy.requirement is FragmentRequirement.REQUIRED
-            else "optional_source_invalid"
-        )
-        return _Admission(policy, None, _outcome(policy, status, 0, 0, reason_code))
+        return _Admission(policy, None, outcome)
     estimate = estimate_injection_tokens(fragment.content)
     return _Admission(policy, fragment, _outcome(policy, FragmentStatus.INCLUDED, estimate, 0))
 

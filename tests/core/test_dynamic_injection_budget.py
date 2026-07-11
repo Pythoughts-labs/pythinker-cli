@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
+
 from pythinker_code.config import Config, LLMModel
 from pythinker_code.soul.agent import Runtime
 from pythinker_code.soul.dynamic_injection import (
@@ -61,6 +63,23 @@ def test_collect_within_budget_recomputes_untrusted_candidate_estimate():
     assert len(out) == 1
     assert out[0].content.endswith("…")
     assert out[0].token_estimate == 5
+
+
+@pytest.mark.parametrize(
+    ("budget_tokens", "expected_count"),
+    [(0, 0), (1, 1)],
+)
+def test_collect_within_budget_preserves_empty_candidate_at_minimum_budget(
+    budget_tokens: int, expected_count: int
+):
+    candidate = InjectionCandidate(type="empty", content="", token_estimate=0)
+
+    out = collect_within_budget([candidate], budget_tokens=budget_tokens)
+
+    assert len(out) == expected_count
+    if out:
+        assert out[0].content == ""
+        assert out[0].token_estimate == 1
 
 
 def test_failed_first_truncation_attempt_prevents_lower_candidate_truncation():
