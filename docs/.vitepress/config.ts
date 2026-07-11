@@ -14,6 +14,11 @@ export default withMermaid(defineConfig({
   title: 'Pythinker Code Docs',
   description: 'Pythinker Code Documentation',
 
+  // Internal superpowers working docs (plans/specs/reports) are gitignored and
+  // never linked in the published site's nav; exclude them from VitePress's
+  // page auto-discovery so their Markdown is not compiled by the Vue SFC parser.
+  srcExclude: ['**/superpowers/**'],
+
   locales: {
     en: {
       label: 'English',
