@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pythinker_core.tooling.empty import EmptyToolset
 
-from pythinker_code.soul.agent import Runtime
+from pythinker_code.soul.agent import Agent, Runtime
+from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection
+from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.subagents.registry import LaborMarket
 from pythinker_code.wire.types import AgentListDelta
@@ -76,6 +80,7 @@ def test_agent_type_projects_to_literal_prompt_and_wire_contract(tmp_path: Path)
 
 
 async def test_provider_projects_literal_agent_type_without_field_drift(
+    runtime: Runtime,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,17 +102,23 @@ async def test_provider_projects_literal_agent_type_without_field_drift(
             required_mcp_servers=("context7",),
         )
     )
+    runtime = dataclasses.replace(runtime, labor_market=labor_market)
+    agent = Agent(
+        name="Agent List Contract",
+        system_prompt="Agent list prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    soul = PythinkerSoul(
+        agent,
+        context=Context(file_backend=tmp_path / "agent-list-context.jsonl"),
+    )
     captured: list[object] = []
     monkeypatch.setattr(
         "pythinker_code.soul.dynamic_injections.agent_list.wire_send",
         lambda message: captured.append(message),
     )
-    soul = SimpleNamespace(
-        runtime=SimpleNamespace(labor_market=labor_market),
-        is_subagent=False,
-    )
-
-    injections = await AgentListInjectionProvider().get_injections([], soul)  # type: ignore[arg-type]
+    injections = await AgentListInjectionProvider().get_injections([], soul)
 
     line = "- `reviewer`: Checks compatibility (Tools: ReadFile, Glob). When to use: Use after changes."
     assert injections == [

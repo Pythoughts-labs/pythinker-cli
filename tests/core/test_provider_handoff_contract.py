@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 import pythinker_code.soul.pythinkersoul as pythinkersoul_module
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
-from pythinker_code.soul.dynamic_injection import DynamicInjection
+from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
 _AGENTS_REMINDER = (
@@ -29,6 +30,19 @@ _AGENTS_REMINDER = (
 )
 
 
+class _StaticInjectionProvider(DynamicInjectionProvider):
+    def __init__(self, injection_type: str, content: str) -> None:
+        self._injection = DynamicInjection(type=injection_type, content=content)
+
+    async def get_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        del history, soul
+        return [self._injection]
+
+
 @pytest.mark.asyncio
 async def test_agent_step_has_one_characterized_provider_handoff(
     runtime: Runtime,
@@ -39,7 +53,12 @@ async def test_agent_step_has_one_characterized_provider_handoff(
         runtime.builtin_args,
         PYTHINKER_AGENTS_MD="Project rule.",
     )
-    runtime = dataclasses.replace(runtime, builtin_args=builtin_args)
+    runtime = dataclasses.replace(
+        runtime,
+        builtin_args=builtin_args,
+        role="subagent",
+        subagent_id="contract-agent",
+    )
     toolset = EmptyToolset()
     agent = Agent(
         name="Contract Agent",
@@ -57,11 +76,8 @@ async def test_agent_step_has_one_characterized_provider_handoff(
         ]
     )
 
-    async def collect_injections() -> list[DynamicInjection]:
-        return [
-            DynamicInjection(type="first", content="First reminder"),
-            DynamicInjection(type="second", content="Second reminder"),
-        ]
+    soul.add_injection_provider(_StaticInjectionProvider("first", "First reminder"))
+    soul.add_injection_provider(_StaticInjectionProvider("second", "Second reminder"))
 
     captured: list[tuple[object, str, object, tuple[Message, ...]]] = []
 
@@ -75,7 +91,6 @@ async def test_agent_step_has_one_characterized_provider_handoff(
             _tool_result_futures={},
         )
 
-    monkeypatch.setattr(soul, "_collect_injections", collect_injections)
     monkeypatch.setattr(pythinker_core, "step", capture)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
 
