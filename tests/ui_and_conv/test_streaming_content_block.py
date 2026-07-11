@@ -412,6 +412,17 @@ def test_thinking_stream_preview_hides_complete_top_level_html_comments():
     assert "-->" not in output
 
 
+def test_thinking_stream_preview_keeps_inline_comment_line_intact():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("<!-- a --> visible middle <!-- b -->")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "visible middle" in output
+    assert "<!--" in output  # mixed line is NOT a whole-line comment block; left intact
+
+
 def test_thinking_stream_preview_preserves_incomplete_markup():
     block = _ContentBlock(is_think=True, show_thinking_stream=True)
     block.append("**Planning agent\n\n<!-- incomplete")
