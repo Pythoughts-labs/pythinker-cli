@@ -1949,6 +1949,7 @@ class PythinkerSoul:
         task: str,
         extra_sources: Sequence[tuple[TrustedSourcePolicy, RequestSourceResult]] = (),
     ) -> _PreparedRequest:
+        assembly_started = time.monotonic()
         try:
             agents_policy, agents_result = self._agents_request_source()
             request = RequestAssemblyInput(
@@ -1974,21 +1975,42 @@ class PythinkerSoul:
             assembled = await RequestAssembler(policies, source_results).assemble(request)
         except RequestAssemblyError as error:
             self.latest_request_manifest = error.manifest
+            self._record_request_assembly_telemetry(error.manifest, assembly_started)
             raise
         except asyncio.CancelledError:
             raise
         except RequestLifecycleError as error:
-            self.latest_request_manifest = failed_manifest(error.reason_code, None)
+            manifest = failed_manifest(error.reason_code, None)
+            self.latest_request_manifest = manifest
+            self._record_request_assembly_telemetry(manifest, assembly_started)
             raise
         except Exception as error:
             failure = RequestLifecycleError("request_source_adapter_failed")
-            self.latest_request_manifest = failed_manifest(failure.reason_code, None)
+            manifest = failed_manifest(failure.reason_code, None)
+            self.latest_request_manifest = manifest
+            self._record_request_assembly_telemetry(manifest, assembly_started)
             raise failure from error
         self.latest_request_manifest = assembled.manifest
+        self._record_request_assembly_telemetry(assembled.manifest, assembly_started)
         return _PreparedRequest(
             assembled,
             (*required.acknowledgements, *optional.acknowledgements),
         )
+
+    @staticmethod
+    def _record_request_assembly_telemetry(
+        manifest: RequestManifest,
+        assembly_started: float,
+    ) -> None:
+        from pythinker_code.telemetry import metrics
+
+        try:
+            metrics.record_request_assembly(
+                manifest,
+                duration_seconds=time.monotonic() - assembly_started,
+            )
+        except Exception:
+            logger.warning("Request assembly telemetry failed", exc_info=True)
 
     async def _persist_assembled_history(self, prepared: _PreparedRequest) -> None:
         if not prepared.assembled.history_appends:
