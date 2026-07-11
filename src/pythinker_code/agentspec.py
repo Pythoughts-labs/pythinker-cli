@@ -155,6 +155,26 @@ def load_agent_spec_validated(
     return resolved, tuple(validations.values())
 
 
+def _resolve_within_agent_roots(agent_file: Path, declared: str | Path) -> Path:
+    """Join *declared* onto *agent_file*'s directory, rejecting escaping paths.
+
+    Trusted local agent specs reference sibling files with relative paths. A
+    ``..`` traversal or symlink whose canonical target lands outside both the
+    originating spec's directory and the built-in agents directory is rejected
+    fail-closed as defense-in-depth, since the joined path is otherwise opened
+    or recursively loaded directly. The stored value keeps its ``.absolute()``
+    form, so permitted paths are unchanged.
+    """
+    parent = agent_file.parent
+    absolute = (parent / declared).absolute()
+    allowed_roots = (parent.resolve(), get_agents_dir().resolve())
+    if not any(absolute.resolve().is_relative_to(root) for root in allowed_roots):
+        raise AgentSpecError(
+            f"Agent spec reference {declared!r} resolves outside the permitted agent directories"
+        )
+    return absolute
+
+
 def _load_agent_spec(
     agent_file: Path,
     _visited: set[Path] | None = None,
@@ -204,17 +224,17 @@ def _load_agent_spec(
     except (TypeError, ValidationError) as exc:
         raise AgentSpecError("Agent spec contains an invalid known field") from exc
     if isinstance(agent_spec.system_prompt_path, Path):
-        agent_spec.system_prompt_path = (
-            agent_file.parent / agent_spec.system_prompt_path
-        ).absolute()
+        agent_spec.system_prompt_path = _resolve_within_agent_roots(
+            agent_file, agent_spec.system_prompt_path
+        )
     if isinstance(agent_spec.subagents, dict):
         for v in agent_spec.subagents.values():
-            v.path = (agent_file.parent / v.path).absolute()
+            v.path = _resolve_within_agent_roots(agent_file, v.path)
     if agent_spec.extend:
         if agent_spec.extend == "default":
             base_agent_file = DEFAULT_AGENT_FILE
         else:
-            base_agent_file = (agent_file.parent / agent_spec.extend).absolute()
+            base_agent_file = _resolve_within_agent_roots(agent_file, agent_spec.extend)
         base_agent_spec = _load_agent_spec(
             base_agent_file,
             _visited,

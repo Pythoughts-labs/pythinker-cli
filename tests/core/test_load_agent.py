@@ -688,3 +688,67 @@ def system_prompt_file() -> Generator[Path, Any, Any]:
         system_md.write_text("Test system prompt with ${PYTHINKER_NOW} and ${CUSTOM_ARG}")
 
         yield system_md
+
+
+def test_extend_escaping_agent_roots_is_rejected(tmp_path: Path) -> None:
+    # An `extend:` that traverses outside the spec's own directory (and the
+    # built-in agents dir) is rejected fail-closed as defense-in-depth, since
+    # the resolved path is otherwise loaded directly.
+    from pythinker_code.agentspec import AgentSpecError, load_agent_spec
+
+    (tmp_path / "outside-system.md").write_text("outside", encoding="utf-8")
+    (tmp_path / "outside.yaml").write_text(
+        "version: 1\nagent:\n  name: outside\n"
+        "  system_prompt_path: ./outside-system.md\n  tools: []\n",
+        encoding="utf-8",
+    )
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "system.md").write_text("child", encoding="utf-8")
+    (agents / "child.yaml").write_text(
+        "version: 1\nagent:\n  name: child\n"
+        "  system_prompt_path: ./system.md\n  tools: []\n"
+        "  extend: ../outside.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AgentSpecError, match="outside the permitted"):
+        load_agent_spec(agents / "child.yaml")
+
+
+def test_subagent_path_escaping_agent_roots_is_rejected(tmp_path: Path) -> None:
+    from pythinker_code.agentspec import AgentSpecError, load_agent_spec
+
+    (tmp_path / "outside.yaml").write_text("version: 1\nagent:\n  name: x\n", encoding="utf-8")
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "system.md").write_text("root", encoding="utf-8")
+    (agents / "root.yaml").write_text(
+        "version: 1\nagent:\n  name: root\n"
+        "  system_prompt_path: ./system.md\n  tools: []\n"
+        "  subagents:\n    analyst:\n      path: ../outside.yaml\n"
+        '      description: "d"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AgentSpecError, match="outside the permitted"):
+        load_agent_spec(agents / "root.yaml")
+
+
+def test_sibling_extend_within_agent_root_still_loads(tmp_path: Path) -> None:
+    # Regression guard: the containment check must not reject the normal
+    # `./sibling.yaml` shape every shipped spec uses.
+    from pythinker_code.agentspec import load_agent_spec
+
+    (tmp_path / "base-system.md").write_text("base", encoding="utf-8")
+    (tmp_path / "base.yaml").write_text(
+        "version: 1\nagent:\n  name: base\n  system_prompt_path: ./base-system.md\n  tools: []\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.yaml").write_text(
+        "version: 1\nagent:\n  name: child\n  extend: ./base.yaml\n",
+        encoding="utf-8",
+    )
+
+    resolved = load_agent_spec(tmp_path / "child.yaml")
+    assert resolved.name == "child"

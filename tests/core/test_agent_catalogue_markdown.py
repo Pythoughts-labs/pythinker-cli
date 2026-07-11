@@ -288,6 +288,30 @@ async def test_unexpected_materialization_value_error_propagates(
 
 
 @pytest.mark.asyncio
+async def test_unexpected_parse_value_error_is_not_mislabeled_as_config_skip(
+    tmp_path: Path,
+) -> None:
+    # A programming defect surfacing as a plain ValueError from the parser must
+    # propagate, not be swallowed as a harmless "invalid_known_field" skip. Only
+    # malformed frontmatter (a MalformedFrontmatterError) is a legitimate skip.
+    agents = _markdown_root(tmp_path / "agents")
+    _write_markdown(Path(str(agents.root)) / "worker.md", name="worker", description="worker")
+
+    with (
+        patch(
+            "pythinker_code.subagents.catalogue.parse_markdown_agent",
+            side_effect=ValueError("parser defect"),
+        ),
+        pytest.raises(ValueError, match="parser defect"),
+    ):
+        await resolve_agent_catalogue(
+            agent_file=_root_agent(tmp_path),
+            markdown_roots=(agents,),
+            materialized_dir=tmp_path / "generated",
+        )
+
+
+@pytest.mark.asyncio
 async def test_unsafe_markdown_keys_are_isolated_without_raw_key_or_value(
     tmp_path: Path,
 ) -> None:

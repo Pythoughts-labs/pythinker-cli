@@ -65,6 +65,17 @@ class MarkdownAgentSource:
     root_ordinal: int
     safe_path: str
 
+    @property
+    def entry_precedence(self) -> int:
+        """Resolved-catalogue precedence for this source (lower wins).
+
+        ``0`` is reserved for required YAML entries, so markdown sources start
+        at ``1``. Owning this ``root_ordinal``-to-precedence mapping here keeps
+        precedence numbering in the discovery layer instead of re-deriving it in
+        the catalogue.
+        """
+        return self.root_ordinal + 1
+
 
 def _project_agent_dir_candidates(project_root: HostPath) -> tuple[HostPath, ...]:
     return (

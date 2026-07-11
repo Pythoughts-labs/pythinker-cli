@@ -6,12 +6,23 @@ from typing import Any, cast
 import yaml
 
 
+class MalformedFrontmatterError(ValueError):
+    """Frontmatter content is syntactically invalid or not a mapping.
+
+    Subclasses :class:`ValueError` for backward compatibility with callers that
+    catch ``ValueError``, while letting callers that need to distinguish an
+    expected "malformed input" skip from an unexpected programming defect catch
+    this narrower type instead of every ``ValueError``.
+    """
+
+
 def parse_frontmatter(text: str) -> dict[str, Any] | None:
     """
     Parse YAML frontmatter from a text blob.
 
     Raises:
-        ValueError: If the frontmatter YAML is invalid.
+        MalformedFrontmatterError: If the frontmatter YAML is invalid or is not
+            a mapping. This is a ``ValueError`` subclass.
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
@@ -32,10 +43,10 @@ def parse_frontmatter(text: str) -> dict[str, Any] | None:
     try:
         raw_data: Any = yaml.safe_load(frontmatter)
     except yaml.YAMLError as exc:
-        raise ValueError("Invalid frontmatter YAML.") from exc
+        raise MalformedFrontmatterError("Invalid frontmatter YAML.") from exc
 
     if not isinstance(raw_data, dict):
-        raise ValueError("Frontmatter YAML must be a mapping.")
+        raise MalformedFrontmatterError("Frontmatter YAML must be a mapping.")
 
     return cast(dict[str, Any], raw_data)
 

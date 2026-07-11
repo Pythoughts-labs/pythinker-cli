@@ -27,7 +27,7 @@ from pythinker_code.subagents.discovery import (
     materialize_markdown_agent_specs,
     parse_markdown_agent,
 )
-from pythinker_code.utils.frontmatter import parse_frontmatter
+from pythinker_code.utils.frontmatter import MalformedFrontmatterError, parse_frontmatter
 
 _MARKDOWN_FIELDS = frozenset(
     {
@@ -255,7 +255,7 @@ def _resolve_markdown_source(
             prompt_file=source.prompt_file,
             scope=source.scope,
         )
-    except ValueError:
+    except MalformedFrontmatterError:
         diagnostics.append(
             _source_diagnostic(
                 source,
@@ -267,7 +267,7 @@ def _resolve_markdown_source(
         return
 
     normalized = normalize_agent_name(spec.name)
-    precedence = source.root_ordinal + 1
+    precedence = source.entry_precedence
     existing = entries.get(normalized)
     if existing is not None:
         reason_code = (
