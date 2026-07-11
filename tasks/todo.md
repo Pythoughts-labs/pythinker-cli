@@ -2,6 +2,19 @@
 
 ## Active
 
+### Agent core deepening program (2026-07-10)
+
+- [ ] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on
+      `feat/agent-core-deepening` using TDD and subagent-driven task reviews.
+- [ ] Phase 1: characterize provider handoff, static prompt, JSONL, agent projections,
+      and Toolset facade behavior.
+- [ ] Phase 2: ship bounded `SkillCatalog` discovery with exhaustive compatibility.
+- [ ] Phase 3: ship observable request assembly and `/prompt-manifest`.
+- [ ] Phase 4: ship transactional Context replacement and disk-first appends.
+- [ ] Phase 5: ship WARN-mode resolved agent catalogue with strict-mode tests.
+- [ ] Phase 6: characterize Toolset, record thresholds, and extract only if measured.
+- [ ] Run full guards, gates, two-axis review, and document the final result here.
+
 ### Plan: publishable benchmark comparison (2026-07-05)
 
 - [ ] Execute `docs/superpowers/plans/2026-07-05-publishable-benchmark-comparison.md`
