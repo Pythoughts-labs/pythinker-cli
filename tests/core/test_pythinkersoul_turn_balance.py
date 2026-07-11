@@ -15,7 +15,6 @@ import pythinker_code.soul.pythinkersoul as pythinkersoul_module
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.context import Context
-from pythinker_code.soul.dynamic_injection import DynamicInjection
 from pythinker_code.soul.pythinkersoul import PythinkerSoul, TurnOutcome
 from pythinker_code.wire.types import StepBegin, StepInterrupted, TextPart, TurnBegin, TurnEnd
 
@@ -34,6 +33,16 @@ def _make_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
         runtime=runtime,
     )
     return PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
+
+
+class _EnteredFuture(asyncio.Future[ToolResult]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+
+    def __await__(self):
+        self.entered.set()
+        return super().__await__()
 
 
 @pytest.mark.asyncio
@@ -225,7 +234,7 @@ async def test_step_persists_assistant_message_when_tool_results_cancelled(
         id="call-cancel-1",
         function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
     )
-    pending_future: asyncio.Future[ToolResult] = asyncio.get_event_loop().create_future()
+    pending_future = _EnteredFuture()
 
     async def fake_pythinker_core_step(chat_provider, system_prompt, toolset, history, **kwargs):
         return StepResult(
@@ -236,19 +245,11 @@ async def test_step_persists_assistant_message_when_tool_results_cancelled(
             _tool_result_futures={"call-cancel-1": pending_future},
         )
 
-    async def fake_collect_injections() -> list[DynamicInjection]:
-        return []
-
-    monkeypatch.setattr(soul, "_collect_injections", fake_collect_injections)
     monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
 
-    # Run _step in a task and cancel it while it is blocked in tool_results()
     step_task = asyncio.create_task(soul._step())
-    # Yield enough times for the task to reach `await result.tool_results()` which
-    # then blocks on the pending_future.
-    for _ in range(10):
-        await asyncio.sleep(0)
+    await pending_future.entered.wait()
     step_task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
@@ -284,7 +285,7 @@ async def test_step_persists_markers_when_cancelled_twice(
         id="call-cancel-2",
         function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
     )
-    pending_future: asyncio.Future[ToolResult] = asyncio.get_event_loop().create_future()
+    pending_future = _EnteredFuture()
 
     async def fake_pythinker_core_step(chat_provider, system_prompt, toolset, history, **kwargs):
         return StepResult(
@@ -295,9 +296,6 @@ async def test_step_persists_markers_when_cancelled_twice(
             _tool_result_futures={"call-cancel-2": pending_future},
         )
 
-    async def fake_collect_injections() -> list[DynamicInjection]:
-        return []
-
     real_grow = soul._grow_context
     write_started = asyncio.Event()
 
@@ -307,14 +305,12 @@ async def test_step_persists_markers_when_cancelled_twice(
             await asyncio.sleep(0)
         await real_grow(result, results)
 
-    monkeypatch.setattr(soul, "_collect_injections", fake_collect_injections)
     monkeypatch.setattr(soul, "_grow_context", slow_grow)
     monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
 
     step_task = asyncio.create_task(soul._step())
-    for _ in range(10):
-        await asyncio.sleep(0)
+    await pending_future.entered.wait()
     step_task.cancel()
     await write_started.wait()
     step_task.cancel()  # second interrupt lands mid marker-write

@@ -27,14 +27,39 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
 
     def __init__(self) -> None:
         self._last_fingerprint: tuple[object, ...] | None = None
+        self._prepared_fingerprint: tuple[object, ...] | None = None
 
     async def get_injections(
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
     ) -> list[DynamicInjection]:
-        if soul.is_subagent:
+        injection, fingerprint = self._candidate(soul)
+        if injection is None:
             return []
+        self._last_fingerprint = fingerprint
+        return [injection]
+
+    async def prepare_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        _ = history
+        if self._prepared_injections:
+            return list(self._prepared_injections)
+        injection, fingerprint = self._candidate(soul)
+        if injection is None:
+            return []
+        self._prepared_fingerprint = fingerprint
+        self._prepared_injections = (injection,)
+        return [injection]
+
+    def _candidate(
+        self, soul: PythinkerSoul
+    ) -> tuple[DynamicInjection | None, tuple[object, ...] | None]:
+        if soul.is_subagent:
+            return None, None
         profile = permission_profile_for_runtime(soul.runtime)
         approval = soul.runtime.approval
         approved = tuple(sorted(approval.session_approved_actions()))
@@ -47,9 +72,8 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
             approved,
         )
         if fingerprint == self._last_fingerprint:
-            return []
-        self._last_fingerprint = fingerprint
-        return [
+            return None, fingerprint
+        return (
             DynamicInjection(
                 type=_INJECTION_TYPE,
                 content=_render(
@@ -59,15 +83,25 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
                     approval.is_safe_mode(),
                     approved,
                 ),
-            )
-        ]
+            ),
+            fingerprint,
+        )
+
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        if injections:
+            self._last_fingerprint = self._prepared_fingerprint
+        self._prepared_fingerprint = None
 
     async def on_context_compacted(self) -> None:
         self._last_fingerprint = None
+        self._prepared_fingerprint = None
+        self._prepared_injections = ()
 
     async def on_auto_changed(self, enabled: bool) -> None:
         _ = enabled
         self._last_fingerprint = None
+        self._prepared_fingerprint = None
+        self._prepared_injections = ()
 
 
 def _render(

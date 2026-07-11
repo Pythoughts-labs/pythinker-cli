@@ -101,7 +101,7 @@ def render_agents_md_reminder(builtin_args: BuiltinSystemPromptArgs) -> str | No
     Returns ``None`` when no ``AGENTS.md`` applies between the project root and the
     working directory. Otherwise returns the framing + fenced merged content that is
     delivered as a session-start, user-role reminder prepended to every model request
-    (see :func:`pythinker_code.soul.pythinkersoul._with_agents_md_preamble`), rather than
+    (see :class:`pythinker_code.soul.request_assembly.RequestAssembler`), rather than
     baked into the immutable system prompt.
 
     Delivering it this way keeps the project instructions out of the system prompt while

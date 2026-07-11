@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ from pythinker_code.soul.approval import (
     _current_deliberation_scope,
 )
 from pythinker_code.soul.context import Context
-from pythinker_code.soul.dynamic_injection import DynamicInjection
+from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.message import is_system_reminder_message
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.utils.aioqueue import QueueShutDown
@@ -37,6 +38,16 @@ from pythinker_code.wire.types import (
     TurnBegin,
     TurnEnd,
 )
+
+
+class _StaticInjectionProvider(DynamicInjectionProvider):
+    async def get_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        del history, soul
+        return [DynamicInjection(type="plan_mode", content="Internal reminder")]
 
 
 @pytest.fixture
@@ -372,14 +383,7 @@ async def test_step_merges_plain_steer_with_dynamic_injection_in_model_history(
             _tool_result_futures={},
         )
 
-    async def fake_collect_injections() -> list[DynamicInjection]:
-        return [DynamicInjection(type="plan_mode", content="Internal reminder")]
-
-    monkeypatch.setattr(
-        soul,
-        "_collect_injections",
-        fake_collect_injections,
-    )
+    soul._injection_providers = [_StaticInjectionProvider()]
     monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
 

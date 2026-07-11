@@ -10,6 +10,7 @@ The question and response are NOT written to the main context history.
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -145,9 +146,19 @@ async def execute_side_question(
 
     try:
         chat_provider = soul._runtime.llm.chat_provider  # pyright: ignore[reportPrivateUsage]
-        system_prompt, history, toolset = _build_btw_context(
-            soul, question, system_reminder_text=system_reminder_text
-        )
+        if system_reminder_text == SIDE_QUESTION_SYSTEM_REMINDER and inspect.iscoroutinefunction(
+            soul.assemble_side_request
+        ):
+            assembled = await soul.assemble_side_request(question, system_reminder_text)
+            system_prompt = assembled.system_prompt
+            history = list(assembled.provider_history)
+            toolset = _DenyAllToolset(
+                soul._agent.toolset.tools  # pyright: ignore[reportPrivateUsage]
+            )
+        else:
+            system_prompt, history, toolset = _build_btw_context(
+                soul, question, system_reminder_text=system_reminder_text
+            )
 
         text_chunks: list[str] = []
 

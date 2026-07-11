@@ -100,7 +100,7 @@ def test_render_agents_md_reminder_present(builtin_args: BuiltinSystemPromptArgs
     """The merged AGENTS.md renders as an authoritative, fenced <system-reminder> body.
 
     AGENTS.md is delivered as a session-start preamble (a user-role system-reminder),
-    not baked into the system prompt — see render_agents_md_reminder / _with_agents_md_preamble.
+    not baked into the system prompt — see render_agents_md_reminder / RequestAssembler.
     """
     from pythinker_code.soul.agent import render_agents_md_reminder
 

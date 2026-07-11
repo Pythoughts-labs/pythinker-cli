@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pythinker_core.message import Message
+from pythinker_core.message import Message, TextPart
 
 from pythinker_code.soul.message import system_reminder
 from pythinker_code.soul.request_primitives import (
@@ -167,7 +167,7 @@ AGENTS_MD_SOURCE_POLICY = TrustedSourcePolicy(
     priority=1_000,
     budget_class=FragmentBudgetClass.NON_BUDGETED,
     truncation=FragmentTruncation.FORBIDDEN,
-    applicability=SourceApplicability.ALWAYS,
+    applicability=SourceApplicability.MAY_BE_NOT_APPLICABLE,
     failure_reason_codes=("agents_md_unavailable", "agents_md_invalid"),
 )
 
@@ -181,7 +181,8 @@ class _Admission:
 
 @dataclass(frozen=True, slots=True)
 class _RequestProjection:
-    messages: tuple[Message, ...]
+    leading_messages: tuple[Message, ...]
+    trailing_messages: tuple[Message, ...]
     history_appends: tuple[Message, ...]
     outcomes: tuple[FragmentOutcome, ...]
 
@@ -563,11 +564,17 @@ class RequestAssembler:
             admissions = admit_source_results(
                 self._policies, self._source_results, request.budget_tokens
             )
-            projection = _project_admissions(admissions)
+            projection = _project_admissions(admissions, self._policies)
             outcomes = projection.outcomes
             boundary_reason = "history_normalization_failed"
             provider_history = tuple(
-                self._history_normalizer((*request.persisted_history, *projection.messages))
+                self._history_normalizer(
+                    (
+                        *projection.leading_messages,
+                        *request.persisted_history,
+                        *projection.trailing_messages,
+                    )
+                )
             )
             boundary_reason = "internal_invariant_violation"
             return AssembledRequest(
@@ -585,29 +592,54 @@ class RequestAssembler:
             raise _categorized_error(request.budget_tokens, failure, self._policies) from error
 
 
-def _project_admissions(admissions: Sequence[_Admission]) -> _RequestProjection:
+def _project_admissions(
+    admissions: Sequence[_Admission], policies: Sequence[TrustedSourcePolicy]
+) -> _RequestProjection:
+    registry = _TrustedSourceRegistry.build(policies)
+    projection_order = sorted(
+        admissions,
+        key=lambda admission: (
+            -admission.policy.priority,
+            registry.source_rank[admission.policy.source],
+            registry.key_rank[(admission.policy.source, admission.policy.key)],
+            admission.policy.key,
+        ),
+    )
     fragments = tuple(
         admission.fragment
-        for admission in admissions
+        for admission in projection_order
         if admission.fragment is not None
         and admission.outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
     )
-    messages = tuple(_fragment_message(fragment) for fragment in fragments)
+    leading = tuple(
+        _fragment_message(fragment)
+        for fragment in fragments
+        if fragment.source == AGENTS_MD_SOURCE_POLICY.source
+    )
+    history_fragments = tuple(
+        fragment for fragment in fragments if fragment.persistence is FragmentPersistence.HISTORY
+    )
+    history_message = _combined_history_message(history_fragments)
+    request_only = tuple(
+        _fragment_message(fragment)
+        for fragment in fragments
+        if fragment.persistence is FragmentPersistence.REQUEST_ONLY
+        and fragment.source != AGENTS_MD_SOURCE_POLICY.source
+    )
+    trailing = ((history_message,) if history_message is not None else ()) + request_only
     return _RequestProjection(
-        messages=messages,
-        history_appends=_history_appends(fragments, messages),
+        leading_messages=leading,
+        trailing_messages=trailing,
+        history_appends=(history_message,) if history_message is not None else (),
         outcomes=tuple(admission.outcome for admission in admissions),
     )
 
 
-def _history_appends(
-    fragments: Sequence[RequestFragment], messages: Sequence[Message]
-) -> tuple[Message, ...]:
-    return tuple(
-        message
-        for fragment, message in zip(fragments, messages, strict=True)
-        if fragment.persistence is FragmentPersistence.HISTORY
-    )
+def _combined_history_message(fragments: Sequence[RequestFragment]) -> Message | None:
+    if not fragments:
+        return None
+    combined = "\n".join(system_reminder(fragment.content).text for fragment in fragments)
+    return Message(role="user", content=[TextPart(text=combined)])
 
 
 def _fragment_message(fragment: RequestFragment) -> Message:

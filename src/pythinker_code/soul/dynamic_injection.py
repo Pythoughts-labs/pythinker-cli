@@ -162,12 +162,41 @@ class DynamicInjectionProvider(ABC):
     (context_usage, runtime, config, etc.).
     """
 
+    _prepared_injections: tuple[DynamicInjection, ...] = ()
+
     @abstractmethod
     async def get_injections(
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
     ) -> list[DynamicInjection]: ...
+
+    async def prepare_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        """Return retry-stable injections without acknowledging one-shot state."""
+        pending = self._prepared_injections
+        if pending:
+            return list(pending)
+        injections = await self.get_injections(history, soul)
+        if injections:
+            self._prepared_injections = tuple(injections)
+        return injections
+
+    def acknowledge_injections(self, keys: Sequence[str]) -> None:
+        """Acknowledge prepared injections after their history append commits."""
+        pending = self._prepared_injections
+        acknowledged = tuple(injection for injection in pending if injection.type in keys)
+        if acknowledged:
+            self._on_injections_acknowledged(acknowledged)
+        self._prepared_injections = tuple(
+            injection for injection in pending if injection.type not in keys
+        )
+
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        _ = injections
 
     async def on_context_compacted(self) -> None:
         """Called after the context is compacted (history is rebuilt).

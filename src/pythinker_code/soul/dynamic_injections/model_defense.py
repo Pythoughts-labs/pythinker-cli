@@ -84,16 +84,32 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
         history: Sequence[Message],
         soul: PythinkerSoul,
     ) -> list[DynamicInjection]:
+        injections = self._candidate_injections(history, soul)
+        if injections:
+            self._injected = True
+        return injections
+
+    async def prepare_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        if self._prepared_injections:
+            return list(self._prepared_injections)
+        injections = self._candidate_injections(history, soul)
+        if injections:
+            self._prepared_injections = tuple(injections)
+        return injections
+
+    def _candidate_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
         _ = history
-        if self._injected:
+        if self._injected or not soul.model_name:
             return []
-        model_name = soul.model_name
-        if not model_name:
-            return []
-        matched = [fragment for fragment in self._fragments if fragment.matches(model_name)]
-        if not matched:
-            return []
-        self._injected = True
+        matched = [fragment for fragment in self._fragments if fragment.matches(soul.model_name)]
         return [
             DynamicInjection(
                 type=f"{_MODEL_DEFENSE_TYPE}:{fragment.name}", content=fragment.content
@@ -101,7 +117,12 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
             for fragment in matched
         ]
 
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        if injections:
+            self._injected = True
+
     async def on_context_compacted(self) -> None:
         # Compaction rewrites history; the prior defense reminder may have been
         # summarized away, so re-arm for the next step.
         self._injected = False
+        self._prepared_injections = ()
