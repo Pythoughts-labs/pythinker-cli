@@ -10,7 +10,7 @@
       and Toolset facade behavior.
 - [x] Phase 2: ship bounded `SkillCatalog` discovery with exhaustive compatibility.
 - [x] Phase 3: ship observable request assembly and `/prompt-manifest`.
-- [ ] Phase 4: ship transactional Context replacement and disk-first appends.
+- [x] Phase 4: ship transactional Context replacement and disk-first appends.
 - [ ] Phase 5: ship WARN-mode resolved agent catalogue with strict-mode tests.
 - [ ] Phase 6: characterize Toolset, record thresholds, and extract only if measured.
 - [ ] Run full guards, gates, two-axis review, and document the final result here.
