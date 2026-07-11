@@ -88,6 +88,10 @@ Format: trigger → rule.
 - **When a deep module classifies trusted and untrusted contributions**, represent source lifecycle
   (`provided` / `not_applicable` / `failed`) and trusted metadata permissions in the initial typed
   contract; identifier-shape validation is sanitization, not source authorization.
+- **When a persisted prompt fragment is deduplicated**, scope its committed identity to both the
+  provider registration and the current history generation; rearm, compaction, and revert must
+  invalidate the relevant identity, and acknowledgement must happen synchronously only after the
+  durable history append completes.
 
 ## TUI prompt chrome
 

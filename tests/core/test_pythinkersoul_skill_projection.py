@@ -197,6 +197,7 @@ async def test_provider_visible_candidate_wrapper_respects_exact_cap_boundaries(
     }
     runtime.skill_catalog = SkillCatalog(skills, ())
     runtime.skills = runtime.skill_catalog.exhaustive_mapping()
+    runtime.config.memory.injection_ceiling_tokens = 4_096
     monkeypatch.setattr(pythinkersoul_module, "SKILL_PROMPT_MAX_CHARACTERS", cap)
     context = Context(file_backend=tmp_path / f"cap-{cap}.jsonl")
     await context.append_message(Message(role="user", content=[TextPart(text="説明")]))

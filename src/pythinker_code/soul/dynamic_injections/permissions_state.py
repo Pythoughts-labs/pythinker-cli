@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from pythinker_core.message import Message
 
-from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
+from pythinker_code.soul.dynamic_injection import (
+    DynamicInjection,
+    DynamicInjectionProvider,
+    PreparedInjection,
+)
 from pythinker_code.soul.permission import PermissionProfile, permission_profile_for_runtime
 
 if TYPE_CHECKING:
@@ -22,7 +27,8 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
     which discovered policy through denied tool calls. Re-injects only when
     the posture fingerprint changes (covers /yolo, /auto, /trust toggles and
     new session approvals), after compaction, and after auto-mode toggles.
-    Root-only: subagent overlays already document their profile constraints.
+    Request assembly treats this source as required for every agent role. The legacy
+    direct-provider API remains root-only for compatibility.
     """
 
     def __init__(self) -> None:
@@ -44,22 +50,17 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
-    ) -> list[DynamicInjection]:
+    ) -> list[PreparedInjection]:
         _ = history
         if self._prepared_injections:
             return list(self._prepared_injections)
-        injection, fingerprint = self._candidate(soul)
-        if injection is None:
-            return []
+        injection, fingerprint = self._current_posture(soul)
         self._prepared_fingerprint = fingerprint
-        self._prepared_injections = (injection,)
-        return [injection]
+        digest = hashlib.sha256(repr(fingerprint).encode(encoding="utf-8")).hexdigest()[:16]
+        self._prepared_injections = (PreparedInjection(f"permissions:{digest}", injection),)
+        return list(self._prepared_injections)
 
-    def _candidate(
-        self, soul: PythinkerSoul
-    ) -> tuple[DynamicInjection | None, tuple[object, ...] | None]:
-        if soul.is_subagent:
-            return None, None
+    def _current_posture(self, soul: PythinkerSoul) -> tuple[DynamicInjection, tuple[object, ...]]:
         profile = permission_profile_for_runtime(soul.runtime)
         approval = soul.runtime.approval
         approved = tuple(sorted(approval.session_approved_actions()))
@@ -71,8 +72,6 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
             approval.is_safe_mode(),
             approved,
         )
-        if fingerprint == self._last_fingerprint:
-            return None, fingerprint
         return (
             DynamicInjection(
                 type=_INJECTION_TYPE,
@@ -86,6 +85,16 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
             ),
             fingerprint,
         )
+
+    def _candidate(
+        self, soul: PythinkerSoul
+    ) -> tuple[DynamicInjection | None, tuple[object, ...] | None]:
+        if soul.is_subagent:
+            return None, None
+        injection, fingerprint = self._current_posture(soul)
+        if fingerprint == self._last_fingerprint:
+            return None, fingerprint
+        return injection, fingerprint
 
     def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
         if injections:
@@ -102,6 +111,14 @@ class PermissionsInjectionProvider(DynamicInjectionProvider):
         self._last_fingerprint = None
         self._prepared_fingerprint = None
         self._prepared_injections = ()
+
+    def rearm(self, key: str) -> bool:
+        if key != _INJECTION_TYPE:
+            return False
+        self._last_fingerprint = None
+        self._prepared_fingerprint = None
+        self._prepared_injections = ()
+        return True
 
 
 def _render(

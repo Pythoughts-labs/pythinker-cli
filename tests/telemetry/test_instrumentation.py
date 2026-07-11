@@ -853,6 +853,7 @@ class TestCompactionTracking:
     def _make_soul(self, *, before_tokens: int, estimated_after: int) -> Any:
         """Construct a minimal PythinkerSoul stub bypassing __init__."""
         from pythinker_code.soul.pythinkersoul import PythinkerSoul
+        from pythinker_code.soul.request_lifecycle import RequestLifecycle
 
         soul = object.__new__(PythinkerSoul)
 
@@ -900,6 +901,7 @@ class TestCompactionTracking:
         soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)
 
         soul._injection_providers = []
+        soul._request_lifecycle = RequestLifecycle([])
         return soul
 
     @pytest.mark.asyncio

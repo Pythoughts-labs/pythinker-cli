@@ -21,7 +21,11 @@ from typing import TYPE_CHECKING
 
 from pythinker_core.message import Message
 
-from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
+from pythinker_code.soul.dynamic_injection import (
+    DynamicInjection,
+    DynamicInjectionProvider,
+    PreparedInjection,
+)
 
 if TYPE_CHECKING:
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -93,13 +97,15 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
-    ) -> list[DynamicInjection]:
+    ) -> list[PreparedInjection]:
         if self._prepared_injections:
             return list(self._prepared_injections)
-        injections = self._candidate_injections(history, soul)
+        injections = self._matching_injections(history, soul)
         if injections:
-            self._prepared_injections = tuple(injections)
-        return injections
+            self._prepared_injections = tuple(
+                PreparedInjection(injection.type, injection) for injection in injections
+            )
+        return list(self._prepared_injections)
 
     def _candidate_injections(
         self,
@@ -108,6 +114,16 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
     ) -> list[DynamicInjection]:
         _ = history
         if self._injected or not soul.model_name:
+            return []
+        return self._matching_injections(history, soul)
+
+    def _matching_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        _ = history
+        if not soul.model_name:
             return []
         matched = [fragment for fragment in self._fragments if fragment.matches(soul.model_name)]
         return [

@@ -12,6 +12,7 @@ from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
+from pythinker_code.soul.request_lifecycle import RequestLifecycle
 
 
 class _BoomProvider(DynamicInjectionProvider):
@@ -105,6 +106,7 @@ def _make_compactable_soul() -> Any:
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)
 
     soul._injection_providers = []
+    soul._request_lifecycle = RequestLifecycle([])
     return soul
 
 

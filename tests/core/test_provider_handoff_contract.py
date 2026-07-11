@@ -14,6 +14,7 @@ import pythinker_code.soul.pythinkersoul as pythinkersoul_module
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
+from pythinker_code.soul.dynamic_injections.permissions_state import PermissionsInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
 _AGENTS_REMINDER = (
@@ -94,6 +95,15 @@ async def test_agent_step_has_one_characterized_provider_handoff(
     monkeypatch.setattr(pythinker_core, "step", capture)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
 
+    permission_content = (await PermissionsInjectionProvider().prepare_injections([], soul))[
+        0
+    ].content
+    dynamic_reminders = (
+        f"<system-reminder>\n{permission_content}\n</system-reminder>\n"
+        "<system-reminder>\nFirst reminder\n</system-reminder>\n"
+        "<system-reminder>\nSecond reminder\n</system-reminder>"
+    )
+
     await soul._step()
 
     assert len(captured) == 1
@@ -115,12 +125,7 @@ async def test_agent_step_has_one_characterized_provider_handoff(
             role="user",
             content=[
                 TextPart(text="Latest request"),
-                TextPart(
-                    text=(
-                        "<system-reminder>\nFirst reminder\n</system-reminder>\n"
-                        "<system-reminder>\nSecond reminder\n</system-reminder>"
-                    )
-                ),
+                TextPart(text=dynamic_reminders),
             ],
         ),
     )
@@ -130,14 +135,7 @@ async def test_agent_step_has_one_characterized_provider_handoff(
         Message(role="user", content=[TextPart(text="Latest request")]),
         Message(
             role="user",
-            content=[
-                TextPart(
-                    text=(
-                        "<system-reminder>\nFirst reminder\n</system-reminder>\n"
-                        "<system-reminder>\nSecond reminder\n</system-reminder>"
-                    )
-                )
-            ],
+            content=[TextPart(text=dynamic_reminders)],
         ),
         Message(role="assistant", content=[TextPart(text="Done")]),
     )

@@ -10,11 +10,18 @@ import pytest
 from pythinker_core.message import Message, ToolCall
 from pythinker_core.tooling import Tool, ToolError, ToolResult
 
+from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.btw import (
     _build_btw_context,
     _DenyAllToolset,
     _tool_result_to_message,
     execute_side_question,
+)
+from pythinker_code.soul.context import Context
+from pythinker_code.soul.request_assembly import (
+    AssembledRequest,
+    RequestManifest,
+    RequestStatus,
 )
 from pythinker_code.ui.shell.prompt import PromptMode, UserInput
 from pythinker_code.ui.shell.visualize import (
@@ -88,6 +95,55 @@ def _mixed_text_and_tool_result(text: str, tool_name: str = "Read") -> _FakeStep
         tool_calls=[tc],
         _tool_results=[error],
     )
+
+
+class _ExecuteSideQuestionSoul:
+    """Typed fake for the default assembler-backed side-question contract."""
+
+    def __init__(self, *, llm_set: bool = True) -> None:
+        llm = MagicMock() if llm_set else None
+        if llm is not None:
+            llm.chat_provider = MagicMock()
+        self._runtime: Runtime = MagicMock(spec=Runtime)
+        self._runtime.llm = llm
+        self._agent: Agent = MagicMock(spec=Agent)
+        self._agent.system_prompt = "sys"
+        self._agent.toolset = MagicMock()
+        self._agent.toolset.tools = []
+        self._context: Context = MagicMock(spec=Context)
+        self._context.history = []
+
+    @property
+    def runtime(self) -> Runtime:
+        return self._runtime
+
+    @property
+    def agent(self) -> Agent:
+        return self._agent
+
+    @property
+    def context(self) -> Context:
+        return self._context
+
+    async def assemble_side_request(self, question: str, reminder_text: str) -> AssembledRequest:
+        history = (Message(role="user", content=f"{reminder_text}\n\n{question}"),)
+        return AssembledRequest(
+            system_prompt="sys",
+            provider_history=history,
+            history_appends=(),
+            manifest=RequestManifest(
+                status=RequestStatus.SUCCEEDED,
+                reason_code=None,
+                outcomes=(),
+                budget_tokens=0,
+                budgeted_admitted_tokens=0,
+                non_budgeted_estimated_tokens=0,
+            ),
+        )
+
+
+def _execute_soul() -> _ExecuteSideQuestionSoul:
+    return _ExecuteSideQuestionSoul()
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +231,7 @@ class TestBuildBtwContext:
         soul = MagicMock()
         soul._agent.system_prompt = "You are a helpful assistant."
         soul._agent.toolset.tools = [MagicMock(spec=Tool)]
+        soul.agent = soul._agent
         soul.context.history = [
             Message(role="user", content="hello"),
             Message(role="assistant", content="hi there"),
@@ -241,19 +298,14 @@ class TestToolResultToMessage:
 
 class TestExecuteSideQuestion:
     def test_llm_not_set_returns_error(self):
-        soul = MagicMock()
-        soul._runtime.llm = None
+        soul = _ExecuteSideQuestionSoul(llm_set=False)
         response, error = asyncio.run(execute_side_question(soul, "hi"))
         assert response is None
         assert error is not None and "LLM is not set" in error
 
     def test_text_on_first_turn(self):
         """LLM returns text immediately → return it."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         async def fake_step(provider, sys_prompt, toolset, history, **kw):
             # Simulate streaming callback
@@ -269,11 +321,7 @@ class TestExecuteSideQuestion:
 
     def test_tool_call_then_text_on_second_turn(self):
         """LLM calls tool on turn 1 (denied), returns text on turn 2."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         call_count = 0
 
@@ -297,11 +345,7 @@ class TestExecuteSideQuestion:
 
     def test_tool_calls_on_both_turns(self):
         """LLM calls tools on both turns → error with tool names."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         async def fake_step(provider, sys_prompt, toolset, history, **kw):
             return _tool_call_result("Bash")
@@ -316,11 +360,7 @@ class TestExecuteSideQuestion:
 
     def test_mixed_text_and_tool_retries_and_returns_second_turn(self):
         """LLM outputs text + tool_call on turn 1 → retry → turn 2 text is the answer."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         call_count = 0
 
@@ -348,11 +388,7 @@ class TestExecuteSideQuestion:
 
     def test_mixed_text_and_tool_on_both_turns_reports_error(self):
         """LLM outputs text + tool_call on both turns → error with tool names."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         async def fake_step(provider, sys_prompt, toolset, history, **kw):
             if kw.get("on_message_part"):
@@ -368,11 +404,7 @@ class TestExecuteSideQuestion:
 
     def test_mixed_output_streaming_callback_receives_both_turns(self):
         """on_text_chunk receives chunks from both turns (preamble + real answer)."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         call_count = 0
         chunks: list[str] = []
@@ -403,11 +435,7 @@ class TestExecuteSideQuestion:
 
     def test_exception_returns_error(self):
         """LLM call raises exception → return error string."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         async def fake_step(*args, **kw):
             raise RuntimeError("API timeout")
@@ -420,11 +448,7 @@ class TestExecuteSideQuestion:
 
     def test_on_text_chunk_callback(self):
         """Streaming chunks are forwarded to on_text_chunk."""
-        soul = MagicMock()
-        soul._runtime.llm.chat_provider = MagicMock()
-        soul._agent.system_prompt = "sys"
-        soul._agent.toolset.tools = []
-        soul.context.history = []
+        soul = _execute_soul()
 
         chunks: list[str] = []
 

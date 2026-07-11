@@ -41,6 +41,7 @@ class RequestStatus(StrEnum):
 
 class SourceResultStatus(StrEnum):
     PROVIDED = "provided"
+    ALREADY_SATISFIED = "already_satisfied"
     NOT_APPLICABLE = "not_applicable"
     FAILED = "failed"
 
@@ -309,7 +310,10 @@ def _validated_results(
 def _validate_source_result(
     policy: TrustedSourcePolicy, source_result: RequestSourceResult
 ) -> None:
-    if source_result.status is SourceResultStatus.PROVIDED:
+    if source_result.status in {
+        SourceResultStatus.PROVIDED,
+        SourceResultStatus.ALREADY_SATISFIED,
+    }:
         if source_result.fragment is None or source_result.reason_code is not None:
             raise _AssemblyFailure("source_result_invalid", ())
         _validate_fragment_matches_policy(policy, source_result.fragment)
@@ -364,6 +368,15 @@ def _initial_admission(
             policy,
             None,
             _outcome(policy, status, 0, 0, source_result.reason_code),
+        )
+    if source_result.status is SourceResultStatus.ALREADY_SATISFIED:
+        fragment = source_result.fragment
+        if fragment is None or not fragment.content:
+            raise _AssemblyFailure("required_source_invalid", ())
+        return _Admission(
+            policy,
+            None,
+            _outcome(policy, FragmentStatus.INCLUDED, 0, 0, "already_satisfied"),
         )
     fragment = source_result.fragment
     if fragment is None:

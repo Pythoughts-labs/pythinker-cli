@@ -37,6 +37,22 @@ class DynamicInjection:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedInjection:
+    """Provider-owned stable identity paired with one dynamic injection."""
+
+    identity: str
+    injection: DynamicInjection
+
+    @property
+    def type(self) -> str:
+        return self.injection.type
+
+    @property
+    def content(self) -> str:
+        return self.injection.content
+
+
+@dataclass(frozen=True, slots=True)
 class InjectionCandidate:
     """Budgetable dynamic prompt content candidate."""
 
@@ -162,7 +178,7 @@ class DynamicInjectionProvider(ABC):
     (context_usage, runtime, config, etc.).
     """
 
-    _prepared_injections: tuple[DynamicInjection, ...] = ()
+    _prepared_injections: tuple[PreparedInjection, ...] = ()
 
     @abstractmethod
     async def get_injections(
@@ -175,25 +191,30 @@ class DynamicInjectionProvider(ABC):
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
-    ) -> list[DynamicInjection]:
+    ) -> list[PreparedInjection]:
         """Return retry-stable injections without acknowledging one-shot state."""
         pending = self._prepared_injections
         if pending:
             return list(pending)
         injections = await self.get_injections(history, soul)
         if injections:
-            self._prepared_injections = tuple(injections)
-        return injections
+            self._prepared_injections = tuple(
+                PreparedInjection(self.injection_identity(injection, index), injection)
+                for index, injection in enumerate(injections)
+            )
+        return list(self._prepared_injections)
+
+    def injection_identity(self, injection: DynamicInjection, index: int) -> str:
+        """Return the stable identity for one prepared result."""
+        return injection.type if index == 0 else f"{injection.type}:{index:04d}"
 
     def acknowledge_injections(self, keys: Sequence[str]) -> None:
         """Acknowledge prepared injections after their history append commits."""
         pending = self._prepared_injections
-        acknowledged = tuple(injection for injection in pending if injection.type in keys)
+        acknowledged = tuple(item for item in pending if item.identity in keys)
+        self._prepared_injections = tuple(item for item in pending if item.identity not in keys)
         if acknowledged:
-            self._on_injections_acknowledged(acknowledged)
-        self._prepared_injections = tuple(
-            injection for injection in pending if injection.type not in keys
-        )
+            self._on_injections_acknowledged(tuple(item.injection for item in acknowledged))
 
     def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
         _ = injections

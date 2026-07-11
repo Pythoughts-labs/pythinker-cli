@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
@@ -16,11 +18,19 @@ from pythinker_code.skill import Skill, SkillCatalog
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.btw import execute_side_question
 from pythinker_code.soul.context import Context
-from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
-from pythinker_code.soul.dynamic_injections.model_defense import ModelDefenseInjectionProvider
+from pythinker_code.soul.dynamic_injection import (
+    DynamicInjection,
+    DynamicInjectionProvider,
+    PreparedInjection,
+)
+from pythinker_code.soul.dynamic_injections.model_defense import (
+    ModelDefenseFragment,
+    ModelDefenseInjectionProvider,
+)
 from pythinker_code.soul.dynamic_injections.permissions_state import PermissionsInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.soul.request_assembly import RequestSourceError, RequestStatus
+from pythinker_code.soul.request_lifecycle import RequestLifecycleError
 
 
 class _StaticProvider(DynamicInjectionProvider):
@@ -38,9 +48,33 @@ class _FailingPermissionsProvider(PermissionsInjectionProvider):
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
-    ) -> list[DynamicInjection]:
+    ) -> list[PreparedInjection]:
         del history, soul
         raise RuntimeError("permission state unavailable")
+
+
+class _BarrierProvider(DynamicInjectionProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def get_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        del history, soul
+        self.calls += 1
+        self.entered.set()
+        await self.release.wait()
+        return [DynamicInjection(type="barrier", content="Concurrent reminder")]
+
+
+class _FailingAckProvider(_StaticProvider):
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        del injections
+        raise RuntimeError("ack failed")
 
 
 def _soul(runtime: Runtime, context: Context) -> PythinkerSoul:
@@ -184,7 +218,7 @@ async def test_persistence_failure_skips_model_and_retries_same_identity(
 
     monkeypatch.setattr(context, "append_message", fail_once)
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(RequestLifecycleError, match="context_persistence_failed"):
         await soul._step()
 
     assert model_calls == 0
@@ -285,3 +319,323 @@ async def test_default_btw_uses_request_assembler_without_persisting_side_questi
     persisted = "\n".join(message.extract_text() for message in context.history)
     assert "Stable plugin reminder" not in persisted
     assert "What changed?" not in persisted
+
+
+@pytest.mark.asyncio
+async def test_concurrent_main_and_btw_share_one_stateful_preparation(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "concurrent-prepare.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    provider = _BarrierProvider()
+    soul._injection_providers = [provider]
+
+    async def capture(*_args: object, **kwargs: object) -> StepResult:
+        if "on_message_part" in kwargs:
+            on_message_part = cast(Callable[[TextPart], None], kwargs["on_message_part"])
+            on_message_part(TextPart(text="Side answer"))
+        return _step_result("Side answer")
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr("pythinker_code.soul.btw.pythinker_core.step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    main_task = asyncio.create_task(soul._step())
+    await provider.entered.wait()
+    btw_task = asyncio.create_task(execute_side_question(soul, "What changed?"))
+    await asyncio.sleep(0)
+    provider.release.set()
+    await asyncio.gather(main_task, btw_task)
+
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_preparer_releases_lock_and_next_request_retries(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    context = Context(file_backend=tmp_path / "cancelled-prepare.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    provider = _BarrierProvider()
+    soul._injection_providers = [provider]
+
+    first = asyncio.create_task(soul.assemble_side_request("one", "side"))
+    await provider.entered.wait()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    provider.release.set()
+    assembled = await asyncio.wait_for(soul.assemble_side_request("two", "side"), timeout=1)
+
+    assert provider.calls == 2
+    assert "Concurrent reminder" in "\n".join(
+        message.extract_text() for message in assembled.provider_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_revert_rearms_both_required_security_sources(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "security-generation.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    await context.checkpoint(add_user_message=False)
+    soul = _soul(runtime, context)
+    defense = ModelDefenseInjectionProvider(
+        (ModelDefenseFragment(name="mock", patterns=("mock",), content="Defense"),)
+    )
+    permissions = PermissionsInjectionProvider()
+    soul._injection_providers = [defense, permissions]
+    captured: list[str] = []
+
+    async def capture(
+        _provider: object,
+        _system_prompt: str,
+        _toolset: object,
+        history: Sequence[Message],
+        **_kwargs: object,
+    ) -> StepResult:
+        captured.append("\n".join(message.extract_text() for message in history))
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    await soul._step()
+    await soul._revert_context_to(0)
+    await context.append_message(Message(role="user", content="Retry task"))
+    await soul._step()
+
+    assert all("Permissions state:" in item for item in captured)
+    assert all("Defense" in item for item in captured)
+
+
+@pytest.mark.asyncio
+async def test_compaction_rebuild_rearms_both_required_security_sources(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "security-compaction.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [
+        ModelDefenseInjectionProvider(
+            (ModelDefenseFragment(name="mock", patterns=("mock",), content="Defense"),)
+        ),
+        PermissionsInjectionProvider(),
+    ]
+    captured: list[str] = []
+
+    async def capture(
+        _provider: object,
+        _system_prompt: str,
+        _toolset: object,
+        history: Sequence[Message],
+        **_kwargs: object,
+    ) -> StepResult:
+        captured.append("\n".join(message.extract_text() for message in history))
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    await soul._step()
+    await context.clear()
+    await context.append_message(Message(role="user", content="Compacted task"))
+    await soul._notify_injection_providers_compacted()
+    await soul._step()
+
+    assert len(captured) == 2
+    assert all("Permissions state:" in item for item in captured)
+    assert all("Defense" in item for item in captured)
+    rebuilt = "\n".join(message.extract_text() for message in context.history)
+    assert rebuilt.count("Permissions state:") == 1
+    assert rebuilt.count("Defense") == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_commit_finishes_commit_and_dedupes_retry(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "cancel-commit.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [_StaticProvider()]
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    real_append = context.append_message
+
+    async def blocked_append(message: Message | Sequence[Message]) -> None:
+        entered.set()
+        await release.wait()
+        await real_append(message)
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        return _step_result()
+
+    monkeypatch.setattr(context, "append_message", blocked_append)
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    step = asyncio.create_task(soul._step())
+    await entered.wait()
+    step.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await step
+
+    assert soul.latest_request_manifest is not None
+    assert soul.latest_request_manifest.status is RequestStatus.FAILED
+    assert soul.latest_request_manifest.reason_code == "context_persistence_cancelled"
+    monkeypatch.setattr(context, "append_message", real_append)
+    await soul._step()
+    persisted = "\n".join(message.extract_text() for message in context.history)
+    assert persisted.count("Stable plugin reminder") == 1
+
+
+@pytest.mark.asyncio
+async def test_ack_failure_replaces_manifest_and_retry_does_not_duplicate(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "ack-failure.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [_FailingAckProvider()]
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    with pytest.raises(RequestLifecycleError, match="provider_finalization_failed"):
+        await soul._step()
+
+    assert soul.latest_request_manifest is not None
+    assert soul.latest_request_manifest.status is RequestStatus.FAILED
+    assert soul.latest_request_manifest.reason_code == "provider_finalization_failed"
+    await soul._step()
+    persisted = "\n".join(message.extract_text() for message in context.history)
+    assert persisted.count("Stable plugin reminder") == 1
+
+
+@pytest.mark.asyncio
+async def test_permission_posture_rearm_commits_new_identity_once(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "permission-rearm.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [PermissionsInjectionProvider(), ModelDefenseInjectionProvider()]
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    await soul._step()
+    await soul._step()
+    assert soul.latest_request_manifest is not None
+    satisfied = next(
+        outcome
+        for outcome in soul.latest_request_manifest.outcomes
+        if outcome.source.startswith("permissions_state")
+    )
+    assert satisfied.reason_code == "already_satisfied"
+    initial_yolo = runtime.approval.is_yolo()
+    runtime.approval.set_yolo(not initial_yolo)
+    soul.rearm_injection("permissions_state")
+    await soul._step()
+    await soul._step()
+
+    persisted = "\n".join(message.extract_text() for message in context.history)
+    assert persisted.count("Permissions state:") == 2
+    expected = "yolo off" if initial_yolo else "yolo on"
+    assert persisted.count(expected) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_before_commit_keeps_history_and_provider_uncommitted(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    context = Context(file_backend=tmp_path / "cancel-before-commit.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    provider = _BarrierProvider()
+    soul._injection_providers = [provider]
+
+    step = asyncio.create_task(soul._step())
+    await provider.entered.wait()
+    step.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await step
+
+    assert len(context.history) == 1
+    provider.release.set()
+    assembled = await soul.assemble_side_request("retry", "side")
+    assert "Concurrent reminder" in "\n".join(
+        message.extract_text() for message in assembled.provider_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_finalize_keeps_one_committed_reminder(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "cancel-after-finalize.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [_StaticProvider()]
+    provider_entered = asyncio.Event()
+    provider_release = asyncio.Event()
+
+    async def blocked_model(*_args: object, **_kwargs: object) -> StepResult:
+        provider_entered.set()
+        await provider_release.wait()
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", blocked_model)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    step = asyncio.create_task(soul._step())
+    await provider_entered.wait()
+    step.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await step
+
+    persisted = "\n".join(message.extract_text() for message in context.history)
+    assert persisted.count("Stable plugin reminder") == 1
+
+    provider_release.set()
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    await soul._step()
+    persisted = "\n".join(message.extract_text() for message in context.history)
+    assert persisted.count("Stable plugin reminder") == 1
+
+
+def test_request_lifecycle_owns_dynamic_dedupe_state() -> None:
+    assert "_committed_injection_keys" not in inspect.getsource(PythinkerSoul)
+    assert "_dynamic_request_sources" not in PythinkerSoul.__dict__

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -87,7 +86,6 @@ from pythinker_code.soul.compaction_restore import (
 )
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import (
-    DynamicInjection,
     DynamicInjectionProvider,
     injection_budget_from_runtime,
 )
@@ -122,7 +120,6 @@ from pythinker_code.soul.request_assembly import (
     FragmentBudgetClass,
     FragmentPersistence,
     FragmentRequirement,
-    FragmentStatus,
     FragmentTruncation,
     RequestAssembler,
     RequestAssemblyError,
@@ -130,10 +127,16 @@ from pythinker_code.soul.request_assembly import (
     RequestFragment,
     RequestManifest,
     RequestSourceResult,
-    RequestStatus,
     SourceApplicability,
     SourceResultStatus,
     TrustedSourcePolicy,
+)
+from pythinker_code.soul.request_lifecycle import (
+    PreparedSources,
+    RequestLifecycle,
+    RequestLifecycleError,
+    SourceAcknowledgement,
+    failed_manifest,
 )
 from pythinker_code.soul.slash import registry as soul_slash_registry
 from pythinker_code.soul.toolset import PythinkerToolset
@@ -400,76 +403,15 @@ def _user_message_with_hook_context(
 
 
 @dataclass(frozen=True, slots=True)
-class _SourceAcknowledgement:
-    source: str
-    key: str
-    provider: DynamicInjectionProvider
-    injection_type: str
-
-
-@dataclass(frozen=True, slots=True)
 class _PreparedRequest:
     assembled: AssembledRequest
-    acknowledgements: tuple[_SourceAcknowledgement, ...]
+    acknowledgements: tuple[SourceAcknowledgement, ...]
 
 
-_PERMISSIONS_SOURCE = "permissions_state"
-_MODEL_DEFENSE_SOURCE = "model_defense"
 _SKILL_SOURCE = "skill_catalog"
 _SKILL_KEY = "task_candidates"
 _SIDE_QUESTION_SOURCE = "side_question"
 _SIDE_QUESTION_KEY = "question"
-_SAFE_SOURCE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
-
-
-def _stable_source_identifier(identifier: str) -> str:
-    if _SAFE_SOURCE_IDENTIFIER.fullmatch(identifier):
-        return identifier
-    normalized = re.sub(r"[^A-Za-z0-9_.:-]+", "_", identifier).strip("_.:-")
-    prefix = normalized[:48] or "provider"
-    digest = hashlib.sha256(identifier.encode(encoding="utf-8")).hexdigest()[:12]
-    return f"{prefix}:{digest}"
-
-
-def _dynamic_source_policy(
-    provider: DynamicInjectionProvider,
-    source: str,
-    key: str,
-) -> TrustedSourcePolicy:
-    required = isinstance(provider, (PermissionsInjectionProvider, ModelDefenseInjectionProvider))
-    failure_codes = (
-        ("permissions_state_unavailable", "permissions_state_invalid")
-        if isinstance(provider, PermissionsInjectionProvider)
-        else (
-            ("model_defense_unavailable", "model_defense_invalid")
-            if isinstance(provider, ModelDefenseInjectionProvider)
-            else ("provider_failed",)
-        )
-    )
-    return TrustedSourcePolicy(
-        source=source,
-        key=key,
-        requirement=(FragmentRequirement.REQUIRED if required else FragmentRequirement.BEST_EFFORT),
-        persistence=FragmentPersistence.HISTORY,
-        priority=100,
-        budget_class=FragmentBudgetClass.BUDGETED,
-        truncation=FragmentTruncation.FORBIDDEN if required else FragmentTruncation.ALLOWED,
-        applicability=SourceApplicability.MAY_BE_NOT_APPLICABLE,
-        failure_reason_codes=failure_codes,
-    )
-
-
-def _dynamic_source_name(provider: DynamicInjectionProvider) -> str:
-    if isinstance(provider, PermissionsInjectionProvider):
-        return _PERMISSIONS_SOURCE
-    if isinstance(provider, ModelDefenseInjectionProvider):
-        return _MODEL_DEFENSE_SOURCE
-    return _stable_source_identifier(type(provider).__name__.lstrip("_"))
-
-
-def _dynamic_fragment_key(injection_type: str, index: int, total: int) -> str:
-    safe_type = _stable_source_identifier(injection_type)
-    return safe_type if total == 1 else f"{index:04d}:{safe_type}"[:64]
 
 
 def _provided_source(policy: TrustedSourcePolicy, content: str) -> RequestSourceResult:
@@ -508,20 +450,6 @@ def _failed_source(policy: TrustedSourcePolicy, reason_code: str) -> RequestSour
         fragment=None,
         reason_code=reason_code,
     )
-
-
-def _invalid_security_injection(
-    provider: DynamicInjectionProvider, injection_type: str
-) -> str | None:
-    if isinstance(provider, PermissionsInjectionProvider):
-        return None if injection_type == _PERMISSIONS_SOURCE else "permissions_state_invalid"
-    if isinstance(provider, ModelDefenseInjectionProvider):
-        return (
-            None
-            if injection_type.startswith(f"{_MODEL_DEFENSE_SOURCE}:")
-            else ("model_defense_invalid")
-        )
-    return None
 
 
 def _should_nudge_truncation(
@@ -682,7 +610,6 @@ class PythinkerSoul:
         self._compaction = SimpleCompaction(base_prompt=self._runtime.config.compact_prompt)
         self.latest_skill_projection_outcome: SkillProjectionOutcome | None = None
         self.latest_request_manifest: RequestManifest | None = None
-        self._committed_injection_keys: set[tuple[str, str]] = set()
 
         for tool in agent.toolset.tools:
             if tool.name == SendDMail_NAME:
@@ -739,6 +666,7 @@ class PythinkerSoul:
                 else [AutoModeInjectionProvider()]
             ),
         ]
+        self._request_lifecycle = RequestLifecycle(self._injection_providers)
         self._hook_engine: HookEngine = HookEngine()
         self._stop_hook_active: bool = False
         if self._runtime.role == "root":
@@ -817,102 +745,30 @@ class PythinkerSoul:
     def add_injection_provider(self, provider: DynamicInjectionProvider) -> None:
         """Register an additional dynamic injection provider."""
         self._injection_providers.append(provider)
+        self._request_lifecycle.sync_providers(self._injection_providers)
 
     def rearm_injection(self, key: str) -> None:
         """Re-arm matching dynamic injection providers after related state changes."""
-        for provider in self._injection_providers:
-            try:
-                provider.rearm(key)
-            except Exception:
-                logger.debug("injection provider rearm failed")
+        failures = self._request_lifecycle.rearm(self._injection_providers, key)
+        for failure in failures:
+            logger.debug("injection provider rearm failed", exc_info=failure)
 
-    async def _dynamic_request_sources(
-        self,
-    ) -> tuple[
-        tuple[TrustedSourcePolicy, ...],
-        tuple[RequestSourceResult, ...],
-        tuple[_SourceAcknowledgement, ...],
-    ]:
-        policies: list[TrustedSourcePolicy] = []
-        source_results: list[RequestSourceResult] = []
-        acknowledgements: list[_SourceAcknowledgement] = []
-        optional_enabled = self._runtime.config.memory.injection_bus
-        for provider in self._injection_providers:
-            source = _dynamic_source_name(provider)
-            required = isinstance(
-                provider, (PermissionsInjectionProvider, ModelDefenseInjectionProvider)
-            )
-            if not optional_enabled and not required:
-                policy = _dynamic_source_policy(provider, source, source)
-                policies.append(policy)
-                source_results.append(_not_applicable_source(policy))
-                continue
-            (
-                provider_policies,
-                provider_results,
-                provider_acks,
-            ) = await self._prepare_dynamic_provider(provider, source)
-            policies.extend(provider_policies)
-            source_results.extend(provider_results)
-            acknowledgements.extend(provider_acks)
-        return tuple(policies), tuple(source_results), tuple(acknowledgements)
+    async def _required_request_sources(self) -> PreparedSources:
+        return await self._request_lifecycle.prepare_required(
+            self._injection_providers,
+            self._context.history,
+            self,
+            self._report_provider_failure,
+        )
 
-    async def _prepare_dynamic_provider(
-        self,
-        provider: DynamicInjectionProvider,
-        source: str,
-    ) -> tuple[
-        tuple[TrustedSourcePolicy, ...],
-        tuple[RequestSourceResult, ...],
-        tuple[_SourceAcknowledgement, ...],
-    ]:
-        try:
-            injections = await provider.prepare_injections(self._context.history, self)
-        except Exception as exc:
-            self._report_provider_failure(provider, exc)
-            policy = _dynamic_source_policy(provider, source, source)
-            reason = (
-                "permissions_state_unavailable"
-                if isinstance(provider, PermissionsInjectionProvider)
-                else (
-                    "model_defense_unavailable"
-                    if isinstance(provider, ModelDefenseInjectionProvider)
-                    else "provider_failed"
-                )
-            )
-            return (policy,), (_failed_source(policy, reason),), ()
-        if not injections:
-            policy = _dynamic_source_policy(provider, source, source)
-            return (policy,), (_not_applicable_source(policy),), ()
-        return self._prepared_injection_results(provider, source, injections)
-
-    def _prepared_injection_results(
-        self,
-        provider: DynamicInjectionProvider,
-        source: str,
-        injections: Sequence[DynamicInjection],
-    ) -> tuple[
-        tuple[TrustedSourcePolicy, ...],
-        tuple[RequestSourceResult, ...],
-        tuple[_SourceAcknowledgement, ...],
-    ]:
-        policies: list[TrustedSourcePolicy] = []
-        source_results: list[RequestSourceResult] = []
-        acknowledgements: list[_SourceAcknowledgement] = []
-        for index, injection in enumerate(injections):
-            key = _dynamic_fragment_key(injection.type, index, len(injections))
-            policy = _dynamic_source_policy(provider, source, key)
-            policies.append(policy)
-            invalid_reason = _invalid_security_injection(provider, injection.type)
-            if invalid_reason is not None:
-                source_results.append(_failed_source(policy, invalid_reason))
-                continue
-            if (source, key) in self._committed_injection_keys:
-                source_results.append(_not_applicable_source(policy))
-                continue
-            source_results.append(_provided_source(policy, injection.content))
-            acknowledgements.append(_SourceAcknowledgement(source, key, provider, injection.type))
-        return tuple(policies), tuple(source_results), tuple(acknowledgements)
+    async def _optional_request_sources(self) -> PreparedSources:
+        return await self._request_lifecycle.prepare_optional(
+            self._injection_providers,
+            self._context.history,
+            self,
+            self._report_provider_failure,
+            enabled=self._runtime.config.memory.injection_bus,
+        )
 
     @staticmethod
     def _report_provider_failure(provider: DynamicInjectionProvider, error: Exception) -> None:
@@ -952,6 +808,11 @@ class PythinkerSoul:
                     type(provider).__name__,
                     exc_info=True,
                 )
+        self._request_lifecycle.context_rebuilt()
+
+    async def _revert_context_to(self, checkpoint_id: int) -> None:
+        await self._context.revert_to(checkpoint_id)
+        await self._notify_injection_providers_compacted()
 
     async def notify_auto_changed(self, enabled: bool) -> None:
         """Notify dynamic injection providers that auto mode changed."""
@@ -2020,7 +1881,7 @@ class PythinkerSoul:
                 )
 
             if back_to_the_future is not None:
-                await self._context.revert_to(back_to_the_future.checkpoint_id)
+                await self._revert_context_to(back_to_the_future.checkpoint_id)
                 # The reverted history no longer contains the last step's calls,
                 # so they must not seed cross-step dedup for the next step.
                 self._last_tool_calls = []
@@ -2089,52 +1950,79 @@ class PythinkerSoul:
         task: str,
         extra_sources: Sequence[tuple[TrustedSourcePolicy, RequestSourceResult]] = (),
     ) -> _PreparedRequest:
-        agents_policy, agents_result = self._agents_request_source()
-        dynamic_policies, dynamic_results, acknowledgements = await self._dynamic_request_sources()
-        skill_policies, skill_results = self._skill_request_sources(task)
-        policies = (agents_policy, *dynamic_policies, *skill_policies)
-        source_results = (agents_result, *dynamic_results, *skill_results)
-        if extra_sources:
-            extra_policies, extra_results = zip(*extra_sources, strict=True)
-            policies = (*policies, *extra_policies)
-            source_results = (*source_results, *extra_results)
-        request = RequestAssemblyInput(
-            system_prompt=self._agent.system_prompt,
-            persisted_history=tuple(self._context.history),
-            current_task=task,
-            budget_tokens=injection_budget_from_runtime(self._runtime).injection_budget_tokens,
-        )
         try:
+            agents_policy, agents_result = self._agents_request_source()
+            request = RequestAssemblyInput(
+                system_prompt=self._agent.system_prompt,
+                persisted_history=tuple(self._context.history),
+                current_task=task,
+                budget_tokens=injection_budget_from_runtime(self._runtime).injection_budget_tokens,
+            )
+            required = await self._required_request_sources()
+            required_policies = (agents_policy, *required.policies)
+            required_results = (agents_result, *required.results)
+            if extra_sources:
+                extra_policies, extra_results = zip(*extra_sources, strict=True)
+                required_policies = (*required_policies, *extra_policies)
+                required_results = (*required_results, *extra_results)
+            await RequestAssembler(required_policies, required_results).assemble(request)
+
+            optional = await self._optional_request_sources()
+            skill_policies, skill_results = self._skill_request_sources(task)
+            policies = (*required_policies, *optional.policies, *skill_policies)
+            source_results = (*required_results, *optional.results, *skill_results)
             assembled = await RequestAssembler(policies, source_results).assemble(request)
         except RequestAssemblyError as error:
             self.latest_request_manifest = error.manifest
             raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            failure = RequestLifecycleError("request_source_adapter_failed")
+            self.latest_request_manifest = failed_manifest(failure.reason_code, None)
+            raise failure from error
         self.latest_request_manifest = assembled.manifest
-        return _PreparedRequest(assembled, acknowledgements)
+        return _PreparedRequest(
+            assembled,
+            (*required.acknowledgements, *optional.acknowledgements),
+        )
 
     async def _persist_assembled_history(self, prepared: _PreparedRequest) -> None:
         if not prepared.assembled.history_appends:
             return
+
+        async def _commit_and_finalize() -> None:
+            try:
+                await self._context.append_message(prepared.assembled.history_appends)
+            except Exception as error:
+                raise RequestLifecycleError("context_persistence_failed") from error
+            try:
+                self._request_lifecycle.finalize(
+                    prepared.assembled.manifest,
+                    prepared.acknowledgements,
+                )
+            except RequestLifecycleError:
+                raise
+            except Exception as error:
+                raise RequestLifecycleError("provider_finalization_failed") from error
+
+        commit_task = asyncio.create_task(_commit_and_finalize())
         try:
-            await self._context.append_message(prepared.assembled.history_appends)
-        except Exception:
-            self.latest_request_manifest = replace(
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await commit_task
+            self.latest_request_manifest = failed_manifest(
+                "context_persistence_cancelled",
                 prepared.assembled.manifest,
-                status=RequestStatus.FAILED,
-                reason_code="context_persistence_failed",
             )
             raise
-        admitted = {
-            (outcome.source, outcome.key)
-            for outcome in prepared.assembled.manifest.outcomes
-            if outcome.persistence is FragmentPersistence.HISTORY
-            and outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
-        }
-        for acknowledgement in prepared.acknowledgements:
-            if (acknowledgement.source, acknowledgement.key) not in admitted:
-                continue
-            acknowledgement.provider.acknowledge_injections((acknowledgement.injection_type,))
-            self._committed_injection_keys.add((acknowledgement.source, acknowledgement.key))
+        except RequestLifecycleError as error:
+            self.latest_request_manifest = failed_manifest(
+                error.reason_code,
+                prepared.assembled.manifest,
+            )
+            raise
 
     async def assemble_side_request(self, question: str, reminder_text: str) -> AssembledRequest:
         policy = TrustedSourcePolicy(
