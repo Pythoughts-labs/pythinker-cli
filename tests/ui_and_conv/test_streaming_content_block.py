@@ -697,9 +697,16 @@ class TestShowThinkingStream:
         block.compose()  # pending changed -> recompute
         assert len(calls) == 2
 
-    def test_stream_mode_cached_preview_matches_uncached_render(self):
+    def test_stream_mode_cached_preview_matches_uncached_render(self, monkeypatch):
         """Caching is behavior-preserving: composed output is byte-identical to a
         fresh (uncached) render of the same reasoning content across ticks."""
+        from pythinker_code.ui.shell.visualize import _blocks
+
+        # Freeze the clock so the elapsed/token-rate status line is identical
+        # across both compose() calls — the comparison targets the cached preview,
+        # not wall-clock timing.
+        monkeypatch.setattr(_blocks.time, "monotonic", lambda: 100.0)
+
         block = _ContentBlock(is_think=True, show_thinking_stream=True)
         block.append("**Preparing report generation**")
 
