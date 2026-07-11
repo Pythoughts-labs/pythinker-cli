@@ -29,7 +29,9 @@
 - Deviation: deterministic fault characterization exposed an exception-atomicity
   defect in MCP registry publication. The surgical rollback preserves the previous
   registry and re-raises the original registration failure. Final review also
-  replaced mock state with real `CompactionResult` and `TaskView` instances.
+  replaced mock state with real `CompactionResult` and `TaskView` instances and
+  bounded optimistic revert conflicts to three attempts before surfacing the typed
+  generation conflict.
 - Compatibility windows: `Runtime.skills` remains until internal exact lookups have
   migrated and repository search proves it removable. Unknown agent fields warn in
   this release and become errors in the following minor release. `LaborMarket`,
@@ -37,7 +39,7 @@
   strict-default release; their earliest removal is the next minor release, subject
   to direct-launch parity and migration checks.
 - Verification: `make check-pythinker-code` passed Ruff, formatting, Pyright, and ty;
-  `make test-pythinker-code` exited 0 after collecting 6,931 package tests and then
+  `make test-pythinker-code` exited 0 after collecting 6,932 package tests and then
   passed 65 E2E tests with four skips; provider snapshots passed 39 tests; the
   Toolset/fault matrix passed 96 tests; focused guard fixes passed 32 tests; and
   `git diff --check` passed. Expected Loguru/Python deprecation and pytest temporary

@@ -1276,6 +1276,31 @@ async def test_expected_generation_conflict_precedes_replacement_io(
     assert context.history[-1] == _message("concurrent")
 
 
+@pytest.mark.asyncio
+async def test_revert_generation_conflicts_stop_after_bounded_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(tmp_path / "context.jsonl")
+    await context.append_message(_message("before"))
+    await context.checkpoint(add_user_message=False)
+    attempts = 0
+
+    async def conflict_then_forbidden(*_args: object, **_kwargs: object) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise context_module.ContextGenerationConflictError(attempts - 1, attempts)
+        raise AssertionError("revert retried past its conflict budget")
+
+    monkeypatch.setattr(context, "replace_history", conflict_then_forbidden)
+
+    with pytest.raises(context_module.ContextGenerationConflictError):
+        await context.revert_to(0)
+
+    assert attempts == 3
+
+
 @pytest.mark.parametrize("unsupported_errno", [errno.EINVAL, errno.ENOTSUP])
 def test_parent_directory_sync_treats_known_posix_errors_as_unsupported(
     tmp_path: Path,

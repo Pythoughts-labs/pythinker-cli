@@ -21,6 +21,8 @@ from pythinker_code.utils.io import ends_with_newline
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.path import next_available_rotation
 
+_MAX_REVERT_CONFLICT_ATTEMPTS = 3
+
 _LOST_RESULT_NOTE = (
     "Tool call result was lost before it could be recorded (the session ended "
     "unexpectedly). Re-run the tool if its output is still needed."
@@ -910,10 +912,11 @@ class Context:
         Raises:
             ValueError: When the checkpoint does not exist.
             RuntimeError: When no available rotation path is found.
+            ContextGenerationConflictError: When concurrent mutations exhaust the retry budget.
         """
 
         logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
-        while True:
+        for attempt in range(_MAX_REVERT_CONFLICT_ATTEMPTS):
             if checkpoint_id >= self._next_checkpoint_id:
                 logger.error(
                     "Checkpoint {checkpoint_id} does not exist", checkpoint_id=checkpoint_id
@@ -980,8 +983,12 @@ class Context:
                     expected_generation=source_generation,
                 )
             except ContextGenerationConflictError:
+                if attempt + 1 == _MAX_REVERT_CONFLICT_ATTEMPTS:
+                    raise
                 continue
             return commit
+
+        raise AssertionError("revert conflict retry loop exhausted without an outcome")
 
     async def clear(self, system_prompt: str | None = None) -> ContextCommit:
         """

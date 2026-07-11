@@ -32,8 +32,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
   raw prompts, user text, or provenance paths.
 - **Conversation history updates are transactional.** Normal appends persist before
   changing memory, while compaction, pruning, revert, and clear flows use atomic
-  replacement with coherent cancellation and rollback behavior. Existing JSONL
-  records and restoration behavior remain compatible.
+  replacement with coherent cancellation and rollback behavior. Concurrent revert
+  conflicts now stop after a bounded retry budget instead of starving indefinitely.
+  Existing JSONL records and restoration behavior remain compatible.
 - **Agent definitions now resolve through one source-aware catalogue.** YAML and
   Markdown definitions share deterministic precedence, collision diagnostics, and
   safe provenance handling. Unknown fields warn in this release, become errors in
