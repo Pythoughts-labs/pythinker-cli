@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -27,6 +28,30 @@ _LOST_RESULT_NOTE = (
 )
 
 _ContextRecord = Message | dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ContextReplacement:
+    system_prompt: str | None
+    messages: tuple[Message, ...]
+    token_count: int
+    create_checkpoint: bool
+    checkpoint_user_marker: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCommit:
+    checkpoint_id: int | None
+    rotated_file: Path | None
+    message_count: int
+
+
+class ContextPersistenceError(OSError):
+    def __init__(self, operation: str, category: str, path: Path):
+        self.operation = operation
+        self.category = category
+        self.path = path
+        super().__init__(f"{operation} failed ({category}) for {path}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +77,135 @@ def _serialize_context_records(records: Sequence[_ContextRecord]) -> str:
         else:
             serialized.append(json.dumps(record))
     return "".join(f"{record}\n" for record in serialized)
+
+
+def _persistence_error(category: str, path: Path) -> ContextPersistenceError:
+    return ContextPersistenceError("replace_history", category, path)
+
+
+def _cleanup_replacement_path(path: Path | None, primary_error: BaseException) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as cleanup_error:
+        logger.warning(
+            "Failed to clean context replacement artifact {path}: {error}",
+            path=path,
+            error=cleanup_error,
+        )
+        primary_error.add_note(f"Cleanup also failed for {path}")
+
+
+def _prepare_replacement_file(file_backend: Path, serialized_records: Sequence[str]) -> Path:
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=file_backend.parent,
+            prefix=file_backend.name,
+            suffix=".tmp",
+        )
+    except OSError as error:
+        raise _persistence_error("temporary_creation", file_backend) from error
+
+    tmp_path = Path(tmp_name)
+    descriptor_owned = True
+    try:
+        try:
+            replacement_file = os.fdopen(fd, "w", encoding="utf-8")
+            descriptor_owned = False
+        except OSError as error:
+            raise _persistence_error("write", file_backend) from error
+        with replacement_file:
+            for record in serialized_records:
+                try:
+                    replacement_file.write(record)
+                except OSError as error:
+                    raise _persistence_error("write", file_backend) from error
+            try:
+                replacement_file.flush()
+            except OSError as error:
+                raise _persistence_error("write", file_backend) from error
+            try:
+                os.fsync(replacement_file.fileno())
+            except OSError as error:
+                raise _persistence_error("synchronization", file_backend) from error
+    except BaseException as error:
+        primary_error = error
+        if isinstance(error, OSError) and not isinstance(error, ContextPersistenceError):
+            primary_error = _persistence_error("write", file_backend)
+        if descriptor_owned:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        _cleanup_replacement_path(tmp_path, primary_error)
+        if primary_error is not error:
+            raise primary_error from error
+        raise
+    return tmp_path
+
+
+def _read_live_bytes(file_backend: Path) -> bytes | None:
+    if not file_backend.exists():
+        return None
+    try:
+        return file_backend.read_bytes()
+    except OSError as error:
+        raise _persistence_error("rotation_archive", file_backend) from error
+
+
+def _write_rotation_archive(rotated_file: Path, live_bytes: bytes) -> None:
+    try:
+        with rotated_file.open("wb") as archive_file:
+            archive_file.write(live_bytes)
+            archive_file.flush()
+            os.fsync(archive_file.fileno())
+    except OSError as error:
+        raise _persistence_error("rotation_archive", rotated_file) from error
+
+
+def _sync_parent_directory(parent: Path) -> bool:
+    if os.name != "posix":
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        directory_fd = os.open(parent, flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as error:
+        unsupported = {errno.EINVAL, getattr(errno, "ENOTSUP", errno.EINVAL)}
+        if error.errno in unsupported:
+            return False
+        raise
+    return True
+
+
+async def _settle_awaitable[T](
+    operation: Awaitable[T],
+) -> tuple[T, asyncio.CancelledError | None]:
+    task = asyncio.ensure_future(operation)
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError as error:
+        cancellation = error
+        while not task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait({task})
+
+    try:
+        result = task.result()
+    except BaseException as operation_error:
+        if cancellation is not None:
+            raise cancellation from operation_error
+        raise
+    return result, cancellation
+
+
+async def _settle_thread[T](
+    operation: Callable[[], T],
+) -> tuple[T, asyncio.CancelledError | None]:
+    return await _settle_awaitable(asyncio.to_thread(operation))
 
 
 def _rollback_context_append(file_backend: Path, existed: bool, original_size: int) -> None:
@@ -298,6 +452,34 @@ def _repair_context_state(state: _ContextState) -> _ContextState:
     )
 
 
+def _replacement_records(replacement: ContextReplacement) -> tuple[_ContextRecord, ...]:
+    if replacement.token_count < 0:
+        raise ValueError("token_count must be a non-negative integer")
+    if replacement.checkpoint_user_marker and not replacement.create_checkpoint:
+        raise ValueError("checkpoint_user_marker requires create_checkpoint")
+
+    records: list[_ContextRecord] = []
+    if replacement.system_prompt is not None:
+        records.append({"role": "_system_prompt", "content": replacement.system_prompt})
+    if replacement.create_checkpoint:
+        records.append({"role": "_checkpoint", "id": 0})
+        if replacement.checkpoint_user_marker:
+            records.append(Message(role="user", content=[system("CHECKPOINT 0")]))
+    records.extend(replacement.messages)
+    records.append({"role": "_usage", "token_count": replacement.token_count})
+    return tuple(records)
+
+
+def _serialize_replacement_records(
+    file_backend: Path,
+    records: Sequence[_ContextRecord],
+) -> tuple[str, ...]:
+    try:
+        return tuple(_serialize_context_records((record,)) for record in records)
+    except (TypeError, ValueError) as error:
+        raise _persistence_error("serialization", file_backend) from error
+
+
 class Context:
     def __init__(self, file_backend: Path):
         self._file_backend = file_backend
@@ -431,6 +613,102 @@ class Context:
             self._swap_state(state)
             if cancellation is not None:
                 raise cancellation
+
+    async def replace_history(self, replacement: ContextReplacement) -> ContextCommit:
+        records = _replacement_records(replacement)
+        serialized_records = _serialize_replacement_records(self._file_backend, records)
+
+        async with self._mutation_lock:
+            next_state, accepted = _reduce_context_records(
+                _empty_context_state(),
+                records,
+                file_backend=self._file_backend,
+            )
+            if not all(accepted):
+                raise ValueError("replacement contains an invalid context record")
+            next_state = replace(next_state, tail_repaired=False)
+
+            temp_path, cancellation = await _settle_thread(
+                lambda: _prepare_replacement_file(self._file_backend, serialized_records)
+            )
+            if cancellation is not None:
+                _cleanup_replacement_path(temp_path, cancellation)
+                raise cancellation
+
+            try:
+                live_bytes, cancellation = await _settle_thread(
+                    lambda: _read_live_bytes(self._file_backend)
+                )
+            except BaseException as error:
+                _cleanup_replacement_path(temp_path, error)
+                raise
+            if cancellation is not None:
+                _cleanup_replacement_path(temp_path, cancellation)
+                raise cancellation
+
+            rotated_file: Path | None = None
+            if live_bytes is not None:
+                rotated_file, cancellation = await _settle_awaitable(
+                    next_available_rotation(self._file_backend)
+                )
+                if rotated_file is None:
+                    error = _persistence_error("rotation_archive", self._file_backend)
+                    _cleanup_replacement_path(temp_path, error)
+                    raise error
+                if cancellation is not None:
+                    _cleanup_replacement_path(rotated_file, cancellation)
+                    _cleanup_replacement_path(temp_path, cancellation)
+                    raise cancellation
+                try:
+                    _, cancellation = await _settle_thread(
+                        lambda: _write_rotation_archive(rotated_file, live_bytes)
+                    )
+                except BaseException as error:
+                    _cleanup_replacement_path(rotated_file, error)
+                    _cleanup_replacement_path(temp_path, error)
+                    raise
+                if cancellation is not None:
+                    _cleanup_replacement_path(rotated_file, cancellation)
+                    _cleanup_replacement_path(temp_path, cancellation)
+                    raise cancellation
+
+            async def commit_visible_generation() -> None:
+                try:
+                    await asyncio.to_thread(os.replace, temp_path, self._file_backend)
+                except OSError as error:
+                    raise _persistence_error("atomic_replacement", self._file_backend) from error
+                self._swap_state(next_state)
+
+            try:
+                _, cancellation = await _settle_awaitable(commit_visible_generation())
+            except BaseException as error:
+                _cleanup_replacement_path(temp_path, error)
+                raise
+
+            def synchronize_visible_generation() -> bool:
+                try:
+                    return _sync_parent_directory(self._file_backend.parent)
+                except OSError as error:
+                    raise _persistence_error(
+                        "visible_commit_durability", self._file_backend
+                    ) from error
+
+            try:
+                _, sync_cancellation = await _settle_thread(synchronize_visible_generation)
+            except ContextPersistenceError as error:
+                if cancellation is not None:
+                    raise cancellation from error
+                raise
+            if cancellation is None:
+                cancellation = sync_cancellation
+            if cancellation is not None:
+                raise cancellation
+
+            return ContextCommit(
+                checkpoint_id=0 if replacement.create_checkpoint else None,
+                rotated_file=rotated_file,
+                message_count=len(next_state.history),
+            )
 
     async def _append_serialized(
         self,
