@@ -94,11 +94,16 @@ async def test_exhaustive_mapping_uses_legacy_global_skill_name_order(tmp_path: 
     _write_skill(first_root, "zeta", name="zeta", description="Zeta workflow")
     _write_skill(second_root, "alpha", name="alpha", description="Alpha workflow")
 
-    catalog = await SkillCatalog.discover([_root(first_root), _root(second_root)])
+    forward = await SkillCatalog.discover([_root(first_root), _root(second_root)])
+    reversed_catalog = await SkillCatalog.discover([_root(second_root), _root(first_root)])
 
-    assert tuple(skill.name for skill in catalog.exhaustive_mapping().values()) == (
-        "alpha",
-        "zeta",
+    expected_names = ("alpha", "zeta")
+    assert tuple(forward.exhaustive_mapping()) == expected_names
+    assert tuple(reversed_catalog.exhaustive_mapping()) == expected_names
+    assert tuple(skill.name for skill in forward.exhaustive_mapping().values()) == expected_names
+    assert (
+        tuple(skill.name for skill in reversed_catalog.exhaustive_mapping().values())
+        == expected_names
     )
 
 
