@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -980,3 +981,291 @@ async def test_replace_history_serializes_with_concurrent_append(
     restored = Context(context_path)
     assert await restored.restore()
     assert list(restored.history) == list(context.history)
+
+
+@pytest.mark.asyncio
+async def test_rotation_reservation_failure_is_categorized_and_cleans_temp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    old_bytes = context_path.read_bytes()
+    old_memory = _memory(context)
+
+    async def fail_reservation(_path: Path) -> Path | None:
+        raise OSError("listdir failed")
+
+    monkeypatch.setattr(context_module, "next_available_rotation", fail_reservation)
+
+    with pytest.raises(context_module.ContextPersistenceError) as raised:
+        await context.replace_history(_replacement(_message("new")))
+
+    assert raised.value.category == "rotation_archive"
+    assert isinstance(raised.value.__cause__, OSError)
+    assert context_path.read_bytes() == old_bytes
+    assert _memory(context) == old_memory
+    assert not list(tmp_path.glob("context.jsonl*.tmp"))
+    assert not (tmp_path / "context_1.jsonl").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "message"),
+    [
+        ("system_prompt", 7, "system_prompt"),
+        ("messages", [_message("list")], "messages"),
+        ("messages", ({"role": "_usage", "token_count": 0},), "messages"),
+        ("token_count", True, "token_count"),
+        ("token_count", "7", "token_count"),
+        ("token_count", -1, "token_count"),
+        ("create_checkpoint", 1, "create_checkpoint"),
+        ("checkpoint_user_marker", 1, "checkpoint_user_marker"),
+    ],
+)
+async def test_replacement_exact_type_validation_precedes_lock_and_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    invalid_value: object,
+    message: str,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context_path.write_bytes(b"old generation")
+    context = Context(context_path)
+    values: dict[str, object] = {
+        "system_prompt": "prompt",
+        "messages": (_message("valid"),),
+        "token_count": 1,
+        "create_checkpoint": True,
+        "checkpoint_user_marker": False,
+    }
+    values[field] = invalid_value
+    replacement = context_module.ContextReplacement(
+        system_prompt=cast(Any, values["system_prompt"]),
+        messages=cast(Any, values["messages"]),
+        token_count=cast(Any, values["token_count"]),
+        create_checkpoint=cast(Any, values["create_checkpoint"]),
+        checkpoint_user_marker=cast(Any, values["checkpoint_user_marker"]),
+    )
+
+    monkeypatch.setattr(
+        context_module.tempfile,
+        "mkstemp",
+        lambda *args, **kwargs: pytest.fail("invalid input touched filesystem"),
+    )
+    async with context._mutation_lock:
+        with pytest.raises((TypeError, ValueError), match=message):
+            await asyncio.wait_for(context.replace_history(replacement), timeout=0.1)
+
+    assert context_path.read_bytes() == b"old generation"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_marker_relationship_validation_precedes_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(tmp_path / "context.jsonl")
+    monkeypatch.setattr(
+        context_module.tempfile,
+        "mkstemp",
+        lambda *args, **kwargs: pytest.fail("invalid input touched filesystem"),
+    )
+
+    with pytest.raises(ValueError, match="checkpoint_user_marker"):
+        await context.replace_history(
+            _replacement(create_checkpoint=False, checkpoint_user_marker=True)
+        )
+
+
+def test_context_persistence_error_renders_only_safe_path() -> None:
+    absolute_path = Path("/private/session-secret/context.jsonl")
+    error = context_module.ContextPersistenceError(
+        "replace_history", "rotation_archive", absolute_path
+    )
+
+    assert str(absolute_path) not in str(error)
+    assert "session-secret" not in str(error)
+    assert "context.jsonl" in str(error)
+
+
+def test_visible_commit_durability_error_is_explicit() -> None:
+    error = context_module.ContextPersistenceError(
+        "replace_history",
+        "visible_commit_durability",
+        Path("/private/session-secret/context.jsonl"),
+    )
+
+    assert "new generation is visible" in str(error)
+    assert "power-loss durability is uncertain" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_before_archive_reservation_keeps_old_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    old_bytes = context_path.read_bytes()
+    old_memory = _memory(context)
+    read_entered = threading.Event()
+    release_read = threading.Event()
+    original_read = context_module._read_live_bytes
+
+    def blocking_read(path: Path) -> bytes | None:
+        read_entered.set()
+        release_read.wait()
+        return original_read(path)
+
+    monkeypatch.setattr(context_module, "_read_live_bytes", blocking_read)
+    replacement = asyncio.create_task(context.replace_history(_replacement(_message("new"))))
+    assert await asyncio.to_thread(read_entered.wait, 5)
+    replacement.cancel()
+    release_read.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+    assert context_path.read_bytes() == old_bytes
+    assert _memory(context) == old_memory
+    assert not list(tmp_path.glob("context.jsonl*.tmp"))
+    assert not (tmp_path / "context_1.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_immediately_before_replace_keeps_old_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    old_bytes = context_path.read_bytes()
+    old_memory = _memory(context)
+    checkpoint_entered = asyncio.Event()
+    release_checkpoint = asyncio.Event()
+
+    async def pause_before_replace() -> None:
+        checkpoint_entered.set()
+        await release_checkpoint.wait()
+
+    monkeypatch.setattr(context_module, "_before_replacement_commit", pause_before_replace)
+    replacement = asyncio.create_task(context.replace_history(_replacement(_message("new"))))
+    await checkpoint_entered.wait()
+    replacement.cancel()
+    release_checkpoint.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+    assert context_path.read_bytes() == old_bytes
+    assert _memory(context) == old_memory
+    assert not list(tmp_path.glob("context.jsonl*.tmp"))
+    assert not (tmp_path / "context_1.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_directory_sync_propagates_after_coherent_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    sync_entered = threading.Event()
+    release_sync = threading.Event()
+    original_sync = context_module._sync_parent_directory
+
+    def blocking_sync(parent: Path) -> bool:
+        sync_entered.set()
+        release_sync.wait()
+        return original_sync(parent)
+
+    monkeypatch.setattr(context_module, "_sync_parent_directory", blocking_sync)
+    replacement = asyncio.create_task(context.replace_history(_replacement(_message("new"))))
+    assert await asyncio.to_thread(sync_entered.wait, 5)
+    replacement.cancel()
+    release_sync.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+    assert context.history[-1] == _message("new")
+    restored = Context(context_path)
+    assert await restored.restore()
+    assert _memory(restored) == _memory(context)
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_after_commit_settlement_has_started_is_settled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    replace_entered = threading.Event()
+    release_replace = threading.Event()
+    settlement_entered = asyncio.Event()
+    real_replace = context_module.os.replace
+    real_wait = context_module.asyncio.wait
+
+    def blocking_replace(source: Path, target: Path) -> None:
+        replace_entered.set()
+        release_replace.wait()
+        real_replace(source, target)
+
+    async def tracked_wait(fs: Any, **kwargs: Any) -> Any:
+        settlement_entered.set()
+        return await real_wait(fs, **kwargs)
+
+    monkeypatch.setattr(context_module.os, "replace", blocking_replace)
+    monkeypatch.setattr(context_module.asyncio, "wait", tracked_wait)
+    replacement = asyncio.create_task(context.replace_history(_replacement(_message("new"))))
+    assert await asyncio.to_thread(replace_entered.wait, 5)
+    replacement.cancel()
+    await settlement_entered.wait()
+    replacement.cancel()
+    release_replace.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+    assert context.history[-1] == _message("new")
+    restored = Context(context_path)
+    assert await restored.restore()
+    assert _memory(restored) == _memory(context)
+
+
+def test_parent_directory_sync_non_posix_is_explicitly_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(context_module.os, "name", "nt")
+    monkeypatch.setattr(
+        context_module.os,
+        "open",
+        lambda *args, **kwargs: pytest.fail("non-POSIX directory sync opened a directory"),
+    )
+
+    assert context_module._sync_parent_directory(tmp_path) is False
+
+
+@pytest.mark.parametrize("unsupported_errno", [errno.EINVAL, errno.ENOTSUP])
+def test_parent_directory_sync_treats_known_posix_errors_as_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsupported_errno: int,
+) -> None:
+    monkeypatch.setattr(context_module.os, "name", "posix")
+    monkeypatch.setattr(context_module.os, "open", lambda *_args: 17)
+    monkeypatch.setattr(
+        context_module.os,
+        "fsync",
+        lambda _fd: (_ for _ in ()).throw(OSError(unsupported_errno, "unsupported")),
+    )
+    closed: list[int] = []
+    monkeypatch.setattr(context_module.os, "close", closed.append)
+
+    assert context_module._sync_parent_directory(tmp_path) is False
+    assert closed == [17]

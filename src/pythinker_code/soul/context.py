@@ -51,7 +51,11 @@ class ContextPersistenceError(OSError):
         self.operation = operation
         self.category = category
         self.path = path
-        super().__init__(f"{operation} failed ({category}) for {path}")
+        safe_path = path.name or "context storage"
+        message = f"{operation} failed ({category}) for {safe_path}"
+        if category == "visible_commit_durability":
+            message += "; the new generation is visible but power-loss durability is uncertain"
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +95,10 @@ def _cleanup_replacement_path(path: Path | None, primary_error: BaseException) -
     except OSError as cleanup_error:
         logger.warning(
             "Failed to clean context replacement artifact {path}: {error}",
-            path=path,
+            path=path.name,
             error=cleanup_error,
         )
-        primary_error.add_note(f"Cleanup also failed for {path}")
+        primary_error.add_note(f"Cleanup also failed for {path.name}")
 
 
 def _prepare_replacement_file(file_backend: Path, serialized_records: Sequence[str]) -> Path:
@@ -206,6 +210,10 @@ async def _settle_thread[T](
     operation: Callable[[], T],
 ) -> tuple[T, asyncio.CancelledError | None]:
     return await _settle_awaitable(asyncio.to_thread(operation))
+
+
+async def _before_replacement_commit() -> None:
+    await asyncio.sleep(0)
 
 
 def _rollback_context_append(file_backend: Path, existed: bool, original_size: int) -> None:
@@ -452,21 +460,45 @@ def _repair_context_state(state: _ContextState) -> _ContextState:
     )
 
 
+def _runtime_replacement_field(value: object) -> object:
+    return value
+
+
 def _replacement_records(replacement: ContextReplacement) -> tuple[_ContextRecord, ...]:
-    if replacement.token_count < 0:
+    system_prompt = _runtime_replacement_field(replacement.system_prompt)
+    messages = _runtime_replacement_field(replacement.messages)
+    token_count = _runtime_replacement_field(replacement.token_count)
+    create_checkpoint = _runtime_replacement_field(replacement.create_checkpoint)
+    checkpoint_user_marker = _runtime_replacement_field(replacement.checkpoint_user_marker)
+
+    if system_prompt is not None and not isinstance(system_prompt, str):
+        raise TypeError("system_prompt must be a string or None")
+    if not isinstance(messages, tuple):
+        raise TypeError("messages must be a tuple containing only Message values")
+    message_values = cast(tuple[object, ...], messages)
+    if not all(isinstance(message, Message) for message in message_values):
+        raise TypeError("messages must be a tuple containing only Message values")
+    validated_messages = cast(tuple[Message, ...], message_values)
+    if type(token_count) is not int:
+        raise TypeError("token_count must be an integer")
+    if type(create_checkpoint) is not bool:
+        raise TypeError("create_checkpoint must be a boolean")
+    if type(checkpoint_user_marker) is not bool:
+        raise TypeError("checkpoint_user_marker must be a boolean")
+    if token_count < 0:
         raise ValueError("token_count must be a non-negative integer")
-    if replacement.checkpoint_user_marker and not replacement.create_checkpoint:
+    if checkpoint_user_marker and not create_checkpoint:
         raise ValueError("checkpoint_user_marker requires create_checkpoint")
 
     records: list[_ContextRecord] = []
-    if replacement.system_prompt is not None:
-        records.append({"role": "_system_prompt", "content": replacement.system_prompt})
-    if replacement.create_checkpoint:
+    if system_prompt is not None:
+        records.append({"role": "_system_prompt", "content": system_prompt})
+    if create_checkpoint:
         records.append({"role": "_checkpoint", "id": 0})
-        if replacement.checkpoint_user_marker:
+        if checkpoint_user_marker:
             records.append(Message(role="user", content=[system("CHECKPOINT 0")]))
-    records.extend(replacement.messages)
-    records.append({"role": "_usage", "token_count": replacement.token_count})
+    records.extend(validated_messages)
+    records.append({"role": "_usage", "token_count": token_count})
     return tuple(records)
 
 
@@ -648,9 +680,20 @@ class Context:
 
             rotated_file: Path | None = None
             if live_bytes is not None:
-                rotated_file, cancellation = await _settle_awaitable(
-                    next_available_rotation(self._file_backend)
-                )
+                try:
+                    rotated_file, cancellation = await _settle_awaitable(
+                        next_available_rotation(self._file_backend)
+                    )
+                except asyncio.CancelledError as error:
+                    _cleanup_replacement_path(temp_path, error)
+                    raise
+                except Exception as reservation_error:
+                    error = _persistence_error("rotation_archive", self._file_backend)
+                    _cleanup_replacement_path(temp_path, error)
+                    raise error from reservation_error
+                except BaseException as error:
+                    _cleanup_replacement_path(temp_path, error)
+                    raise
                 if rotated_file is None:
                     error = _persistence_error("rotation_archive", self._file_backend)
                     _cleanup_replacement_path(temp_path, error)
@@ -671,6 +714,13 @@ class Context:
                     _cleanup_replacement_path(rotated_file, cancellation)
                     _cleanup_replacement_path(temp_path, cancellation)
                     raise cancellation
+
+            try:
+                await _before_replacement_commit()
+            except BaseException as error:
+                _cleanup_replacement_path(rotated_file, error)
+                _cleanup_replacement_path(temp_path, error)
+                raise
 
             async def commit_visible_generation() -> None:
                 try:
