@@ -5,7 +5,7 @@ import contextlib
 import json
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -52,6 +52,83 @@ def _serialize_context_records(records: Sequence[_ContextRecord]) -> str:
         else:
             serialized.append(json.dumps(record))
     return "".join(f"{record}\n" for record in serialized)
+
+
+def _rollback_context_append(file_backend: Path, existed: bool, original_size: int) -> None:
+    if not existed:
+        file_backend.unlink(missing_ok=True)
+        return
+    with file_backend.open("r+b") as rollback_file:
+        rollback_file.truncate(original_size)
+        rollback_file.flush()
+
+
+def _append_context_sync(file_backend: Path, payload: str) -> None:
+    existed = file_backend.exists()
+    original_size = file_backend.stat().st_size if existed else 0
+    try:
+        with file_backend.open("a", encoding="utf-8") as context_file:
+            context_file.write(payload)
+            context_file.flush()
+    except BaseException as append_error:
+        try:
+            _rollback_context_append(file_backend, existed, original_size)
+        except BaseException as rollback_error:
+            raise BaseExceptionGroup(
+                "Context append and rollback both failed",
+                (append_error, rollback_error),
+            ) from append_error
+        raise
+
+
+def _write_system_prompt_sync(file_backend: Path, prompt_line: str) -> None:
+    fd, tmp_name = tempfile.mkstemp(
+        dir=file_backend.parent,
+        prefix=file_backend.name,
+        suffix=".tmp",
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as prompt_file:
+            prompt_file.write(prompt_line)
+            if file_backend.exists() and file_backend.stat().st_size > 0:
+                with file_backend.open(encoding="utf-8") as source_file:
+                    while chunk := source_file.read(64 * 1024):
+                        prompt_file.write(chunk)
+            prompt_file.flush()
+        tmp_path.replace(file_backend)
+    except BaseException as write_error:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            raise BaseExceptionGroup(
+                "System prompt write and cleanup both failed",
+                (write_error, cleanup_error),
+            ) from write_error
+        raise
+
+
+async def _settle_sync_commit(operation: Callable[[], None]) -> asyncio.CancelledError | None:
+    commit_task = asyncio.create_task(asyncio.to_thread(operation))
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        await asyncio.shield(commit_task)
+    except asyncio.CancelledError as error:
+        cancellation = error
+        while not commit_task.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(commit_task)
+
+    try:
+        commit_task.result()
+    except BaseException as commit_error:
+        if cancellation is not None:
+            raise BaseExceptionGroup(
+                "Context commit failed while cancellation was pending",
+                (cancellation, commit_error),
+            ) from commit_error
+        raise
+    return cancellation
 
 
 def repair_history_invariants(history: Sequence[Message]) -> list[Message]:
@@ -345,63 +422,32 @@ class Context:
         prompt_record: dict[str, object] = {"role": "_system_prompt", "content": prompt}
         prompt_line = _serialize_context_records((prompt_record,))
 
-        def _write_system_prompt_sync() -> None:
-            if not self._file_backend.exists() or self._file_backend.stat().st_size == 0:
-                with self._file_backend.open("w", encoding="utf-8") as prompt_file:
-                    prompt_file.write(prompt_line)
-                    prompt_file.flush()
-                return
-
-            # Unique temp name (NOT a fixed .tmp suffix): two processes
-            # resuming the same session would otherwise interleave writes into
-            # the same temp file and os.replace the garbage into place.
-            fd, tmp_name = tempfile.mkstemp(
-                dir=self._file_backend.parent, prefix=self._file_backend.name, suffix=".tmp"
-            )
-            tmp_path = Path(tmp_name)
-            try:
-                with (
-                    os.fdopen(fd, "w", encoding="utf-8") as tmp_f,
-                    self._file_backend.open(encoding="utf-8") as src_f,
-                ):
-                    tmp_f.write(prompt_line)
-                    while True:
-                        chunk = src_f.read(64 * 1024)
-                        if not chunk:
-                            break
-                        tmp_f.write(chunk)
-                    tmp_f.flush()
-                tmp_path.replace(self._file_backend)
-            except BaseException:
-                with contextlib.suppress(OSError):
-                    tmp_path.unlink()
-                raise
-
         async with self._mutation_lock:
             state, _ = _reduce_context_records(
                 self._state(),
                 (prompt_record,),
                 file_backend=self._file_backend,
             )
-            await asyncio.to_thread(_write_system_prompt_sync)
+            cancellation = await _settle_sync_commit(
+                lambda: _write_system_prompt_sync(self._file_backend, prompt_line)
+            )
             self._swap_state(state)
+            if cancellation is not None:
+                raise cancellation
 
-    async def _append_serialized(self, payload: str, state: _ContextState) -> None:
-        original_size = self._file_backend.stat().st_size if self._file_backend.exists() else 0
+    async def _append_serialized(
+        self,
+        payload: str,
+        state: _ContextState,
+        next_state: _ContextState,
+    ) -> None:
         append_payload = self._tail_repair_prefix(state) + payload
-        async with aiofiles.open(self._file_backend, "a", encoding="utf-8") as context_file:
-            try:
-                await context_file.write(append_payload)
-                await context_file.flush()
-            except BaseException as append_error:
-                try:
-                    await context_file.truncate(original_size)
-                except BaseException as rollback_error:
-                    raise BaseExceptionGroup(
-                        "Context append and rollback both failed",
-                        (append_error, rollback_error),
-                    ) from append_error
-                raise
+        cancellation = await _settle_sync_commit(
+            lambda: _append_context_sync(self._file_backend, append_payload)
+        )
+        self._swap_state(next_state)
+        if cancellation is not None:
+            raise cancellation
 
     async def checkpoint(self, add_user_message: bool) -> None:
         async with self._mutation_lock:
@@ -427,8 +473,7 @@ class Context:
                 file_backend=self._file_backend,
             )
             next_state = replace(next_state, tail_repaired=True)
-            await self._append_serialized(payload, state)
-            self._swap_state(next_state)
+            await self._append_serialized(payload, state, next_state)
 
     async def revert_to(self, checkpoint_id: int) -> None:
         async with self._mutation_lock:
@@ -555,8 +600,7 @@ class Context:
                 file_backend=self._file_backend,
             )
             next_state = replace(next_state, tail_repaired=True)
-            await self._append_serialized(payload, state)
-            self._swap_state(next_state)
+            await self._append_serialized(payload, state, next_state)
 
     async def update_token_count(self, token_count: int) -> None:
         logger.debug("Updating token count in context: {token_count}", token_count=token_count)
@@ -570,8 +614,7 @@ class Context:
                 file_backend=self._file_backend,
             )
             next_state = replace(next_state, tail_repaired=True)
-            await self._append_serialized(payload, state)
-            self._swap_state(next_state)
+            await self._append_serialized(payload, state, next_state)
 
     def _parse_context_line(
         self,
