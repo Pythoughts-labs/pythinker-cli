@@ -311,9 +311,25 @@ async def test_partial_connect_publishes_connected_servers(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_optional_inventory_distinguishes_method_not_found_and_transient_failure() -> None:
+async def test_optional_inventory_distinguishes_method_not_found_and_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from mcp.shared.exceptions import McpError
     from mcp.types import METHOD_NOT_FOUND, ErrorData
+
+    import pythinker_code.soul.toolset as toolset_mod
+
+    debug_messages: list[str] = []
+    warning_messages: list[str] = []
+
+    def capture_debug(message: str, **_kwargs: object) -> None:
+        debug_messages.append(message)
+
+    def capture_warning(message: str, **_kwargs: object) -> None:
+        warning_messages.append(message)
+
+    monkeypatch.setattr(toolset_mod.logger, "debug", capture_debug)
+    monkeypatch.setattr(toolset_mod.logger, "warning", capture_warning)
 
     async def unsupported() -> list[object]:
         raise McpError(ErrorData(code=METHOD_NOT_FOUND, message="not supported"))
@@ -322,7 +338,13 @@ async def test_optional_inventory_distinguishes_method_not_found_and_transient_f
         raise ConnectionError("inventory transport reset")
 
     assert await _discover_optional_capability("alpha", "resources", unsupported) == []
+    assert debug_messages == ["MCP server {name} does not support {cap}"]
+    assert warning_messages == []
+
     assert await _discover_optional_capability("alpha", "prompts", transient) == []
+    assert warning_messages == [
+        "MCP server {name} failed listing {cap} (transient?); treating as empty: {error}"
+    ]
 
 
 @pytest.mark.asyncio

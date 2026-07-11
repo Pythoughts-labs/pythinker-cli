@@ -10,7 +10,7 @@ import tempfile
 import time
 import tracemalloc
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, cast
@@ -51,6 +51,7 @@ _UNMEASURED_EXECUTION_PHASES = (
     "post_hook_reminder",
     "telemetry_wire",
 )
+_REGISTRY_PROJECTIONS_PER_RUN = 20
 
 
 class _FrozenModel(BaseModel):
@@ -86,6 +87,7 @@ class PhaseSamples(_FrozenModel):
     median_ns: int | None
     p95_ns: int | None
     throughput_per_second: float | None
+    within_run_samples_ns: tuple[tuple[int, ...], ...] = ()
 
     @classmethod
     def from_samples(
@@ -93,6 +95,7 @@ class PhaseSamples(_FrozenModel):
         samples_ns: Sequence[int],
         *,
         operations_per_sample: int = 1,
+        within_run_samples_ns: Sequence[Sequence[int]] = (),
     ) -> PhaseSamples:
         if not samples_ns:
             raise ValueError("phase samples must not be empty")
@@ -102,6 +105,13 @@ class PhaseSamples(_FrozenModel):
         if any(sample < 0 for sample in normalized):
             raise ValueError("phase samples must be non-negative")
         ordered = sorted(normalized)
+        normalized_within = tuple(
+            tuple(int(sample) for sample in run) for run in within_run_samples_ns
+        )
+        if normalized_within and len(normalized_within) != len(normalized):
+            raise ValueError("within-run sample groups must match measured runs")
+        if any(not run or any(sample < 0 for sample in run) for run in normalized_within):
+            raise ValueError("within-run sample groups must be non-empty and non-negative")
         median_ns = int(statistics.median(ordered))
         p95_index = max(0, math.ceil(len(ordered) * 0.95) - 1)
         throughput = operations_per_sample * 1_000_000_000 / median_ns if median_ns else None
@@ -110,6 +120,7 @@ class PhaseSamples(_FrozenModel):
             median_ns=median_ns,
             p95_ns=ordered[p95_index],
             throughput_per_second=throughput,
+            within_run_samples_ns=normalized_within,
         )
 
     @classmethod
@@ -121,6 +132,7 @@ class PhaseSamples(_FrozenModel):
             median_ns=None,
             p95_ns=None,
             throughput_per_second=None,
+            within_run_samples_ns=(),
         )
 
 
@@ -175,7 +187,7 @@ class ThresholdDecision(_FrozenModel):
 
 
 class CharacterizationReport(_FrozenModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     environment: EnvironmentSnapshot
     scenarios: tuple[ScenarioResult, ...]
     decisions: tuple[ThresholdDecision, ...]
@@ -218,6 +230,98 @@ def evaluate_threshold(
         rerun_state=rerun_state,
         state=state,
         rerun_required=state is ThresholdState.INCONCLUSIVE and normalized_rerun is None,
+    )
+
+
+def build_threshold_decisions(
+    scenarios: Sequence[ScenarioResult],
+) -> tuple[ThresholdDecision, ...]:
+    indexed: dict[tuple[ScenarioKind, int], ScenarioResult] = {
+        (scenario.fixture.kind, scenario.fixture.size): scenario for scenario in scenarios
+    }
+    if len(indexed) != len(scenarios):
+        raise ValueError("threshold scenarios must have unique kind and size")
+
+    safe = _required_scenario(indexed, "execution_safe", 1)
+    mixed = _required_scenario(indexed, "execution_mixed", 10)
+    advertisement = _required_scenario(indexed, "advertisement", 500)
+    mcp = {size: _required_scenario(indexed, "mcp", size) for size in (1, 10, 50)}
+
+    return (
+        evaluate_threshold(
+            name="execution_framework_overhead_percent_short_safe_size_1",
+            threshold=10.0,
+            values=_percent_values(safe, "framework_overhead", "end_to_end"),
+        ),
+        evaluate_threshold(
+            name="mcp_lifecycle_startup_percent_10_servers",
+            threshold=20.0,
+            values=_percent_values(mcp[10], "mcp_lifecycle", "startup_to_ready"),
+        ),
+        *(
+            evaluate_threshold(
+                name=f"mcp_cleanup_seconds_{size}_servers",
+                threshold=6.0,
+                values=tuple(
+                    sample / 1_000_000_000
+                    for sample in _required_phase(mcp[size], "cleanup").samples_ns
+                ),
+            )
+            for size in (1, 10, 50)
+        ),
+        evaluate_threshold(
+            name="registry_projection_p95_ms_500_tools",
+            threshold=5.0,
+            values=tuple(
+                sample / 1_000_000
+                for sample in _required_phase(advertisement, "registry_projection_p95").samples_ns
+            ),
+        ),
+        evaluate_threshold(
+            name="mixed_gate_wait_end_to_end_percent_10_pairs",
+            threshold=25.0,
+            values=_percent_values(mixed, "read_write_gate_wait", "end_to_end"),
+        ),
+    )
+
+
+def _required_scenario(
+    indexed: dict[tuple[ScenarioKind, int], ScenarioResult],
+    kind: ScenarioKind,
+    size: int,
+) -> ScenarioResult:
+    try:
+        return indexed[(kind, size)]
+    except KeyError as exc:
+        raise ValueError(f"missing threshold scenario: {kind}:{size}") from exc
+
+
+def _required_phase(scenario: ScenarioResult, name: str) -> PhaseSamples:
+    try:
+        phase = scenario.phases[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"missing threshold phase: {scenario.fixture.kind}:{scenario.fixture.size}:{name}"
+        ) from exc
+    if phase.measurement_status != "measured":
+        raise ValueError(f"threshold phase is unmeasured: {name}")
+    return phase
+
+
+def _percent_values(
+    scenario: ScenarioResult,
+    numerator_name: str,
+    denominator_name: str,
+) -> tuple[float, ...]:
+    numerators = _required_phase(scenario, numerator_name).samples_ns
+    denominators = _required_phase(scenario, denominator_name).samples_ns
+    if len(numerators) != len(denominators):
+        raise ValueError("threshold phase sample counts must match")
+    if any(denominator <= 0 for denominator in denominators):
+        raise ValueError("threshold denominator samples must be positive")
+    return tuple(
+        numerator / denominator * 100
+        for numerator, denominator in zip(numerators, denominators, strict=True)
     )
 
 
@@ -420,10 +524,13 @@ async def run_characterization(
         if scenario == "all" or _scenario_group(fixture.kind) == scenario
     )
     results = [await _measure_fixture(fixture, runs=runs, warmups=warmups) for fixture in fixtures]
+    decisions = (
+        build_threshold_decisions(results) if scenario == "all" and runs == 5 and not smoke else ()
+    )
     return CharacterizationReport(
         environment=EnvironmentSnapshot.current(),
         scenarios=tuple(results),
-        decisions=(),
+        decisions=decisions,
     )
 
 
@@ -438,6 +545,7 @@ async def _measure_fixture(fixture: FixtureShape, *, runs: int, warmups: int) ->
 
     before_tasks = _pending_task_count()
     phase_samples: dict[str, list[int]] = {}
+    within_run_samples: dict[str, list[tuple[int, ...]]] = {}
     hashes: list[str] = []
     task_count_peak = 0
     operation_count = 0
@@ -460,6 +568,8 @@ async def _measure_fixture(fixture: FixtureShape, *, runs: int, warmups: int) ->
             projection_counts = sample.projection_counts
             for phase, duration_ns in sample.phases.items():
                 phase_samples.setdefault(phase, []).append(duration_ns)
+            for phase, raw_samples in sample.within_run_samples.items():
+                within_run_samples.setdefault(phase, []).append(raw_samples)
         current_bytes, peak_bytes = tracemalloc.get_traced_memory()
         retained_delta = current_bytes - baseline_current
     finally:
@@ -476,7 +586,11 @@ async def _measure_fixture(fixture: FixtureShape, *, runs: int, warmups: int) ->
     leaked_tasks = max(0, _pending_task_count() - before_tasks)
     operations = operation_count // runs
     summarized_phases = {
-        name: PhaseSamples.from_samples(samples, operations_per_sample=operations)
+        name: PhaseSamples.from_samples(
+            samples,
+            operations_per_sample=operations,
+            within_run_samples_ns=within_run_samples.get(name, ()),
+        )
         for name, samples in phase_samples.items()
     }
     if fixture.kind.startswith("execution_") or fixture.kind == "dedupe":
@@ -510,6 +624,9 @@ class _MeasurementSample:
     operation_count: int
     category_counts: dict[str, int]
     projection_counts: dict[str, int]
+    within_run_samples: dict[str, tuple[int, ...]] = field(
+        default_factory=lambda: dict[str, tuple[int, ...]]()
+    )
 
 
 type _Measure = Callable[[FixtureShape], Awaitable[_MeasurementSample]]
@@ -679,7 +796,9 @@ async def _measure_advertisement(fixture: FixtureShape) -> _MeasurementSample:
         rebuild_ns = time.monotonic_ns() - rebuild_started
         for tool in mcp_tools:
             disabled.add(tool)
-        phases, projections = _measure_visibility_projections(enabled, disabled, fixture.size)
+        phases, projections, within_run_samples = _measure_visibility_projections(
+            enabled, disabled, fixture.size
+        )
         phases["rebuild_after_mcp_publication"] = rebuild_ns
         registry_hash = _advertisement_hash(enabled, disabled)
     return _MeasurementSample(
@@ -689,6 +808,7 @@ async def _measure_advertisement(fixture: FixtureShape) -> _MeasurementSample:
         operation_count=fixture.size,
         category_counts=category_counts,
         projection_counts=projections,
+        within_run_samples=within_run_samples,
     )
 
 
@@ -742,7 +862,7 @@ def _measure_visibility_projections(
     enabled: PythinkerToolset,
     disabled: PythinkerToolset,
     fixture_size: int,
-) -> tuple[dict[str, int], dict[str, int]]:
+) -> tuple[dict[str, int], dict[str, int], dict[str, tuple[int, ...]]]:
     hidden_names = tuple(
         f"Characterization_{('builtin', 'plugin', 'mcp')[index % 3]}_{index:05d}"
         for index in range(0, fixture_size, 10)
@@ -768,9 +888,24 @@ def _measure_visibility_projections(
     for _ in range(3):
         repeated_projection = enabled.tools
     phases["repeated_unchanged_projection"] = time.monotonic_ns() - started
+    projection_samples: list[int] = []
+    for _ in range(_REGISTRY_PROJECTIONS_PER_RUN):
+        started = time.monotonic_ns()
+        repeated_projection = enabled.tools
+        projection_samples.append(time.monotonic_ns() - started)
+    phases["registry_projection_p95"] = _nearest_rank_p95_ns(projection_samples)
     projections["rebuild"] = len(enabled.tools)
     projections["repeated"] = len(repeated_projection)
-    return phases, projections
+    return phases, projections, {"registry_projection_p95": tuple(projection_samples)}
+
+
+def _nearest_rank_p95_ns(samples_ns: Sequence[int]) -> int:
+    if not samples_ns:
+        raise ValueError("p95 samples must not be empty")
+    ordered = sorted(int(sample) for sample in samples_ns)
+    if ordered[0] < 0:
+        raise ValueError("p95 samples must be non-negative")
+    return ordered[max(0, math.ceil(len(ordered) * 0.95) - 1)]
 
 
 def _advertisement_hash(enabled: PythinkerToolset, disabled: PythinkerToolset) -> str:
@@ -972,6 +1107,7 @@ __all__ = [
     "ThresholdDecision",
     "ThresholdState",
     "deterministic_registry_hash",
+    "build_threshold_decisions",
     "evaluate_threshold",
     "fixture_matrix",
     "run_characterization",

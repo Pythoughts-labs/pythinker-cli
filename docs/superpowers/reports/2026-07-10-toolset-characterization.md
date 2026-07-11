@@ -18,6 +18,7 @@ threshold crossed, and the 5,000-tool stress fixture is not used as a trigger.
 - Platform: macOS 26.5.2, arm64
 - Warm-ups: 1 per fixture
 - Measured runs: 5 per fixture
+- Machine schema: version 2; full all/5 runs derive decisions during report generation
 - Machine record: `docs/superpowers/reports/2026-07-10-toolset-characterization.json`
 - Directionality: local engineering evidence only; these values are not universal product telemetry.
 
@@ -34,17 +35,18 @@ No primary decision had exactly one crossing, so no rerun was permitted or perfo
 
 | Decision | Threshold | Five primary values | Median | Crossings | Primary | Rerun | Final |
 | --- | ---: | --- | ---: | ---: | --- | --- | --- |
-| Execution framework overhead, short safe size 1 (%) | 10 | 99.418016, 99.440358, 99.568352, 99.636689, 99.625015 | 99.568352 | 5/5 | crossed | not required | crossed |
-| MCP lifecycle / startup-to-ready, 10 servers (%) | 20 | 3.560205, 3.557888, 3.554970, 3.825044, 3.611799 | 3.560205 | 0/5 | uncrossed | not required | uncrossed |
-| MCP cleanup, 1 server (s) | 6 | 0.000145958, 0.000129959, 0.000127416, 0.000134166, 0.000130750 | 0.000130750 | 0/5 | uncrossed | not required | uncrossed |
-| MCP cleanup, 10 servers (s) | 6 | 0.000291834, 0.000287500, 0.000294167, 0.000329541, 0.000327166 | 0.000294167 | 0/5 | uncrossed | not required | uncrossed |
-| MCP cleanup, 50 servers (s) | 6 | 0.001207917, 0.001091625, 0.001037041, 0.001057500, 0.001191083 | 0.001091625 | 0/5 | uncrossed | not required | uncrossed |
-| Registry projection p95 proxy, 500 tools (ms) | 5 | 2.925500, 2.914500, 2.956042, 3.090625, 3.036333 | 2.956042 | 0/5 | uncrossed | not required | uncrossed |
-| Mixed gate wait / end-to-end, 10 pairs (%) | 25 | 89.819891, 89.485688, 89.975527, 89.638305, 89.755314 | 89.755314 | 5/5 | crossed | not required | crossed |
+| Execution framework overhead, short safe size 1 (%) | 10 | 99.379636, 99.386855, 99.409597, 99.560675, 99.427590 | 99.409597 | 5/5 | crossed | not required | crossed |
+| MCP lifecycle / startup-to-ready, 10 servers (%) | 20 | 3.494475, 3.724089, 3.483475, 3.232632, 4.668090 | 3.494475 | 0/5 | uncrossed | not required | uncrossed |
+| MCP cleanup, 1 server (s) | 6 | 0.000192875, 0.000158375, 0.000167042, 0.000141875, 0.000135583 | 0.000158375 | 0/5 | uncrossed | not required | uncrossed |
+| MCP cleanup, 10 servers (s) | 6 | 0.000337167, 0.000311209, 0.000303209, 0.000349417, 0.002235292 | 0.000337167 | 0/5 | uncrossed | not required | uncrossed |
+| MCP cleanup, 50 servers (s) | 6 | 0.001486500, 0.001113583, 0.001131750, 0.001084292, 0.001252167 | 0.001131750 | 0/5 | uncrossed | not required | uncrossed |
+| Registry within-run projection p95, 500 tools (ms) | 5 | 3.245000, 2.934625, 3.091542, 4.716500, 3.079834 | 3.091542 | 0/5 | uncrossed | not required | uncrossed |
+| Mixed gate wait / end-to-end, 10 pairs (%) | 25 | 89.705807, 89.779066, 89.454402, 89.823940, 89.565488 | 89.705807 | 5/5 | crossed | not required | crossed |
 
-The registry value for each run is the slower of the visibility-enabled hidden and unhidden 500-tool
-projection. This conservative pairing keeps all five raw run values and excludes the 5,000-tool
-stress result from the decision.
+Each registry value is the nearest-rank p95 of twenty individually timed, visibility-enabled,
+unchanged 500-tool projections from that run. The machine report preserves all five groups of twenty
+raw samples. The decision excludes both single-sample hidden/unhidden timings and the 5,000-tool
+stress result.
 
 ## Safety and fault matrix
 
@@ -80,11 +82,16 @@ The attempt moved the reader/writer gate and its execution call ownership into t
 private `_ToolExecutionPipeline`, removed the equivalent gate state/logic from `PythinkerToolset`,
 and kept `PythinkerToolset.handle` as the facade. The focused fault matrix remained green (68 tests).
 
-The identical short-safe size-1 fixture then produced framework-overhead ratios of 99.519399,
-99.606995, 99.589209, 99.645530, and 99.624502 percent; median 99.606995 percent. The primary median
-was 99.568352 percent. The attempt was slightly worse, remained far above the 10 percent threshold,
+Against the original primary median of 99.568352 percent, the identical short-safe size-1 extraction
+fixture produced framework-overhead ratios of 99.519399,
+99.606995, 99.589209, 99.645530, and 99.624502 percent; median 99.606995 percent. The attempt was
+slightly worse, remained far above the 10 percent threshold,
 and moved only gate admission rather than the broader frequently changed handle lifecycle. It
 therefore failed both the measured-target improvement rule and the locality/depth test.
+
+The post-review schema-v2 rerun emitted decisions directly from the benchmark command and again
+crossed the execution threshold, with a 99.409597 percent median. This does not change the failed
+extraction comparison or authorize a second attempt.
 
 The private module, compatibility projection, and probe adaptation were reverted in full. The final
 decision is **NO-GO**: retain `PythinkerToolset` and the colocated `_ReadWriteGate`. Keep the

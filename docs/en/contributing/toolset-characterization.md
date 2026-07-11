@@ -54,8 +54,11 @@ Fixture construction and warm-up are outside every named measured interval. All 
 - Dedupe dispatches two same-step calls with identical 1 KiB, 100 KiB, or 1 MiB payloads. It uses
   the same execution intervals and keeps payload construction outside the measured region.
 - Advertisement projects 50, 500, and 5,000 real built-in, `PluginTool`, and `MCPTool` categories.
-  It records visibility policy enabled/disabled with hidden/unhidden entries, three repeated reads
-  without a registry change, and a rebuild after deterministic MCP publication. Setup remains
+  It records visibility policy enabled/disabled with hidden/unhidden entries, three aggregate reads
+  plus twenty individually timed repeated reads without a registry change, and a rebuild after
+  deterministic MCP publication. Each measured run records all twenty raw projection samples and
+  their nearest-rank p95; the registry repeatability decision uses the five within-run p95 values,
+  never a single projection or the 5,000-tool stress result. Setup remains
   outside every named projection interval. Category and projection counts make the fixture behavior
   independently checkable; the registry hash length-prefixes both policy projections in order.
 - MCP runs the current background `load_mcp_tools`/`wait_for_mcp_tools`/`cleanup` lifecycle for 1,
@@ -114,8 +117,9 @@ The versioned report contains:
 - `scenarios[].fixture`: scenario kind, size, concurrency, payload size, and composition; mixed
   execution explicitly reports `composition: reader/writer pairs`;
 - `warmups` and `iterations`;
-- `phases`: measured/unmeasured status, raw nanosecond samples, median, nearest-rank p95,
-  throughput where meaningful, and an explanation for unavailable boundaries;
+- `phases`: measured/unmeasured status, raw nanosecond samples, optional raw within-run sample
+  groups, median, nearest-rank p95, throughput where meaningful, and an explanation for unavailable
+  boundaries;
 - deterministic `registry_hash`;
 - `allocation_peak_bytes` and `retained_object_delta` from `tracemalloc`;
 - `cancellation`: completion status and completion duration;
@@ -128,6 +132,7 @@ The versioned report contains:
 - `decisions`: threshold, five primary values, optional five-value rerun, crossing count, median,
   primary/rerun/final states, and rerun-required state.
 
-Task 12 reports an empty `decisions` array by design. A human-readable crossed/uncrossed/
-inconclusive decision record is a Task 13 deliverable after real measurements and deterministic
-fault tests are complete.
+Partial, smoke, and non-five-run reports keep an empty `decisions` array. The documented full
+`--scenario all --runs 5` command deterministically derives all seven Task 13 decisions from the raw
+scenario samples and writes them in the same report. A human-readable crossed/uncrossed/inconclusive
+decision record remains a Task 13 deliverable after deterministic fault tests are complete.

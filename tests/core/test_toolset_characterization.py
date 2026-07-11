@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import pythinker_code.benchmark.toolset_characterization as characterization_mod
 from pythinker_code.benchmark.toolset_characterization import (
     CancellationResult,
     CharacterizationReport,
@@ -17,6 +18,7 @@ from pythinker_code.benchmark.toolset_characterization import (
     FixtureShape,
     LeakSnapshot,
     PhaseSamples,
+    ScenarioKind,
     ScenarioResult,
     ThresholdState,
     _await_handle,
@@ -25,12 +27,36 @@ from pythinker_code.benchmark.toolset_characterization import (
     _measure_execution,
     _new_tool,
     _tool_call,
+    build_threshold_decisions,
     deterministic_registry_hash,
     evaluate_threshold,
     fixture_matrix,
     interval_union_duration_ns,
     run_characterization,
 )
+
+
+def _decision_scenario(
+    kind: ScenarioKind,
+    size: int,
+    phases: dict[str, tuple[int, ...]],
+) -> ScenarioResult:
+    return ScenarioResult(
+        fixture=FixtureShape(kind=kind, size=size, concurrency=size),
+        warmups=1,
+        iterations=5,
+        phases={name: PhaseSamples.from_samples(values) for name, values in phases.items()},
+        registry_hash=deterministic_registry_hash((kind, str(size))),
+        allocation_peak_bytes=0,
+        retained_object_delta=0,
+        cancellation=CancellationResult(completed=True, completion_ns=0),
+        leaks=LeakSnapshot(tasks=0, processes=0, sessions=0),
+        task_count_peak=0,
+        operation_count=5,
+        category_counts={},
+        projection_counts={},
+        lifecycle_status="settled" if kind == "mcp" else "completed",
+    )
 
 
 @pytest.fixture
@@ -90,6 +116,133 @@ def test_measured_short_safe_framework_overhead_records_crossed_threshold() -> N
 
     assert decision.state is ThresholdState.CROSSED
     assert decision.median == 99.56835157490183
+
+
+def test_decision_builder_derives_all_gates_from_raw_scenarios() -> None:
+    scenarios = (
+        _decision_scenario(
+            "execution_safe",
+            1,
+            {
+                "framework_overhead": (11, 12, 13, 14, 15),
+                "end_to_end": (100, 100, 100, 100, 100),
+            },
+        ),
+        _decision_scenario(
+            "execution_mixed",
+            10,
+            {
+                "read_write_gate_wait": (20, 20, 20, 20, 20),
+                "end_to_end": (100, 100, 100, 100, 100),
+            },
+        ),
+        _decision_scenario(
+            "advertisement",
+            500,
+            {"registry_projection_p95": (4_000_000,) * 5},
+        ),
+        *(
+            _decision_scenario(
+                "mcp",
+                size,
+                {
+                    "startup_to_ready": (100,) * 5,
+                    "mcp_lifecycle": (10,) * 5,
+                    "cleanup": (1_000_000_000,) * 5,
+                },
+            )
+            for size in (1, 10, 50)
+        ),
+    )
+
+    decisions = build_threshold_decisions(scenarios)
+
+    assert [decision.name for decision in decisions] == [
+        "execution_framework_overhead_percent_short_safe_size_1",
+        "mcp_lifecycle_startup_percent_10_servers",
+        "mcp_cleanup_seconds_1_servers",
+        "mcp_cleanup_seconds_10_servers",
+        "mcp_cleanup_seconds_50_servers",
+        "registry_projection_p95_ms_500_tools",
+        "mixed_gate_wait_end_to_end_percent_10_pairs",
+    ]
+    assert decisions[5].values == (4.0, 4.0, 4.0, 4.0, 4.0)
+    assert decisions[5].state is ThresholdState.UNCROSSED
+
+
+def test_phase_samples_preserve_raw_within_run_projection_samples() -> None:
+    within_runs = (
+        (1_000_000, 2_000_000, 3_000_000),
+        (2_000_000, 3_000_000, 4_000_000),
+    )
+
+    phase = PhaseSamples.from_samples(
+        (3_000_000, 4_000_000),
+        within_run_samples_ns=within_runs,
+    )
+
+    assert phase.within_run_samples_ns == within_runs
+
+
+async def test_full_five_run_all_builds_tracked_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenarios = (
+        _decision_scenario(
+            "execution_safe",
+            1,
+            {
+                "framework_overhead": (11, 12, 13, 14, 15),
+                "end_to_end": (100,) * 5,
+            },
+        ),
+        _decision_scenario(
+            "execution_mixed",
+            10,
+            {
+                "read_write_gate_wait": (20,) * 5,
+                "end_to_end": (100,) * 5,
+            },
+        ),
+        _decision_scenario(
+            "advertisement",
+            500,
+            {"registry_projection_p95": (4_000_000,) * 5},
+        ),
+        *(
+            _decision_scenario(
+                "mcp",
+                size,
+                {
+                    "startup_to_ready": (100,) * 5,
+                    "mcp_lifecycle": (10,) * 5,
+                    "cleanup": (1_000_000_000,) * 5,
+                },
+            )
+            for size in (1, 10, 50)
+        ),
+    )
+    by_fixture = {
+        (scenario.fixture.kind, scenario.fixture.size): scenario for scenario in scenarios
+    }
+
+    monkeypatch.setattr(
+        characterization_mod,
+        "fixture_matrix",
+        lambda *, smoke=False: tuple(scenario.fixture for scenario in scenarios),
+    )
+
+    async def measure(fixture: FixtureShape, *, runs: int, warmups: int) -> ScenarioResult:
+        assert runs == 5
+        assert warmups == 1
+        return by_fixture[(fixture.kind, fixture.size)]
+
+    monkeypatch.setattr(characterization_mod, "_measure_fixture", measure)
+
+    report = await run_characterization(scenario="all", runs=5)
+
+    assert len(report.decisions) == 7
+    assert report.decisions[5].name == "registry_projection_p95_ms_500_tools"
 
 
 def test_threshold_rejects_nonfinite_threshold() -> None:
@@ -240,13 +393,14 @@ def test_report_schema_contains_required_measurement_and_safety_fields() -> None
         "median_ns",
         "p95_ns",
         "throughput_per_second",
+        "within_run_samples_ns",
     }
 
 
 def test_report_json_is_machine_readable(characterization_report: CharacterizationReport) -> None:
     payload = json.loads(characterization_report.model_dump_json())
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["environment"]["python_version"]
     assert payload["scenarios"][0]["phases"]["framework_overhead"]["samples_ns"] == [10, 20]
 
@@ -359,8 +513,12 @@ async def test_advertisement_smoke_measures_hidden_and_unhidden_projection() -> 
         "visibility_disabled_hidden",
         "visibility_disabled_unhidden",
         "repeated_unchanged_projection",
+        "registry_projection_p95",
         "rebuild_after_mcp_publication",
     }
+    projection = scenario.phases["registry_projection_p95"]
+    assert len(projection.within_run_samples_ns) == 2
+    assert all(len(run) >= 5 for run in projection.within_run_samples_ns)
     assert all(scenario.category_counts[origin] > 0 for origin in ("builtin", "plugin", "mcp"))
     assert (
         scenario.projection_counts["enabled_hidden"]

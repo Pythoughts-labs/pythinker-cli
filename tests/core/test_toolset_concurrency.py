@@ -40,6 +40,24 @@ class _RecordingTool:
         return ToolReturnValue(is_error=False, output="ok", message="ok", display=[])
 
 
+class _AdmissionBlockingTool(_RecordingTool):
+    def __init__(self, name: str, events: list[tuple[str, str]]) -> None:
+        super().__init__(name, events, parallel=True, delay=0)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def call(self, arguments: object) -> ToolReturnValue:
+        self._events.append(("enter", self.name))
+        self.entered.set()
+        try:
+            await self.release.wait()
+            return ToolReturnValue(is_error=False, output="ok", message="ok", display=[])
+        finally:
+            self._events.append(("close", self.name))
+            self.closed.set()
+
+
 def _toolset(*tools: _RecordingTool, cwd: Path) -> PythinkerToolset:
     toolset = PythinkerToolset()
     toolset._hook_engine = HookEngine([], cwd=str(cwd))
@@ -311,6 +329,39 @@ async def test_cancellation_after_reader_admission_restores_gate_state() -> None
 
     async with gate.exclusive():
         pass
+
+
+async def test_handle_cancellation_after_admission_closes_and_recovers(tmp_path: Path) -> None:
+    events: list[tuple[str, str]] = []
+    blocking = _AdmissionBlockingTool("Read", events)
+    recovery = _RecordingTool("Write", events, parallel=False, delay=0)
+    toolset = _toolset(blocking, recovery, cwd=tmp_path)
+    toolset.begin_step([])
+    running = toolset.handle(
+        ToolCall(
+            id="admitted-read",
+            function=ToolCall.FunctionBody(name="Read", arguments='{"attempt":1}'),
+        )
+    )
+    assert isinstance(running, asyncio.Task)
+    await blocking.entered.wait()
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    await blocking.closed.wait()
+
+    recovered = toolset.handle(
+        ToolCall(
+            id="recovery-write",
+            function=ToolCall.FunctionBody(name="Write", arguments='{"attempt":2}'),
+        )
+    )
+    assert isinstance(recovered, asyncio.Task)
+    result = await recovered
+
+    assert result.return_value.is_error is False
+    assert events == [("enter", "Read"), ("close", "Read"), ("enter", "Write"), ("exit", "Write")]
 
 
 class TestPluginToolDefault:
