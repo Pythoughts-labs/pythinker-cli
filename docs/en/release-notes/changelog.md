@@ -17,6 +17,34 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Agent request compatibility is now executable and reviewable.** Provider handoff,
+  prompt ordering, persisted-versus-effective history, context JSONL restoration,
+  agent projections, and Toolset lifecycle behavior now have explicit compatibility
+  contracts guarding future agent-core changes.
+- **Skill discovery is bounded without making skills unreachable.** Pythinker now
+  searches one deterministic `SkillCatalog`, keeps exhaustive exact-name resolution,
+  and sends only task-relevant candidates to the model within an 8,000-character
+  request budget. The exhaustive `Runtime.skills` mapping remains available during
+  the compatibility window.
+- **Agent requests now have one observable assembly path.** Required guidance fails
+  closed, optional guidance reports sanitized degradation outcomes, and the new
+  `/prompt-manifest` command explains the latest request composition without storing
+  raw prompts, user text, or provenance paths.
+- **Conversation history updates are transactional.** Normal appends persist before
+  changing memory, while compaction, pruning, revert, and clear flows use atomic
+  replacement with coherent cancellation and rollback behavior. Existing JSONL
+  records and restoration behavior remain compatible.
+- **Agent definitions now resolve through one source-aware catalogue.** YAML and
+  Markdown definitions share deterministic precedence, collision diagnostics, and
+  safe provenance handling. Unknown fields warn in this release, become errors in
+  the following minor release, and the `LaborMarket`, `AgentTypeDefinition`, and
+  generated-wrapper adapters remain through that strict-default release.
+- **Tool execution and MCP lifecycle behavior now have deterministic fault coverage.**
+  Publication rebuilds preserve the previous MCP tool registry if registration
+  fails. Characterization crossed the execution-overhead threshold, but a controlled
+  private extraction measured slightly worse and was reverted, so
+  `PythinkerToolset` remains the implementation boundary.
+
 ## 0.57.0 (2026-07-05)
 
 - **No more ghost/duplicate input prompt while the agent works.** After

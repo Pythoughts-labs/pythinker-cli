@@ -54,7 +54,7 @@ Fixture construction and warm-up are outside every named measured interval. All 
 - Dedupe dispatches two same-step calls with identical 1 KiB, 100 KiB, or 1 MiB payloads. It uses
   the same execution intervals and keeps payload construction outside the measured region.
 - Advertisement projects 50, 500, and 5,000 real built-in, `PluginTool`, and `MCPTool` categories.
-  It records visibility policy enabled/disabled with hidden/unhidden entries, three aggregate reads
+  It records visibility policy enabled/disabled with hidden/unhidden entries, four aggregate reads
   plus twenty individually timed repeated reads without a registry change, and a rebuild after
   deterministic MCP publication. Each measured run records all twenty raw projection samples and
   their nearest-rank p95; the registry repeatability decision uses the five within-run p95 values,

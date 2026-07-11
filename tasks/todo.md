@@ -4,7 +4,7 @@
 
 ### Agent core deepening program (2026-07-10)
 
-- [ ] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on
+- [x] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on
       `feat/agent-core-deepening` using TDD and subagent-driven task reviews.
 - [x] Phase 1: characterize provider handoff, static prompt, JSONL, agent projections,
       and Toolset facade behavior.
@@ -12,8 +12,42 @@
 - [x] Phase 3: ship observable request assembly and `/prompt-manifest`.
 - [x] Phase 4: ship transactional Context replacement and disk-first appends.
 - [x] Phase 5: ship WARN-mode resolved agent catalogue with strict-mode tests.
-- [ ] Phase 6: characterize Toolset, record thresholds, and extract only if measured.
-- [ ] Run full guards, gates, two-axis review, and document the final result here.
+- [x] Phase 6: characterize Toolset, record thresholds, and extract only if measured.
+- [x] Run full guards, gates, two-axis review, and document the final result here.
+
+#### Review: agent core deepening
+
+- Outcome: all six approved phases shipped on the umbrella branch. Bounded skill
+  discovery, observable request assembly, transactional Context persistence, and
+  resolved agent definitions retain their documented compatibility projections.
+  `/prompt-manifest` exposes only sanitized in-memory assembly metadata.
+- Toolset decision: NO-GO on private extraction. The controlled execution-pipeline
+  attempt worsened median framework overhead from 99.568352% to 99.606995% and was
+  reverted. The reproducible schema-v2 report contains 18 scenarios and seven
+  command-generated decisions. Five true 500-tool registry p95 values were
+  3.245000, 2.934625, 3.091542, 4.716500, and 3.079834 ms; none crossed 5 ms.
+- Deviation: deterministic fault characterization exposed an exception-atomicity
+  defect in MCP registry publication. The surgical rollback preserves the previous
+  registry and re-raises the original registration failure. Final review also
+  replaced mock state with real `CompactionResult` and `TaskView` instances.
+- Compatibility windows: `Runtime.skills` remains until internal exact lookups have
+  migrated and repository search proves it removable. Unknown agent fields warn in
+  this release and become errors in the following minor release. `LaborMarket`,
+  `AgentTypeDefinition`, and generated Markdown wrappers remain through that
+  strict-default release; their earliest removal is the next minor release, subject
+  to direct-launch parity and migration checks.
+- Verification: `make check-pythinker-code` passed Ruff, formatting, Pyright, and ty;
+  `make test-pythinker-code` exited 0 after collecting 6,931 package tests and then
+  passed 65 E2E tests with four skips; provider snapshots passed 39 tests; the
+  Toolset/fault matrix passed 96 tests; focused guard fixes passed 32 tests; and
+  `git diff --check` passed. Expected Loguru/Python deprecation and pytest temporary
+  cleanup warnings remain non-blocking.
+- Review: Task 13 rereview approved the reproducible decision builder, true p95
+  samples, handle-level cancellation recovery, and MCP observability. Final Standards
+  and Spec reviews found no Critical/Important implementation defect; their release
+  metadata blockers were resolved here. Pythinker, clean-code, test, and docs guard
+  passes found no remaining ship blocker.
+- Blockers: none.
 
 ### Plan: publishable benchmark comparison (2026-07-05)
 
