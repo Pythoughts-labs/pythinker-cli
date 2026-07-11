@@ -635,11 +635,20 @@ class PythinkerToolset:
         synchronously (no ``await`` between the drop and the republish), so the two
         registries are never observed half-rebuilt.
         """
-        stale = [name for name, tool in self._tool_dict.items() if isinstance(tool, MCPTool)]
-        for name in stale:
-            del self._tool_dict[name]
-        runtime.mcp_tools.clear()
-        self._publish_connected_mcp_tools(runtime)
+        prior_tools = dict(self._tool_dict)
+        prior_runtime_tools = dict(runtime.mcp_tools)
+        try:
+            stale = [name for name, tool in self._tool_dict.items() if isinstance(tool, MCPTool)]
+            for name in stale:
+                del self._tool_dict[name]
+            runtime.mcp_tools.clear()
+            self._publish_connected_mcp_tools(runtime)
+        except Exception:
+            self._tool_dict.clear()
+            self._tool_dict.update(prior_tools)
+            runtime.mcp_tools.clear()
+            runtime.mcp_tools.update(prior_runtime_tools)
+            raise
 
     def hide(self, tool_name: str) -> bool:
         """Hide a tool from the LLM tool list. Returns True if the tool exists."""

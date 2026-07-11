@@ -57,3 +57,28 @@ async def test_cleanup_times_out_hung_close(monkeypatch: pytest.MonkeyPatch) -> 
     await asyncio.wait_for(ts.cleanup(), timeout=2.0)  # completes fast despite the hang
 
     assert closed == ["good"]
+
+
+async def test_cleanup_cancels_background_load_before_closing_clients() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    closed: list[str] = []
+    ts = PythinkerToolset()
+    ts._mcp_servers["alpha"] = _info(_GoodClient(closed, "alpha"))
+
+    async def load() -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    loading = asyncio.create_task(load())
+    ts._mcp_loading_task = loading
+    await entered.wait()
+
+    await ts.cleanup()
+
+    assert loading.cancelled()
+    assert cancelled.is_set()
+    assert closed == ["alpha"]

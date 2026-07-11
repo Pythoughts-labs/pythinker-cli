@@ -14,6 +14,7 @@ from pythinker_code.soul.toolset import (
     MCPServerInfo,
     MCPTool,
     PythinkerToolset,
+    _discover_optional_capability,
     _make_mcp_live_refresh_handler,
 )
 
@@ -307,3 +308,213 @@ async def test_partial_connect_publishes_connected_servers(monkeypatch: pytest.M
 
     assert toolset.find("GoodTool") is good_tool
     assert runtime.mcp_tools["mcp__good__GoodTool"] is good_tool
+
+
+@pytest.mark.asyncio
+async def test_optional_inventory_distinguishes_method_not_found_and_transient_failure() -> None:
+    from mcp.shared.exceptions import McpError
+    from mcp.types import METHOD_NOT_FOUND, ErrorData
+
+    async def unsupported() -> list[object]:
+        raise McpError(ErrorData(code=METHOD_NOT_FOUND, message="not supported"))
+
+    async def transient() -> list[object]:
+        raise ConnectionError("inventory transport reset")
+
+    assert await _discover_optional_capability("alpha", "resources", unsupported) == []
+    assert await _discover_optional_capability("alpha", "prompts", transient) == []
+
+
+@pytest.mark.asyncio
+async def test_list_change_storm_completes_every_refresh_without_orphan_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mcp.types
+
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    toolset._mcp_servers["alpha"] = MCPServerInfo(
+        status="connected",
+        client=cast(Any, SimpleNamespace()),
+        tools=[],
+        resources=[],
+        prompts=[],
+    )
+    entered = asyncio.Semaphore(0)
+    release = asyncio.Event()
+    completed: list[int] = []
+
+    async def refresh(_server_name: str, _runtime: Any) -> None:
+        index = len(completed)
+        entered.release()
+        await release.wait()
+        completed.append(index)
+
+    monkeypatch.setattr(toolset, "refresh_mcp_server", refresh)
+
+    class _FakeClient:
+        pass
+
+    handler = _make_mcp_live_refresh_handler(_FakeClient(), toolset, runtime, "alpha")
+    tasks = [
+        asyncio.create_task(handler.on_tool_list_changed(mcp.types.ToolListChangedNotification()))
+        for _ in range(5)
+    ]
+    for _ in tasks:
+        await entered.acquire()
+    release.set()
+    await asyncio.gather(*tasks)
+
+    assert len(completed) == 5
+    assert all(task.done() for task in tasks)
+
+
+@pytest.mark.asyncio
+async def test_refresh_racing_disconnect_cannot_republish_disconnected_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    old_tool = _fake_mcp_tool("alpha", "OldTool")
+    new_tool = _fake_mcp_tool("alpha", "NewTool")
+    inventory_entered = asyncio.Event()
+    release_inventory = asyncio.Event()
+    info = MCPServerInfo(
+        status="connected",
+        client=cast(Any, SimpleNamespace(close=AsyncMock())),
+        tools=[old_tool],
+        resources=[],
+        prompts=[],
+        server_config={"command": "echo"},
+    )
+    toolset._mcp_servers["alpha"] = info
+    toolset._publish_connected_mcp_tools(runtime)
+
+    async def inventory(
+        _server_name: str, _server_info: MCPServerInfo, _runtime: Any
+    ) -> tuple[list[MCPTool[Any]], list[Any], list[Any]]:
+        inventory_entered.set()
+        await release_inventory.wait()
+        return [new_tool], [], []
+
+    monkeypatch.setattr(toolset, "_inventory_mcp_server", inventory)
+    refresh_task = asyncio.create_task(toolset.refresh_mcp_server("alpha", runtime))
+    await inventory_entered.wait()
+    await toolset.disconnect_mcp_server("alpha", runtime)
+    release_inventory.set()
+    await refresh_task
+
+    assert info.status == "failed"
+    assert toolset.find("OldTool") is None
+    assert toolset.find("NewTool") is None
+    assert runtime.mcp_tools == {}
+
+
+@pytest.mark.asyncio
+async def test_rebuild_rolls_back_after_partial_publication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    original = _fake_mcp_tool("original", "Original")
+    alpha = _fake_mcp_tool("alpha", "Alpha")
+    beta = _fake_mcp_tool("beta", "Beta")
+    toolset.add(original)
+    runtime.mcp_tools["mcp__original__Original"] = original
+    toolset._mcp_servers = {
+        "alpha": MCPServerInfo(
+            status="connected",
+            client=cast(Any, SimpleNamespace()),
+            tools=[alpha],
+            resources=[],
+            prompts=[],
+        ),
+        "beta": MCPServerInfo(
+            status="connected",
+            client=cast(Any, SimpleNamespace()),
+            tools=[beta],
+            resources=[],
+            prompts=[],
+        ),
+    }
+    original_register = toolset._register_mcp_tools
+
+    def fail_second_server(server_name: str, tools: list[MCPTool[Any]]) -> None:
+        if server_name == "beta":
+            raise RuntimeError("publication failed")
+        original_register(server_name, tools)
+
+    monkeypatch.setattr(toolset, "_register_mcp_tools", fail_second_server)
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        toolset._rebuild_published_mcp_tools(runtime)
+
+    assert toolset.find("Original") is original
+    assert toolset.find("Alpha") is None
+    assert toolset.find("Beta") is None
+    assert runtime.mcp_tools == {"mcp__original__Original": original}
+
+
+@pytest.mark.asyncio
+async def test_hung_connect_reports_timeout_without_publishing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    runtime.config.mcp.client.startup_timeout_ms = 0
+    info = MCPServerInfo(
+        status="pending",
+        client=cast(Any, SimpleNamespace()),
+        tools=[],
+        resources=[],
+        prompts=[],
+    )
+
+    async def hung_inventory(
+        _server_name: str, _server_info: MCPServerInfo, _runtime: Any
+    ) -> tuple[list[MCPTool[Any]], list[Any], list[Any]]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(toolset, "_inventory_mcp_server", hung_inventory)
+
+    server_name, error = await toolset._connect_mcp_server("alpha", info, runtime)
+
+    assert server_name == "alpha"
+    assert isinstance(error, TimeoutError)
+    assert info.status == "failed"
+    assert info.error is not None and "startup timed out" in info.error
+    assert info.tools == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_server_name_connects_once_with_last_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastmcp.mcp_config import MCPConfig
+
+    toolset = PythinkerToolset()
+    runtime = _runtime()
+    connected: list[str] = []
+
+    async def connect(
+        server_name: str, server_info: MCPServerInfo, _runtime: Any
+    ) -> tuple[str, Exception | None]:
+        connected.append(server_name)
+        server_info.status = "connected"
+        return server_name, None
+
+    monkeypatch.setattr(toolset, "_connect_mcp_server", connect)
+    monkeypatch.setattr(
+        "pythinker_code.soul.toolset._configure_mcp_client_handlers",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr("fastmcp.Client", lambda *_args, **_kwargs: SimpleNamespace())
+    first = MCPConfig.model_validate({"mcpServers": {"alpha": {"command": "first-command"}}})
+    second = MCPConfig.model_validate({"mcpServers": {"alpha": {"command": "second-command"}}})
+
+    await toolset.load_mcp_tools([first, second], runtime, in_background=False)
+
+    assert connected == ["alpha"]
+    assert tuple(toolset.mcp_servers) == ("alpha",)
+    assert toolset.mcp_servers["alpha"].server_config.command == "second-command"

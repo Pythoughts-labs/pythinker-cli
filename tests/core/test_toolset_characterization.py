@@ -75,6 +75,23 @@ def test_threshold_crosses_only_with_four_of_five_and_crossing_median() -> None:
     assert decision.rerun_required is False
 
 
+def test_measured_short_safe_framework_overhead_records_crossed_threshold() -> None:
+    decision = evaluate_threshold(
+        name="execution_framework_overhead_percent_short_safe_size_1",
+        threshold=10.0,
+        values=(
+            99.41801566579635,
+            99.44035789159838,
+            99.56835157490183,
+            99.6366887606035,
+            99.62501511204897,
+        ),
+    )
+
+    assert decision.state is ThresholdState.CROSSED
+    assert decision.median == 99.56835157490183
+
+
 def test_threshold_rejects_nonfinite_threshold() -> None:
     with pytest.raises(ValueError, match="threshold must be finite"):
         evaluate_threshold(name="example", threshold=float("nan"), values=(1, 2, 3, 4, 5))
