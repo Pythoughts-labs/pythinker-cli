@@ -6,7 +6,7 @@
 
 - [ ] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on
       `feat/agent-core-deepening` using TDD and subagent-driven task reviews.
-- [ ] Phase 1: characterize provider handoff, static prompt, JSONL, agent projections,
+- [x] Phase 1: characterize provider handoff, static prompt, JSONL, agent projections,
       and Toolset facade behavior.
 - [ ] Phase 2: ship bounded `SkillCatalog` discovery with exhaustive compatibility.
 - [ ] Phase 3: ship observable request assembly and `/prompt-manifest`.
