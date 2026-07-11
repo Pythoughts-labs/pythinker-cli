@@ -319,8 +319,6 @@ def test_request_manifest_metrics_record_only_sanitized_aggregates(
                 "degraded_count": 0,
                 "failed_count": 0,
                 "budget_limit": 32,
-                "budgeted_admitted_tokens": 17,
-                "non_budgeted_estimated_tokens": 7,
             },
         )
     ]

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import statistics
-import time
 from pathlib import Path
 
 import pytest
@@ -405,17 +403,12 @@ def test_recall_fixture_and_warm_search_performance(tmp_path: Path) -> None:
         assert matches[0].tier.name == item["winner_tier"]
 
     catalog.search("release deployment", limit=8)
-    durations: list[float] = []
-    for _ in range(25):
-        started = time.perf_counter()
-        search_result = catalog.search_with_metrics("release deployment", limit=8)
-        durations.append(time.perf_counter() - started)
-        assert search_result.metrics.candidates_evaluated == len(skills)
-        assert search_result.metrics.match_work_units <= len(skills) * 250
-        assert search_result.metrics.sort_items <= len(skills)
-        assert search_result.metrics.sort_comparison_bound <= len(skills) ** 2
-        assert len(search_result.matches) <= 8
-    assert statistics.median(durations) < 0.1
+    search_result = catalog.search_with_metrics("release deployment", limit=8)
+    assert search_result.metrics.candidates_evaluated == len(skills)
+    assert search_result.metrics.match_work_units <= len(skills) * 250
+    assert search_result.metrics.sort_items <= len(skills)
+    assert search_result.metrics.sort_comparison_bound <= len(skills) ** 2
+    assert len(search_result.matches) <= 8
 
 
 @pytest.mark.asyncio

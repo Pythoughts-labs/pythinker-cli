@@ -174,8 +174,10 @@ async def test_history_handoff_is_byte_equivalent_and_request_only_sources_are_n
 
     await soul._step()
 
+    assert len(captured_history) == 3
     assert captured_history[0].role == "user"
     assert "Test agents content" in captured_history[0].extract_text()
+    assert "Original question" in captured_history[0].extract_text()
     assert captured_history[1] == Message(role="assistant", content="Original answer")
     final_text = captured_history[-1].extract_text("\n")
     assert "Validate this deployment" in final_text

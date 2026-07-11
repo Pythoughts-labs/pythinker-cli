@@ -1013,6 +1013,10 @@ def _benchmark_runtime_inputs(session_dir: Path) -> tuple[Config, OAuthManager, 
     work_dir = HostPath.unsafe_from_local_path(work_dir_path)
     config = get_default_config()
     config.plugins.discover_external = False
+    # LSP is orthogonal to toolset characterization; leaving it enabled spawns a
+    # per-sample language-server init task that is never torn down (Runtime has no
+    # shutdown) and perturbs the deterministic pending-task counts this benchmark measures.
+    config.lsp.enabled = False
     session = Session(
         id="toolset-characterization",
         work_dir=work_dir,

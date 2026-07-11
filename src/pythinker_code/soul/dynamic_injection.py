@@ -154,7 +154,7 @@ def _legacy_source_result(
             requirement=policy.requirement,
             persistence=policy.persistence,
             priority=policy.priority,
-            truncatable=True,
+            truncatable=policy.truncation is FragmentTruncation.ALLOWED,
         ),
         reason_code=None,
     )

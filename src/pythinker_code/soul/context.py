@@ -60,7 +60,7 @@ class ContextPersistenceError(OSError):
         path: Path,
         *,
         commit: ContextCommit | None = None,
-    ):
+    ) -> None:
         self.operation = operation
         self.category = category
         self.path = path
@@ -282,8 +282,10 @@ def _write_system_prompt_sync(file_backend: Path, prompt_line: str) -> None:
         suffix=".tmp",
     )
     tmp_path = Path(tmp_name)
+    fd_owned_by_file = False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as prompt_file:
+            fd_owned_by_file = True
             prompt_file.write(prompt_line)
             if file_backend.exists() and file_backend.stat().st_size > 0:
                 with file_backend.open(encoding="utf-8") as source_file:
@@ -292,6 +294,8 @@ def _write_system_prompt_sync(file_backend: Path, prompt_line: str) -> None:
             prompt_file.flush()
         tmp_path.replace(file_backend)
     except BaseException as write_error:
+        if not fd_owned_by_file:
+            os.close(fd)
         try:
             tmp_path.unlink(missing_ok=True)
         except OSError as cleanup_error:
@@ -423,7 +427,11 @@ def _reduce_context_records(
             continue
         if role == "_usage":
             usage_token_count = record.get("token_count")
-            if not isinstance(usage_token_count, int):
+            if (
+                not isinstance(usage_token_count, int)
+                or isinstance(usage_token_count, bool)
+                or usage_token_count < 0
+            ):
                 logger.warning(
                     "Skipping invalid usage line {line_no} in {file}",
                     line_no=line_no,
@@ -439,7 +447,11 @@ def _reduce_context_records(
             continue
         if role == "_checkpoint":
             checkpoint_id = record.get("id")
-            if not isinstance(checkpoint_id, int):
+            if (
+                not isinstance(checkpoint_id, int)
+                or isinstance(checkpoint_id, bool)
+                or checkpoint_id < 0
+            ):
                 logger.warning(
                     "Skipping invalid checkpoint line {line_no} in {file}",
                     line_no=line_no,
@@ -1032,6 +1044,10 @@ class Context:
 
     async def update_token_count(self, token_count: int) -> None:
         logger.debug("Updating token count in context: {token_count}", token_count=token_count)
+        if type(token_count) is not int:
+            raise TypeError("token_count must be an integer")
+        if token_count < 0:
+            raise ValueError("token_count must be a non-negative integer")
         usage_record: dict[str, object] = {"role": "_usage", "token_count": token_count}
         payload = _serialize_context_records((usage_record,))
         async with self._mutation_lock:

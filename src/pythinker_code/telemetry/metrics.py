@@ -226,8 +226,6 @@ def record_request_assembly(
         "degraded_count": sum(outcome.status is FragmentStatus.DEGRADED for outcome in outcomes),
         "failed_count": sum(outcome.status is FragmentStatus.FAILED for outcome in outcomes),
         "budget_limit": manifest.budget_tokens,
-        "budgeted_admitted_tokens": manifest.budgeted_admitted_tokens,
-        "non_budgeted_estimated_tokens": manifest.non_budgeted_estimated_tokens,
     }
     request_assembly_duration_seconds.record(duration_seconds, attrs)
 

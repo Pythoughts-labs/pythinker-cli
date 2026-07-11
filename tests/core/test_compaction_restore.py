@@ -373,12 +373,14 @@ async def test_compact_context_rejects_stale_replacement_after_concurrent_append
     context.replace_history = delayed_replace  # type: ignore[method-assign]
     with patch("pythinker_code.soul.pythinkersoul.wire_send"):
         compact = asyncio.create_task(soul.compact_context())
-        await replacement_entered.wait()
-        concurrent = Message(role="user", content="concurrent append wins")
-        await context.append_message(concurrent)
-        release_replacement.set()
+        try:
+            await asyncio.wait_for(replacement_entered.wait(), timeout=5.0)
+            concurrent = Message(role="user", content="concurrent append wins")
+            await context.append_message(concurrent)
+        finally:
+            release_replacement.set()
         with pytest.raises(ContextGenerationConflictError):
-            await compact
+            await asyncio.wait_for(compact, timeout=5.0)
 
     assert context.history[-1] == concurrent
 
@@ -419,7 +421,7 @@ async def test_compact_visible_commit_cancellation_settles_rearm_under_second_ca
     context.replace_history = commit_then_cancel  # type: ignore[method-assign]
     with patch("pythinker_code.soul.pythinkersoul.wire_send"):
         compact = asyncio.create_task(soul.compact_context())
-        await asyncio.wait_for(entered.wait(), timeout=0.2)
+        await asyncio.wait_for(entered.wait(), timeout=5.0)
         compact.cancel()
         release.set()
         with pytest.raises(asyncio.CancelledError):

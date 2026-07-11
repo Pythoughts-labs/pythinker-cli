@@ -53,6 +53,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
   fails. Characterization crossed the execution-overhead threshold, but a controlled
   private extraction measured slightly worse and was reverted, so
   `PythinkerToolset` remains the implementation boundary.
+- **Agent-core seams hardened from review.** Persisted usage/checkpoint records reject
+  boolean and negative token counts, `update_token_count` validates at the boundary, a
+  temporary system-prompt descriptor is closed if `fdopen` fails, request finalization
+  surfaces every provider acknowledgement failure, a failed skill projection is always
+  recorded as failed (never blurred to not-applicable), and request-assembly telemetry no
+  longer emits unbounded per-request token values as metric attributes.
 
 ## 0.57.0 (2026-07-05)
 

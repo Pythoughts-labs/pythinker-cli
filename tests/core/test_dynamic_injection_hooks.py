@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pythinker_core.message import Message
@@ -13,10 +12,10 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.soul.context as context_module
 from pythinker_code.soul.agent import Agent, Runtime
+from pythinker_code.soul.compaction import CompactionResult
 from pythinker_code.soul.context import Context, ContextGenerationConflictError, ContextReplacement
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
-from pythinker_code.soul.request_lifecycle import RequestLifecycle
 
 
 class _BoomProvider(DynamicInjectionProvider):
@@ -130,17 +129,19 @@ async def test_stale_operation_does_not_claim_concurrent_replacement_commit(
         )
 
     stale = asyncio.create_task(soul._complete_history_replacement(stale_replacement()))  # pyright: ignore[reportPrivateUsage]
-    await stale_entered.wait()
-    await soul._complete_history_replacement(  # pyright: ignore[reportPrivateUsage]
-        context.replace_history(
-            ContextReplacement(None, (Message(role="user", content="winner"),), 1, False),
-            expected_generation=expected_generation,
+    try:
+        await asyncio.wait_for(stale_entered.wait(), timeout=5.0)
+        await soul._complete_history_replacement(  # pyright: ignore[reportPrivateUsage]
+            context.replace_history(
+                ContextReplacement(None, (Message(role="user", content="winner"),), 1, False),
+                expected_generation=expected_generation,
+            )
         )
-    )
-    release_stale.set()
+    finally:
+        release_stale.set()
 
     with pytest.raises(ContextGenerationConflictError):
-        await stale
+        await asyncio.wait_for(stale, timeout=5.0)
     assert recorder.on_context_compacted_calls == 1
     assert soul._request_lifecycle.history_generation == 1  # pyright: ignore[reportPrivateUsage]
 
@@ -187,60 +188,36 @@ async def test_revert_visible_durability_error_rearms_all_providers_before_propa
     assert recorder.on_context_compacted_calls == 1
 
 
-def _make_compactable_soul() -> Any:
-    """Minimal PythinkerSoul bypassing __init__, just enough for compact_context().
+async def _make_compactable_soul(runtime: Runtime, tmp_path: Path) -> PythinkerSoul:
+    """Build a real soul through its constructor and mock only the compaction LLM boundary.
 
-    Mirrors the pattern used in tests/telemetry/test_instrumentation.py.
+    Exercising the production constructor (rather than ``object.__new__`` with hand-assigned
+    private fields) keeps the test honest against constructor drift: a field the compaction
+    path starts reading is wired by ``__init__`` here instead of silently defaulting to a mock.
     """
-    soul = object.__new__(PythinkerSoul)
-
-    runtime = MagicMock()
-    runtime.llm = MagicMock()
-    runtime.session.id = "test-session"
-    runtime.role = "non-root"  # skip active-task-snapshot branch
-    runtime.background_tasks = MagicMock()
-    soul._runtime = runtime
-
-    ctx = MagicMock()
-    ctx.token_count = 10_000
-    ctx.history = []
-    ctx.replace_history = AsyncMock()
-    soul._context = ctx
-
-    soul._hook_engine = MagicMock()
-    soul._hook_engine.trigger = AsyncMock()
-
-    soul._compaction = MagicMock()
-
-    soul._agent = MagicMock()
-    soul._agent.system_prompt = "sys"
-
-    loop_control = MagicMock()
-    loop_control.max_retries_per_step = 1
-    soul._loop_control = loop_control
-
-    soul._checkpoint = AsyncMock()
-    soul._checkpoint_with_user_message = False
-
-    fake_result = MagicMock()
-    # Non-empty to satisfy the post-compaction guard against producing no
-    # messages; the exact contents do not matter for the injection-hook test.
-    fake_result.messages = [MagicMock()]
-    fake_result.estimated_token_count = 2_000
-    # No usage, so the cumulative-usage accumulation (subagent-2) is skipped —
-    # this harness bypasses __init__.
-    fake_result.usage = None
-    soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)
-
-    soul._injection_providers = []
-    soul._request_lifecycle = RequestLifecycle([])
-    soul._notified_context_generations = set()
+    runtime.session.state.active_skills = []
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history.jsonl")
+    await context.append_message(Message(role="user", content="compact me"))
+    soul = PythinkerSoul(agent, context=context)
+    result = CompactionResult(
+        messages=[Message(role="user", content="compacted")],
+        usage=None,
+    )
+    soul._run_with_connection_recovery = AsyncMock(return_value=result)  # pyright: ignore[reportPrivateUsage]
     return soul
 
 
-async def test_compact_context_notifies_injection_providers() -> None:
+async def test_compact_context_notifies_injection_providers(
+    runtime: Runtime, tmp_path: Path
+) -> None:
     """compact_context() must await on_context_compacted on every registered provider."""
-    soul = _make_compactable_soul()
+    soul = await _make_compactable_soul(runtime, tmp_path)
     provider_a = _RecordingProvider()
     provider_b = _RecordingProvider()
     soul.add_injection_provider(provider_a)
@@ -253,9 +230,11 @@ async def test_compact_context_notifies_injection_providers() -> None:
     assert provider_b.on_context_compacted_calls == 1
 
 
-async def test_compact_context_notifies_surviving_providers_after_failure() -> None:
+async def test_compact_context_notifies_surviving_providers_after_failure(
+    runtime: Runtime, tmp_path: Path
+) -> None:
     """A provider raising in its hook must not prevent later providers from being notified."""
-    soul = _make_compactable_soul()
+    soul = await _make_compactable_soul(runtime, tmp_path)
     boom = _BoomProvider()
     recorder = _RecordingProvider()
     soul.add_injection_provider(boom)

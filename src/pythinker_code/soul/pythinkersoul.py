@@ -1991,8 +1991,7 @@ class PythinkerSoul:
                 reason=outcome.reason_code or "none",
             )
         if outcome.view is None or not outcome.view.matches:
-            reason = outcome.reason_code
-            if outcome.status is SkillProjectionStatus.FAILED and reason is not None:
+            if outcome.status is SkillProjectionStatus.FAILED:
                 return (policy,), (_failed_source(policy, "skill_projection_failed"),)
             return (policy,), (_not_applicable_source(policy),)
         return (policy,), (_provided_source(policy, render_skill_prompt_view(outcome.view)),)
@@ -2089,13 +2088,18 @@ class PythinkerSoul:
             await asyncio.shield(commit_task)
         except asyncio.CancelledError as cancellation:
             await _settle_shielded(commit_task)
-            with contextlib.suppress(Exception):
+            commit_error: BaseException | None = None
+            try:
                 commit_task.result()
+            except BaseException as error:
+                commit_error = error
             self.latest_request_manifest = failed_manifest(
                 "context_persistence_cancelled",
                 prepared.assembled.manifest,
             )
-            raise cancellation
+            if commit_error is not None:
+                raise cancellation from commit_error
+            raise
         except RequestLifecycleError as error:
             self.latest_request_manifest = failed_manifest(
                 error.reason_code,

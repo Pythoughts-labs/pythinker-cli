@@ -317,6 +317,10 @@ class RequestLifecycle:
             except Exception as exc:
                 failures.append(exc)
         if failures:
+            from pythinker_code.telemetry.errors import report_handled_error
+
+            for failure in failures:
+                report_handled_error(failure, site="soul.request_lifecycle.finalize")
             raise RequestLifecycleError("provider_finalization_failed") from failures[0]
 
     def context_rebuilt(self) -> None:
