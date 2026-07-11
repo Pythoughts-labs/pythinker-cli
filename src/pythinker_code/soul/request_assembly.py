@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -242,6 +243,13 @@ _MAX_IDENTIFIER_LENGTH = 64
 _DEGRADED_STATUSES = frozenset(
     {FragmentStatus.TRUNCATED, FragmentStatus.OMITTED_BUDGET, FragmentStatus.DEGRADED}
 )
+
+
+def opaque_manifest_identifier(identifier: str) -> str:
+    """Return a stable content-free identifier for diagnostic surfaces."""
+    identifier_bytes = identifier.encode(encoding="utf-8")
+    digest = hashlib.sha256(identifier_bytes).hexdigest()[:16]
+    return f"id:{digest}"
 
 
 def _validate_policies(policies: Sequence[TrustedSourcePolicy]) -> None:

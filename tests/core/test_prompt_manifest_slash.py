@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Awaitable
 from pathlib import Path
 from typing import cast
@@ -71,6 +72,11 @@ def _manifest(
     )
 
 
+def _opaque_identifier(identifier: str) -> str:
+    identifier_bytes = identifier.encode(encoding="utf-8")
+    return f"id:{hashlib.sha256(identifier_bytes).hexdigest()[:16]}"
+
+
 @pytest.fixture
 def sent_text(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     captured: list[str] = []
@@ -134,7 +140,9 @@ async def test_prompt_manifest_renders_safe_status_and_accounting(
 
     rendered = sent_text[0]
     assert status.value.upper() in rendered
-    assert "permissions [permissions_state]" in rendered
+    assert f"{_opaque_identifier('permissions')} " in rendered
+    assert f"[{_opaque_identifier('permissions_state')}]" in rendered
+    assert "permissions [permissions_state]" not in rendered
     assert "required" in rendered
     assert "request_only" in rendered
     assert outcome_status.value in rendered
@@ -176,6 +184,62 @@ async def test_prompt_manifest_redacts_untrusted_identifiers(
     assert "<redacted>" in rendered
 
 
+@pytest.mark.asyncio
+async def test_prompt_manifest_redacts_embedded_credentials_from_reason_codes(
+    runtime: Runtime,
+    tmp_path: Path,
+    sent_text: list[str],
+) -> None:
+    embedded_secret = "prefix-sk-proj-" + "e" * 24 + "-suffix"
+    soul = _make_soul(runtime, tmp_path)
+    soul.latest_request_manifest = _manifest(
+        RequestStatus.FAILED,
+        reason_code=embedded_secret,
+        outcome_status=FragmentStatus.FAILED,
+        outcome_reason=embedded_secret,
+    )
+
+    await _run_prompt_manifest(soul)
+
+    rendered = sent_text[0]
+    assert embedded_secret not in rendered
+    assert rendered.count("<redacted>") == 2
+
+
+@pytest.mark.parametrize(
+    ("key", "source"),
+    [
+        (
+            "plugin-sk-proj-" + "a" * 24 + "-suffix",
+            "prefix-ghp_" + "b" * 24 + "-suffix",
+        ),
+        ("user_alice_request_20260711", "provider_controlled_plugin_alpha"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_prompt_manifest_uses_opaque_ids_for_provider_controlled_metadata(
+    runtime: Runtime,
+    tmp_path: Path,
+    sent_text: list[str],
+    key: str,
+    source: str,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    soul.latest_request_manifest = _manifest(
+        RequestStatus.SUCCEEDED,
+        key=key,
+        source=source,
+    )
+
+    await _run_prompt_manifest(soul)
+
+    rendered = sent_text[0]
+    assert key not in rendered
+    assert source not in rendered
+    assert _opaque_identifier(key) in rendered
+    assert _opaque_identifier(source) in rendered
+
+
 def test_request_manifest_metrics_record_only_sanitized_aggregates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,13 +257,16 @@ def test_request_manifest_metrics_record_only_sanitized_aggregates(
     )
     record_manifest = getattr(metrics, "record_request_assembly", None)
     assert record_manifest is not None
+    embedded_secret_source = "plugin-sk-proj-" + "c" * 24 + "-suffix"
+    user_derived_source = "user_alice_request_20260711"
+    suffixed_secret_source = "prefix-ghp_" + "d" * 24 + "-suffix"
     manifest = RequestManifest(
         status=RequestStatus.DEGRADED,
         reason_code="optional_source_degraded",
         outcomes=(
             FragmentOutcome(
                 key="permissions",
-                source="permissions_state",
+                source=embedded_secret_source,
                 requirement=FragmentRequirement.REQUIRED,
                 persistence=FragmentPersistence.REQUEST_ONLY,
                 status=FragmentStatus.INCLUDED,
@@ -209,7 +276,7 @@ def test_request_manifest_metrics_record_only_sanitized_aggregates(
             ),
             FragmentOutcome(
                 key="plan",
-                source="plan_mode",
+                source=user_derived_source,
                 requirement=FragmentRequirement.BEST_EFFORT,
                 persistence=FragmentPersistence.HISTORY,
                 status=FragmentStatus.TRUNCATED,
@@ -219,7 +286,7 @@ def test_request_manifest_metrics_record_only_sanitized_aggregates(
             ),
             FragmentOutcome(
                 key="git",
-                source="git_status",
+                source=suffixed_secret_source,
                 requirement=FragmentRequirement.BEST_EFFORT,
                 persistence=FragmentPersistence.REQUEST_ONLY,
                 status=FragmentStatus.OMITTED_BUDGET,
@@ -239,7 +306,11 @@ def test_request_manifest_metrics_record_only_sanitized_aggregates(
         (
             0.25,
             {
-                "source_ids": ("permissions_state", "plan_mode", "git_status"),
+                "source_ids": (
+                    _opaque_identifier(embedded_secret_source),
+                    _opaque_identifier(user_derived_source),
+                    _opaque_identifier(suffixed_secret_source),
+                ),
                 "required_count": 1,
                 "optional_count": 2,
                 "included_count": 1,

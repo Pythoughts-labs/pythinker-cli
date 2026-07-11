@@ -21,6 +21,7 @@ from pythinker_code.soul.request_assembly import (
     FragmentRequirement,
     FragmentStatus,
     RequestManifest,
+    opaque_manifest_identifier,
 )
 
 # ---------------------------------------------------------------------------
@@ -208,7 +209,9 @@ def record_request_assembly(
     """Record content-free request admission aggregates."""
     outcomes = manifest.outcomes
     attrs: dict[str, Any] = {
-        "source_ids": tuple(dict.fromkeys(outcome.source for outcome in outcomes)),
+        "source_ids": tuple(
+            dict.fromkeys(opaque_manifest_identifier(outcome.source) for outcome in outcomes)
+        ),
         "required_count": sum(
             outcome.requirement is FragmentRequirement.REQUIRED for outcome in outcomes
         ),

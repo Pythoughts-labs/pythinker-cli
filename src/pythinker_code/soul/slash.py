@@ -16,6 +16,7 @@ from pythinker_code.soul.agent import load_agents_md
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injections.auto_mode import AUTO_DISABLED_REMINDER
 from pythinker_code.soul.message import system, system_reminder
+from pythinker_code.soul.request_assembly import opaque_manifest_identifier
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.path import sanitize_cli_path, shorten_home
 from pythinker_code.utils.slashcmd import SlashCommandRegistry
@@ -42,11 +43,11 @@ _MANIFEST_SECRET_IDENTIFIER = re.compile(
 _MAX_MANIFEST_IDENTIFIER_LENGTH = 64
 
 
-def _safe_manifest_identifier(identifier: str) -> str:
+def _safe_manifest_reason(identifier: str) -> str:
     if (
         0 < len(identifier) <= _MAX_MANIFEST_IDENTIFIER_LENGTH
         and _MANIFEST_IDENTIFIER.fullmatch(identifier) is not None
-        and _MANIFEST_SECRET_IDENTIFIER.fullmatch(identifier) is None
+        and _MANIFEST_SECRET_IDENTIFIER.search(identifier) is None
     ):
         return identifier
     return "<redacted>"
@@ -58,7 +59,7 @@ def _render_prompt_manifest(soul: PythinkerSoul) -> str:
         return "No request has been assembled in this session."
 
     overall_reason = (
-        f" reason={_safe_manifest_identifier(manifest.reason_code)}"
+        f" reason={_safe_manifest_reason(manifest.reason_code)}"
         if manifest.reason_code is not None
         else ""
     )
@@ -74,13 +75,13 @@ def _render_prompt_manifest(soul: PythinkerSoul) -> str:
     ]
     for outcome in manifest.outcomes:
         reason = (
-            f" reason={_safe_manifest_identifier(outcome.reason_code)}"
+            f" reason={_safe_manifest_reason(outcome.reason_code)}"
             if outcome.reason_code is not None
             else ""
         )
         lines.append(
-            f"- {_safe_manifest_identifier(outcome.key)} "
-            f"[{_safe_manifest_identifier(outcome.source)}]: "
+            f"- {opaque_manifest_identifier(outcome.key)} "
+            f"[{opaque_manifest_identifier(outcome.source)}]: "
             f"{outcome.requirement.value} {outcome.persistence.value} {outcome.status.value} "
             f"estimated={outcome.estimated_tokens} admitted={outcome.admitted_tokens}{reason}"
         )
