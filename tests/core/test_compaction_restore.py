@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -147,6 +148,14 @@ async def test_compact_context_restores_files_and_hook_context(
             [HookResult(additional_context="SessionStart compact context")],
         ]
     )
+    legacy_clear = AsyncMock(side_effect=AssertionError("legacy clear path used"))
+    legacy_write_prompt = AsyncMock(side_effect=AssertionError("legacy prompt write used"))
+    legacy_append = AsyncMock(side_effect=AssertionError("legacy rebuild append used"))
+    legacy_usage = AsyncMock(side_effect=AssertionError("legacy usage rollback used"))
+    context.clear = legacy_clear  # type: ignore[method-assign]
+    context.write_system_prompt = legacy_write_prompt  # type: ignore[method-assign]
+    context.append_message = legacy_append  # type: ignore[method-assign]
+    context.update_token_count = legacy_usage  # type: ignore[method-assign]
 
     sent_texts: list[str] = []
 
@@ -178,12 +187,19 @@ async def test_compact_context_restores_files_and_hook_context(
     session_start_call = soul._hook_engine.trigger.await_args_list[2]  # pyright: ignore[reportPrivateUsage]
     assert session_start_call.args[0] == "SessionStart"
     assert session_start_call.kwargs["matcher_value"] == "compact"
+    soul._checkpoint.assert_not_awaited()  # pyright: ignore[reportPrivateUsage]
+    legacy_clear.assert_not_awaited()
+    legacy_write_prompt.assert_not_awaited()
+    legacy_append.assert_not_awaited()
+    legacy_usage.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_compact_context_restores_history_when_rebuild_fails(
+@pytest.mark.parametrize("error", [OSError("disk full"), asyncio.CancelledError()])
+async def test_compact_context_replacement_failure_preserves_generation(
     runtime: Runtime,
     tmp_path: Path,
+    error: BaseException,
 ) -> None:
     agent = Agent(
         name="Test Agent",
@@ -201,37 +217,50 @@ async def test_compact_context_restores_history_when_rebuild_fails(
     await context.append_message(msg_user)
     await context.append_message(msg_assistant)
 
-    before = list(context.history)
+    await context.write_system_prompt("Test system prompt.")
+    await context.update_token_count(47)
+    before_bytes = context.file_backend.read_bytes()
+    before_memory = (
+        tuple(context.history),
+        context.system_prompt,
+        context.token_count,
+        context.token_count_with_pending,
+        context.n_checkpoints,
+    )
 
     fake_result = MagicMock()
     fake_result.messages = [Message(role="user", content=[TextPart(text="compacted-summary")])]
     fake_result.estimated_token_count = 5
     fake_result.usage = None
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
-    soul._checkpoint = AsyncMock()  # pyright: ignore[reportPrivateUsage]
     soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
-
-    # Wrap append_message: raise when seeing the compacted summary text so the
-    # fault lands after clear() has already rotated the backing file.
-    real_append = context.append_message
-
-    async def flaky_append(message):
-        msgs = [message] if isinstance(message, Message) else list(message)
-        for m in msgs:
-            if "compacted-summary" in m.extract_text(""):
-                raise RuntimeError("disk full")
-        return await real_append(message)
-
-    context.append_message = flaky_append  # type: ignore[method-assign]
+    replace_history = AsyncMock(side_effect=error)
+    context.replace_history = replace_history  # type: ignore[method-assign]
+    soul.notify_history_rebuilt = AsyncMock()
+    sent: list[str] = []
 
     with (
-        patch("pythinker_code.soul.pythinkersoul.wire_send"),
+        patch(
+            "pythinker_code.soul.pythinkersoul.wire_send",
+            lambda message: sent.append(type(message).__name__),
+        ),
         patch("pythinker_code.telemetry.track"),
-        pytest.raises(RuntimeError, match="disk full"),
+        pytest.raises(type(error)),
     ):
         await soul.compact_context()
 
-    assert list(context.history) == before
+    replace_history.assert_awaited_once()
+    soul.notify_history_rebuilt.assert_not_awaited()
+    assert sent.count("CompactionBegin") == 1
+    assert sent.count("CompactionEnd") == 1
+    assert context.file_backend.read_bytes() == before_bytes
+    assert (
+        tuple(context.history),
+        context.system_prompt,
+        context.token_count,
+        context.token_count_with_pending,
+        context.n_checkpoints,
+    ) == before_memory
 
 
 @pytest.mark.asyncio

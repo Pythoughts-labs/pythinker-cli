@@ -867,10 +867,7 @@ class TestCompactionTracking:
         ctx = MagicMock()
         ctx.token_count = before_tokens
         ctx.history = []
-        ctx.clear = AsyncMock()
-        ctx.write_system_prompt = AsyncMock()
-        ctx.append_message = AsyncMock()
-        ctx.update_token_count = AsyncMock()
+        ctx.replace_history = AsyncMock()
         soul._context = ctx
 
         soul._hook_engine = MagicMock()
@@ -886,6 +883,7 @@ class TestCompactionTracking:
         soul._loop_control = loop_control
 
         soul._checkpoint = AsyncMock()
+        soul._checkpoint_with_user_message = False
 
         # _run_with_connection_recovery returns a value with .messages and
         # .estimated_token_count — shape it with MagicMock to avoid depending

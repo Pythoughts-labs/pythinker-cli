@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import aiofiles
-import aiofiles.os
 from pydantic import ValidationError
 from pythinker_core.message import Message, TextPart
 
@@ -37,6 +36,10 @@ class ContextReplacement:
     token_count: int
     create_checkpoint: bool
     checkpoint_user_marker: bool = False
+    checkpoint_positions: tuple[int, ...] = ()
+    pending_message_count: int = 0
+    persist_token_count: bool = True
+    repair_history: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +59,10 @@ class ContextPersistenceError(OSError):
         if category == "visible_commit_durability":
             message += "; the new generation is visible but power-loss durability is uncertain"
         super().__init__(message)
+
+
+class _ContextGenerationChanged(RuntimeError):
+    """The live generation changed while a semantic replacement was prepared."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,6 +477,10 @@ def _replacement_records(replacement: ContextReplacement) -> tuple[_ContextRecor
     token_count = _runtime_replacement_field(replacement.token_count)
     create_checkpoint = _runtime_replacement_field(replacement.create_checkpoint)
     checkpoint_user_marker = _runtime_replacement_field(replacement.checkpoint_user_marker)
+    checkpoint_positions = _runtime_replacement_field(replacement.checkpoint_positions)
+    pending_message_count = _runtime_replacement_field(replacement.pending_message_count)
+    persist_token_count = _runtime_replacement_field(replacement.persist_token_count)
+    repair_history = _runtime_replacement_field(replacement.repair_history)
 
     if system_prompt is not None and not isinstance(system_prompt, str):
         raise TypeError("system_prompt must be a string or None")
@@ -485,10 +496,35 @@ def _replacement_records(replacement: ContextReplacement) -> tuple[_ContextRecor
         raise TypeError("create_checkpoint must be a boolean")
     if type(checkpoint_user_marker) is not bool:
         raise TypeError("checkpoint_user_marker must be a boolean")
+    if not isinstance(checkpoint_positions, tuple):
+        raise TypeError("checkpoint_positions must be a tuple of integers")
+    checkpoint_position_values = cast(tuple[object, ...], checkpoint_positions)
+    if not all(type(position) is int for position in checkpoint_position_values):
+        raise TypeError("checkpoint_positions must be a tuple of integers")
+    validated_checkpoint_positions = cast(tuple[int, ...], checkpoint_position_values)
+    if type(pending_message_count) is not int:
+        raise TypeError("pending_message_count must be an integer")
+    if type(persist_token_count) is not bool:
+        raise TypeError("persist_token_count must be a boolean")
+    if type(repair_history) is not bool:
+        raise TypeError("repair_history must be a boolean")
     if token_count < 0:
         raise ValueError("token_count must be a non-negative integer")
     if checkpoint_user_marker and not create_checkpoint:
         raise ValueError("checkpoint_user_marker requires create_checkpoint")
+    if create_checkpoint and validated_checkpoint_positions:
+        raise ValueError("create_checkpoint cannot be combined with checkpoint_positions")
+    if create_checkpoint and pending_message_count:
+        raise ValueError("create_checkpoint cannot retain pending messages")
+    if pending_message_count < 0 or pending_message_count > len(validated_messages):
+        raise ValueError("pending_message_count must identify a suffix of messages")
+    if any(
+        position < 0 or position > len(validated_messages)
+        for position in validated_checkpoint_positions
+    ):
+        raise ValueError("checkpoint_positions must refer to message boundaries")
+    if tuple(sorted(validated_checkpoint_positions)) != validated_checkpoint_positions:
+        raise ValueError("checkpoint_positions must be ordered")
 
     records: list[_ContextRecord] = []
     if system_prompt is not None:
@@ -497,8 +533,24 @@ def _replacement_records(replacement: ContextReplacement) -> tuple[_ContextRecor
         records.append({"role": "_checkpoint", "id": 0})
         if checkpoint_user_marker:
             records.append(Message(role="user", content=[system("CHECKPOINT 0")]))
-    records.extend(validated_messages)
-    records.append({"role": "_usage", "token_count": token_count})
+        records.extend(validated_messages)
+        if persist_token_count:
+            records.append({"role": "_usage", "token_count": token_count})
+        return tuple(records)
+
+    usage_position = len(validated_messages) - pending_message_count
+    checkpoint_index = 0
+    for position in range(len(validated_messages) + 1):
+        if persist_token_count and position == usage_position:
+            records.append({"role": "_usage", "token_count": token_count})
+        while (
+            checkpoint_index < len(validated_checkpoint_positions)
+            and validated_checkpoint_positions[checkpoint_index] == position
+        ):
+            records.append({"role": "_checkpoint", "id": checkpoint_index})
+            checkpoint_index += 1
+        if position < len(validated_messages):
+            records.append(validated_messages[position])
     return tuple(records)
 
 
@@ -646,7 +698,12 @@ class Context:
             if cancellation is not None:
                 raise cancellation
 
-    async def replace_history(self, replacement: ContextReplacement) -> ContextCommit:
+    async def replace_history(
+        self,
+        replacement: ContextReplacement,
+        *,
+        _expected_live_bytes: bytes | None = None,
+    ) -> ContextCommit:
         records = _replacement_records(replacement)
         serialized_records = _serialize_replacement_records(self._file_backend, records)
 
@@ -658,6 +715,8 @@ class Context:
             )
             if not all(accepted):
                 raise ValueError("replacement contains an invalid context record")
+            if replacement.repair_history:
+                next_state = _repair_context_state(next_state)
             next_state = replace(next_state, tail_repaired=False)
 
             temp_path, cancellation = await _settle_thread(
@@ -677,6 +736,10 @@ class Context:
             if cancellation is not None:
                 _cleanup_replacement_path(temp_path, cancellation)
                 raise cancellation
+            if _expected_live_bytes is not None and live_bytes != _expected_live_bytes:
+                changed = _ContextGenerationChanged()
+                _cleanup_replacement_path(temp_path, changed)
+                raise changed
 
             rotated_file: Path | None = None
             if live_bytes is not None:
@@ -801,10 +864,6 @@ class Context:
             await self._append_serialized(payload, state, next_state)
 
     async def revert_to(self, checkpoint_id: int) -> None:
-        async with self._mutation_lock:
-            await self._revert_to(checkpoint_id)
-
-    async def _revert_to(self, checkpoint_id: int) -> None:
         """
         Revert the context to the specified checkpoint.
         After this, the specified checkpoint and all subsequent content will be
@@ -819,66 +878,76 @@ class Context:
         """
 
         logger.debug("Reverting checkpoint, ID: {id}", id=checkpoint_id)
-        if checkpoint_id >= self._next_checkpoint_id:
-            logger.error("Checkpoint {checkpoint_id} does not exist", checkpoint_id=checkpoint_id)
-            raise ValueError(f"Checkpoint {checkpoint_id} does not exist")
+        while True:
+            if checkpoint_id >= self._next_checkpoint_id:
+                logger.error(
+                    "Checkpoint {checkpoint_id} does not exist", checkpoint_id=checkpoint_id
+                )
+                raise ValueError(f"Checkpoint {checkpoint_id} does not exist")
 
-        # rotate the context file
-        rotated_file_path = await next_available_rotation(self._file_backend)
-        if rotated_file_path is None:
-            logger.error("No available rotation path found")
-            raise RuntimeError("No available rotation path found")
-        await aiofiles.os.replace(self._file_backend, rotated_file_path)
-        logger.debug(
-            "Rotated context file: {rotated_file_path}", rotated_file_path=rotated_file_path
-        )
-
-        # restore the context until the specified checkpoint
-        self._history.clear()
-        self._token_count = 0
-        self._next_checkpoint_id = 0
-        self._system_prompt = None
-        messages_after_last_usage: list[Message] = []
-        async with (
-            aiofiles.open(rotated_file_path, encoding="utf-8", errors="replace") as old_file,
-            aiofiles.open(self._file_backend, "w", encoding="utf-8") as new_file,
-        ):
-            line_no = 0
-            async for line in old_file:
-                line_no += 1
+            source_bytes = await asyncio.to_thread(self._file_backend.read_bytes)
+            records: list[dict[str, Any]] = []
+            line_numbers: list[int] = []
+            found_checkpoint = False
+            source_text = source_bytes.decode(encoding="utf-8", errors="replace")
+            for line_no, line in enumerate(source_text.splitlines(), 1):
                 if not line.strip():
                     continue
 
                 line_json = self._parse_context_line(
                     line,
-                    file_backend=rotated_file_path,
+                    file_backend=self._file_backend,
                     line_no=line_no,
                 )
                 if line_json is None:
                     continue
                 if line_json.get("role") == "_checkpoint" and line_json.get("id") == checkpoint_id:
+                    found_checkpoint = True
                     break
+                records.append(line_json)
+                line_numbers.append(line_no)
+            if not found_checkpoint:
+                raise ValueError(f"Checkpoint {checkpoint_id} does not exist")
 
-                keep_line = self._apply_context_record(
-                    line_json,
-                    history=self._history,
-                    messages_after_last_usage=messages_after_last_usage,
-                    file_backend=rotated_file_path,
-                    line_no=line_no,
+            target_state, accepted = _reduce_context_records(
+                _empty_context_state(),
+                records,
+                file_backend=self._file_backend,
+                line_numbers=line_numbers,
+            )
+            checkpoint_positions: list[int] = []
+            message_count = 0
+            persist_token_count = False
+            for record, keep in zip(records, accepted, strict=True):
+                if not keep:
+                    continue
+                role = record.get("role")
+                if role == "_checkpoint":
+                    checkpoint_positions.append(message_count)
+                elif role == "_usage":
+                    persist_token_count = True
+                elif role not in {"_system_prompt", "_usage"}:
+                    message_count += 1
+
+            try:
+                await self.replace_history(
+                    ContextReplacement(
+                        system_prompt=target_state.system_prompt,
+                        messages=target_state.history,
+                        token_count=target_state.token_count,
+                        create_checkpoint=False,
+                        checkpoint_positions=tuple(checkpoint_positions),
+                        pending_message_count=len(target_state.pending_messages),
+                        persist_token_count=persist_token_count,
+                        repair_history=True,
+                    ),
+                    _expected_live_bytes=source_bytes,
                 )
-                if keep_line:
-                    await new_file.write(line)
+            except _ContextGenerationChanged:
+                continue
+            return
 
-        self._history[:] = repair_history_invariants(self._history)
-        messages_after_last_usage[:] = repair_history_invariants(messages_after_last_usage)
-        self._pending_messages = tuple(messages_after_last_usage)
-        self._pending_token_estimate = estimate_text_tokens(messages_after_last_usage)
-
-    async def clear(self) -> None:
-        async with self._mutation_lock:
-            await self._clear()
-
-    async def _clear(self) -> None:
+    async def clear(self, system_prompt: str | None = None) -> None:
         """
         Clear the context history.
         This is almost equivalent to revert_to(0), but without relying on the assumption
@@ -890,24 +959,15 @@ class Context:
         """
 
         logger.debug("Clearing context")
-
-        # rotate the context file
-        rotated_file_path = await next_available_rotation(self._file_backend)
-        if rotated_file_path is None:
-            logger.error("No available rotation path found")
-            raise RuntimeError("No available rotation path found")
-        await aiofiles.os.replace(self._file_backend, rotated_file_path)
-        self._file_backend.touch()
-        logger.debug(
-            "Rotated context file: {rotated_file_path}", rotated_file_path=rotated_file_path
+        await self.replace_history(
+            ContextReplacement(
+                system_prompt=system_prompt,
+                messages=(),
+                token_count=0,
+                create_checkpoint=False,
+                persist_token_count=False,
+            )
         )
-
-        self._history.clear()
-        self._token_count = 0
-        self._pending_messages = ()
-        self._pending_token_estimate = 0
-        self._next_checkpoint_id = 0
-        self._system_prompt = None
 
     async def append_message(self, message: Message | Sequence[Message]) -> None:
         messages = (message,) if isinstance(message, Message) else message
@@ -966,34 +1026,3 @@ class Context:
             )
             return None
         return cast(dict[str, Any], line_json)
-
-    def _apply_context_record(
-        self,
-        line_json: dict[str, Any],
-        *,
-        history: list[Message],
-        messages_after_last_usage: list[Message],
-        file_backend: Path,
-        line_no: int,
-    ) -> bool:
-        state = _ContextState(
-            history=tuple(history),
-            token_count=self._token_count,
-            pending_messages=tuple(messages_after_last_usage),
-            pending_token_estimate=estimate_text_tokens(messages_after_last_usage),
-            next_checkpoint_id=self._next_checkpoint_id,
-            system_prompt=self._system_prompt,
-            tail_repaired=self._tail_repaired,
-        )
-        next_state, accepted = _reduce_context_records(
-            state,
-            (line_json,),
-            file_backend=file_backend,
-            line_numbers=(line_no,),
-        )
-        history[:] = next_state.history
-        messages_after_last_usage[:] = next_state.pending_messages
-        self._token_count = next_state.token_count
-        self._next_checkpoint_id = next_state.next_checkpoint_id
-        self._system_prompt = next_state.system_prompt
-        return accepted[0]

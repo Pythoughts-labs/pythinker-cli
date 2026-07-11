@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from pythinker_core.message import Message, Role
@@ -288,6 +290,55 @@ async def test_revert_preserves_system_prompt(tmp_path: Path) -> None:
 
     assert ctx.system_prompt == "Preserved prompt"
     assert len(ctx.history) == 1
+
+
+@pytest.mark.parametrize("operation", ["revert", "clear"])
+@pytest.mark.parametrize("error", [OSError("disk full"), asyncio.CancelledError()])
+async def test_history_replacement_failure_preserves_exact_generation(
+    tmp_path: Path,
+    operation: str,
+    error: BaseException,
+) -> None:
+    path = tmp_path / "context.jsonl"
+    _write_lines(
+        path,
+        [
+            {"role": "_system_prompt", "content": "Preserved prompt"},
+            _message_dict("user", "Before checkpoint"),
+            {"role": "_checkpoint", "id": 0},
+            _message_dict("assistant", "After checkpoint"),
+            {"role": "_usage", "token_count": 23},
+            {"role": "_checkpoint", "id": 1},
+        ],
+    )
+    ctx = Context(file_backend=path)
+    await ctx.restore()
+    before_bytes = path.read_bytes()
+    before_memory = (
+        tuple(ctx.history),
+        ctx.system_prompt,
+        ctx.token_count,
+        ctx.token_count_with_pending,
+        ctx.n_checkpoints,
+    )
+    replace_history = AsyncMock(side_effect=error)
+    ctx.replace_history = replace_history  # type: ignore[method-assign]
+
+    with pytest.raises(type(error)):
+        if operation == "revert":
+            await ctx.revert_to(1)
+        else:
+            await ctx.clear()
+
+    replace_history.assert_awaited_once()
+    assert path.read_bytes() == before_bytes
+    assert (
+        tuple(ctx.history),
+        ctx.system_prompt,
+        ctx.token_count,
+        ctx.token_count_with_pending,
+        ctx.n_checkpoints,
+    ) == before_memory
 
 
 @pytest.mark.asyncio

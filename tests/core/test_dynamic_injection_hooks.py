@@ -75,10 +75,7 @@ def _make_compactable_soul() -> Any:
     ctx = MagicMock()
     ctx.token_count = 10_000
     ctx.history = []
-    ctx.clear = AsyncMock()
-    ctx.write_system_prompt = AsyncMock()
-    ctx.append_message = AsyncMock()
-    ctx.update_token_count = AsyncMock()
+    ctx.replace_history = AsyncMock()
     soul._context = ctx
 
     soul._hook_engine = MagicMock()
@@ -94,6 +91,7 @@ def _make_compactable_soul() -> Any:
     soul._loop_control = loop_control
 
     soul._checkpoint = AsyncMock()
+    soul._checkpoint_with_user_message = False
 
     fake_result = MagicMock()
     # Non-empty to satisfy the post-compaction guard against producing no

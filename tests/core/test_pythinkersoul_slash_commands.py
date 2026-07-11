@@ -8,6 +8,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 from pythinker_host.path import HostPath
 
 import pythinker_code.soul.pythinkersoul as pythinkersoul_module
+import pythinker_code.soul.slash as slash_module
 from pythinker_code.skill import Skill
 from pythinker_code.skill.flow import Flow, FlowEdge, FlowNode
 from pythinker_code.soul.agent import Agent, Runtime
@@ -174,3 +175,30 @@ async def test_flow_slash_run_does_not_auto_generate_session_title(
     await soul.run("/flow:demo-flow")
 
     assert runtime.session.state.custom_title is None
+
+
+@pytest.mark.asyncio
+async def test_clear_slash_notifies_lifecycle_only_after_coherent_reset(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Current system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    await context.write_system_prompt("Current system prompt.")
+    before_bytes = context.file_backend.read_bytes()
+    notify = AsyncMock()
+    soul.notify_history_rebuilt = notify  # type: ignore[method-assign]
+    context.replace_history = AsyncMock(side_effect=OSError("disk full"))  # type: ignore[method-assign]
+    monkeypatch.setattr(slash_module, "wire_send", lambda _message: None)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    with pytest.raises(OSError, match="disk full"):
+        await soul.run("/clear")
+
+    assert context.file_backend.read_bytes() == before_bytes
+    notify.assert_not_awaited()

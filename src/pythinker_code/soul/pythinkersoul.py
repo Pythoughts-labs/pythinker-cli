@@ -84,7 +84,7 @@ from pythinker_code.soul.compaction_restore import (
     build_hook_context_message,
     compact_summary_text,
 )
-from pythinker_code.soul.context import Context
+from pythinker_code.soul.context import Context, ContextReplacement
 from pythinker_code.soul.dynamic_injection import (
     DynamicInjectionProvider,
     injection_budget_from_runtime,
@@ -2616,11 +2616,7 @@ class PythinkerSoul:
             return False
 
         before_tokens = self._context.token_count
-        # Snapshot history first: clear() rotates the backing file, so a mid-rebuild
-        # failure would otherwise leave the context as just the system prompt. Reuse the
-        # same clear+rebuild primitive compact_context uses (the supported way to mutate
-        # the append-only JSONL context), but roll back to the snapshot if it throws.
-        snapshot = list(self._context.history)
+        snapshot = tuple(self._context.history)
         # Reduce the AUTHORITATIVE pre-prune count by the estimated tokens freed, rather
         # than replacing it with a full heuristic re-estimate of the remaining history. A
         # full re-estimate can over-count the survivors (chars/4 overshoots code/markup),
@@ -2629,20 +2625,15 @@ class PythinkerSoul:
         # pruning can only lower the count (pruned ⊆ snapshot ⇒ delta ≥ 0).
         freed_tokens = estimate_text_tokens(snapshot) - estimate_text_tokens(pruned)
         pruned_tokens = max(0, before_tokens - max(0, freed_tokens))
-        await self._context.clear()
-        try:
-            await self._context.write_system_prompt(self._agent.system_prompt)
-            await self._checkpoint()
-            await self._context.append_message(pruned)
-            await self._context.update_token_count(pruned_tokens)
-        except Exception:
-            await self._context.clear()
-            await self._context.write_system_prompt(self._agent.system_prompt)
-            await self._checkpoint()
-            if snapshot:
-                await self._context.append_message(snapshot)
-            await self._context.update_token_count(before_tokens)
-            raise
+        await self._context.replace_history(
+            ContextReplacement(
+                system_prompt=self._agent.system_prompt,
+                messages=tuple(pruned),
+                token_count=pruned_tokens,
+                create_checkpoint=True,
+                checkpoint_user_marker=self._checkpoint_with_user_message,
+            )
+        )
         # Unlike full compaction, pruning preserves every non-tool message verbatim
         # (only tool-result *bodies* are elided), so prior dynamic injections survive in
         # history. Do NOT re-arm injection providers here, or one-shot fragments (e.g. the
@@ -2736,85 +2727,71 @@ class PythinkerSoul:
                 self._session_cost_usd += estimate_cost_usd(
                     compaction_result.usage, self.model_name
                 )
-            await self._context.clear()
-            try:
-                await self._context.write_system_prompt(self._agent.system_prompt)
-                await self._checkpoint()
-                await self._context.append_message(compaction_result.messages)
-                estimated_token_count = compaction_result.estimated_token_count
-                summary_text = compact_summary_text(compaction_result.messages)
+            replacement_messages = list(compaction_result.messages)
+            estimated_token_count = compaction_result.estimated_token_count
+            summary_text = compact_summary_text(compaction_result.messages)
 
-                if restore_context.messages:
-                    await self._context.append_message(restore_context.messages)
-                    estimated_token_count += estimate_text_tokens(restore_context.messages)
+            if restore_context.messages:
+                replacement_messages.extend(restore_context.messages)
+                estimated_token_count += estimate_text_tokens(restore_context.messages)
 
-                if self._runtime.role == "root":
-                    active_task_snapshot = build_active_task_snapshot(
-                        self._runtime.background_tasks
+            if self._runtime.role == "root":
+                active_task_snapshot = build_active_task_snapshot(self._runtime.background_tasks)
+                if active_task_snapshot is not None:
+                    active_task_message = Message(
+                        role="user",
+                        content=[
+                            system(
+                                "The following background tasks are still active"
+                                " after compaction. Use TaskList if you need to"
+                                " re-enumerate them later."
+                            ),
+                            TextPart(text=active_task_snapshot),
+                        ],
                     )
-                    if active_task_snapshot is not None:
-                        active_task_message = Message(
-                            role="user",
-                            content=[
-                                system(
-                                    "The following background tasks are still active"
-                                    " after compaction. Use TaskList if you need to"
-                                    " re-enumerate them later."
-                                ),
-                                TextPart(text=active_task_snapshot),
-                            ],
-                        )
-                        await self._context.append_message(active_task_message)
-                        estimated_token_count += estimate_text_tokens([active_task_message])
+                    replacement_messages.append(active_task_message)
+                    estimated_token_count += estimate_text_tokens([active_task_message])
 
-                post_compact_results = await self._hook_engine.trigger(
-                    "PostCompact",
-                    matcher_value=trigger_reason,
-                    input_data=events.post_compact(
-                        session_id=self._runtime.session.id,
-                        cwd=_safe_cwd(str(self._runtime.work_dir)),
-                        trigger=trigger_reason,
-                        estimated_token_count=estimated_token_count,
-                        compact_summary=summary_text,
-                    ),
-                )
-                session_start_results = await self._hook_engine.trigger(
-                    "SessionStart",
-                    matcher_value="compact",
-                    input_data=events.session_start(
-                        session_id=self._runtime.session.id,
-                        cwd=_safe_cwd(str(self._runtime.work_dir)),
-                        source="compact",
-                    ),
-                )
-                hook_context_message = build_hook_context_message(
-                    result.additional_context
-                    for result in [*post_compact_results, *session_start_results]
-                )
-                if hook_context_message is not None:
-                    await self._context.append_message(hook_context_message)
-                    estimated_token_count += estimate_text_tokens([hook_context_message])
+            post_compact_results = await self._hook_engine.trigger(
+                "PostCompact",
+                matcher_value=trigger_reason,
+                input_data=events.post_compact(
+                    session_id=self._runtime.session.id,
+                    cwd=_safe_cwd(str(self._runtime.work_dir)),
+                    trigger=trigger_reason,
+                    estimated_token_count=estimated_token_count,
+                    compact_summary=summary_text,
+                ),
+            )
+            session_start_results = await self._hook_engine.trigger(
+                "SessionStart",
+                matcher_value="compact",
+                input_data=events.session_start(
+                    session_id=self._runtime.session.id,
+                    cwd=_safe_cwd(str(self._runtime.work_dir)),
+                    source="compact",
+                ),
+            )
+            hook_context_message = build_hook_context_message(
+                result.additional_context
+                for result in [*post_compact_results, *session_start_results]
+            )
+            if hook_context_message is not None:
+                replacement_messages.append(hook_context_message)
+                estimated_token_count += estimate_text_tokens([hook_context_message])
 
-                # Estimate token count so context_usage is not reported as 0%
-                await self._context.update_token_count(estimated_token_count)
+            await self._context.replace_history(
+                ContextReplacement(
+                    system_prompt=self._agent.system_prompt,
+                    messages=tuple(replacement_messages),
+                    token_count=estimated_token_count,
+                    create_checkpoint=True,
+                    checkpoint_user_marker=self._checkpoint_with_user_message,
+                )
+            )
 
-                # Notify dynamic injection providers that history has been rebuilt so
-                # they can reset any one-shot throttling state. Failures are isolated
-                # per-provider so compaction completion (wire event + telemetry) is
-                # not affected by a buggy provider.
-                await self.notify_history_rebuilt()
-            except Exception:
-                # Rebuild faulted after clear() rotated the backing file. Restore
-                # the pre-compaction history so an I/O fault cannot truncate the
-                # live context to just the system prompt. Same primitive as
-                # prune_context.
-                await self._context.clear()
-                await self._context.write_system_prompt(self._agent.system_prompt)
-                await self._checkpoint()
-                if history_before_compaction:
-                    await self._context.append_message(list(history_before_compaction))
-                await self._context.update_token_count(before_tokens)
-                raise
+            # Notify only after the visible generation commits successfully.
+            await self.notify_history_rebuilt()
 
         except Exception:
             from pythinker_code.telemetry import track
