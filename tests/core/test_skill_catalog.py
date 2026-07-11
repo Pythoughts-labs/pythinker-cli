@@ -88,20 +88,18 @@ async def test_discover_keeps_first_root_winner_in_exhaustive_mapping(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_search_is_deterministic_when_root_input_is_reversed(tmp_path: Path) -> None:
-    alpha_root = tmp_path / "alpha-root"
-    zeta_root = tmp_path / "zeta-root"
-    _write_skill(alpha_root, "alpha", name="alpha", description="Alpha workflow")
-    _write_skill(zeta_root, "zeta", name="zeta", description="Zeta workflow")
+async def test_exhaustive_mapping_uses_legacy_global_skill_name_order(tmp_path: Path) -> None:
+    first_root = tmp_path / "first-root"
+    second_root = tmp_path / "second-root"
+    _write_skill(first_root, "zeta", name="zeta", description="Zeta workflow")
+    _write_skill(second_root, "alpha", name="alpha", description="Alpha workflow")
 
-    forward = await SkillCatalog.discover([_root(alpha_root), _root(zeta_root)])
-    reversed_catalog = await SkillCatalog.discover([_root(zeta_root), _root(alpha_root)])
+    catalog = await SkillCatalog.discover([_root(first_root), _root(second_root)])
 
-    forward_names = tuple(match.skill.name for match in forward.search("workflow", limit=10))
-    reversed_names = tuple(
-        match.skill.name for match in reversed_catalog.search("workflow", limit=10)
+    assert tuple(skill.name for skill in catalog.exhaustive_mapping().values()) == (
+        "alpha",
+        "zeta",
     )
-    assert forward_names == reversed_names == ("alpha", "zeta")
 
 
 @pytest.mark.asyncio
@@ -125,13 +123,40 @@ async def test_discovery_retains_unavailable_diagnostic_for_malformed_source(
     assert diagnostic.name == "broken"
     assert diagnostic.source_kind is SkillSourceKind.DIRECTORY
     assert diagnostic.category is SkillDiagnosticCategory.UNAVAILABLE
-    assert diagnostic.path == str(malformed_path)
+    assert diagnostic.source_id == "broken/SKILL.md"
+    assert str(tmp_path) not in diagnostic.source_id
+    assert not Path(diagnostic.source_id).is_absolute()
     assert diagnostic.reason_code == "invalid_skill_metadata"
     assert "do-not-leak" not in diagnostic.safe_reason
 
 
 @pytest.mark.asyncio
-async def test_prompt_view_exposes_frozen_exhaustive_projection(tmp_path: Path) -> None:
+async def test_unreadable_flat_source_retains_unavailable_diagnostic(tmp_path: Path) -> None:
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    (skills_root / "unreadable.md").symlink_to(skills_root / "missing-target.md")
+
+    catalog = await SkillCatalog.discover([_root(skills_root)])
+
+    assert catalog.resolve("unreadable") is None
+    assert len(catalog.diagnostics) == 1
+    diagnostic = catalog.diagnostics[0]
+    assert diagnostic.source_id == "unreadable.md"
+    assert diagnostic.reason_code == "unreadable_skill_source"
+
+
+@pytest.mark.asyncio
+async def test_search_is_explicitly_deferred_until_ranking_policy_exists(tmp_path: Path) -> None:
+    skills_root = tmp_path / "skills"
+    _write_skill(skills_root, "alpha", name="alpha", description="Alpha workflow")
+    catalog = await SkillCatalog.discover([_root(skills_root)])
+
+    with pytest.raises(NotImplementedError, match="Task 3"):
+        catalog.search("workflow", limit=10)
+
+
+@pytest.mark.asyncio
+async def test_prompt_view_reports_deferred_without_fabricated_view(tmp_path: Path) -> None:
     skills_root = tmp_path / "skills"
     _write_skill(skills_root, "alpha", name="alpha", description="Alpha workflow")
     _write_skill(skills_root, "zeta", name="zeta", description="Zeta workflow")
@@ -139,11 +164,6 @@ async def test_prompt_view_exposes_frozen_exhaustive_projection(tmp_path: Path) 
 
     outcome = catalog.prompt_view("workflow", max_characters=1_000)
 
-    assert outcome.status is SkillProjectionStatus.READY
-    assert outcome.reason_code is None
-    assert outcome.view is not None
-    assert tuple(match.skill.name for match in outcome.view.matches) == ("alpha", "zeta")
-    assert outcome.view.total_count == 2
-    assert outcome.view.omitted_count == 0
-    assert outcome.view.overflowed_priority_count == 0
-    assert outcome.view.rendered_characters > 0
+    assert outcome.status is SkillProjectionStatus.FAILED
+    assert outcome.reason_code == "skill_projection_deferred"
+    assert outcome.view is None

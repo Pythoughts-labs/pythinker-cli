@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pythinker_host import get_current_host
 from pythinker_host.local import local_host
 from pythinker_host.path import HostPath
@@ -656,7 +656,7 @@ async def discover_skills(
                 skill = parse_skill_text(
                     content, dir_path=entry, skill_md_file=skill_md, scope=scope
                 )
-            except Exception as exc:
+            except (ValueError, ValidationError) as exc:
                 logger.info("Skipping invalid skill at {}: {}", skill_md, exc)
                 _collect_discovery_issue(
                     diagnostic_collector,
@@ -723,6 +723,21 @@ async def discover_skills(
 
             try:
                 content = await entry.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.info("Skipping unreadable flat skill at {}: {}", entry, exc)
+                _collect_discovery_issue(
+                    diagnostic_collector,
+                    SkillDiscoveryIssue(
+                        name=_strip_md_suffix(entry.name),
+                        source_kind="flat_file",
+                        path=entry,
+                        scope=scope,
+                        reason_code="unreadable_skill_source",
+                        safe_reason="Skill source could not be read.",
+                    ),
+                )
+                continue
+            try:
                 skill = parse_skill_text(
                     content,
                     dir_path=skills_dir,
@@ -730,7 +745,7 @@ async def discover_skills(
                     scope=scope,
                     flat_file=entry,
                 )
-            except Exception as exc:
+            except (ValueError, ValidationError) as exc:
                 logger.info("Skipping invalid flat skill at {}: {}", entry, exc)
                 _collect_discovery_issue(
                     diagnostic_collector,
