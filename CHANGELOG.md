@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.58.0 (2026-07-11)
+
 - **Agent-spec loading is more defensive and truthful.** Subagent `path`, `extend`, and
   `system_prompt_path` references that resolve outside their spec's directory (or the built-in
   agents directory) are now rejected instead of loaded, and the markdown agent catalogue no longer
@@ -57,6 +59,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   surfaces every provider acknowledgement failure, a failed skill projection is always
   recorded as failed (never blurred to not-applicable), and request-assembly telemetry no
   longer emits unbounded per-request token values as metric attributes.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.58.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.57.0 (2026-07-05)
 
