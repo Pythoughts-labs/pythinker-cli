@@ -99,6 +99,17 @@ Format: trigger → rule.
   keep the empty card visible: `_turn_starting` and the live-view first-commit
   gate may suppress editable content, but the top border and `❯` row should
   remain visible so the prompt bar does not disappear while the agent loads.
+- **When routing live preview text through the existing Markdown renderer**, verify unsupported
+  constructs against the installed library before treating the renderer as a complete cleanup
+  boundary. Rich renders HTML comments literally, so a preview that must hide them needs a narrow,
+  fence-aware filter while malformed comments remain visible.
+- **When narrowing a regex that strips whole-line delimited blocks (HTML comments, fences)**, a
+  non-greedy `.*?` between the open and close delimiters can backtrack across an embedded closer and
+  silently swallow visible text on a mixed line (`<!-- a --> text <!-- b -->` collapsed to `""`).
+  Bound the body with a tempered token `(?:(?!-->).)*?` so a failed end-anchor simply fails the
+  match. Then derive test assertions from the *anchored* semantics: a line-anchored stripper leaves
+  a mixed prose+comment line fully intact (markers included), so asserting the markers vanish is
+  wrong — that was a self-contradictory test spec the implementer correctly blocked on.
 
 ## Spec/profile consistency
 

@@ -2,6 +2,21 @@
 
 ## Active
 
+### TUI thinking Markdown and activity motion (2026-07-11)
+
+- [ ] Execute `docs/superpowers/plans/2026-07-11-tui-thinking-markdown-and-activity-motion.md`
+      with TDD and the Pythinker guard checkpoints.
+- [x] Render complete thinking-preview Markdown without leaking top-level HTML comments.
+- [x] Keep activity-tree detail text static and reserve coral shimmer for the verb spinner.
+- [x] Add the required `CHANGELOG.md` Unreleased entry.
+- [ ] Run focused UI tests, `make check-pythinker-code`, and `make test-pythinker-code`.
+- [ ] Run clean-code, test, docs, Pythinker guard, verification, and final diff review passes.
+
+Acceptance: complete Markdown emphasis renders without delimiters; complete top-level HTML comments
+are hidden; malformed Markdown and comments remain readable; fenced literal comment examples remain
+visible; activity-tree details do not shimmer; the bottom verb spinner retains its coral shimmer;
+reduced-motion and lifecycle-marker contracts remain green.
+
 ### Agent core deepening program (2026-07-10)
 
 - [x] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on

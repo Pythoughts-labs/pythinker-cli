@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Thinking and subagent activity now render cleanly in the terminal.** Live reasoning previews
+  render complete Markdown without exposing top-level HTML comments, activity-tree rows remain
+  visually stable, and the coral shimmer is reserved for the active verb spinner.
 - **Agent request compatibility is now executable and reviewable.** Provider handoff,
   prompt ordering, persisted-versus-effective history, context JSONL restoration,
   agent projections, and Toolset lifecycle behavior now have explicit compatibility

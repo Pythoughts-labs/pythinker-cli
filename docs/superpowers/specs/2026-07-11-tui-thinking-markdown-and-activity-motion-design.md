@@ -41,7 +41,9 @@ constructing a plain `Text` object.
 The preview remains nested under the existing thinking bullet and spinner. Rendering is limited to
 the already bounded preview, so the change does not parse the complete accumulated reasoning on
 every frame. The shared Markdown renderer remains responsible for ANSI sanitization and Markdown
-semantics, including suppressing HTML comments.
+semantics. Rich renders HTML blocks literally, so the thinking-preview boundary removes complete
+top-level HTML comment blocks before constructing the Markdown renderable. It preserves comment
+syntax inside fenced code and preserves malformed or incomplete comments as readable streaming text.
 
 Incomplete streaming Markdown must fail safely as readable text; it must not raise out of the Live
 render loop. The final committed reasoning path remains unchanged because it already renders through
