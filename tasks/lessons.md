@@ -83,6 +83,12 @@ Format: trigger → rule.
   NOT `.claude/` config. Transcripts showing `~/.pythinker/sessions/` paths
   are pythinker runs; behavioral fixes belong in the product.
 
+## Typed policy boundaries
+
+- **When a deep module classifies trusted and untrusted contributions**, represent source lifecycle
+  (`provided` / `not_applicable` / `failed`) and trusted metadata permissions in the initial typed
+  contract; identifier-shape validation is sanitization, not source authorization.
+
 ## TUI prompt chrome
 
 - **When hiding the first-load editable input row to prevent ghost prompts**,

@@ -7,7 +7,21 @@ from typing import TYPE_CHECKING
 
 from pythinker_core.message import Message
 
-from pythinker_code.notifications import is_notification_message
+from pythinker_code.soul.request_assembly import (
+    FragmentBudgetClass,
+    FragmentPersistence,
+    FragmentRequirement,
+    FragmentStatus,
+    FragmentTruncation,
+    RequestFragment,
+    RequestSourceResult,
+    SourceApplicability,
+    SourceResultStatus,
+    TrustedSourcePolicy,
+    admit_source_results,
+)
+from pythinker_code.soul.request_primitives import estimate_injection_tokens
+from pythinker_code.soul.request_primitives import normalize_history as normalize_history
 
 if TYPE_CHECKING:
     from pythinker_code.soul.agent import Runtime
@@ -47,11 +61,6 @@ class ContextBudget:
         return max(0, min(self.injection_ceiling_tokens, available))
 
 
-def estimate_injection_tokens(text: str) -> int:
-    """Estimate dynamic-injection tokens using the project-wide len/4 heuristic."""
-    return max(1, len(text) // 4)
-
-
 def injection_budget_from_runtime(runtime: Runtime) -> ContextBudget:
     """Build a dynamic-injection budget from runtime model/config values."""
     llm = getattr(runtime, "llm", None)
@@ -78,29 +87,17 @@ def collect_within_budget(
     Oversize candidates are truncated at a line boundary when possible; otherwise they are
     dropped if no useful prefix fits. The input order is the tie-breaker for equal priorities.
     """
-    from pythinker_code.soul.request_assembly import (
-        FragmentPersistence,
-        FragmentRequirement,
-        FragmentStatus,
-        RequestFragment,
-        admit_fragments,
+    policies = tuple(
+        _legacy_source_policy(index, candidate) for index, candidate in enumerate(candidates)
     )
-
-    fragments = tuple(
-        RequestFragment(
-            key=f"legacy_{index}",
-            content=candidate.content,
-            source=f"legacy_{index}",
-            requirement=FragmentRequirement.BEST_EFFORT,
-            persistence=FragmentPersistence.HISTORY,
-            priority=candidate.priority,
-            truncatable=True,
-        )
-        for index, candidate in enumerate(candidates)
+    source_results = tuple(
+        _legacy_source_result(policy, candidate)
+        for policy, candidate in zip(policies, candidates, strict=True)
     )
-    source_order = tuple(fragment.source for fragment in fragments)
-    admissions = admit_fragments(fragments, max(0, budget_tokens), source_order)
-    candidates_by_key = {f"legacy_{index}": candidate for index, candidate in enumerate(candidates)}
+    admissions = admit_source_results(policies, source_results, max(0, budget_tokens))
+    candidates_by_key = {
+        f"legacy_{index:012d}": candidate for index, candidate in enumerate(candidates)
+    }
     return [
         replace(
             candidates_by_key[admission.fragment.key],
@@ -108,8 +105,43 @@ def collect_within_budget(
             token_estimate=admission.outcome.admitted_tokens,
         )
         for admission in admissions
-        if admission.outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
+        if admission.fragment is not None
+        and admission.outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
     ]
+
+
+def _legacy_source_policy(index: int, candidate: InjectionCandidate) -> TrustedSourcePolicy:
+    return TrustedSourcePolicy(
+        source="legacy_dynamic_injection",
+        key=f"legacy_{index:012d}",
+        requirement=FragmentRequirement.BEST_EFFORT,
+        persistence=FragmentPersistence.HISTORY,
+        priority=candidate.priority,
+        budget_class=FragmentBudgetClass.BUDGETED,
+        truncation=FragmentTruncation.ALLOWED,
+        applicability=SourceApplicability.ALWAYS,
+        failure_reason_codes=(),
+    )
+
+
+def _legacy_source_result(
+    policy: TrustedSourcePolicy, candidate: InjectionCandidate
+) -> RequestSourceResult:
+    return RequestSourceResult(
+        source=policy.source,
+        key=policy.key,
+        status=SourceResultStatus.PROVIDED,
+        fragment=RequestFragment(
+            key=policy.key,
+            content=candidate.content,
+            source=policy.source,
+            requirement=policy.requirement,
+            persistence=policy.persistence,
+            priority=policy.priority,
+            truncatable=True,
+        ),
+        reason_code=None,
+    )
 
 
 def dynamic_to_candidate(injection: DynamicInjection, *, priority: int = 100) -> InjectionCandidate:
@@ -167,32 +199,3 @@ class DynamicInjectionProvider(ABC):
         """
         _ = key
         return False
-
-
-def normalize_history(history: Sequence[Message]) -> list[Message]:
-    """Merge adjacent user messages to produce a clean API input sequence.
-
-    Dynamic injections are stored as standalone user messages in history;
-    normalization merges them into the adjacent user message.
-
-    Only ``user`` role messages are merged. Assistant and tool messages
-    are never merged because their ``tool_calls`` / ``tool_call_id``
-    fields form linked pairs that must stay intact.
-    """
-    if not history:
-        return []
-
-    result: list[Message] = []
-    for msg in history:
-        if (
-            result
-            and result[-1].role == msg.role
-            and msg.role == "user"
-            and not is_notification_message(result[-1])
-            and not is_notification_message(msg)
-        ):
-            merged_content = list(result[-1].content) + list(msg.content)
-            result[-1] = Message(role="user", content=merged_content)
-        else:
-            result.append(msg)
-    return result

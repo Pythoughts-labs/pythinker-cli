@@ -25,6 +25,16 @@ def test_collect_within_budget_orders_by_priority_and_caps():
     assert sum(item.token_estimate or 0 for item in out) <= 20
 
 
+def test_collect_within_budget_preserves_equal_priority_order_past_single_digits():
+    candidates = [
+        InjectionCandidate(type=f"candidate-{index}", content="x" * 4) for index in range(12)
+    ]
+
+    out = collect_within_budget(candidates, budget_tokens=20)
+
+    assert [candidate.type for candidate in out] == [candidate.type for candidate in candidates]
+
+
 def test_collect_within_budget_truncates_deterministically():
     out = collect_within_budget(
         [InjectionCandidate(type="x", content="alpha\nbeta\ngamma" * 100, priority=10)],
@@ -51,6 +61,18 @@ def test_collect_within_budget_recomputes_untrusted_candidate_estimate():
     assert len(out) == 1
     assert out[0].content.endswith("…")
     assert out[0].token_estimate == 5
+
+
+def test_failed_first_truncation_attempt_prevents_lower_candidate_truncation():
+    out = collect_within_budget(
+        [
+            InjectionCandidate(type="empty-prefix", content="\n" * 20, priority=20),
+            InjectionCandidate(type="lower", content="lower candidate" * 10, priority=10),
+        ],
+        budget_tokens=1,
+    )
+
+    assert out == []
 
 
 def test_context_budget_uses_ceiling_and_available_context():
