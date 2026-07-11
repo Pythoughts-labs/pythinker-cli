@@ -19,7 +19,7 @@ from pythinker_code.approval_runtime import ApprovalRuntime
 from pythinker_code.auth.oauth import OAuthManager
 from pythinker_code.background import BackgroundTaskManager
 from pythinker_code.config import Config
-from pythinker_code.exception import MCPConfigError, SystemPromptTemplateError
+from pythinker_code.exception import AgentSpecError, MCPConfigError, SystemPromptTemplateError
 from pythinker_code.llm import LLM
 from pythinker_code.lsp.service import LspService
 from pythinker_code.notifications import NotificationManager
@@ -36,11 +36,14 @@ from pythinker_code.soul.approval import Approval, ApprovalState
 from pythinker_code.soul.denwarenji import DenwaRenji
 from pythinker_code.soul.message import system_reminder
 from pythinker_code.soul.toolset import PythinkerToolset, ToolType
-from pythinker_code.subagents.discovery import (
-    discover_markdown_agents,
-    materialize_markdown_agent_specs,
-    resolve_agent_roots,
+from pythinker_code.subagents.catalogue import (
+    ResolvedAgentCatalogue,
+    ResolvedAgentEntry,
+    UnknownFieldPolicy,
+    normalize_agent_name,
+    resolve_agent_catalogue,
 )
+from pythinker_code.subagents.discovery import resolve_agent_roots
 from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.subagents.registry import LaborMarket
 from pythinker_code.subagents.store import SubagentStore
@@ -235,6 +238,7 @@ class Runtime:
     skills: Mapping[str, Skill]
     additional_dirs: list[HostPath]
     skills_dirs: list[HostPath]
+    agent_catalogue: ResolvedAgentCatalogue | None = None
     prompt_templates: dict[str, PromptTemplate] = field(default_factory=dict[str, PromptTemplate])
     mcp_tools: dict[str, ToolType] = field(default_factory=dict[str, ToolType])
     """Connected MCP tools, keyed `mcp__<server>__<tool>`, shared with subagent allowlists."""
@@ -484,6 +488,7 @@ class Runtime:
             # Share the same list reference so /add-dir mutations propagate to all agents
             additional_dirs=self.additional_dirs,
             skills_dirs=self.skills_dirs,
+            agent_catalogue=self.agent_catalogue,
             # Share the parent's connected MCP tools so allowlisted subagents can attach them
             mcp_tools=self.mcp_tools,
             subagent_store=self.subagent_store,
@@ -513,6 +518,106 @@ class Agent:
     top_p: float | None = None
 
 
+def agent_type_definitions(runtime: Runtime) -> Mapping[str, AgentTypeDefinition]:
+    """Return catalogue-projected definitions in their compatibility insertion order."""
+    labor_market = getattr(runtime, "labor_market", None)
+    compatibility_types = getattr(labor_market, "builtin_types", {}) or {}
+    return compatibility_types
+
+
+def get_agent_type_definition(runtime: Runtime, name: str) -> AgentTypeDefinition | None:
+    """Resolve an internal agent reader through the catalogue without changing LaborMarket."""
+    if runtime.agent_catalogue is not None:
+        entry = runtime.agent_catalogue.get(name)
+        if entry is not None:
+            return runtime.labor_market.get_builtin_type(entry.name)
+    return runtime.labor_market.get_builtin_type(name)
+
+
+def require_agent_type_definition(runtime: Runtime, name: str) -> AgentTypeDefinition:
+    type_def = get_agent_type_definition(runtime, name)
+    if type_def is None:
+        raise KeyError(f"Builtin subagent type not found: {name}")
+    return type_def
+
+
+def _project_agent_entry(entry: ResolvedAgentEntry) -> AgentTypeDefinition:
+    if entry.legacy_agent_file is None:
+        raise AgentSpecError(
+            f"Agent catalogue entry {entry.name!r} has no compatibility launch file"
+        )
+    launch_spec = entry.launch_spec
+    tool_policy = (
+        ToolPolicy(mode="allowlist", tools=tuple(launch_spec.allowed_tools))
+        if launch_spec.allowed_tools is not None
+        else ToolPolicy(mode="inherit")
+    )
+    return AgentTypeDefinition(
+        name=entry.name,
+        description=entry.description,
+        agent_file=entry.legacy_agent_file,
+        when_to_use=launch_spec.when_to_use,
+        default_model=launch_spec.model,
+        tool_policy=tool_policy,
+        supports_background=entry.supports_background,
+        required_mcp_servers=entry.required_mcp_servers,
+    )
+
+
+def _catalogue_entries_in_compatibility_order(
+    catalogue: ResolvedAgentCatalogue,
+    declared_subagents: tuple[str, ...],
+) -> tuple[ResolvedAgentEntry, ...]:
+    declared_normalized = {normalize_agent_name(name) for name in declared_subagents}
+    declared_entries = tuple(catalogue.require(name) for name in declared_subagents)
+    optional_entries = sorted(
+        (entry for entry in catalogue.values() if entry.normalized_name not in declared_normalized),
+        key=lambda entry: (entry.provenance.precedence, entry.provenance.source_id),
+    )
+    return (*declared_entries, *optional_entries)
+
+
+def _log_agent_catalogue_diagnostics(catalogue: ResolvedAgentCatalogue) -> None:
+    for diagnostic in catalogue.diagnostics:
+        logger.warning(
+            "Agent definition {severity}: {source_kind} {safe_path}; "
+            "reason={reason_code}; fields={field_path}",
+            severity=diagnostic.severity,
+            source_kind=diagnostic.source_kind,
+            safe_path=diagnostic.safe_path,
+            reason_code=diagnostic.reason_code,
+            field_path=diagnostic.field_path or "(none)",
+        )
+
+
+async def _publish_agent_catalogue(
+    agent_file: Path,
+    runtime: Runtime,
+    declared_subagents: tuple[str, ...],
+) -> None:
+    if runtime.agent_catalogue is not None:
+        return
+    materialized_dir = runtime.session.dir / "external_agents"
+    catalogue = await resolve_agent_catalogue(
+        agent_file=agent_file,
+        markdown_roots=await resolve_agent_roots(runtime.work_dir),
+        materialized_dir=materialized_dir,
+        available_models=set(runtime.config.models),
+        unknown_field_policy=UnknownFieldPolicy.WARN,
+    )
+    # The compatibility materializer historically created this directory even
+    # with no markdown sources; preserve the session layout during the rollout.
+    materialized_dir.mkdir(parents=True, exist_ok=True)
+    _log_agent_catalogue_diagnostics(catalogue)
+    projections = tuple(
+        _project_agent_entry(entry)
+        for entry in _catalogue_entries_in_compatibility_order(catalogue, declared_subagents)
+    )
+    for type_def in projections:
+        runtime.labor_market.add_builtin_type(type_def)
+    runtime.agent_catalogue = catalogue
+
+
 async def load_agent(
     agent_file: Path,
     runtime: Runtime,
@@ -536,50 +641,15 @@ async def load_agent(
     logger.info("Loading agent: {agent_file}", agent_file=agent_file)
     agent_spec = load_agent_spec(agent_file)
 
+    # Resolve and publish the immutable definition catalogue exactly once, before
+    # any tool reads the compatibility LaborMarket projection.
+    await _publish_agent_catalogue(agent_file, runtime, tuple(agent_spec.subagents))
+
     system_prompt = _load_system_prompt(
         agent_spec.system_prompt_path,
         agent_spec.system_prompt_args,
         runtime.builtin_args,
     )
-
-    # Register built-in subagent types before loading tools because some tools render
-    # descriptions from the labor market on initialization.
-    for subagent_name, subagent_spec in agent_spec.subagents.items():
-        logger.debug(
-            "Registering builtin subagent type: {subagent_name}", subagent_name=subagent_name
-        )
-        builtin_spec = load_agent_spec(subagent_spec.path)
-        tool_policy = (
-            ToolPolicy(mode="allowlist", tools=tuple(builtin_spec.allowed_tools))
-            if builtin_spec.allowed_tools is not None
-            else ToolPolicy(mode="inherit")
-        )
-        runtime.labor_market.add_builtin_type(
-            AgentTypeDefinition(
-                name=subagent_name,
-                description=subagent_spec.description,
-                agent_file=subagent_spec.path,
-                when_to_use=builtin_spec.when_to_use,
-                default_model=builtin_spec.model,
-                tool_policy=tool_policy,
-                supports_background=not builtin_spec.hidden,
-            )
-        )
-
-    external_agents = await discover_markdown_agents(await resolve_agent_roots(runtime.work_dir))
-    for type_def in materialize_markdown_agent_specs(
-        external_agents,
-        output_dir=runtime.session.dir / "external_agents",
-        available_models=set(runtime.config.models),
-    ):
-        if runtime.labor_market.get_builtin_type(type_def.name) is not None:
-            logger.warning(
-                "Skipping external markdown agent {name}: would override a built-in subagent type",
-                name=type_def.name,
-            )
-            continue
-        logger.debug("Registering external markdown agent type: {name}", name=type_def.name)
-        runtime.labor_market.add_builtin_type(type_def)
 
     toolset = PythinkerToolset(runtime)
     # Wire the live MCP startup state so the subagent-spawn gate can reject an agent whose

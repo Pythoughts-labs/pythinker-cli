@@ -59,6 +59,21 @@ Recognized frontmatter fields are `name`, `description`, `tools`, `model`, and
 warning. Discovered markdown agents appear as `Agent` tool subagent types alongside the
 built-in types.
 
+### Agent definition validation rollout
+
+Pythinker currently resolves YAML and repository markdown definitions into one agent catalogue.
+Unknown definition fields are accepted with one aggregated startup warning per source in this
+release. Warnings identify the field path but do not include field values, prompt content, or raw
+absolute source paths.
+
+The production policy will reject unknown fields in the immediately following minor release.
+Fix warnings before upgrading: required YAML definitions will then fail to load, while an invalid
+optional markdown definition will be skipped with a diagnostic. The existing `LaborMarket`
+compatibility interface and generated markdown YAML wrappers will remain for that strict-default
+release. Their earliest removal is one additional minor release later, and only after direct
+catalogue launch has equivalent prompt, model, tool-policy, required-MCP, foreground, and
+background behavior.
+
 ## Custom agent files
 
 Agents are defined in YAML format. Load a custom agent with the `--agent-file` flag:

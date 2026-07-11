@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field, field_validator
 from pythinker_core.tooling import CallableTool2, ToolError, ToolReturnValue
 
 from pythinker_code.execution_profiles import resolve_execution_policy
-from pythinker_code.soul.agent import Runtime
+from pythinker_code.soul.agent import (
+    Runtime,
+    agent_type_definitions,
+    get_agent_type_definition,
+    require_agent_type_definition,
+)
 from pythinker_code.soul.toolset import get_current_tool_call_or_none
 from pythinker_code.subagents.codenames import generate_codename, is_generic_agent_name
 from pythinker_code.subagents.models import AgentLaunchSpec, AgentTypeDefinition
@@ -98,7 +103,7 @@ def _emit_subagent_tool_fallback(
                 SubagentToolFallback(
                     reason=reason,
                     requested_type=requested_type,
-                    available_types=tuple(sorted(runtime.labor_market.builtin_types)),
+                    available_types=tuple(sorted(agent_type_definitions(runtime))),
                 )
             )
     except Exception as exc:  # noqa: BLE001 - observability must not break Agent tool errors
@@ -302,7 +307,7 @@ class AgentTool(CallableTool2[Params]):
     @staticmethod
     def _builtin_type_lines(runtime: Runtime) -> str:
         lines: list[str] = []
-        for name, type_def in runtime.labor_market.builtin_types.items():
+        for name, type_def in agent_type_definitions(runtime).items():
             tool_names = AgentTool._tool_summary(type_def)
             model = type_def.default_model or "inherit"
             suffix = (
@@ -364,7 +369,7 @@ class AgentTool(CallableTool2[Params]):
         type-validation path reports that), or MCP is still loading. Unconfigured/failed
         required servers once loading settles are surfaced so the model can self-correct.
         """
-        type_def = self._runtime.labor_market.get_builtin_type(requested_type)
+        type_def = get_agent_type_definition(self._runtime, requested_type)
         if type_def is None or not type_def.required_mcp_servers:
             return None
         snapshot = self._runtime.mcp_status() if self._runtime.mcp_status is not None else None
@@ -514,9 +519,9 @@ class AgentTool(CallableTool2[Params]):
             return ToolError(
                 message=(
                     f"{exc.args[0] if exc.args else exc}."
-                    f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                    f"{_did_you_mean(requested_type, agent_type_definitions(self._runtime))}"
                     f" Available types: "
-                    f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
+                    f"{', '.join(sorted(agent_type_definitions(self._runtime)))}."
                 ),
                 brief="Invalid subagent type",
             )
@@ -563,7 +568,7 @@ class AgentTool(CallableTool2[Params]):
                 # the instance was created.  params.model is already validated in
                 # __call__, so only check the stored effective_model fallback here.
                 if params.model is None:
-                    type_def = self._runtime.labor_market.require_builtin_type(actual_type)
+                    type_def = require_agent_type_definition(self._runtime, actual_type)
                     effective = record.launch_spec.effective_model or type_def.default_model
                     if effective is not None and effective not in self._runtime.config.models:
                         return ToolError(
@@ -579,7 +584,7 @@ class AgentTool(CallableTool2[Params]):
 
             created_instance = False
             if not params.resume:
-                type_def = self._runtime.labor_market.require_builtin_type(actual_type)
+                type_def = require_agent_type_definition(self._runtime, actual_type)
                 self._runtime.subagent_store.create_instance(
                     agent_id=agent_id,
                     description=params.description.strip(),
@@ -684,9 +689,9 @@ class AgentTool(CallableTool2[Params]):
             return ToolError(
                 message=(
                     f"{exc.args[0] if exc.args else exc}."
-                    f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                    f"{_did_you_mean(requested_type, agent_type_definitions(self._runtime))}"
                     f" Available types: "
-                    f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
+                    f"{', '.join(sorted(agent_type_definitions(self._runtime)))}."
                 ),
                 brief="Invalid subagent type",
             )
@@ -862,14 +867,14 @@ class RunAgentsTool(CallableTool2[RunAgentsParams]):
             # discovering it mid-loop leaves earlier children running, and a
             # corrected retry then double-launches them (the orchestration
             # fingerprint is already approved by that point).
-            if self._runtime.labor_market.get_builtin_type(requested_type) is None:
+            if get_agent_type_definition(self._runtime, requested_type) is None:
                 return ToolError(
                     message=(
                         f"Unknown subagent type {requested_type!r} for agent "
                         f"{child.name!r}."
-                        f"{_did_you_mean(requested_type, self._runtime.labor_market.builtin_types)}"
+                        f"{_did_you_mean(requested_type, agent_type_definitions(self._runtime))}"
                         f" Available types: "
-                        f"{', '.join(sorted(self._runtime.labor_market.builtin_types))}."
+                        f"{', '.join(sorted(agent_type_definitions(self._runtime)))}."
                     ),
                     brief="Invalid subagent type",
                 )
@@ -1396,7 +1401,7 @@ class ImplementAndJudgeTool(CallableTool2[ImplementAndJudgeParams]):
                 brief="ImplementAndJudge unavailable",
             )
         for subagent_type in ("implementer", "judge"):
-            if self._runtime.labor_market.get_builtin_type(subagent_type) is None:
+            if get_agent_type_definition(self._runtime, subagent_type) is None:
                 return ToolError(
                     message=(
                         f"Subagent type {subagent_type!r} is not registered. "
