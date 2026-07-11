@@ -269,9 +269,9 @@ def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[tuple[str, ...], b
     for key in cast("dict[object, object]", data):
         if isinstance(key, str) and key in {"version", "agent"}:
             continue
-        segment, is_unsafe = render_agent_field_segment(key)
-        unknown.append(segment)
-        has_invalid_key = has_invalid_key or is_unsafe
+        rendered = render_agent_field_segment(key)
+        unknown.append(rendered.text)
+        has_invalid_key = has_invalid_key or rendered.structurally_invalid
     raw_agent = data.get("agent")
     if not isinstance(raw_agent, dict):
         return tuple(sorted(unknown)), has_invalid_key
@@ -280,25 +280,25 @@ def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[tuple[str, ...], b
     for key in cast("dict[object, object]", agent):
         if isinstance(key, str) and key in known_agent_fields:
             continue
-        segment, is_unsafe = render_agent_field_segment(key)
-        unknown.append(f"agent.{segment}")
-        has_invalid_key = has_invalid_key or is_unsafe
+        rendered = render_agent_field_segment(key)
+        unknown.append(f"agent.{rendered.text}")
+        has_invalid_key = has_invalid_key or rendered.structurally_invalid
     raw_subagents = agent.get("subagents")
     if isinstance(raw_subagents, dict):
         known_subagent_fields = set(SubagentSpec.model_fields)
         for name, raw_subagent in cast("dict[object, object]", raw_subagents).items():
-            name_segment, unsafe_name = render_agent_field_segment(name)
-            has_invalid_key = has_invalid_key or unsafe_name
-            if unsafe_name:
-                unknown.append(f"agent.subagents.{name_segment}")
+            rendered_name = render_agent_field_segment(name)
+            has_invalid_key = has_invalid_key or rendered_name.structurally_invalid
+            if rendered_name.structurally_invalid:
+                unknown.append(f"agent.subagents.{rendered_name.text}")
             if not isinstance(raw_subagent, dict):
                 continue
             for key in cast("dict[object, object]", raw_subagent):
                 if isinstance(key, str) and key in known_subagent_fields:
                     continue
-                segment, is_unsafe = render_agent_field_segment(key)
-                unknown.append(f"agent.subagents.{name_segment}.{segment}")
-                has_invalid_key = has_invalid_key or is_unsafe
+                rendered = render_agent_field_segment(key)
+                unknown.append(f"agent.subagents.{rendered_name.text}.{rendered.text}")
+                has_invalid_key = has_invalid_key or rendered.structurally_invalid
     return tuple(sorted(unknown)), has_invalid_key
 
 
@@ -317,16 +317,33 @@ _SENSITIVE_FIELD_HINTS = (
 )
 
 
-def render_agent_field_segment(value: object) -> tuple[str, bool]:
-    """Return a stable diagnostic segment and whether the raw key is unsafe."""
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentFieldSegment:
+    text: str
+    redacted_for_safety: bool
+    structurally_invalid: bool
+
+
+def render_agent_field_segment(value: object) -> AgentFieldSegment:
+    """Render a stable field segment without conflating redaction and validity."""
     if isinstance(value, str):
         lowered = value.casefold()
         if _FIELD_IDENTIFIER_RE.fullmatch(value) and not any(
             hint in lowered for hint in _SENSITIVE_FIELD_HINTS
         ):
-            return value, False
+            return AgentFieldSegment(
+                text=value,
+                redacted_for_safety=False,
+                structurally_invalid=False,
+            )
         digest_input = f"str:{value}"
+        structurally_invalid = _FIELD_IDENTIFIER_RE.fullmatch(value) is None
     else:
         digest_input = f"{type(value).__qualname__}:{value!r}"
+        structurally_invalid = True
     digest = hashlib.sha256(digest_input.encode(encoding="utf-8")).hexdigest()[:12]
-    return f"field[{digest}]", True
+    return AgentFieldSegment(
+        text=f"field[{digest}]",
+        redacted_for_safety=True,
+        structurally_invalid=structurally_invalid,
+    )

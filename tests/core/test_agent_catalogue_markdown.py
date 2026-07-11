@@ -313,6 +313,36 @@ async def test_unsafe_markdown_keys_are_isolated_without_raw_key_or_value(
 
 
 @pytest.mark.asyncio
+async def test_markdown_warn_redacts_sensitive_string_unknown_fields_and_loads_entry(
+    tmp_path: Path,
+) -> None:
+    agents = _markdown_root(tmp_path / "agents")
+    (Path(str(agents.root)) / "worker.md").write_text(
+        "---\n"
+        "name: worker\n"
+        "description: worker\n"
+        "auth_strategy: ignored\n"
+        "MY_SECRET_TOKEN: do-not-leak\n"
+        "---\nBody",
+        encoding="utf-8",
+    )
+
+    catalogue = await resolve_agent_catalogue(
+        agent_file=_root_agent(tmp_path),
+        markdown_roots=(agents,),
+        materialized_dir=tmp_path / "generated",
+        unknown_field_policy=UnknownFieldPolicy.WARN,
+    )
+
+    assert [entry.name for entry in catalogue.values()] == ["worker"]
+    rendered = repr(catalogue.diagnostics)
+    assert "auth_strategy" not in rendered
+    assert "MY_SECRET_TOKEN" not in rendered
+    assert "do-not-leak" not in rendered
+    assert "field[" in rendered
+
+
+@pytest.mark.asyncio
 async def test_canonical_markdown_source_is_deduplicated_across_roots(tmp_path: Path) -> None:
     agents = _markdown_root(tmp_path / "agents")
     _write_markdown(Path(str(agents.root)) / "worker.md", name="worker", description="worker")

@@ -211,6 +211,36 @@ async def test_yaml_rejects_heterogeneous_and_secret_shaped_keys_without_leaking
 
 
 @pytest.mark.asyncio
+async def test_yaml_warn_redacts_sensitive_string_unknown_fields_and_loads_entry(
+    tmp_path: Path,
+) -> None:
+    child = tmp_path / "child.yaml"
+    _write_child(
+        child,
+        extra="  auth_strategy: ignored\n  MY_SECRET_TOKEN: do-not-leak\n",
+    )
+    root = tmp_path / "root.yaml"
+    _write_root_with_subagents(
+        root,
+        "    worker:\n      path: ./child.yaml\n      description: worker\n",
+    )
+
+    catalogue = await resolve_agent_catalogue(
+        agent_file=root,
+        markdown_roots=(),
+        materialized_dir=tmp_path / "generated",
+        unknown_field_policy=UnknownFieldPolicy.WARN,
+    )
+
+    assert [entry.name for entry in catalogue.values()] == ["worker"]
+    rendered = repr(catalogue.diagnostics)
+    assert "auth_strategy" not in rendered
+    assert "MY_SECRET_TOKEN" not in rendered
+    assert "do-not-leak" not in rendered
+    assert "field[" in rendered
+
+
+@pytest.mark.asyncio
 async def test_same_basename_yaml_sources_have_unique_safe_identifiers(tmp_path: Path) -> None:
     first = tmp_path / "one" / "child.yaml"
     second = tmp_path / "two" / "child.yaml"

@@ -235,9 +235,9 @@ def _resolve_markdown_source(
         for key in cast("dict[object, object]", frontmatter):
             if isinstance(key, str) and key in _MARKDOWN_FIELDS:
                 continue
-            segment, is_unsafe = render_agent_field_segment(key)
-            unknown_fields.append(segment)
-            has_invalid_key = has_invalid_key or is_unsafe
+            rendered = render_agent_field_segment(key)
+            unknown_fields.append(rendered.text)
+            has_invalid_key = has_invalid_key or rendered.structurally_invalid
         unknown_fields.sort()
         if unknown_fields:
             diagnostics.append(
