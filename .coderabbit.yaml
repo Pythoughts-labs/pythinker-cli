@@ -48,7 +48,6 @@ reviews:
   path_filters:
     - "!dist/**"
     - "!build/**"
-    - "!graphify-out/**"
     - "!**/*.pyc"
     - "!**/__pycache__/**"
     # Prose and working-notes paths: keeps bot reviews focused on shipped
