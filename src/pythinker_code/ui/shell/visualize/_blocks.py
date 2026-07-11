@@ -562,10 +562,11 @@ def _tail_lines(text: str, n: int) -> str:
     return text[pos + 1 :]
 
 
-_COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--.*?-->[ \t]*(?=\r?$)")
+_COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--(?:(?!-->).)*?-->[ \t]*(?=\r?$)")
 
 
 def _render_thinking_preview(preview: str) -> RenderableType | None:
+    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
     segments: list[str] = []
     unfenced: list[str] = []
 
