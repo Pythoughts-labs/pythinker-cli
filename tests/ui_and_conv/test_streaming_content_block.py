@@ -669,6 +669,56 @@ class TestShowThinkingStream:
         assert "Thinking" in plain
         assert "tokens" in plain
 
+    def test_stream_mode_reuses_rendered_preview_across_ticks(self, monkeypatch):
+        """The markdown render runs once per preview change, not per Live tick.
+
+        The Live area refreshes on the spinner's own animation cadence with no new
+        content; ``_render_thinking_preview`` (regex + markdown parse) must be
+        served from cache on those ticks and only recomputed when pending changes.
+        """
+        from pythinker_code.ui.shell.visualize import _blocks
+
+        calls: list[str] = []
+        original = _blocks._render_thinking_preview
+
+        def counting(preview: str):
+            calls.append(preview)
+            return original(preview)
+
+        monkeypatch.setattr(_blocks, "_render_thinking_preview", counting)
+
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**first reasoning line**")
+        block.compose()
+        block.compose()  # unchanged pending -> served from cache
+        assert len(calls) == 1
+
+        block.append("\n**second reasoning line**")
+        block.compose()  # pending changed -> recompute
+        assert len(calls) == 2
+
+    def test_stream_mode_cached_preview_matches_uncached_render(self, monkeypatch):
+        """Caching is behavior-preserving: composed output is byte-identical to a
+        fresh (uncached) render of the same reasoning content across ticks."""
+        from pythinker_code.ui.shell.visualize import _blocks
+
+        # Freeze the clock so the elapsed/token-rate status line is identical
+        # across both compose() calls — the comparison targets the cached preview,
+        # not wall-clock timing.
+        monkeypatch.setattr(_blocks.time, "monotonic", lambda: 100.0)
+
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Preparing report generation**")
+
+        first = Console(record=True, width=120, color_system=None)
+        first.print(block.compose())
+        second = Console(record=True, width=120, color_system=None)
+        second.print(block.compose())  # cache hit
+        first_text = first.export_text()
+        assert first_text == second.export_text()
+        assert "Preparing report generation" in first_text
+        assert block._thinking_render_cache_key is not None
+
     def test_compact_mode_compose_final_returns_trace_line(self):
         from rich.text import Text
 
