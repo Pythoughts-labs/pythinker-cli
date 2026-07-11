@@ -41,10 +41,16 @@ from pythinker_code.notifications import (
     NotificationView,
     build_notification_message,
     extract_notification_ids,
+    is_notification_message,
 )
 from pythinker_code.prompt_templates import PromptTemplate, expand_prompt_template
 from pythinker_code.prompts import BUDGET_CONTINUATION_NUDGE
 from pythinker_code.skill import Skill, read_skill_text_with_local_specialization
+from pythinker_code.skill.catalog import (
+    SkillProjectionOutcome,
+    SkillProjectionStatus,
+    render_skill_prompt_view,
+)
 from pythinker_code.soul import (
     LLMNotSet,
     LLMNotSupported,
@@ -54,6 +60,7 @@ from pythinker_code.soul import (
     wire_send,
 )
 from pythinker_code.soul.agent import (
+    SKILL_PROMPT_MAX_CHARACTERS,
     Agent,
     BuiltinSystemPromptArgs,
     Runtime,
@@ -102,6 +109,7 @@ from pythinker_code.soul.flow_runner import FLOW_COMMAND_PREFIX, FlowRunner
 from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.soul.message import (
     check_message,
+    is_system_reminder_message,
     system,
     system_reminder,
     tool_result_to_message,
@@ -154,6 +162,7 @@ if TYPE_CHECKING:
 
 
 SKILL_COMMAND_PREFIX = "skill:"
+_EXPLICIT_SKILL_RE = re.compile(r"(?:\$|/skill:)([\w.-]+)", re.IGNORECASE)
 
 
 def _safe_cwd(fallback: str) -> str:
@@ -166,6 +175,24 @@ def _safe_cwd(fallback: str) -> str:
         return str(Path.cwd())
     except FileNotFoundError:
         return str(fallback)
+
+
+def _explicit_skill_names(task: str) -> tuple[str, ...]:
+    """Return explicit skill mentions in left-to-right message order."""
+    return tuple(match.group(1) for match in _EXPLICIT_SKILL_RE.finditer(task))
+
+
+def _latest_real_user_text(history: Sequence[Message]) -> str | None:
+    """Return the latest user task, excluding injected and notification messages."""
+    for message in reversed(history):
+        if message.role != "user":
+            continue
+        if is_notification_message(message) or is_system_reminder_message(message):
+            continue
+        text = message.extract_text(" ").strip()
+        if text:
+            return text
+    return None
 
 
 def classify_llm_system(chat_provider: object | None) -> str:
@@ -532,6 +559,7 @@ class PythinkerSoul:
         self._deliberation_generation = 0
         self._sleep_inhibitor = SleepInhibitor(enabled=agent.runtime.config.prevent_idle_sleep)
         self._compaction = SimpleCompaction(base_prompt=self._runtime.config.compact_prompt)
+        self.latest_skill_projection_outcome: SkillProjectionOutcome | None = None
 
         for tool in agent.toolset.tools:
             if tool.name == SendDMail_NAME:
@@ -1807,6 +1835,33 @@ class PythinkerSoul:
             # Consume any pending steers between steps
             await self._consume_pending_steers()
 
+    def _with_skill_candidates(self, history: Sequence[Message]) -> list[Message]:
+        """Append one bounded, request-only candidate reminder when relevant."""
+        task = _latest_real_user_text(self._context.history)
+        if task is None:
+            self.latest_skill_projection_outcome = None
+            return list(history)
+        outcome = self._runtime.skill_catalog.prompt_view(
+            task,
+            max_characters=SKILL_PROMPT_MAX_CHARACTERS - len(system_reminder("").text),
+            explicit_names=_explicit_skill_names(task),
+            active_names=self._runtime.session.state.active_skills,
+        )
+        self.latest_skill_projection_outcome = outcome
+        if outcome.status is not SkillProjectionStatus.READY:
+            logger.warning(
+                "Skill candidate projection status={status} reason={reason}",
+                status=outcome.status.value,
+                reason=outcome.reason_code or "none",
+            )
+        if outcome.view is None or not outcome.view.matches:
+            return list(history)
+        candidate = Message(
+            role="user",
+            content=[system_reminder(render_skill_prompt_view(outcome.view))],
+        )
+        return normalize_history([*history, candidate])
+
     async def _step(self) -> StepOutcome | None:
         """Run a single step and return a stop outcome, or None to continue."""
         # already checked in `run`
@@ -1871,6 +1926,7 @@ class PythinkerSoul:
         effective_history = normalize_history(
             _with_agents_md_preamble(self._context.history, self._runtime.builtin_args)
         )
+        effective_history = self._with_skill_candidates(effective_history)
 
         # Capture tool results as they stream in. If the batch is interrupted
         # mid-flight, already-completed calls must keep their real output rather

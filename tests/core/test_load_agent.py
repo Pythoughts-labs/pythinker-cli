@@ -78,6 +78,24 @@ async def test_render_agent_system_prompt_builds_args_without_runtime(
     assert "${PYTHINKER_" not in prompt
 
 
+@pytest.mark.asyncio
+async def test_system_prompt_skill_policy_is_static_and_omits_catalogue_paths(
+    temp_work_dir: HostPath,
+    config: Config,
+) -> None:
+    from pythinker_code.agentspec import DEFAULT_AGENT_FILE
+    from pythinker_code.soul.agent import render_agent_system_prompt
+
+    first = await render_agent_system_prompt(DEFAULT_AGENT_FILE, temp_work_dir, config)
+    second = await render_agent_system_prompt(DEFAULT_AGENT_FILE, temp_work_dir, config)
+
+    first_skills = first.split("## 12. Skills", 1)[1]
+    second_skills = second.split("## 12. Skills", 1)[1]
+    assert first_skills == second_skills
+    assert "Task-relevant skill candidates arrive with each request" in first_skills
+    assert "Path:" not in first_skills
+
+
 def test_render_agents_md_reminder_present(builtin_args: BuiltinSystemPromptArgs):
     """The merged AGENTS.md renders as an authoritative, fenced <system-reminder> body.
 

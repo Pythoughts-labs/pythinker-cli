@@ -35,26 +35,37 @@ class ReadSkillTool(CallableTool2[Params]):
             return ToolError(message="Skill name is required.", brief="Missing skill name")
 
         lookup_keys = skill_lookup_keys(skill_name)
-        skill = None
-        for key in lookup_keys:
-            skill = self._runtime.skills.get(key)
-            if skill is not None:
-                break
+        skill = self._runtime.skill_catalog.resolve(skill_name)
+        if skill is None:
+            for key in lookup_keys:
+                skill = self._runtime.skills.get(key)
+                if skill is not None:
+                    break
 
         mcp_match = find_mcp_server_for_skill_name(skill_name, self._runtime.mcp_tools)
 
         if skill is None:
+            diagnostic = self._runtime.skill_catalog.unavailable_diagnostic(skill_name)
+            if diagnostic is not None:
+                return ToolError(
+                    message=(
+                        f"status: unavailable\nSkill unavailable: {skill_name}. "
+                        f"{diagnostic.safe_reason}"
+                    ),
+                    brief="Skill unavailable",
+                )
             if mcp_match is not None:
                 server, tools = mcp_match
                 content = mcp_skill_bridge_content(server, tools)
                 return ToolReturnValue(
                     is_error=False,
-                    output=f"skill: {server} (MCP bridge)\n\n{content}",
+                    output=f"status: mcp_fallback\nskill: {server} (MCP bridge)\n\n{content}",
                     message=f"Resolved {skill_name} to MCP server {server}.",
                     display=[],
                 )
 
-            available = ", ".join(sorted(s.name for s in self._runtime.skills.values())) or "(none)"
+            suggestions = self._runtime.skill_catalog.search(skill_name, limit=5)
+            suggestion_text = ", ".join(match.skill.name for match in suggestions) or "(none)"
             mcp_hint = ""
             if mcp_match is None and self._runtime.mcp_tools:
                 servers = sorted(
@@ -68,7 +79,8 @@ class ReadSkillTool(CallableTool2[Params]):
                     mcp_hint = f" Connected MCP servers: {', '.join(servers)}."
             return ToolError(
                 message=(
-                    f"Skill not found: {skill_name}. Available skills: {available}.{mcp_hint}"
+                    f"status: not_found\nSkill not found: {skill_name}. "
+                    f"Suggestions: {suggestion_text}.{mcp_hint}"
                 ),
                 brief="Skill not found",
             )

@@ -984,3 +984,18 @@ def _is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
 from pythinker_code.skill.catalog import (  # noqa: E402
     SkillCatalog as SkillCatalog,
 )
+from pythinker_code.skill.catalog import (  # noqa: E402
+    SkillMatch as SkillMatch,
+)
+from pythinker_code.skill.catalog import (  # noqa: E402
+    SkillProjectionOutcome as SkillProjectionOutcome,
+)
+from pythinker_code.skill.catalog import (  # noqa: E402
+    SkillProjectionStatus as SkillProjectionStatus,
+)
+from pythinker_code.skill.catalog import (  # noqa: E402
+    SkillPromptView as SkillPromptView,
+)
+from pythinker_code.skill.catalog import (  # noqa: E402
+    render_skill_prompt_view as render_skill_prompt_view,
+)

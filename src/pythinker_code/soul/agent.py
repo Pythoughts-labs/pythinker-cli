@@ -27,10 +27,9 @@ from pythinker_code.prompt_templates import PromptTemplate, discover_prompt_temp
 from pythinker_code.scratchpad import DEFAULT_SCRATCHPAD_SECTION
 from pythinker_code.session import Session
 from pythinker_code.skill import (
+    ScopedSkillsRoot,
     Skill,
-    discover_skills_from_roots,
-    format_skills_for_prompt,
-    index_skills,
+    SkillCatalog,
     resolve_skills_roots,
 )
 from pythinker_code.soul.approval import Approval, ApprovalState
@@ -87,6 +86,7 @@ class BuiltinSystemPromptArgs:
 
 
 _AGENTS_MD_MAX_BYTES = 32 * 1024  # 32 KiB
+SKILL_PROMPT_MAX_CHARACTERS = 8_000
 
 
 def _agents_md_fence(content: str) -> str:
@@ -231,6 +231,7 @@ class Runtime:
     environment: Environment
     notifications: NotificationManager
     background_tasks: BackgroundTaskManager
+    skill_catalog: SkillCatalog
     skills: dict[str, Skill]
     additional_dirs: list[HostPath]
     skills_dirs: list[HostPath]
@@ -298,19 +299,13 @@ class Runtime:
             Environment.detect(),
         )
 
-        # Discover and format skills (grouped by scope for the system prompt).
-        scoped_roots = await resolve_skills_roots(
-            session.work_dir,
-            skills_dirs=skills_dirs,
-            merge_brands=config.merge_all_available_skills,
-            extra_skill_dirs=config.extra_skill_dirs or None,
+        skill_catalog, scoped_roots = await discover_runtime_skill_catalog(
+            session.work_dir, config, skills_dirs=skills_dirs
         )
         # Canonicalize so symlinked skill directories match resolved paths
         skills_roots_canonical = [s.root.canonical() for s in scoped_roots]
-        skills = await discover_skills_from_roots(scoped_roots)
-        skills_by_name = index_skills(skills)
-        logger.info("Discovered {count} skill(s)", count=len(skills))
-        skills_formatted = format_skills_for_prompt(skills)
+        skills_by_name = dict(skill_catalog.exhaustive_mapping())
+        logger.info("Discovered {count} skill(s)", count=len(skills_by_name))
 
         prompt_templates = await discover_prompt_templates(session.work_dir)
         logger.info("Discovered {count} prompt template(s)", count=len(prompt_templates))
@@ -402,7 +397,7 @@ class Runtime:
                 PYTHINKER_WORK_DIR_LS=ls_output,
                 PYTHINKER_AGENTS_MD=agents_md or "",
                 PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
-                PYTHINKER_SKILLS=skills_formatted or "No skills found.",
+                PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),
                 PYTHINKER_ADDITIONAL_DIRS_INFO=additional_dirs_info,
                 PYTHINKER_OS=environment.os_kind,
                 PYTHINKER_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
@@ -418,6 +413,7 @@ class Runtime:
                 config.background,
                 notifications=notifications,
             ),
+            skill_catalog=skill_catalog,
             skills=skills_by_name,
             prompt_templates=prompt_templates,
             additional_dirs=additional_dirs,
@@ -482,6 +478,7 @@ class Runtime:
             environment=self.environment,
             notifications=self.notifications,
             background_tasks=self.background_tasks.copy_for_role("subagent"),
+            skill_catalog=self.skill_catalog,
             skills=self.skills,
             prompt_templates=self.prompt_templates,
             # Share the same list reference so /add-dir mutations propagate to all agents
@@ -726,23 +723,45 @@ async def build_builtin_system_prompt_args(
         load_agents_md(work_dir),
         Environment.detect(),
     )
-    scoped_roots = await resolve_skills_roots(
-        work_dir,
-        merge_brands=config.merge_all_available_skills,
-        extra_skill_dirs=config.extra_skill_dirs or None,
-    )
-    skills_formatted = format_skills_for_prompt(await discover_skills_from_roots(scoped_roots))
+    skill_catalog, _ = await discover_runtime_skill_catalog(work_dir, config)
     return BuiltinSystemPromptArgs(
         PYTHINKER_NOW=datetime.now().astimezone().isoformat(),
         PYTHINKER_WORK_DIR=work_dir,
         PYTHINKER_WORK_DIR_LS=ls_output,
         PYTHINKER_AGENTS_MD=agents_md or "",
         PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
-        PYTHINKER_SKILLS=skills_formatted or "No skills found.",
+        PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),
         PYTHINKER_ADDITIONAL_DIRS_INFO="",
         PYTHINKER_OS=environment.os_kind,
         PYTHINKER_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
         PYTHINKER_SCRATCHPAD_SECTION=scratchpad_section or DEFAULT_SCRATCHPAD_SECTION,
+    )
+
+
+async def discover_runtime_skill_catalog(
+    work_dir: HostPath,
+    config: Config,
+    *,
+    skills_dirs: list[HostPath] | None = None,
+) -> tuple[SkillCatalog, list[ScopedSkillsRoot]]:
+    """Construct the catalogue used by runtime creation and prompt inspection."""
+    scoped_roots = await resolve_skills_roots(
+        work_dir,
+        skills_dirs=skills_dirs,
+        merge_brands=config.merge_all_available_skills,
+        extra_skill_dirs=config.extra_skill_dirs or None,
+    )
+    return await SkillCatalog.discover(scoped_roots), scoped_roots
+
+
+def format_skill_catalog_policy(catalog: SkillCatalog) -> str:
+    """Render stable catalogue metadata without task-dependent candidates."""
+    count = len(catalog.exhaustive_mapping())
+    return (
+        "Task-relevant skill candidates arrive with each request. "
+        f"The catalogue contains {count} skill(s); candidate rendering is capped at "
+        f"{SKILL_PROMPT_MAX_CHARACTERS} characters. Exact names remain available through "
+        "ReadSkill even when omitted from a candidate view."
     )
 
 

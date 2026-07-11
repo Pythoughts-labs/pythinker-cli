@@ -243,6 +243,8 @@ def runtime(
     environment: Environment,
 ) -> Runtime:
     """Create a Runtime instance."""
+    from pythinker_code.skill import SkillCatalog
+
     notifications = NotificationManager(
         session.context_file.parent / "notifications", config.notifications
     )
@@ -261,6 +263,7 @@ def runtime(
             config.background,
             notifications=notifications,
         ),
+        skill_catalog=SkillCatalog({}, ()),
         skills={},
         oauth=OAuthManager(config),
         additional_dirs=[],

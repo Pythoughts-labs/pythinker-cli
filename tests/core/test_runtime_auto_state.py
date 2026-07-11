@@ -10,6 +10,7 @@ import pytest
 
 import pythinker_code.soul.agent as agent_module
 from pythinker_code.auth.oauth import OAuthManager
+from pythinker_code.skill import SkillCatalog
 from pythinker_code.soul.agent import Runtime
 from pythinker_code.wire.types import ToolCall
 
@@ -26,10 +27,11 @@ def lightweight_runtime_create(monkeypatch: pytest.MonkeyPatch, environment) -> 
     monkeypatch.setattr(agent_module, "list_directory", AsyncMock(return_value=""))
     monkeypatch.setattr(agent_module, "load_agents_md", AsyncMock(return_value=None))
     monkeypatch.setattr(agent_module.Environment, "detect", AsyncMock(return_value=environment))
-    monkeypatch.setattr(agent_module, "resolve_skills_roots", AsyncMock(return_value=[]))
-    monkeypatch.setattr(agent_module, "discover_skills_from_roots", AsyncMock(return_value=[]))
-    monkeypatch.setattr(agent_module, "index_skills", lambda _skills: {})
-    monkeypatch.setattr(agent_module, "format_skills_for_prompt", lambda _skills: None)
+    monkeypatch.setattr(
+        agent_module,
+        "discover_runtime_skill_catalog",
+        AsyncMock(return_value=(SkillCatalog({}, ()), [])),
+    )
 
 
 @pytest.mark.asyncio

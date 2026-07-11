@@ -6,7 +6,12 @@ import pytest
 from pythinker_host.path import HostPath
 
 import pythinker_code.skill as skill_module
-from pythinker_code.skill import Skill, read_skill_text_with_local_specialization
+from pythinker_code.skill import (
+    ScopedSkillsRoot,
+    Skill,
+    SkillCatalog,
+    read_skill_text_with_local_specialization,
+)
 from pythinker_code.tools.skill import ReadSkill
 
 
@@ -52,6 +57,51 @@ async def test_read_skill_reports_missing_skill(runtime) -> None:
 
     assert result.is_error
     assert result.brief == "Skill not found"
+    assert "status: not_found" in result.message
+
+
+async def test_read_skill_missing_name_returns_only_bounded_suggestions(
+    runtime, tmp_path: Path
+) -> None:
+    runtime.skills = {
+        f"deploy-{index}": _skill(f"deploy-{index}", tmp_path / f"deploy-{index}.md")
+        for index in range(20)
+    }
+    runtime.skill_catalog = SkillCatalog(runtime.skills, ())
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="deploy"))
+
+    assert result.is_error
+    assert result.message.count("deploy-") <= 5
+    assert "deploy-19" not in result.message
+
+
+async def test_read_skill_distinguishes_unavailable_discovered_source(
+    runtime, tmp_path: Path
+) -> None:
+    root = tmp_path / "skills"
+    broken = root / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\ntype: unsupported\n---\n",
+        encoding="utf-8",
+    )
+    runtime.skill_catalog = await SkillCatalog.discover(
+        [
+            ScopedSkillsRoot(
+                root=HostPath.unsafe_from_local_path(root),
+                scope="project",
+            )
+        ]
+    )
+    runtime.skills = dict(runtime.skill_catalog.exhaustive_mapping())
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="broken"))
+
+    assert result.is_error
+    assert result.brief == "Skill unavailable"
+    assert "status: unavailable" in result.message
+    assert str(tmp_path) not in result.message
 
 
 async def test_read_skill_resolves_plugin_style_alias(runtime, tmp_path: Path) -> None:
@@ -84,6 +134,7 @@ async def test_read_skill_mcp_bridge_when_filesystem_skill_missing(runtime) -> N
     assert not result.is_error
     assert isinstance(result.output, str)
     assert "MCP bridge" in result.output
+    assert "status: mcp_fallback" in result.output
     assert "mcp__designer-skill__get_design_system" in result.output
     assert "anti_slop_checklist" in result.output
 
