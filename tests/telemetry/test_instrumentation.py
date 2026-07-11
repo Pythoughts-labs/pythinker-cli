@@ -900,6 +900,7 @@ class TestCompactionTracking:
 
         soul._injection_providers = []
         soul._request_lifecycle = RequestLifecycle([])
+        soul._notified_context_generations = set()
         return soul
 
     @pytest.mark.asyncio

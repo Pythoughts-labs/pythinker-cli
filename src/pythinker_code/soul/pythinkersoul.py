@@ -84,7 +84,13 @@ from pythinker_code.soul.compaction_restore import (
     build_hook_context_message,
     compact_summary_text,
 )
-from pythinker_code.soul.context import Context, ContextReplacement
+from pythinker_code.soul.context import (
+    Context,
+    ContextCommit,
+    ContextCommittedCancellation,
+    ContextPersistenceError,
+    ContextReplacement,
+)
 from pythinker_code.soul.dynamic_injection import (
     DynamicInjectionProvider,
     injection_budget_from_runtime,
@@ -667,6 +673,7 @@ class PythinkerSoul:
             ),
         ]
         self._request_lifecycle = RequestLifecycle(self._injection_providers)
+        self._notified_context_generations: set[int] = set()
         self._hook_engine: HookEngine = HookEngine()
         self._stop_hook_active: bool = False
         if self._runtime.role == "root":
@@ -797,6 +804,19 @@ class PythinkerSoul:
             for provider in self._injection_providers:
                 try:
                     await provider.on_context_compacted()
+                except asyncio.CancelledError as exc:
+                    from pythinker_code.telemetry.errors import report_handled_error
+
+                    report_handled_error(
+                        exc,
+                        site="soul.injection.on_context_compacted",
+                        provider=type(provider).__name__,
+                    )
+                    logger.warning(
+                        "injection provider %s cancelled its context callback",
+                        type(provider).__name__,
+                        exc_info=True,
+                    )
                 except Exception as exc:
                     from pythinker_code.telemetry.errors import report_handled_error
 
@@ -822,15 +842,23 @@ class PythinkerSoul:
                 raise cancellation from notification_error
             raise
 
-    async def _complete_history_replacement(self, operation: Awaitable[object]) -> None:
-        replacement_generation = self._context.replacement_generation
-        try:
-            await operation
-        except BaseException:
-            if self._context.replacement_generation != replacement_generation:
-                await self.notify_history_rebuilt()
-            raise
+    async def _notify_context_commit(self, commit: ContextCommit) -> None:
+        if commit.generation in self._notified_context_generations:
+            return
+        self._notified_context_generations.add(commit.generation)
         await self.notify_history_rebuilt()
+
+    async def _complete_history_replacement(self, operation: Awaitable[ContextCommit]) -> None:
+        try:
+            commit = await operation
+        except ContextCommittedCancellation as cancellation:
+            await self._notify_context_commit(cancellation.commit)
+            raise
+        except ContextPersistenceError as error:
+            if error.commit is not None:
+                await self._notify_context_commit(error.commit)
+            raise
+        await self._notify_context_commit(commit)
 
     async def clear_context(self) -> None:
         await self._complete_history_replacement(self._context.clear(self._agent.system_prompt))

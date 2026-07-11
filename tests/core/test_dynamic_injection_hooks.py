@@ -13,7 +13,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.soul.context as context_module
 from pythinker_code.soul.agent import Agent, Runtime
-from pythinker_code.soul.context import Context
+from pythinker_code.soul.context import Context, ContextGenerationConflictError, ContextReplacement
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.soul.request_lifecycle import RequestLifecycle
@@ -60,6 +60,12 @@ class _BlockingProvider(_RecordingProvider):
         await self._release.wait()
 
 
+class _SelfCancellingProvider(_RecordingProvider):
+    async def on_context_compacted(self) -> None:
+        self.on_context_compacted_calls += 1
+        raise asyncio.CancelledError()
+
+
 async def test_compacted_hook_isolates_provider_failures(runtime: Runtime, tmp_path: Path) -> None:
     """A buggy provider must not abort compaction notification of later providers."""
     agent = Agent(
@@ -76,6 +82,67 @@ async def test_compacted_hook_isolates_provider_failures(runtime: Runtime, tmp_p
     await soul.notify_history_rebuilt()
 
     assert recorder.on_context_compacted_calls == 1
+
+
+async def test_compacted_hook_isolates_provider_originated_cancellation(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    soul = PythinkerSoul(agent, context=Context(file_backend=tmp_path / "history.jsonl"))
+    cancelling = _SelfCancellingProvider()
+    recorder = _RecordingProvider()
+    soul._injection_providers = [cancelling, recorder]  # pyright: ignore[reportPrivateUsage]
+
+    await soul.notify_history_rebuilt()
+
+    assert cancelling.on_context_compacted_calls == 1
+    assert recorder.on_context_compacted_calls == 1
+
+
+async def test_stale_operation_does_not_claim_concurrent_replacement_commit(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "concurrent.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    recorder = _RecordingProvider()
+    soul._injection_providers = [recorder]  # pyright: ignore[reportPrivateUsage]
+    expected_generation = context.mutation_generation
+    stale_entered = asyncio.Event()
+    release_stale = asyncio.Event()
+
+    async def stale_replacement():
+        stale_entered.set()
+        await release_stale.wait()
+        return await context.replace_history(
+            ContextReplacement(None, (Message(role="user", content="stale"),), 1, False),
+            expected_generation=expected_generation,
+        )
+
+    stale = asyncio.create_task(soul._complete_history_replacement(stale_replacement()))  # pyright: ignore[reportPrivateUsage]
+    await stale_entered.wait()
+    await soul._complete_history_replacement(  # pyright: ignore[reportPrivateUsage]
+        context.replace_history(
+            ContextReplacement(None, (Message(role="user", content="winner"),), 1, False),
+            expected_generation=expected_generation,
+        )
+    )
+    release_stale.set()
+
+    with pytest.raises(ContextGenerationConflictError):
+        await stale
+    assert recorder.on_context_compacted_calls == 1
+    assert soul._request_lifecycle.history_generation == 1  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_revert_visible_durability_error_rearms_all_providers_before_propagating(
@@ -167,6 +234,7 @@ def _make_compactable_soul() -> Any:
 
     soul._injection_providers = []
     soul._request_lifecycle = RequestLifecycle([])
+    soul._notified_context_generations = set()
     return soul
 
 

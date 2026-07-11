@@ -47,18 +47,33 @@ class ContextCommit:
     checkpoint_id: int | None
     rotated_file: Path | None
     message_count: int
+    generation: int
 
 
 class ContextPersistenceError(OSError):
-    def __init__(self, operation: str, category: str, path: Path):
+    def __init__(
+        self,
+        operation: str,
+        category: str,
+        path: Path,
+        *,
+        commit: ContextCommit | None = None,
+    ):
         self.operation = operation
         self.category = category
         self.path = path
+        self.commit = commit
         safe_path = path.name or "context storage"
         message = f"{operation} failed ({category}) for {safe_path}"
         if category == "visible_commit_durability":
             message += "; the new generation is visible but power-loss durability is uncertain"
         super().__init__(message)
+
+
+class ContextCommittedCancellation(asyncio.CancelledError):
+    def __init__(self, commit: ContextCommit) -> None:
+        self.commit = commit
+        super().__init__("context replacement committed before cancellation")
 
 
 class ContextGenerationConflictError(RuntimeError):
@@ -585,7 +600,6 @@ class Context:
         self._tail_repaired: bool = False
         self._mutation_lock = asyncio.Lock()
         self._mutation_generation = 0
-        self._replacement_generation = 0
 
     def _tail_repair_prefix(self, state: _ContextState) -> str:
         """One-time torn-line terminator for the append paths.
@@ -608,7 +622,7 @@ class Context:
             tail_repaired=self._tail_repaired,
         )
 
-    def _swap_state(self, state: _ContextState, *, replacement_commit: bool = False) -> None:
+    def _swap_state(self, state: _ContextState) -> None:
         self._history[:] = state.history
         self._token_count = state.token_count
         self._pending_messages = state.pending_messages
@@ -617,8 +631,6 @@ class Context:
         self._system_prompt = state.system_prompt
         self._tail_repaired = state.tail_repaired
         self._mutation_generation += 1
-        if replacement_commit:
-            self._replacement_generation = self._mutation_generation
 
     async def restore(self) -> bool:
         async with self._mutation_lock:
@@ -690,10 +702,6 @@ class Context:
     @property
     def mutation_generation(self) -> int:
         return self._mutation_generation
-
-    @property
-    def replacement_generation(self) -> int:
-        return self._replacement_generation
 
     async def write_system_prompt(self, prompt: str) -> None:
         """Write the system prompt as the first record of the context file.
@@ -813,13 +821,20 @@ class Context:
                     await asyncio.to_thread(os.replace, temp_path, self._file_backend)
                 except OSError as error:
                     raise _persistence_error("atomic_replacement", self._file_backend) from error
-                self._swap_state(next_state, replacement_commit=True)
+                self._swap_state(next_state)
 
             try:
                 _, cancellation = await _settle_awaitable(commit_visible_generation())
             except BaseException as error:
                 _cleanup_replacement_path(temp_path, error)
                 raise
+
+            commit = ContextCommit(
+                checkpoint_id=0 if replacement.create_checkpoint else None,
+                rotated_file=rotated_file,
+                message_count=len(next_state.history),
+                generation=self._mutation_generation,
+            )
 
             def synchronize_visible_generation() -> bool:
                 try:
@@ -832,19 +847,16 @@ class Context:
             try:
                 _, sync_cancellation = await _settle_thread(synchronize_visible_generation)
             except ContextPersistenceError as error:
+                error.commit = commit
                 if cancellation is not None:
-                    raise cancellation from error
+                    raise ContextCommittedCancellation(commit) from error
                 raise
             if cancellation is None:
                 cancellation = sync_cancellation
             if cancellation is not None:
-                raise cancellation
+                raise ContextCommittedCancellation(commit) from cancellation
 
-            return ContextCommit(
-                checkpoint_id=0 if replacement.create_checkpoint else None,
-                rotated_file=rotated_file,
-                message_count=len(next_state.history),
-            )
+            return commit
 
     async def _append_serialized(
         self,
@@ -886,7 +898,7 @@ class Context:
             next_state = replace(next_state, tail_repaired=True)
             await self._append_serialized(payload, state, next_state)
 
-    async def revert_to(self, checkpoint_id: int) -> None:
+    async def revert_to(self, checkpoint_id: int) -> ContextCommit:
         """
         Revert the context to the specified checkpoint.
         After this, the specified checkpoint and all subsequent content will be
@@ -954,7 +966,7 @@ class Context:
                     message_count += 1
 
             try:
-                await self.replace_history(
+                commit = await self.replace_history(
                     ContextReplacement(
                         system_prompt=target_state.system_prompt,
                         messages=target_state.history,
@@ -969,9 +981,9 @@ class Context:
                 )
             except ContextGenerationConflictError:
                 continue
-            return
+            return commit
 
-    async def clear(self, system_prompt: str | None = None) -> None:
+    async def clear(self, system_prompt: str | None = None) -> ContextCommit:
         """
         Clear the context history.
         This is almost equivalent to revert_to(0), but without relying on the assumption
@@ -983,7 +995,7 @@ class Context:
         """
 
         logger.debug("Clearing context")
-        await self.replace_history(
+        return await self.replace_history(
             ContextReplacement(
                 system_prompt=system_prompt,
                 messages=(),

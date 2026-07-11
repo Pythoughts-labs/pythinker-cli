@@ -18,7 +18,11 @@ from pythinker_code.soul.compaction_restore import (
     build_hook_context_message,
     compact_summary_text,
 )
-from pythinker_code.soul.context import Context, ContextGenerationConflictError
+from pythinker_code.soul.context import (
+    Context,
+    ContextCommittedCancellation,
+    ContextGenerationConflictError,
+)
 from pythinker_code.soul.dynamic_injection import DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
@@ -407,8 +411,8 @@ async def test_compact_visible_commit_cancellation_settles_rearm_under_second_ca
     real_replace = context.replace_history
 
     async def commit_then_cancel(replacement, **kwargs):  # noqa: ANN001, ANN003
-        await real_replace(replacement, **kwargs)
-        raise asyncio.CancelledError()
+        commit = await real_replace(replacement, **kwargs)
+        raise ContextCommittedCancellation(commit)
 
     context.replace_history = commit_then_cancel  # type: ignore[method-assign]
     with patch("pythinker_code.soul.pythinkersoul.wire_send"):
