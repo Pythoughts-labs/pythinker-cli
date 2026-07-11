@@ -185,8 +185,9 @@ def agents(app: Shell, args: str):
     if soul is None:
         return
 
-    labor_market = getattr(soul.runtime, "labor_market", None)
-    builtin_types = getattr(labor_market, "builtin_types", {}) or {}
+    from pythinker_code.soul.agent import agent_type_definitions
+
+    builtin_types = agent_type_definitions(soul.runtime)
     type_defs = sorted(builtin_types.values(), key=lambda item: item.name)
     from pythinker_code.ui.theme import get_tui_tokens, tui_rich_style
 

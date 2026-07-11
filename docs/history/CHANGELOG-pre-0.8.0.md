@@ -115,7 +115,7 @@ Subagent roles overhaul, Kimi K2 provider support, and a ripgrep-free Grep fallb
   - Pure-Python `rg`-free fallback (`_python_grep`) honoring `pattern`, `path`, `glob`, `type` (bash / c / cpp / go / java / js / json / md / py / rust / sh / toml / ts / txt / yaml / zsh), `ignore_case`, `multiline`, `context` / `before_context` / `after_context`, `line_number`, `output_mode` (`content` / `files_with_matches` / `count_matches`), `offset`, `head_limit`, and the standard sensitive-file redaction. `.gitignore` / `.ignore` and the VCS metadata directories (`.git`, `.svn`, `.hg`, `.bzr`, `.jj`, `.sl`) are respected unless `include_ignored=true`.
   - `_find_existing_rg` now honors `PYTHINKER_RG_PATH` and additionally probes `/usr/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`, and `~/.pi/agent/bin` before falling through to download.
   - Downloader retries against the upstream GitHub releases mirror (`https://github.com/BurntSushi/ripgrep/releases/download/<version>/...`) when the CDN mirror is unreachable, and the failure path now degrades into the Python fallback instead of raising.
-- `.gitignore`: ignore `graphify-out*/`, `.graphify_*.json`, `.graphify_*.txt`, and the local reference-scan scratch area.
+- `.gitignore`: ignore generated code-graph outputs and the local reference-scan scratch area.
 - `AGENTS.md` rewritten to reflect the new subagent roster and workflow.
 
 ## 2.3.0 (2026-05-09)

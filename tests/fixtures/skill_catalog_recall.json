@@ -1,0 +1,25 @@
+{
+  "skills": [
+    {"name": "release-deploy", "description": "Deploy release artifacts safely", "scope": "builtin"},
+    {"name": "review-pr", "description": "Review pull requests for correctness"},
+    {"name": "spreadsheets", "description": "Create polished spreadsheet workbooks"},
+    {"name": "diagnose-ci-failures", "description": "Diagnose failing continuous integration jobs"},
+    {"name": "gh-fix-ci", "description": "Fix GitHub continuous integration failures"},
+    {"name": "art", "description": "Create illustrations and drawings"},
+    {"name": "cartography", "description": "Create geographic maps"},
+    {"name": "release-notes", "description": "Write release documentation", "scope": "builtin"},
+    {"name": "generic-release", "description": "General release workflow", "scope": "project"},
+    {"name": "shadowed", "description": "Project winning specialization", "scope": "project", "shadowed": "User losing specialization"}
+  ],
+  "cases": [
+    {"query": "deploy the release safely", "expected": ["release-deploy"], "winner_tier": "NAME_TOKEN"},
+    {"query": "review this pull request", "expected": ["review-pr"], "winner_tier": "NAME_TOKEN"},
+    {"query": "create a polished spreadsheet workbook", "expected": ["spreadsheets"], "winner_tier": "DESCRIPTION_TOKEN"},
+    {"query": "debug a failing continuous integration job", "expected": ["diagnose-ci-failures"], "winner_tier": "DESCRIPTION_TOKEN"},
+    {"query": "/skill:github:gh-fix-ci", "expected": ["gh-fix-ci"], "winner_tier": "EXACT_NAME"},
+    {"query": "cartography", "expected": ["cartography"], "winner_tier": "EXACT_NAME"},
+    {"query": "release notes", "expected": ["release-notes"], "winner_tier": "EXACT_NAME"},
+    {"query": "release workflow", "expected": ["generic-release", "release-deploy", "release-notes"], "winner_tier": "NAME_TOKEN"},
+    {"query": "project winning specialization", "expected": ["shadowed"], "winner_tier": "DESCRIPTION_TOKEN"}
+  ]
+}

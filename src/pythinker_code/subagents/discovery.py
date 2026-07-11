@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -37,6 +37,7 @@ CLAUDE_TOOL_MAP: dict[str, str] = {
 class ScopedAgentRoot:
     root: HostPath
     scope: AgentScope
+    precedence: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,29 @@ class MarkdownAgentSpec:
     when_to_use: str = ""
     required_mcp_servers: tuple[str, ...] = ()
     steps: int | None = None
+    prompt_content: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownAgentSource:
+    """One canonical markdown file with its trusted discovery-order metadata."""
+
+    content: str
+    prompt_file: HostPath
+    scope: AgentScope
+    root_ordinal: int
+    safe_path: str
+
+    @property
+    def entry_precedence(self) -> int:
+        """Resolved-catalogue precedence for this source (lower wins).
+
+        ``0`` is reserved for required YAML entries, so markdown sources start
+        at ``1``. Owning this ``root_ordinal``-to-precedence mapping here keeps
+        precedence numbering in the discovery layer instead of re-deriving it in
+        the catalogue.
+        """
+        return self.root_ordinal + 1
 
 
 def _project_agent_dir_candidates(project_root: HostPath) -> tuple[HostPath, ...]:
@@ -68,8 +92,10 @@ async def resolve_agent_roots(work_dir: HostPath) -> list[ScopedAgentRoot]:
     roots: list[ScopedAgentRoot] = []
     seen: set[str] = set()
 
-    async def add_existing(candidates: Iterable[HostPath], scope: AgentScope) -> None:
-        for candidate in candidates:
+    async def add_existing(
+        candidates: Iterable[HostPath], scope: AgentScope, precedence_base: int
+    ) -> None:
+        for offset, candidate in enumerate(candidates):
             try:
                 if not await candidate.is_dir():
                     continue
@@ -81,23 +107,57 @@ async def resolve_agent_roots(work_dir: HostPath) -> list[ScopedAgentRoot]:
             if key in seen:
                 continue
             seen.add(key)
-            roots.append(ScopedAgentRoot(root=canon, scope=scope))
+            roots.append(
+                ScopedAgentRoot(
+                    root=canon,
+                    scope=scope,
+                    precedence=precedence_base + offset,
+                )
+            )
 
-    await add_existing(_project_agent_dir_candidates(project_root), "project")
+    await add_existing(_project_agent_dir_candidates(project_root), "project", 1)
 
     # Enabled plugins (pythinker/Claude/Codex installs) contribute agent roots
     # below project scope, so a project-local agent of the same name wins.
     from pythinker_code.plugin.integration import plugin_agent_dirs
 
     plugin_roots = [HostPath.unsafe_from_local_path(d) for d in plugin_agent_dirs()]
-    await add_existing(plugin_roots, "plugin")
+    await add_existing(plugin_roots, "plugin", 1_000)
     return roots
 
 
 async def discover_markdown_agents(roots: Iterable[ScopedAgentRoot]) -> list[MarkdownAgentSpec]:
     """Discover Claude/Agents-style ``*.md`` subagent definitions."""
     by_name: dict[str, MarkdownAgentSpec] = {}
-    for scoped in roots:
+    for source in await discover_markdown_agent_sources(roots):
+        try:
+            spec = parse_markdown_agent(
+                source.content,
+                prompt_file=source.prompt_file,
+                scope=source.scope,
+            )
+        except ValueError as exc:
+            logger.info(
+                "Skipping invalid markdown agent {path}: {error}",
+                path=source.prompt_file,
+                error=exc,
+            )
+            continue
+        by_name.setdefault(spec.name.casefold(), spec)
+    return sorted(by_name.values(), key=lambda s: s.name)
+
+
+async def discover_markdown_agent_sources(
+    roots: Iterable[ScopedAgentRoot],
+    *,
+    on_error: Callable[[str, str], None] | None = None,
+) -> tuple[MarkdownAgentSource, ...]:
+    """Read canonical markdown sources in deterministic root and filename order."""
+    sources: list[MarkdownAgentSource] = []
+    seen: set[str] = set()
+    ordered_roots = sorted(roots, key=_agent_root_order)
+    for root_ordinal, scoped in enumerate(ordered_roots):
+        entries: list[HostPath] = []
         try:
             async for entry in scoped.root.iterdir():
                 if not entry.name.lower().endswith(".md"):
@@ -105,23 +165,76 @@ async def discover_markdown_agents(roots: Iterable[ScopedAgentRoot]) -> list[Mar
                 try:
                     if await entry.is_dir():
                         continue
-                    content = await entry.read_text(encoding="utf-8")
-                    spec = parse_markdown_agent(content, prompt_file=entry, scope=scoped.scope)
-                except Exception as exc:
+                except OSError as exc:
+                    if on_error is not None:
+                        on_error(
+                            f"{scoped.scope}[{root_ordinal}]/{entry.name}",
+                            "unreadable_optional_source",
+                        )
                     logger.info(
-                        "Skipping invalid markdown agent {path}: {error}",
+                        "Skipping unreadable markdown agent {path}: {error}",
                         path=entry,
                         error=exc,
                     )
                     continue
-                by_name.setdefault(spec.name.casefold(), spec)
+                entries.append(entry)
         except OSError as exc:
+            if on_error is not None:
+                on_error(
+                    f"{scoped.scope}[{root_ordinal}]",
+                    "unreadable_optional_root",
+                )
             logger.warning(
                 "Failed to iterate agent directory {path}: {error}",
                 path=scoped.root,
                 error=exc,
             )
-    return sorted(by_name.values(), key=lambda s: s.name)
+            continue
+        for entry in sorted(entries, key=lambda item: (item.name.casefold(), item.name)):
+            try:
+                canonical = str(entry.canonical())
+                if canonical in seen:
+                    continue
+                content = await entry.read_text(encoding="utf-8")
+            except OSError as exc:
+                if on_error is not None:
+                    on_error(
+                        f"{scoped.scope}[{root_ordinal}]/{entry.name}",
+                        "unreadable_optional_source",
+                    )
+                logger.info(
+                    "Skipping unreadable markdown agent {path}: {error}",
+                    path=entry,
+                    error=exc,
+                )
+                continue
+            seen.add(canonical)
+            sources.append(
+                MarkdownAgentSource(
+                    content=content,
+                    prompt_file=entry,
+                    scope=scoped.scope,
+                    root_ordinal=root_ordinal,
+                    safe_path=f"{scoped.scope}[{root_ordinal}]/{entry.name}",
+                )
+            )
+    return tuple(sources)
+
+
+def _agent_root_order(scoped: ScopedAgentRoot) -> tuple[int, int, str]:
+    if scoped.precedence is not None:
+        return (scoped.precedence, 0, "")
+    root_text = str(scoped.root.canonical())
+    if scoped.scope == "plugin":
+        return (1_000, 1, root_text)
+    parent_name = Path(root_text).parent.name
+    project_rank = {
+        ".pythinker": 1,
+        ".claude": 2,
+        ".agents": 3,
+        ".codex": 4,
+    }.get(parent_name, 100)
+    return (project_rank, 1, root_text)
 
 
 def parse_markdown_agent(
@@ -167,6 +280,7 @@ def parse_markdown_agent(
         when_to_use=when_to_use,
         required_mcp_servers=required_mcp_servers,
         steps=steps,
+        prompt_content=content,
     )
 
 
@@ -195,15 +309,18 @@ def materialize_markdown_agent_specs(
         seen_filenames.add(filename.casefold())
         wrapper_path = output_dir / f"{filename}.yaml"
         prompt_path = output_dir / f"{filename}.system.md"
-        try:
-            prompt_text = Path(str(agent.prompt_file)).read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "Failed to read markdown agent prompt {path}: {error}",
-                path=agent.prompt_file,
-                error=exc,
-            )
-            prompt_text = ""
+        if agent.prompt_content is not None:
+            prompt_text = agent.prompt_content
+        else:
+            try:
+                prompt_text = Path(str(agent.prompt_file)).read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read markdown agent prompt {path}: {error}",
+                    path=agent.prompt_file,
+                    error=exc,
+                )
+                continue
         prompt_path.write_text(strip_frontmatter(prompt_text).strip(), encoding="utf-8")
         payload: dict[str, Any] = {
             "version": 1,

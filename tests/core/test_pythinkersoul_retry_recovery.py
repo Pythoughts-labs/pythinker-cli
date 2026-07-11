@@ -356,6 +356,7 @@ def _runtime_with_llm(runtime: Runtime, llm: LLM) -> Runtime:
         environment=runtime.environment,
         notifications=runtime.notifications,
         background_tasks=runtime.background_tasks,
+        skill_catalog=runtime.skill_catalog,
         skills=runtime.skills,
         oauth=runtime.oauth,
         additional_dirs=runtime.additional_dirs,

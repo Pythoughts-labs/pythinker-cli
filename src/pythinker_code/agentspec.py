@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from pythinker_code.exception import AgentSpecError
 
@@ -89,6 +91,14 @@ class ResolvedAgentSpec:
     subagents: dict[str, SubagentSpec]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentSpecSourceValidation:
+    """Unknown fields observed in one canonical YAML source before projection."""
+
+    source_path: Path
+    field_paths: tuple[str, ...]
+
+
 def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
     """
     Load agent specification from file.
@@ -97,7 +107,22 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         FileNotFoundError: If the agent spec file is not found.
         AgentSpecError: If the agent spec is not valid.
     """
-    agent_spec = _load_agent_spec(agent_file)
+    agent_spec, _ = load_agent_spec_validated(agent_file)
+    return agent_spec
+
+
+def load_agent_spec_validated(
+    agent_file: Path,
+    *,
+    forbid_unknown_fields: bool = False,
+) -> tuple[ResolvedAgentSpec, tuple[AgentSpecSourceValidation, ...]]:
+    """Load a spec and report raw unknown fields from every inherited source."""
+    validations: dict[Path, AgentSpecSourceValidation] = {}
+    agent_spec = _load_agent_spec(
+        agent_file,
+        _validations=validations,
+        _forbid_unknown_fields=forbid_unknown_fields,
+    )
     assert agent_spec.extend is None, "agent extension should be recursively resolved"
     if isinstance(agent_spec.name, Inherit):
         raise AgentSpecError("Agent name is required")
@@ -111,7 +136,7 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         agent_spec.exclude_tools = []
     if isinstance(agent_spec.subagents, Inherit):
         agent_spec.subagents = {}
-    return ResolvedAgentSpec(
+    resolved = ResolvedAgentSpec(
         name=agent_spec.name,
         system_prompt_path=agent_spec.system_prompt_path,
         system_prompt_args=agent_spec.system_prompt_args,
@@ -127,9 +152,36 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         exclude_tools=agent_spec.exclude_tools or [],
         subagents=agent_spec.subagents or {},
     )
+    return resolved, tuple(validations.values())
 
 
-def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> AgentSpec:
+def _resolve_within_agent_roots(agent_file: Path, declared: str | Path) -> Path:
+    """Join *declared* onto *agent_file*'s directory, rejecting escaping paths.
+
+    Trusted local agent specs reference sibling files with relative paths. A
+    ``..`` traversal or symlink whose canonical target lands outside both the
+    originating spec's directory and the built-in agents directory is rejected
+    fail-closed as defense-in-depth, since the joined path is otherwise opened
+    or recursively loaded directly. The stored value keeps its ``.absolute()``
+    form, so permitted paths are unchanged.
+    """
+    parent = agent_file.parent
+    absolute = (parent / declared).absolute()
+    allowed_roots = (parent.resolve(), get_agents_dir().resolve())
+    if not any(absolute.resolve().is_relative_to(root) for root in allowed_roots):
+        raise AgentSpecError(
+            f"Agent spec reference {declared!r} resolves outside the permitted agent directories"
+        )
+    return absolute
+
+
+def _load_agent_spec(
+    agent_file: Path,
+    _visited: set[Path] | None = None,
+    *,
+    _validations: dict[Path, AgentSpecSourceValidation] | None = None,
+    _forbid_unknown_fields: bool = False,
+) -> AgentSpec:
     resolved = agent_file.resolve()
     if _visited is None:
         _visited = set()
@@ -149,24 +201,46 @@ def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> Age
         raise AgentSpecError(f"Agent spec file must contain a mapping: {agent_file}")
     data = cast("dict[str, Any]", data)
 
+    unknown_fields, has_invalid_field_key = _unknown_agent_spec_fields(data)
+    if unknown_fields:
+        if has_invalid_field_key:
+            fields = ", ".join(unknown_fields)
+            raise AgentSpecError(f"Invalid agent field key: {fields}")
+        if _forbid_unknown_fields:
+            fields = ", ".join(unknown_fields)
+            raise AgentSpecError(f"Unknown fields in required agent source: {fields}")
+        if _validations is not None and resolved not in _validations:
+            _validations[resolved] = AgentSpecSourceValidation(
+                source_path=resolved,
+                field_paths=unknown_fields,
+            )
+
     version = str(data.get("version", DEFAULT_AGENT_SPEC_VERSION))
     if version not in SUPPORTED_AGENT_SPEC_VERSIONS:
         raise AgentSpecError(f"Unsupported agent spec version: {version}")
 
-    agent_spec = AgentSpec(**data.get("agent", {}))
+    try:
+        agent_spec = AgentSpec(**data.get("agent", {}))
+    except (TypeError, ValidationError) as exc:
+        raise AgentSpecError("Agent spec contains an invalid known field") from exc
     if isinstance(agent_spec.system_prompt_path, Path):
-        agent_spec.system_prompt_path = (
-            agent_file.parent / agent_spec.system_prompt_path
-        ).absolute()
+        agent_spec.system_prompt_path = _resolve_within_agent_roots(
+            agent_file, agent_spec.system_prompt_path
+        )
     if isinstance(agent_spec.subagents, dict):
         for v in agent_spec.subagents.values():
-            v.path = (agent_file.parent / v.path).absolute()
+            v.path = _resolve_within_agent_roots(agent_file, v.path)
     if agent_spec.extend:
         if agent_spec.extend == "default":
             base_agent_file = DEFAULT_AGENT_FILE
         else:
-            base_agent_file = (agent_file.parent / agent_spec.extend).absolute()
-        base_agent_spec = _load_agent_spec(base_agent_file, _visited)
+            base_agent_file = _resolve_within_agent_roots(agent_file, agent_spec.extend)
+        base_agent_spec = _load_agent_spec(
+            base_agent_file,
+            _visited,
+            _validations=_validations,
+            _forbid_unknown_fields=_forbid_unknown_fields,
+        )
         if not isinstance(agent_spec.name, Inherit):
             base_agent_spec.name = agent_spec.name
         if not isinstance(agent_spec.system_prompt_path, Inherit):
@@ -207,3 +281,89 @@ def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> Age
                 base_agent_spec.subagents = agent_spec.subagents
         agent_spec = base_agent_spec
     return agent_spec
+
+
+def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
+    unknown: list[str] = []
+    has_invalid_key = False
+    for key in cast("dict[object, object]", data):
+        if isinstance(key, str) and key in {"version", "agent"}:
+            continue
+        rendered = render_agent_field_segment(key)
+        unknown.append(rendered.text)
+        has_invalid_key = has_invalid_key or rendered.structurally_invalid
+    raw_agent = data.get("agent")
+    if not isinstance(raw_agent, dict):
+        return tuple(sorted(unknown)), has_invalid_key
+    agent = cast("dict[str, Any]", raw_agent)
+    known_agent_fields = set(AgentSpec.model_fields)
+    for key in cast("dict[object, object]", agent):
+        if isinstance(key, str) and key in known_agent_fields:
+            continue
+        rendered = render_agent_field_segment(key)
+        unknown.append(f"agent.{rendered.text}")
+        has_invalid_key = has_invalid_key or rendered.structurally_invalid
+    raw_subagents = agent.get("subagents")
+    if isinstance(raw_subagents, dict):
+        known_subagent_fields = set(SubagentSpec.model_fields)
+        for name, raw_subagent in cast("dict[object, object]", raw_subagents).items():
+            rendered_name = render_agent_field_segment(name)
+            has_invalid_key = has_invalid_key or rendered_name.structurally_invalid
+            if rendered_name.structurally_invalid:
+                unknown.append(f"agent.subagents.{rendered_name.text}")
+            if not isinstance(raw_subagent, dict):
+                continue
+            for key in cast("dict[object, object]", raw_subagent):
+                if isinstance(key, str) and key in known_subagent_fields:
+                    continue
+                rendered = render_agent_field_segment(key)
+                unknown.append(f"agent.subagents.{rendered_name.text}.{rendered.text}")
+                has_invalid_key = has_invalid_key or rendered.structurally_invalid
+    return tuple(sorted(unknown)), has_invalid_key
+
+
+_FIELD_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_SENSITIVE_FIELD_HINTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "credential",
+    "auth",
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentFieldSegment:
+    text: str
+    redacted_for_safety: bool
+    structurally_invalid: bool
+
+
+def render_agent_field_segment(value: object) -> AgentFieldSegment:
+    """Render a stable field segment without conflating redaction and validity."""
+    if isinstance(value, str):
+        lowered = value.casefold()
+        if _FIELD_IDENTIFIER_RE.fullmatch(value) and not any(
+            hint in lowered for hint in _SENSITIVE_FIELD_HINTS
+        ):
+            return AgentFieldSegment(
+                text=value,
+                redacted_for_safety=False,
+                structurally_invalid=False,
+            )
+        digest_input = f"str:{value}"
+        structurally_invalid = _FIELD_IDENTIFIER_RE.fullmatch(value) is None
+    else:
+        digest_input = f"{type(value).__qualname__}:{value!r}"
+        structurally_invalid = True
+    digest = hashlib.sha256(digest_input.encode(encoding="utf-8")).hexdigest()[:12]
+    return AgentFieldSegment(
+        text=f"field[{digest}]",
+        redacted_for_safety=True,
+        structurally_invalid=structurally_invalid,
+    )

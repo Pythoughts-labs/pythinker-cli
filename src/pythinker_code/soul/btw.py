@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pythinker_core
 from pythinker_core.message import Message, ToolCall
@@ -27,9 +27,28 @@ from pythinker_code.wire.types import BtwBegin, BtwEnd, TextPart
 if TYPE_CHECKING:
     from pythinker_core.chat_provider import StreamedMessagePart
 
+    from pythinker_code.soul.agent import Agent, Runtime
+    from pythinker_code.soul.context import Context
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
+    from pythinker_code.soul.request_assembly import AssembledRequest
 
 _BTW_MAX_TURNS = 2
+
+
+class _SideQuestionSoul(Protocol):
+    @property
+    def runtime(self) -> Runtime: ...
+
+    @property
+    def agent(self) -> Agent: ...
+
+    @property
+    def context(self) -> Context: ...
+
+    async def assemble_side_request(
+        self, question: str, reminder_text: str
+    ) -> AssembledRequest: ...
+
 
 SIDE_QUESTION_SYSTEM_REMINDER = """\
 This is a side question from the user. Answer directly in a single response.
@@ -91,7 +110,7 @@ class _DenyAllToolset:
 
 
 def _build_btw_context(
-    soul: PythinkerSoul,
+    soul: _SideQuestionSoul,
     question: str,
     *,
     system_reminder_text: str = SIDE_QUESTION_SYSTEM_REMINDER,
@@ -103,13 +122,13 @@ def _build_btw_context(
     ``system_reminder_text`` selects the framing (side question vs. max-steps
     handoff); both run tools-denied over the current history.
     """
-    system_prompt = soul._agent.system_prompt  # pyright: ignore[reportPrivateUsage]
+    system_prompt = soul.agent.system_prompt
     effective_history = normalize_history(soul.context.history)
 
     wrapped = f"{system_reminder(system_reminder_text).text}\n\n{question}"
     side_message = Message(role="user", content=wrapped)
 
-    toolset = _DenyAllToolset(soul._agent.toolset.tools)  # pyright: ignore[reportPrivateUsage]
+    toolset = _DenyAllToolset(soul.agent.toolset.tools)
 
     return system_prompt, [*effective_history, side_message], toolset
 
@@ -120,7 +139,7 @@ def _build_btw_context(
 
 
 async def execute_side_question(
-    soul: PythinkerSoul,
+    soul: _SideQuestionSoul,
     question: str,
     on_text_chunk: Callable[[str], None] | None = None,
     *,
@@ -140,14 +159,20 @@ async def execute_side_question(
     Returns:
         (response_text, None) on success, (None, error_message) on failure.
     """
-    if soul._runtime.llm is None:  # pyright: ignore[reportPrivateUsage]
+    if soul.runtime.llm is None:
         return None, "LLM is not set."
 
     try:
-        chat_provider = soul._runtime.llm.chat_provider  # pyright: ignore[reportPrivateUsage]
-        system_prompt, history, toolset = _build_btw_context(
-            soul, question, system_reminder_text=system_reminder_text
-        )
+        chat_provider = soul.runtime.llm.chat_provider
+        if system_reminder_text == SIDE_QUESTION_SYSTEM_REMINDER:
+            assembled = await soul.assemble_side_request(question, system_reminder_text)
+            system_prompt = assembled.system_prompt
+            history = list(assembled.provider_history)
+            toolset = _DenyAllToolset(soul.agent.toolset.tools)
+        else:
+            system_prompt, history, toolset = _build_btw_context(
+                soul, question, system_reminder_text=system_reminder_text
+            )
 
         text_chunks: list[str] = []
 

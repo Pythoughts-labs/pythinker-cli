@@ -21,7 +21,11 @@ from typing import TYPE_CHECKING
 
 from pythinker_core.message import Message
 
-from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
+from pythinker_code.soul.dynamic_injection import (
+    DynamicInjection,
+    DynamicInjectionProvider,
+    PreparedInjection,
+)
 
 if TYPE_CHECKING:
     from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -73,10 +77,8 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
 
     def __init__(self, fragments: Sequence[ModelDefenseFragment] = MODEL_DEFENSE_FRAGMENTS) -> None:
         self._fragments = tuple(fragments)
-        # Single-shot guard. Safe without a lock: the soul drives injection providers
-        # sequentially and there is no ``await`` between the check and the set in
-        # ``get_injections``, so the read-modify-write cannot interleave. Add a lock
-        # only if a provider is ever driven from multiple OS threads.
+        # Legacy direct-call one-shot guard. Request assembly serializes preparation
+        # per provider in RequestLifecycle, including concurrent main and /btw requests.
         self._injected = False
 
     async def get_injections(
@@ -84,16 +86,44 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
         history: Sequence[Message],
         soul: PythinkerSoul,
     ) -> list[DynamicInjection]:
+        injections = self._candidate_injections(history, soul)
+        if injections:
+            self._injected = True
+        return injections
+
+    async def prepare_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[PreparedInjection]:
+        if self._prepared_injections:
+            return list(self._prepared_injections)
+        injections = self._matching_injections(history, soul)
+        if injections:
+            self._prepared_injections = tuple(
+                PreparedInjection(injection.type, injection) for injection in injections
+            )
+        return list(self._prepared_injections)
+
+    def _candidate_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
         _ = history
-        if self._injected:
+        if self._injected or not soul.model_name:
             return []
-        model_name = soul.model_name
-        if not model_name:
+        return self._matching_injections(history, soul)
+
+    def _matching_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[DynamicInjection]:
+        _ = history
+        if not soul.model_name:
             return []
-        matched = [fragment for fragment in self._fragments if fragment.matches(model_name)]
-        if not matched:
-            return []
-        self._injected = True
+        matched = [fragment for fragment in self._fragments if fragment.matches(soul.model_name)]
         return [
             DynamicInjection(
                 type=f"{_MODEL_DEFENSE_TYPE}:{fragment.name}", content=fragment.content
@@ -101,7 +131,12 @@ class ModelDefenseInjectionProvider(DynamicInjectionProvider):
             for fragment in matched
         ]
 
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        if injections:
+            self._injected = True
+
     async def on_context_compacted(self) -> None:
         # Compaction rewrites history; the prior defense reminder may have been
         # summarized away, so re-arm for the next step.
         self._injected = False
+        self._prepared_injections = ()

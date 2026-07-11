@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pydantic
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, UndefinedError
@@ -19,7 +20,7 @@ from pythinker_code.approval_runtime import ApprovalRuntime
 from pythinker_code.auth.oauth import OAuthManager
 from pythinker_code.background import BackgroundTaskManager
 from pythinker_code.config import Config
-from pythinker_code.exception import MCPConfigError, SystemPromptTemplateError
+from pythinker_code.exception import AgentSpecError, MCPConfigError, SystemPromptTemplateError
 from pythinker_code.llm import LLM
 from pythinker_code.lsp.service import LspService
 from pythinker_code.notifications import NotificationManager
@@ -27,21 +28,23 @@ from pythinker_code.prompt_templates import PromptTemplate, discover_prompt_temp
 from pythinker_code.scratchpad import DEFAULT_SCRATCHPAD_SECTION
 from pythinker_code.session import Session
 from pythinker_code.skill import (
+    ScopedSkillsRoot,
     Skill,
-    discover_skills_from_roots,
-    format_skills_for_prompt,
-    index_skills,
+    SkillCatalog,
     resolve_skills_roots,
 )
 from pythinker_code.soul.approval import Approval, ApprovalState
 from pythinker_code.soul.denwarenji import DenwaRenji
 from pythinker_code.soul.message import system_reminder
 from pythinker_code.soul.toolset import PythinkerToolset, ToolType
-from pythinker_code.subagents.discovery import (
-    discover_markdown_agents,
-    materialize_markdown_agent_specs,
-    resolve_agent_roots,
+from pythinker_code.subagents.catalogue import (
+    ResolvedAgentCatalogue,
+    ResolvedAgentEntry,
+    UnknownFieldPolicy,
+    normalize_agent_name,
+    resolve_agent_catalogue,
 )
+from pythinker_code.subagents.discovery import resolve_agent_roots
 from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.subagents.registry import LaborMarket
 from pythinker_code.subagents.store import SubagentStore
@@ -87,6 +90,7 @@ class BuiltinSystemPromptArgs:
 
 
 _AGENTS_MD_MAX_BYTES = 32 * 1024  # 32 KiB
+SKILL_PROMPT_MAX_CHARACTERS = 8_000
 
 
 def _agents_md_fence(content: str) -> str:
@@ -101,7 +105,7 @@ def render_agents_md_reminder(builtin_args: BuiltinSystemPromptArgs) -> str | No
     Returns ``None`` when no ``AGENTS.md`` applies between the project root and the
     working directory. Otherwise returns the framing + fenced merged content that is
     delivered as a session-start, user-role reminder prepended to every model request
-    (see :func:`pythinker_code.soul.pythinkersoul._with_agents_md_preamble`), rather than
+    (see :class:`pythinker_code.soul.request_assembly.RequestAssembler`), rather than
     baked into the immutable system prompt.
 
     Delivering it this way keeps the project instructions out of the system prompt while
@@ -231,9 +235,12 @@ class Runtime:
     environment: Environment
     notifications: NotificationManager
     background_tasks: BackgroundTaskManager
-    skills: dict[str, Skill]
+    skill_catalog: SkillCatalog
+    skills: Mapping[str, Skill]
     additional_dirs: list[HostPath]
     skills_dirs: list[HostPath]
+    agent_catalogue: ResolvedAgentCatalogue | None = None
+    agent_type_projection: Mapping[str, AgentTypeDefinition] | None = None
     prompt_templates: dict[str, PromptTemplate] = field(default_factory=dict[str, PromptTemplate])
     mcp_tools: dict[str, ToolType] = field(default_factory=dict[str, ToolType])
     """Connected MCP tools, keyed `mcp__<server>__<tool>`, shared with subagent allowlists."""
@@ -298,19 +305,13 @@ class Runtime:
             Environment.detect(),
         )
 
-        # Discover and format skills (grouped by scope for the system prompt).
-        scoped_roots = await resolve_skills_roots(
-            session.work_dir,
-            skills_dirs=skills_dirs,
-            merge_brands=config.merge_all_available_skills,
-            extra_skill_dirs=config.extra_skill_dirs or None,
+        skill_catalog, scoped_roots = await discover_runtime_skill_catalog(
+            session.work_dir, config, skills_dirs=skills_dirs
         )
         # Canonicalize so symlinked skill directories match resolved paths
         skills_roots_canonical = [s.root.canonical() for s in scoped_roots]
-        skills = await discover_skills_from_roots(scoped_roots)
-        skills_by_name = index_skills(skills)
-        logger.info("Discovered {count} skill(s)", count=len(skills))
-        skills_formatted = format_skills_for_prompt(skills)
+        skills_by_name = skill_catalog.exhaustive_mapping()
+        logger.info("Discovered {count} skill(s)", count=len(skills_by_name))
 
         prompt_templates = await discover_prompt_templates(session.work_dir)
         logger.info("Discovered {count} prompt template(s)", count=len(prompt_templates))
@@ -402,7 +403,7 @@ class Runtime:
                 PYTHINKER_WORK_DIR_LS=ls_output,
                 PYTHINKER_AGENTS_MD=agents_md or "",
                 PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
-                PYTHINKER_SKILLS=skills_formatted or "No skills found.",
+                PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),
                 PYTHINKER_ADDITIONAL_DIRS_INFO=additional_dirs_info,
                 PYTHINKER_OS=environment.os_kind,
                 PYTHINKER_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
@@ -418,6 +419,7 @@ class Runtime:
                 config.background,
                 notifications=notifications,
             ),
+            skill_catalog=skill_catalog,
             skills=skills_by_name,
             prompt_templates=prompt_templates,
             additional_dirs=additional_dirs,
@@ -482,11 +484,14 @@ class Runtime:
             environment=self.environment,
             notifications=self.notifications,
             background_tasks=self.background_tasks.copy_for_role("subagent"),
+            skill_catalog=self.skill_catalog,
             skills=self.skills,
             prompt_templates=self.prompt_templates,
             # Share the same list reference so /add-dir mutations propagate to all agents
             additional_dirs=self.additional_dirs,
             skills_dirs=self.skills_dirs,
+            agent_catalogue=self.agent_catalogue,
+            agent_type_projection=self.agent_type_projection,
             # Share the parent's connected MCP tools so allowlisted subagents can attach them
             mcp_tools=self.mcp_tools,
             subagent_store=self.subagent_store,
@@ -516,6 +521,113 @@ class Agent:
     top_p: float | None = None
 
 
+def agent_type_definitions(runtime: Runtime) -> Mapping[str, AgentTypeDefinition]:
+    """Return catalogue-projected definitions in their compatibility insertion order."""
+    projection = getattr(runtime, "agent_type_projection", None)
+    if isinstance(projection, Mapping):
+        return cast("Mapping[str, AgentTypeDefinition]", projection)
+    labor_market = getattr(runtime, "labor_market", None)
+    compatibility_types = getattr(labor_market, "builtin_types", {}) or {}
+    return compatibility_types
+
+
+def get_agent_type_definition(runtime: Runtime, name: str) -> AgentTypeDefinition | None:
+    """Resolve an internal agent reader through the catalogue without changing LaborMarket."""
+    if runtime.agent_catalogue is not None and runtime.agent_type_projection is not None:
+        entry = runtime.agent_catalogue.get(name)
+        if entry is not None:
+            return runtime.agent_type_projection.get(entry.name)
+        return runtime.agent_type_projection.get(name)
+    return runtime.labor_market.get_builtin_type(name)
+
+
+def require_agent_type_definition(runtime: Runtime, name: str) -> AgentTypeDefinition:
+    type_def = get_agent_type_definition(runtime, name)
+    if type_def is None:
+        raise KeyError(f"Builtin subagent type not found: {name}")
+    return type_def
+
+
+def _project_agent_entry(entry: ResolvedAgentEntry) -> AgentTypeDefinition:
+    if entry.legacy_agent_file is None:
+        raise AgentSpecError(
+            f"Agent catalogue entry {entry.name!r} has no compatibility launch file"
+        )
+    launch_spec = entry.launch_spec
+    tool_policy = (
+        ToolPolicy(mode="allowlist", tools=tuple(launch_spec.allowed_tools))
+        if launch_spec.allowed_tools is not None
+        else ToolPolicy(mode="inherit")
+    )
+    return AgentTypeDefinition(
+        name=entry.name,
+        description=entry.description,
+        agent_file=entry.legacy_agent_file,
+        when_to_use=launch_spec.when_to_use,
+        default_model=launch_spec.model,
+        tool_policy=tool_policy,
+        supports_background=entry.supports_background,
+        required_mcp_servers=entry.required_mcp_servers,
+    )
+
+
+def _catalogue_entries_in_compatibility_order(
+    catalogue: ResolvedAgentCatalogue,
+    declared_subagents: tuple[str, ...],
+) -> tuple[ResolvedAgentEntry, ...]:
+    declared_normalized = {normalize_agent_name(name) for name in declared_subagents}
+    declared_entries = tuple(catalogue.require(name) for name in declared_subagents)
+    optional_entries = sorted(
+        (entry for entry in catalogue.values() if entry.normalized_name not in declared_normalized),
+        key=lambda entry: entry.name,
+    )
+    return (*declared_entries, *optional_entries)
+
+
+def _log_agent_catalogue_diagnostics(catalogue: ResolvedAgentCatalogue) -> None:
+    for diagnostic in catalogue.diagnostics:
+        logger.warning(
+            "Agent definition {severity}: {source_kind} {safe_path}; "
+            "reason={reason_code}; fields={field_path}",
+            severity=diagnostic.severity,
+            source_kind=diagnostic.source_kind,
+            safe_path=diagnostic.safe_path,
+            reason_code=diagnostic.reason_code,
+            field_path=diagnostic.field_path or "(none)",
+        )
+
+
+async def _publish_agent_catalogue(
+    agent_file: Path,
+    runtime: Runtime,
+    declared_subagents: tuple[str, ...],
+) -> None:
+    if runtime.agent_catalogue is not None:
+        return
+    materialized_dir = runtime.session.dir / "external_agents"
+    catalogue = await resolve_agent_catalogue(
+        agent_file=agent_file,
+        markdown_roots=await resolve_agent_roots(runtime.work_dir),
+        materialized_dir=materialized_dir,
+        available_models=set(runtime.config.models),
+        unknown_field_policy=UnknownFieldPolicy.WARN,
+    )
+    # The compatibility materializer historically created this directory even
+    # with no markdown sources; preserve the session layout during the rollout.
+    materialized_dir.mkdir(parents=True, exist_ok=True)
+    _log_agent_catalogue_diagnostics(catalogue)
+    resolved_projections = tuple(
+        _project_agent_entry(entry)
+        for entry in _catalogue_entries_in_compatibility_order(catalogue, declared_subagents)
+    )
+    compatibility_projection = dict(runtime.labor_market.builtin_types)
+    compatibility_projection.update((type_def.name, type_def) for type_def in resolved_projections)
+    for type_def in resolved_projections:
+        runtime.labor_market.add_builtin_type(type_def)
+    runtime.agent_catalogue = catalogue
+    runtime.agent_type_projection = MappingProxyType(compatibility_projection)
+
+
 async def load_agent(
     agent_file: Path,
     runtime: Runtime,
@@ -539,50 +651,15 @@ async def load_agent(
     logger.info("Loading agent: {agent_file}", agent_file=agent_file)
     agent_spec = load_agent_spec(agent_file)
 
+    # Resolve and publish the immutable definition catalogue exactly once, before
+    # any tool reads the compatibility LaborMarket projection.
+    await _publish_agent_catalogue(agent_file, runtime, tuple(agent_spec.subagents))
+
     system_prompt = _load_system_prompt(
         agent_spec.system_prompt_path,
         agent_spec.system_prompt_args,
         runtime.builtin_args,
     )
-
-    # Register built-in subagent types before loading tools because some tools render
-    # descriptions from the labor market on initialization.
-    for subagent_name, subagent_spec in agent_spec.subagents.items():
-        logger.debug(
-            "Registering builtin subagent type: {subagent_name}", subagent_name=subagent_name
-        )
-        builtin_spec = load_agent_spec(subagent_spec.path)
-        tool_policy = (
-            ToolPolicy(mode="allowlist", tools=tuple(builtin_spec.allowed_tools))
-            if builtin_spec.allowed_tools is not None
-            else ToolPolicy(mode="inherit")
-        )
-        runtime.labor_market.add_builtin_type(
-            AgentTypeDefinition(
-                name=subagent_name,
-                description=subagent_spec.description,
-                agent_file=subagent_spec.path,
-                when_to_use=builtin_spec.when_to_use,
-                default_model=builtin_spec.model,
-                tool_policy=tool_policy,
-                supports_background=not builtin_spec.hidden,
-            )
-        )
-
-    external_agents = await discover_markdown_agents(await resolve_agent_roots(runtime.work_dir))
-    for type_def in materialize_markdown_agent_specs(
-        external_agents,
-        output_dir=runtime.session.dir / "external_agents",
-        available_models=set(runtime.config.models),
-    ):
-        if runtime.labor_market.get_builtin_type(type_def.name) is not None:
-            logger.warning(
-                "Skipping external markdown agent {name}: would override a built-in subagent type",
-                name=type_def.name,
-            )
-            continue
-        logger.debug("Registering external markdown agent type: {name}", name=type_def.name)
-        runtime.labor_market.add_builtin_type(type_def)
 
     toolset = PythinkerToolset(runtime)
     # Wire the live MCP startup state so the subagent-spawn gate can reject an agent whose
@@ -726,23 +803,45 @@ async def build_builtin_system_prompt_args(
         load_agents_md(work_dir),
         Environment.detect(),
     )
-    scoped_roots = await resolve_skills_roots(
-        work_dir,
-        merge_brands=config.merge_all_available_skills,
-        extra_skill_dirs=config.extra_skill_dirs or None,
-    )
-    skills_formatted = format_skills_for_prompt(await discover_skills_from_roots(scoped_roots))
+    skill_catalog, _ = await discover_runtime_skill_catalog(work_dir, config)
     return BuiltinSystemPromptArgs(
         PYTHINKER_NOW=datetime.now().astimezone().isoformat(),
         PYTHINKER_WORK_DIR=work_dir,
         PYTHINKER_WORK_DIR_LS=ls_output,
         PYTHINKER_AGENTS_MD=agents_md or "",
         PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
-        PYTHINKER_SKILLS=skills_formatted or "No skills found.",
+        PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),
         PYTHINKER_ADDITIONAL_DIRS_INFO="",
         PYTHINKER_OS=environment.os_kind,
         PYTHINKER_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
         PYTHINKER_SCRATCHPAD_SECTION=scratchpad_section or DEFAULT_SCRATCHPAD_SECTION,
+    )
+
+
+async def discover_runtime_skill_catalog(
+    work_dir: HostPath,
+    config: Config,
+    *,
+    skills_dirs: list[HostPath] | None = None,
+) -> tuple[SkillCatalog, list[ScopedSkillsRoot]]:
+    """Construct the catalogue used by runtime creation and prompt inspection."""
+    scoped_roots = await resolve_skills_roots(
+        work_dir,
+        skills_dirs=skills_dirs,
+        merge_brands=config.merge_all_available_skills,
+        extra_skill_dirs=config.extra_skill_dirs or None,
+    )
+    return await SkillCatalog.discover(scoped_roots), scoped_roots
+
+
+def format_skill_catalog_policy(catalog: SkillCatalog) -> str:
+    """Render stable catalogue metadata without task-dependent candidates."""
+    count = len(catalog.exhaustive_mapping())
+    return (
+        "Task-relevant skill candidates arrive with each request. "
+        f"The catalogue contains {count} skill(s); candidate rendering is capped at "
+        f"{SKILL_PROMPT_MAX_CHARACTERS} characters. Exact names remain available through "
+        "ReadSkill even when omitted from a candidate view."
     )
 
 

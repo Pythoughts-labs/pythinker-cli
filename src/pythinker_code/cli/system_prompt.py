@@ -51,7 +51,8 @@ def system_prompt(
     """Print the fully-assembled system prompt for an agent.
 
     Read-only: renders the prompt the agent would receive (work dir, OS, shell,
-    AGENTS.md, skills) without creating a session, authenticating, or loading MCP.
+    AGENTS.md, and stable skill-catalogue metadata) without creating a session,
+    authenticating, loading MCP, or inventing task-specific skill candidates.
     """
     from pythinker_host.path import HostPath
 

@@ -55,6 +55,11 @@ def test_initialize_handshake(tmp_path) -> None:
                             "aliases": [],
                         },
                         {
+                            "name": "prompt-manifest",
+                            "description": "Show the latest sanitized request assembly manifest",
+                            "aliases": [],
+                        },
+                        {
                             "name": "compact",
                             "description": "Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)",
                             "aliases": [],
@@ -329,6 +334,11 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         {
                             "name": "recap",
                             "description": "Recap Pythinker sessions. Usage: /recap [on|off|today|yesterday|week|YYYY-MM-DD]",
+                            "aliases": [],
+                        },
+                        {
+                            "name": "prompt-manifest",
+                            "description": "Show the latest sanitized request assembly manifest",
                             "aliases": [],
                         },
                         {

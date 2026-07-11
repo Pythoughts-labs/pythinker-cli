@@ -83,12 +83,33 @@ Format: trigger → rule.
   NOT `.claude/` config. Transcripts showing `~/.pythinker/sessions/` paths
   are pythinker runs; behavioral fixes belong in the product.
 
+## Typed policy boundaries
+
+- **When a deep module classifies trusted and untrusted contributions**, represent source lifecycle
+  (`provided` / `not_applicable` / `failed`) and trusted metadata permissions in the initial typed
+  contract; identifier-shape validation is sanitization, not source authorization.
+- **When a persisted prompt fragment is deduplicated**, scope its committed identity to both the
+  provider registration and the current history generation; rearm, compaction, and revert must
+  invalidate the relevant identity, and acknowledgement must happen synchronously only after the
+  durable history append completes.
+
 ## TUI prompt chrome
 
 - **When hiding the first-load editable input row to prevent ghost prompts**,
   keep the empty card visible: `_turn_starting` and the live-view first-commit
   gate may suppress editable content, but the top border and `❯` row should
   remain visible so the prompt bar does not disappear while the agent loads.
+- **When routing live preview text through the existing Markdown renderer**, verify unsupported
+  constructs against the installed library before treating the renderer as a complete cleanup
+  boundary. Rich renders HTML comments literally, so a preview that must hide them needs a narrow,
+  fence-aware filter while malformed comments remain visible.
+- **When narrowing a regex that strips whole-line delimited blocks (HTML comments, fences)**, a
+  non-greedy `.*?` between the open and close delimiters can backtrack across an embedded closer and
+  silently swallow visible text on a mixed line (`<!-- a --> text <!-- b -->` collapsed to `""`).
+  Bound the body with a tempered token `(?:(?!-->).)*?` so a failed end-anchor simply fails the
+  match. Then derive test assertions from the *anchored* semantics: a line-anchored stripper leaves
+  a mixed prose+comment line fully intact (markers included), so asserting the markers vanish is
+  wrong — that was a self-contradictory test spec the implementer correctly blocked on.
 
 ## Spec/profile consistency
 
@@ -106,6 +127,10 @@ Format: trigger → rule.
   headers.
 
 ## Verification gates
+
+- **When a repo-required skill is absent from the advertised Codex skill roots**, check the
+  project-documented legacy skill roots (especially `~/.claude/skills/`) before reporting it as
+  unavailable; an incomplete root search is not evidence that the skill is missing.
 
 - **When running a gate command (make check, pytest, ruff) through a pipe or
   in the background**, the pipeline exit code is the LAST command's (e.g.

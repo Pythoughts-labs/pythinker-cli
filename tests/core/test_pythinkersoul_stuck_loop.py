@@ -23,7 +23,7 @@ from pythinker_core.tooling.simple import SimpleToolset
 
 from pythinker_code.llm import LLM
 from pythinker_code.soul import run_soul
-from pythinker_code.soul.agent import Agent, BuiltinSystemPromptArgs, Runtime
+from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul, TurnStopReason
 from pythinker_code.soul.toolset import PythinkerToolset
@@ -140,6 +140,7 @@ def _rebuild_runtime_with_llm(runtime: Runtime, llm: LLM) -> Runtime:
         environment=runtime.environment,
         notifications=runtime.notifications,
         background_tasks=runtime.background_tasks,
+        skill_catalog=runtime.skill_catalog,
         skills=runtime.skills,
         oauth=runtime.oauth,
         additional_dirs=runtime.additional_dirs,
@@ -311,59 +312,6 @@ def test_user_message_with_hook_context() -> None:
         "review the diff", [HookResult(action="block", additional_context="should be ignored")]
     )
     assert "should be ignored" not in blocked.extract_text(" ")
-
-
-def test_with_agents_md_preamble_prepends_authoritative_reminder(
-    builtin_args: BuiltinSystemPromptArgs,
-) -> None:
-    """The merged AGENTS.md is prepended as a leading user-role <system-reminder>, ahead of
-    the conversation, WITHOUT mutating context history — assembled fresh each step so it
-    survives compaction (never persisted) and the injection budget (not a dynamic injection)."""
-    from pythinker_code.soul.message import is_system_reminder_message
-    from pythinker_code.soul.pythinkersoul import _with_agents_md_preamble
-
-    history = [Message(role="user", content=[TextPart(text="hello")])]
-    result = _with_agents_md_preamble(history, builtin_args)
-
-    # A leading reminder is prepended; the original history follows it, by identity.
-    assert len(result) == 2
-    assert is_system_reminder_message(result[0])
-    reminder_part = result[0].content[0]
-    assert isinstance(reminder_part, TextPart)
-    assert "Test agents content" in reminder_part.text
-    assert result[1] is history[0]
-    # The input list is never mutated (the preamble must not leak into context.history).
-    assert history == [Message(role="user", content=[TextPart(text="hello")])]
-
-
-def test_with_agents_md_preamble_absent_returns_history_unchanged(
-    builtin_args: BuiltinSystemPromptArgs,
-) -> None:
-    """No AGENTS.md → history passes through unchanged (no empty preamble is injected)."""
-    from dataclasses import replace
-
-    from pythinker_code.soul.pythinkersoul import _with_agents_md_preamble
-
-    empty = replace(builtin_args, PYTHINKER_AGENTS_MD="")
-    history = [Message(role="user", content=[TextPart(text="hi")])]
-    result = _with_agents_md_preamble(history, empty)
-    assert result == history
-
-
-def test_with_agents_md_preamble_normalizes_to_lead_the_first_user_turn(
-    builtin_args: BuiltinSystemPromptArgs,
-) -> None:
-    """After history normalization the AGENTS.md reminder leads the first user message —
-    a stable position-0 prefix (good for prompt-cache keying), not a stray extra turn."""
-    from pythinker_code.soul.dynamic_injection import normalize_history
-    from pythinker_code.soul.pythinkersoul import _with_agents_md_preamble
-
-    history = [Message(role="user", content=[TextPart(text="first prompt")])]
-    normalized = normalize_history(_with_agents_md_preamble(history, builtin_args))
-
-    assert len(normalized) == 1
-    text = "".join(p.text for p in normalized[0].content if isinstance(p, TextPart))
-    assert text.index("Test agents content") < text.index("first prompt")
 
 
 @pytest.mark.asyncio

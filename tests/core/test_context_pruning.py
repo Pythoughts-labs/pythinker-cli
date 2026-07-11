@@ -8,6 +8,9 @@ pairing. Recent messages are protected; small outputs are left alone.
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock
+
 from pythinker_core.message import Message, TextPart
 
 from pythinker_code.soul.compaction import (
@@ -85,7 +88,7 @@ import pytest  # noqa: E402
 from pythinker_core.tooling.simple import SimpleToolset  # noqa: E402
 
 from pythinker_code.soul.agent import Agent, Runtime  # noqa: E402
-from pythinker_code.soul.context import Context  # noqa: E402
+from pythinker_code.soul.context import Context, ContextGenerationConflictError  # noqa: E402
 from pythinker_code.soul.pythinkersoul import PythinkerSoul  # noqa: E402
 
 
@@ -111,6 +114,16 @@ async def test_prune_context_rewrites_history_preserving_structure(runtime, tmp_
             Message(role="assistant", content=[TextPart(text="done")]),
         ]
     )
+    legacy_clear = AsyncMock(side_effect=AssertionError("legacy clear path used"))
+    legacy_write_prompt = AsyncMock(side_effect=AssertionError("legacy prompt write used"))
+    legacy_checkpoint = AsyncMock(side_effect=AssertionError("legacy checkpoint path used"))
+    legacy_append = AsyncMock(side_effect=AssertionError("legacy rebuild append used"))
+    legacy_usage = AsyncMock(side_effect=AssertionError("legacy usage rollback used"))
+    context.clear = legacy_clear  # type: ignore[method-assign]
+    context.write_system_prompt = legacy_write_prompt  # type: ignore[method-assign]
+    context.checkpoint = legacy_checkpoint  # type: ignore[method-assign]
+    context.append_message = legacy_append  # type: ignore[method-assign]
+    context.update_token_count = legacy_usage  # type: ignore[method-assign]
 
     did_prune = await soul.prune_context()
 
@@ -123,6 +136,11 @@ async def test_prune_context_rewrites_history_preserving_structure(runtime, tmp_
     assert "elided" in tool_msgs[0].extract_text("")  # body replaced
     # Recent + non-tool messages untouched.
     assert history[-1].extract_text("") == "done"
+    legacy_clear.assert_not_awaited()
+    legacy_write_prompt.assert_not_awaited()
+    legacy_checkpoint.assert_not_awaited()
+    legacy_append.assert_not_awaited()
+    legacy_usage.assert_not_awaited()
 
 
 def _seed_prunable() -> list[Message]:
@@ -136,33 +154,39 @@ def _seed_prunable() -> list[Message]:
 
 
 @pytest.mark.asyncio
-async def test_prune_context_restores_history_when_rebuild_fails(runtime, tmp_path) -> None:
-    """If the rebuild after clear() fails, prune must restore prior history rather than
-    leave the context gutted to just the system prompt (data-loss guard)."""
+@pytest.mark.parametrize("error", [OSError("disk full"), asyncio.CancelledError()])
+async def test_prune_context_replacement_failure_preserves_generation(
+    runtime, tmp_path, error: BaseException
+) -> None:
     runtime.config.loop_control.prune_protect_last = 2
     runtime.config.loop_control.prune_min_chars = 2000
     context, soul = _make_soul(runtime, tmp_path)
     await context.write_system_prompt("sys")
     await context.append_message(_seed_prunable())
-    before = list(context.history)
+    await context.update_token_count(91)
+    before_bytes = context.file_backend.read_bytes()
+    before_memory = (
+        tuple(context.history),
+        context.system_prompt,
+        context.token_count,
+        context.token_count_with_pending,
+        context.n_checkpoints,
+    )
+    replace_history = AsyncMock(side_effect=error)
+    context.replace_history = replace_history  # type: ignore[method-assign]
 
-    # Fail the rebuild's append of the pruned body (it carries the "elided" placeholder);
-    # the restore re-appends the original snapshot, which must still succeed.
-    real_append = context.append_message
-
-    async def flaky_append(message):
-        msgs = [message] if isinstance(message, Message) else list(message)
-        if any("elided" in m.extract_text("") for m in msgs):
-            raise RuntimeError("disk full")
-        return await real_append(message)
-
-    context.append_message = flaky_append  # type: ignore[method-assign]
-
-    with pytest.raises(RuntimeError, match="disk full"):
+    with pytest.raises(type(error)):
         await soul.prune_context()
 
-    # History is restored intact — not left as just the system prompt.
-    assert list(context.history) == before
+    replace_history.assert_awaited_once()
+    assert context.file_backend.read_bytes() == before_bytes
+    assert (
+        tuple(context.history),
+        context.system_prompt,
+        context.token_count,
+        context.token_count_with_pending,
+        context.n_checkpoints,
+    ) == before_memory
 
 
 @pytest.mark.asyncio
@@ -232,3 +256,33 @@ async def test_prune_context_noop_when_nothing_stale(runtime, tmp_path) -> None:
 
     assert did_prune is False  # protected + small → nothing to prune
     assert soul.context.history[-1].extract_text("") == "small"
+
+
+@pytest.mark.asyncio
+async def test_prune_context_rejects_stale_replacement_after_concurrent_append(
+    runtime, tmp_path
+) -> None:
+    runtime.config.loop_control.prune_protect_last = 2
+    runtime.config.loop_control.prune_min_chars = 2000
+    context, soul = _make_soul(runtime, tmp_path)
+    await context.write_system_prompt("sys")
+    await context.append_message(_seed_prunable())
+    replacement_entered = asyncio.Event()
+    release_replacement = asyncio.Event()
+    real_replace = context.replace_history
+
+    async def delayed_replace(replacement, **kwargs):  # noqa: ANN001, ANN003
+        replacement_entered.set()
+        await release_replacement.wait()
+        return await real_replace(replacement, **kwargs)
+
+    context.replace_history = delayed_replace  # type: ignore[method-assign]
+    prune = asyncio.create_task(soul.prune_context())
+    await replacement_entered.wait()
+    concurrent = Message(role="user", content="concurrent append wins")
+    await context.append_message(concurrent)
+    release_replacement.set()
+
+    with pytest.raises(ContextGenerationConflictError):
+        await prune
+    assert context.history[-1] == concurrent

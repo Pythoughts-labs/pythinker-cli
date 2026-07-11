@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -15,6 +16,7 @@ from pythinker_code.soul.agent import load_agents_md
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injections.auto_mode import AUTO_DISABLED_REMINDER
 from pythinker_code.soul.message import system, system_reminder
+from pythinker_code.soul.request_assembly import opaque_manifest_identifier
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.path import sanitize_cli_path, shorten_home
 from pythinker_code.utils.slashcmd import SlashCommandRegistry
@@ -32,6 +34,60 @@ Raises:
 """
 
 registry = SlashCommandRegistry[SoulSlashCmdFunc]()
+_MANIFEST_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]*")
+_MANIFEST_SECRET_IDENTIFIER = re.compile(
+    r"(?:sk-(?:ant|proj|[A-Za-z0-9])[A-Za-z0-9_-]{16,}|"
+    r"xox(?:a|b|p|r|s)-[A-Za-z0-9-]{10,}|"
+    r"gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})"
+)
+_MAX_MANIFEST_IDENTIFIER_LENGTH = 64
+
+
+def _safe_manifest_reason(identifier: str) -> str:
+    if (
+        0 < len(identifier) <= _MAX_MANIFEST_IDENTIFIER_LENGTH
+        and _MANIFEST_IDENTIFIER.fullmatch(identifier) is not None
+        and _MANIFEST_SECRET_IDENTIFIER.search(identifier) is None
+    ):
+        return identifier
+    return "<redacted>"
+
+
+def _render_prompt_manifest(soul: PythinkerSoul) -> str:
+    manifest = soul.latest_request_manifest
+    if manifest is None:
+        return "No request has been assembled in this session."
+
+    overall_reason = (
+        f" reason={_safe_manifest_reason(manifest.reason_code)}"
+        if manifest.reason_code is not None
+        else ""
+    )
+    lines = [
+        f"Prompt manifest: {manifest.status.value.upper()}{overall_reason}",
+        (
+            "Budget: "
+            f"limit={manifest.budget_tokens} "
+            f"budgeted_admitted={manifest.budgeted_admitted_tokens} "
+            f"non_budgeted_estimated={manifest.non_budgeted_estimated_tokens}"
+        ),
+        "Fragments:",
+    ]
+    for outcome in manifest.outcomes:
+        reason = (
+            f" reason={_safe_manifest_reason(outcome.reason_code)}"
+            if outcome.reason_code is not None
+            else ""
+        )
+        lines.append(
+            f"- {opaque_manifest_identifier(outcome.key)} "
+            f"[{opaque_manifest_identifier(outcome.source)}]: "
+            f"{outcome.requirement.value} {outcome.persistence.value} {outcome.status.value} "
+            f"estimated={outcome.estimated_tokens} admitted={outcome.admitted_tokens}{reason}"
+        )
+    if not manifest.outcomes:
+        lines.append("- none")
+    return "\n".join(lines)
 
 
 @registry.command
@@ -108,6 +164,13 @@ async def recap(soul: PythinkerSoul, args: str) -> None:
     wire_send(TextPart(text=text))
 
 
+@registry.command(name="prompt-manifest")
+def prompt_manifest(soul: PythinkerSoul, args: str) -> None:
+    """Show the latest sanitized request assembly manifest"""
+    del args
+    wire_send(TextPart(text=_render_prompt_manifest(soul)))
+
+
 @registry.command
 async def compact(soul: PythinkerSoul, args: str):
     """Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)"""
@@ -131,8 +194,7 @@ async def compact(soul: PythinkerSoul, args: str):
 async def clear(soul: PythinkerSoul, args: str):
     """Clear the context"""
     logger.info("Running `/clear`")
-    await soul.context.clear()
-    await soul.context.write_system_prompt(soul.agent.system_prompt)
+    await soul.clear_context()
     wire_send(TextPart(text="The context has been cleared."))
     snap = soul.status
     wire_send(

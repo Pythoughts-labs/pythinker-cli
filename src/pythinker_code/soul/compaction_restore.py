@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -67,7 +67,7 @@ async def build_compaction_restore_context(
     work_dir: HostPath,
     additional_dirs: Sequence[HostPath] = (),
     active_skill_names: Sequence[str] = (),
-    skills_by_name: dict[str, Skill] | None = None,
+    skills_by_name: Mapping[str, Skill] | None = None,
     max_files: int = MAX_RESTORED_FILES,
 ) -> CompactionRestoreContext:
     """Build post-compaction reminders for facts that summaries often drop.
@@ -278,7 +278,7 @@ def _most_recent(paths: list[str], limit: int) -> list[str]:
 
 async def _restore_active_skills(
     active_skill_names: Sequence[str],
-    skills_by_name: dict[str, Skill],
+    skills_by_name: Mapping[str, Skill],
 ) -> tuple[str, tuple[str, ...]]:
     if not active_skill_names or not skills_by_name:
         return "", ()

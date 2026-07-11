@@ -33,14 +33,9 @@ src/pythinker_code/dashboard/static/
 
 # Generated reports
 .firecrawl/
-# Graphify generated graph, cache, wiki, and Obsidian vault outputs
-graphify-out/
-graphify-out*/
 src/pythinker_code/.understand-anything/
 # understand-anything knowledge graph (any location)
 .understand-anything/
-.graphify_*.json
-.graphify_*.txt
 tests_ai/report.json
 tests_ai/terminal_bench_2_cache/
 jobs/

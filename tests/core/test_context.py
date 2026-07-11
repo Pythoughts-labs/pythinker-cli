@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from pythinker_core.message import Message, Role
@@ -32,6 +34,21 @@ def _message_dict(role: Role, text: str) -> dict:
     return json.loads(
         Message(role=role, content=[TextPart(text=text)]).model_dump_json(exclude_none=True)
     )
+
+
+@pytest.fixture
+def mixed_context_jsonl(tmp_path: Path) -> Path:
+    path = tmp_path / "mixed-context.jsonl"
+    path.write_text(
+        '{"role":"_system_prompt","content":"Frozen prompt"}\n'
+        '{"role":"user","content":"Before checkpoint"}\n'
+        '{"role":"_checkpoint","id":3}\n'
+        '{"role":"assistant","content":"Recorded answer"}\n'
+        '{"role":"_usage","token_count":144}\n'
+        '{"role":"user","content":"After usage"}\n',
+        encoding="utf-8",
+    )
+    return path
 
 
 # --- write_system_prompt tests ---
@@ -80,6 +97,23 @@ async def test_write_system_prompt_prepends_to_existing(tmp_path: Path) -> None:
 
 
 # --- restore tests ---
+
+
+@pytest.mark.asyncio
+async def test_restore_preserves_literal_mixed_record_contract(mixed_context_jsonl: Path) -> None:
+    ctx = Context(file_backend=mixed_context_jsonl)
+
+    restored = await ctx.restore()
+
+    assert restored is True
+    assert ctx.system_prompt == "Frozen prompt"
+    assert ctx.n_checkpoints == 4
+    assert ctx.token_count == 144
+    assert tuple(ctx.history) == (
+        Message(role="user", content=[TextPart(text="Before checkpoint")]),
+        Message(role="assistant", content=[TextPart(text="Recorded answer")]),
+        Message(role="user", content=[TextPart(text="After usage")]),
+    )
 
 
 @pytest.mark.asyncio
@@ -256,6 +290,55 @@ async def test_revert_preserves_system_prompt(tmp_path: Path) -> None:
 
     assert ctx.system_prompt == "Preserved prompt"
     assert len(ctx.history) == 1
+
+
+@pytest.mark.parametrize("operation", ["revert", "clear"])
+@pytest.mark.parametrize("error", [OSError("disk full"), asyncio.CancelledError()])
+async def test_history_replacement_failure_preserves_exact_generation(
+    tmp_path: Path,
+    operation: str,
+    error: BaseException,
+) -> None:
+    path = tmp_path / "context.jsonl"
+    _write_lines(
+        path,
+        [
+            {"role": "_system_prompt", "content": "Preserved prompt"},
+            _message_dict("user", "Before checkpoint"),
+            {"role": "_checkpoint", "id": 0},
+            _message_dict("assistant", "After checkpoint"),
+            {"role": "_usage", "token_count": 23},
+            {"role": "_checkpoint", "id": 1},
+        ],
+    )
+    ctx = Context(file_backend=path)
+    await ctx.restore()
+    before_bytes = path.read_bytes()
+    before_memory = (
+        tuple(ctx.history),
+        ctx.system_prompt,
+        ctx.token_count,
+        ctx.token_count_with_pending,
+        ctx.n_checkpoints,
+    )
+    replace_history = AsyncMock(side_effect=error)
+    ctx.replace_history = replace_history  # type: ignore[method-assign]
+
+    with pytest.raises(type(error)):
+        if operation == "revert":
+            await ctx.revert_to(1)
+        else:
+            await ctx.clear()
+
+    replace_history.assert_awaited_once()
+    assert path.read_bytes() == before_bytes
+    assert (
+        tuple(ctx.history),
+        ctx.system_prompt,
+        ctx.token_count,
+        ctx.token_count_with_pending,
+        ctx.n_checkpoints,
+    ) == before_memory
 
 
 @pytest.mark.asyncio

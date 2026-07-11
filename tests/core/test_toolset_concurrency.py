@@ -13,6 +13,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from pythinker_core.tooling import ToolReturnValue
 
 from pythinker_code.hooks.engine import HookEngine
@@ -37,6 +38,24 @@ class _RecordingTool:
         await asyncio.sleep(self._delay)
         self._events.append(("exit", self.name))
         return ToolReturnValue(is_error=False, output="ok", message="ok", display=[])
+
+
+class _AdmissionBlockingTool(_RecordingTool):
+    def __init__(self, name: str, events: list[tuple[str, str]]) -> None:
+        super().__init__(name, events, parallel=True, delay=0)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def call(self, arguments: object) -> ToolReturnValue:
+        self._events.append(("enter", self.name))
+        self.entered.set()
+        try:
+            await self.release.wait()
+            return ToolReturnValue(is_error=False, output="ok", message="ok", display=[])
+        finally:
+            self._events.append(("close", self.name))
+            self.closed.set()
 
 
 def _toolset(*tools: _RecordingTool, cwd: Path) -> PythinkerToolset:
@@ -223,6 +242,126 @@ async def test_read_gate_cap_does_not_block_writer_draining() -> None:
     await asyncio.wait_for(writer_ran.wait(), timeout=1.0)  # writer proceeds, no deadlock
     queued.cancel()
     await asyncio.gather(held, writer_task, queued, return_exceptions=True)
+
+
+async def test_cancelled_queued_reader_releases_permit_and_later_reader_recovers() -> None:
+    from pythinker_code.soul.toolset import _ReadWriteGate
+
+    gate = _ReadWriteGate(max_concurrent_readers=1)
+    writer_entered = asyncio.Event()
+    release_writer = asyncio.Event()
+    reader_requested = asyncio.Event()
+    recovered = asyncio.Event()
+
+    async def writer() -> None:
+        async with gate.exclusive():
+            writer_entered.set()
+            await release_writer.wait()
+
+    async def queued_reader() -> None:
+        reader_requested.set()
+        async with gate.shared():
+            raise AssertionError("cancelled reader entered the protected region")
+
+    writer_task = asyncio.create_task(writer())
+    await writer_entered.wait()
+    reader_task = asyncio.create_task(queued_reader())
+    await reader_requested.wait()
+    reader_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await reader_task
+    release_writer.set()
+    await writer_task
+
+    async with gate.shared():
+        recovered.set()
+    assert recovered.is_set()
+
+
+async def test_cancelled_queued_writer_does_not_block_later_writer() -> None:
+    from pythinker_code.soul.toolset import _ReadWriteGate
+
+    gate = _ReadWriteGate(max_concurrent_readers=1)
+    reader_entered = asyncio.Event()
+    release_reader = asyncio.Event()
+    writer_requested = asyncio.Event()
+
+    async def reader() -> None:
+        async with gate.shared():
+            reader_entered.set()
+            await release_reader.wait()
+
+    async def queued_writer() -> None:
+        writer_requested.set()
+        async with gate.exclusive():
+            raise AssertionError("cancelled writer entered the protected region")
+
+    reader_task = asyncio.create_task(reader())
+    await reader_entered.wait()
+    writer_task = asyncio.create_task(queued_writer())
+    await writer_requested.wait()
+    writer_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await writer_task
+    release_reader.set()
+    await reader_task
+
+    async with gate.exclusive():
+        pass
+
+
+async def test_cancellation_after_reader_admission_restores_gate_state() -> None:
+    from pythinker_code.soul.toolset import _ReadWriteGate
+
+    gate = _ReadWriteGate(max_concurrent_readers=1)
+    admitted = asyncio.Event()
+
+    async def admitted_reader() -> None:
+        async with gate.shared():
+            admitted.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(admitted_reader())
+    await admitted.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with gate.exclusive():
+        pass
+
+
+async def test_handle_cancellation_after_admission_closes_and_recovers(tmp_path: Path) -> None:
+    events: list[tuple[str, str]] = []
+    blocking = _AdmissionBlockingTool("Read", events)
+    recovery = _RecordingTool("Write", events, parallel=False, delay=0)
+    toolset = _toolset(blocking, recovery, cwd=tmp_path)
+    toolset.begin_step([])
+    running = toolset.handle(
+        ToolCall(
+            id="admitted-read",
+            function=ToolCall.FunctionBody(name="Read", arguments='{"attempt":1}'),
+        )
+    )
+    assert isinstance(running, asyncio.Task)
+    await blocking.entered.wait()
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    await blocking.closed.wait()
+
+    recovered = toolset.handle(
+        ToolCall(
+            id="recovery-write",
+            function=ToolCall.FunctionBody(name="Write", arguments='{"attempt":2}'),
+        )
+    )
+    assert isinstance(recovered, asyncio.Task)
+    result = await recovered
+
+    assert result.return_value.is_error is False
+    assert events == [("enter", "Read"), ("close", "Read"), ("enter", "Write"), ("exit", "Write")]
 
 
 class TestPluginToolDefault:

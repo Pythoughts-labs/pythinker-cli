@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from pythinker_core.message import Message
 
 from pythinker_code.soul import wire_send
+from pythinker_code.soul.agent import agent_type_definitions
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.subagents.models import AgentTypeDefinition
 from pythinker_code.utils.logging import logger
@@ -48,7 +49,7 @@ class AgentListInjectionProvider(DynamicInjectionProvider):
             return []
         del history
         agents = sorted(
-            soul.runtime.labor_market.builtin_types.values(),
+            agent_type_definitions(soul.runtime).values(),
             key=lambda item: item.name,
         )
         lines = tuple(format_agent_line(agent) for agent in agents)

@@ -6,7 +6,12 @@ import pytest
 from pythinker_host.path import HostPath
 
 import pythinker_code.skill as skill_module
-from pythinker_code.skill import Skill, read_skill_text_with_local_specialization
+from pythinker_code.skill import (
+    ScopedSkillsRoot,
+    Skill,
+    SkillCatalog,
+    read_skill_text_with_local_specialization,
+)
 from pythinker_code.tools.skill import ReadSkill
 
 
@@ -52,6 +57,74 @@ async def test_read_skill_reports_missing_skill(runtime) -> None:
 
     assert result.is_error
     assert result.brief == "Skill not found"
+    assert "status: not_found" in result.message
+
+
+async def test_read_skill_missing_name_returns_only_bounded_suggestions(
+    runtime, tmp_path: Path
+) -> None:
+    runtime.skills = {
+        f"deploy-{index}": _skill(f"deploy-{index}", tmp_path / f"deploy-{index}.md")
+        for index in range(20)
+    }
+    runtime.skill_catalog = SkillCatalog(runtime.skills, ())
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="deploy"))
+
+    assert result.is_error
+    assert result.message.count("deploy-") <= 5
+    assert "deploy-19" not in result.message
+
+
+async def test_read_skill_distinguishes_unavailable_discovered_source(
+    runtime, tmp_path: Path
+) -> None:
+    root = tmp_path / "skills"
+    broken = root / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text(
+        "---\nname: broken\ntype: unsupported\n---\n",
+        encoding="utf-8",
+    )
+    runtime.skill_catalog = await SkillCatalog.discover(
+        [
+            ScopedSkillsRoot(
+                root=HostPath.unsafe_from_local_path(root),
+                scope="project",
+            )
+        ]
+    )
+    runtime.skills = dict(runtime.skill_catalog.exhaustive_mapping())
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="broken"))
+
+    assert result.is_error
+    assert result.brief == "Skill unavailable"
+    assert "status: unavailable" in result.message
+    assert str(tmp_path) not in result.message
+
+
+async def test_read_skill_deleted_after_discovery_reports_structured_unavailable(
+    runtime, tmp_path: Path
+) -> None:
+    root = tmp_path / "skills"
+    skill_dir = root / "ephemeral"
+    skill_dir.mkdir(parents=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text("---\nname: ephemeral\ndescription: Temporary\n---\n", encoding="utf-8")
+    runtime.skill_catalog = await SkillCatalog.discover(
+        [ScopedSkillsRoot(root=HostPath.unsafe_from_local_path(root), scope="project")]
+    )
+    runtime.skills = runtime.skill_catalog.exhaustive_mapping()
+    skill_path.unlink()
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="ephemeral"))
+
+    assert result.is_error
+    assert result.brief == "Skill unavailable"
+    assert result.message.startswith("status: unavailable\n")
+    assert "could not be read" in result.message
+    assert str(tmp_path) not in result.message
 
 
 async def test_read_skill_resolves_plugin_style_alias(runtime, tmp_path: Path) -> None:
@@ -84,6 +157,7 @@ async def test_read_skill_mcp_bridge_when_filesystem_skill_missing(runtime) -> N
     assert not result.is_error
     assert isinstance(result.output, str)
     assert "MCP bridge" in result.output
+    assert "status: mcp_fallback" in result.output
     assert "mcp__designer-skill__get_design_system" in result.output
     assert "anti_slop_checklist" in result.output
 
@@ -102,6 +176,23 @@ async def test_read_skill_mcp_bridge_works_for_user_added_server(runtime) -> Non
     assert "# MCP skill bridge: my-research" in result.output
     assert "mcp__my-research__search" in result.output
     assert "get_design_system" not in result.output
+
+
+async def test_missing_skill_caps_connected_mcp_server_hint(runtime) -> None:
+    runtime.skills = {}
+    runtime.skill_catalog = SkillCatalog({}, ())
+    runtime.mcp_tools = {f"mcp__server-{index:03d}__search": object() for index in range(50)}
+
+    result = await ReadSkill(runtime)(ReadSkill.params(skill_name="missing"))
+
+    assert result.is_error
+    assert len(result.message) < 500
+    assert (
+        "Connected MCP servers: server-000, server-001, server-002, server-003, server-004"
+        in result.message
+    )
+    assert "45 omitted" in result.message
+    assert "server-049" not in result.message
 
 
 async def test_read_skill_appends_resource_manifest(runtime, tmp_path: Path) -> None:

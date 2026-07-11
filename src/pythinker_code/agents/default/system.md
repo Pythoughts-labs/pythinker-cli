@@ -255,7 +255,7 @@ Precedence per §2. `README`/`README.md` files are optional supplementary contex
 
 ## 12. Skills
 
-Skills are reusable, self-contained capability directories, each with a `SKILL.md` of instructions, examples, scripts, and reference material — specialized domain knowledge, workflow patterns, pre-configured tool chains, and templates. They are grouped by scope (`Project`, `User`, `Extra`, `Built-in`); when scopes define the same name, the more specific wins: **Project › User › Extra › Built-in.**
+Skills are reusable, self-contained capability directories, each with a `SKILL.md` of instructions, examples, scripts, and reference material — specialized domain knowledge, workflow patterns, pre-configured tool chains, and templates. When scopes define the same name, the more specific wins: **Project › User › Extra › Built-in.**
 
 ${PYTHINKER_SKILLS}
 

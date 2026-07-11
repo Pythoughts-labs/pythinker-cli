@@ -129,6 +129,24 @@ def test_format_skills_for_prompt_sorts_within_scope():
     assert a_idx < m_idx < z_idx
 
 
+def test_format_skills_for_prompt_preserves_literal_compatibility_bytes():
+    skills = [
+        _skill("zeta", "user", description="User description"),
+        _skill("alpha", "project", description="Project description"),
+    ]
+
+    assert format_skills_for_prompt(skills) == (
+        "### Project\n"
+        "- alpha\n"
+        "  - Path: /tmp/project/alpha/SKILL.md\n"
+        "  - Description: Project description\n\n"
+        "### User\n"
+        "- zeta\n"
+        "  - Path: /tmp/user/zeta/SKILL.md\n"
+        "  - Description: User description"
+    )
+
+
 @pytest.mark.asyncio
 async def test_discovered_skills_carry_scope(tmp_path, monkeypatch):
     """End-to-end: scoped discovery stamps each skill with its origin scope."""

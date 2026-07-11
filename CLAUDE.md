@@ -9,7 +9,7 @@ Read both, in order:
 
 1. **`AGENTS.md`** — non-negotiable repository rules. Always applies.
 2. **`AGENTS.local`** — machine-specific / private local instructions (gitignored). Read it after
-   `AGENTS.md`. It may add workflow detail (e.g. the code-graph / graphify workflow) but must not
+   `AGENTS.md`. It may add workflow detail (e.g. a local code-graph workflow) but must not
    weaken or override the rules in `AGENTS.md`.
 
 @AGENTS.md

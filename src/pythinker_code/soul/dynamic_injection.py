@@ -7,7 +7,21 @@ from typing import TYPE_CHECKING
 
 from pythinker_core.message import Message
 
-from pythinker_code.notifications import is_notification_message
+from pythinker_code.soul.request_assembly import (
+    FragmentBudgetClass,
+    FragmentPersistence,
+    FragmentRequirement,
+    FragmentStatus,
+    FragmentTruncation,
+    RequestFragment,
+    RequestSourceResult,
+    SourceApplicability,
+    SourceResultStatus,
+    TrustedSourcePolicy,
+    admit_source_results,
+)
+from pythinker_code.soul.request_primitives import estimate_injection_tokens
+from pythinker_code.soul.request_primitives import normalize_history as normalize_history
 
 if TYPE_CHECKING:
     from pythinker_code.soul.agent import Runtime
@@ -20,6 +34,22 @@ class DynamicInjection:
 
     type: str  # identifier, e.g. "plan_mode"
     content: str  # text content (will be wrapped in <system-reminder> tags)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedInjection:
+    """Provider-owned stable identity paired with one dynamic injection."""
+
+    identity: str
+    injection: DynamicInjection
+
+    @property
+    def type(self) -> str:
+        return self.injection.type
+
+    @property
+    def content(self) -> str:
+        return self.injection.content
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,11 +75,6 @@ class ContextBudget:
     def injection_budget_tokens(self) -> int:
         available = max(0, self.max_context_tokens - self.reserved_context_tokens)
         return max(0, min(self.injection_ceiling_tokens, available))
-
-
-def estimate_injection_tokens(text: str) -> int:
-    """Estimate dynamic-injection tokens using the project-wide len/4 heuristic."""
-    return max(1, len(text) // 4)
 
 
 def injection_budget_from_runtime(runtime: Runtime) -> ContextBudget:
@@ -78,51 +103,61 @@ def collect_within_budget(
     Oversize candidates are truncated at a line boundary when possible; otherwise they are
     dropped if no useful prefix fits. The input order is the tie-breaker for equal priorities.
     """
-    if budget_tokens <= 0:
-        return []
-    ordered = sorted(enumerate(candidates), key=lambda item: (-item[1].priority, item[0]))
-    out: list[InjectionCandidate] = []
-    used = 0
-    truncation_used = False
-    for _index, candidate in ordered:
-        estimate = candidate.token_estimate or estimate_injection_tokens(candidate.content)
-        if estimate <= 0:
-            continue
-        if used + estimate <= budget_tokens:
-            out.append(replace(candidate, token_estimate=estimate))
-            used += estimate
-            continue
-        # Whole-fit failed. Truncate at most once per call, for the first
-        # (highest-priority) candidate that didn't whole-fit. Lower-priority
-        # candidates further down the loop may still whole-fit in remaining
-        # budget; don't break — keep scanning.
-        if truncation_used:
-            continue
-        truncation_used = True
-        remaining = budget_tokens - used
-        if remaining <= 0:
-            continue
-        truncated = _truncate_to_tokens(candidate.content, remaining)
-        if not truncated:
-            continue
-        truncated_estimate = estimate_injection_tokens(truncated)
-        if truncated_estimate <= 0 or used + truncated_estimate > budget_tokens:
-            continue
-        out.append(replace(candidate, content=truncated, token_estimate=truncated_estimate))
-        used += truncated_estimate
-    return out
+    policies = tuple(
+        _legacy_source_policy(index, candidate) for index, candidate in enumerate(candidates)
+    )
+    source_results = tuple(
+        _legacy_source_result(policy, candidate)
+        for policy, candidate in zip(policies, candidates, strict=True)
+    )
+    admissions = admit_source_results(policies, source_results, max(0, budget_tokens))
+    candidates_by_key = {
+        f"legacy_{index:012d}": candidate for index, candidate in enumerate(candidates)
+    }
+    return [
+        replace(
+            candidates_by_key[admission.fragment.key],
+            content=admission.fragment.content,
+            token_estimate=admission.outcome.admitted_tokens,
+        )
+        for admission in admissions
+        if admission.fragment is not None
+        and admission.outcome.status in {FragmentStatus.INCLUDED, FragmentStatus.TRUNCATED}
+    ]
 
 
-def _truncate_to_tokens(text: str, budget_tokens: int) -> str:
-    max_chars = max(0, budget_tokens * 4)
-    if max_chars <= 1:
-        return ""
-    truncated = text[: max_chars - 1].rstrip()
-    if "\n" in truncated:
-        truncated = truncated.rsplit("\n", 1)[0].rstrip()
-    if not truncated:
-        return ""
-    return f"{truncated}\n…"
+def _legacy_source_policy(index: int, candidate: InjectionCandidate) -> TrustedSourcePolicy:
+    return TrustedSourcePolicy(
+        source="legacy_dynamic_injection",
+        key=f"legacy_{index:012d}",
+        requirement=FragmentRequirement.BEST_EFFORT,
+        persistence=FragmentPersistence.HISTORY,
+        priority=candidate.priority,
+        budget_class=FragmentBudgetClass.BUDGETED,
+        truncation=FragmentTruncation.ALLOWED,
+        applicability=SourceApplicability.ALWAYS,
+        failure_reason_codes=(),
+    )
+
+
+def _legacy_source_result(
+    policy: TrustedSourcePolicy, candidate: InjectionCandidate
+) -> RequestSourceResult:
+    return RequestSourceResult(
+        source=policy.source,
+        key=policy.key,
+        status=SourceResultStatus.PROVIDED,
+        fragment=RequestFragment(
+            key=policy.key,
+            content=candidate.content,
+            source=policy.source,
+            requirement=policy.requirement,
+            persistence=policy.persistence,
+            priority=policy.priority,
+            truncatable=policy.truncation is FragmentTruncation.ALLOWED,
+        ),
+        reason_code=None,
+    )
 
 
 def dynamic_to_candidate(injection: DynamicInjection, *, priority: int = 100) -> InjectionCandidate:
@@ -143,12 +178,46 @@ class DynamicInjectionProvider(ABC):
     (context_usage, runtime, config, etc.).
     """
 
+    _prepared_injections: tuple[PreparedInjection, ...] = ()
+
     @abstractmethod
     async def get_injections(
         self,
         history: Sequence[Message],
         soul: PythinkerSoul,
     ) -> list[DynamicInjection]: ...
+
+    async def prepare_injections(
+        self,
+        history: Sequence[Message],
+        soul: PythinkerSoul,
+    ) -> list[PreparedInjection]:
+        """Return retry-stable injections without acknowledging one-shot state."""
+        pending = self._prepared_injections
+        if pending:
+            return list(pending)
+        injections = await self.get_injections(history, soul)
+        if injections:
+            self._prepared_injections = tuple(
+                PreparedInjection(self.injection_identity(injection, index), injection)
+                for index, injection in enumerate(injections)
+            )
+        return list(self._prepared_injections)
+
+    def injection_identity(self, injection: DynamicInjection, index: int) -> str:
+        """Return the stable identity for one prepared result."""
+        return injection.type if index == 0 else f"{injection.type}:{index:04d}"
+
+    def acknowledge_injections(self, keys: Sequence[str]) -> None:
+        """Acknowledge prepared injections after their history append commits."""
+        pending = self._prepared_injections
+        acknowledged = tuple(item for item in pending if item.identity in keys)
+        self._prepared_injections = tuple(item for item in pending if item.identity not in keys)
+        if acknowledged:
+            self._on_injections_acknowledged(tuple(item.injection for item in acknowledged))
+
+    def _on_injections_acknowledged(self, injections: Sequence[DynamicInjection]) -> None:
+        _ = injections
 
     async def on_context_compacted(self) -> None:
         """Called after the context is compacted (history is rebuilt).
@@ -180,32 +249,3 @@ class DynamicInjectionProvider(ABC):
         """
         _ = key
         return False
-
-
-def normalize_history(history: Sequence[Message]) -> list[Message]:
-    """Merge adjacent user messages to produce a clean API input sequence.
-
-    Dynamic injections are stored as standalone user messages in history;
-    normalization merges them into the adjacent user message.
-
-    Only ``user`` role messages are merged. Assistant and tool messages
-    are never merged because their ``tool_calls`` / ``tool_call_id``
-    fields form linked pairs that must stay intact.
-    """
-    if not history:
-        return []
-
-    result: list[Message] = []
-    for msg in history:
-        if (
-            result
-            and result[-1].role == msg.role
-            and msg.role == "user"
-            and not is_notification_message(result[-1])
-            and not is_notification_message(msg)
-        ):
-            merged_content = list(result[-1].content) + list(msg.content)
-            result[-1] = Message(role="user", content=merged_content)
-        else:
-            result.append(msg)
-    return result

@@ -10,10 +10,13 @@ from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import mcp
+import pytest
 from pydantic import BaseModel
 from pythinker_core.tooling import CallableTool, CallableTool2, ToolOk, ToolReturnValue
 from pythinker_core.tooling.error import ToolNotFoundError as PythinkerCoreToolNotFoundError
 
+from pythinker_code.hooks import HookDef, HookEngine
+from pythinker_code.hooks.runner import HookResult
 from pythinker_code.soul.toolset import (
     MCPServerInfo,
     MCPTool,
@@ -645,6 +648,118 @@ async def test_pre_tool_use_policy_block_opt_in_emits_tool_use_skipped(monkeypat
     assert [msg for msg in captured if isinstance(msg, ToolUseSkipped)] == [
         ToolUseSkipped(tool_call_id="tc-policy", tool_name="ToolA", reason="policy")
     ]
+
+
+async def test_pre_tool_use_block_survives_telemetry_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hook telemetry is best-effort; it must never erase a security block."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    engine = HookEngine([HookDef(event="PreToolUse", matcher="ToolA", command="unused")])
+
+    async def execute_hooks(*_args: object, **_kwargs: object) -> list[HookResult]:
+        entered.set()
+        await release.wait()
+        return [HookResult(action="block", reason="policy denied")]
+
+    def fail_telemetry(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("telemetry unavailable")
+
+    monkeypatch.setattr(engine, "_execute_hooks", execute_hooks)
+    monkeypatch.setattr("pythinker_code.telemetry.track", fail_telemetry)
+    toolset = _make_toolset()
+    toolset.set_hook_engine(engine)
+    toolset.begin_step([])
+
+    result = toolset.handle(
+        ToolCall(
+            id="blocked-with-telemetry-failure",
+            function=ToolCall.FunctionBody(name="ToolA", arguments="{}"),
+        )
+    )
+    assert isinstance(result, asyncio.Task)
+    await entered.wait()
+    release.set()
+    completed = await result
+
+    assert completed.return_value.is_error is True
+    assert completed.return_value.brief == "Hook blocked"
+    assert completed.return_value.message == "policy denied"
+
+
+async def test_pre_tool_use_exception_fails_open_and_later_call_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented hook-engine policy is fail-open for execution errors."""
+    engine = HookEngine([HookDef(event="PreToolUse", matcher="ToolA", command="unused")])
+    attempts = 0
+
+    async def execute_hooks(*_args: object, **_kwargs: object) -> list[HookResult]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("hook transport failed")
+        return [HookResult(action="allow")]
+
+    monkeypatch.setattr(engine, "_execute_hooks", execute_hooks)
+    toolset = _make_toolset()
+    toolset.set_hook_engine(engine)
+
+    for index in range(2):
+        toolset.begin_step([], step_no=index + 1)
+        result = toolset.handle(
+            ToolCall(
+                id=f"hook-recovery-{index}",
+                function=ToolCall.FunctionBody(
+                    name="ToolA", arguments=json.dumps({"value": str(index)})
+                ),
+            )
+        )
+        assert isinstance(result, asyncio.Task)
+        completed = await result
+        assert completed.return_value.is_error is False
+
+    assert attempts == 2
+
+
+async def test_post_tool_use_failure_isolated_from_result_and_later_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fire-and-forget post-hook failure cannot rewrite a successful tool result."""
+    engine = HookEngine([HookDef(event="PostToolUse", matcher="ToolA", command="unused")])
+    failed = asyncio.Event()
+
+    async def execute_hooks(event: str, *_args: object, **_kwargs: object) -> list[HookResult]:
+        if event == "PostToolUse":
+            failed.set()
+            raise RuntimeError("post hook failed")
+        return []
+
+    monkeypatch.setattr(engine, "_execute_hooks", execute_hooks)
+    toolset = _make_toolset()
+    toolset.set_hook_engine(engine)
+
+    for index in range(2):
+        toolset.begin_step([], step_no=index + 1)
+        result = toolset.handle(
+            ToolCall(
+                id=f"post-hook-recovery-{index}",
+                function=ToolCall.FunctionBody(
+                    name="ToolA", arguments=json.dumps({"value": str(index)})
+                ),
+            )
+        )
+        assert isinstance(result, asyncio.Task)
+        completed = await result
+        assert completed.return_value.is_error is False
+        await failed.wait()
+        failed.clear()
+
+    pending = tuple(engine._pending_fire_and_forget)  # pyright: ignore[reportPrivateUsage]
+    if pending:
+        await asyncio.gather(*pending)
+    assert all(task.done() for task in pending)
 
 
 async def test_cross_step_duplicate_uses_sparse_stronger_reminders():

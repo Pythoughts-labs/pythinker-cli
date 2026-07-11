@@ -38,6 +38,13 @@ Aliases: `/report`
 
 List the available subagent types, showing each agent's name, when to use it, its default model, and its tool posture.
 
+### `/prompt-manifest`
+
+Show the latest request-assembly status for the current session. The output includes opaque,
+stable fragment identifiers, admission outcomes, and token estimates. It never includes prompt
+content, user content, raw source names, raw file paths, credentials, or stack traces. Before the
+first assembled request, the command reports that no manifest is available.
+
 ## Account and configuration
 
 ### `/login`

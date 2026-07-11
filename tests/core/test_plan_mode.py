@@ -13,6 +13,7 @@ from pythinker_core.tooling.empty import EmptyToolset
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.context import Context
+from pythinker_code.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.soul.toolset import PythinkerToolset
 from pythinker_code.tools.file.replace import StrReplaceFile
@@ -235,7 +236,12 @@ class TestManualPlanModeInjections:
         assert soul._pending_plan_activation_injection is True
         assert soul.context.history == []
 
-        injections = await soul._collect_injections()
+        provider = next(
+            provider
+            for provider in soul._injection_providers
+            if isinstance(provider, PlanModeInjectionProvider)
+        )
+        injections = await provider.prepare_injections(soul.context.history, soul)
 
         plan_injections = [i for i in injections if i.type.startswith("plan_mode")]
         assert len(plan_injections) == 1
@@ -259,7 +265,12 @@ class TestManualPlanModeInjections:
         assert soul.plan_mode is False
         assert soul._pending_plan_activation_injection is False
 
-        injections = await soul._collect_injections()
+        provider = next(
+            provider
+            for provider in soul._injection_providers
+            if isinstance(provider, PlanModeInjectionProvider)
+        )
+        injections = await provider.prepare_injections(soul.context.history, soul)
         assert [i for i in injections if i.type.startswith("plan_mode")] == []
 
     async def test_tool_toggle_does_not_queue_manual_activation_injection(

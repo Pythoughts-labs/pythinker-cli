@@ -2,6 +2,116 @@
 
 ## Active
 
+### TUI thinking Markdown and activity motion (2026-07-11)
+
+- [x] Execute `docs/superpowers/plans/2026-07-11-tui-thinking-markdown-and-activity-motion.md`
+      with TDD and the Pythinker guard checkpoints.
+- [x] Render complete thinking-preview Markdown without leaking top-level HTML comments.
+- [x] Keep activity-tree detail text static and reserve coral shimmer for the verb spinner.
+- [x] Add the required `CHANGELOG.md` Unreleased entry.
+- [x] Run focused UI tests, `make check-pythinker-code`, and `make test-pythinker-code`.
+- [x] Run clean-code, test, docs, Pythinker guard, verification, and final diff review passes.
+
+Acceptance: complete Markdown emphasis renders without delimiters; complete top-level HTML comments
+are hidden; malformed Markdown and comments remain readable; fenced literal comment examples remain
+visible; activity-tree details do not shimmer; the bottom verb spinner retains its coral shimmer;
+reduced-motion and lifecycle-marker contracts remain green.
+
+#### Review: TUI thinking Markdown and activity motion
+
+Executed subagent-driven (implementer → task review → fix loop → final whole-branch review) across
+four commits `3505c47c..be252dbf` on `a20bfda0`.
+
+**Resulting behavior (all verified by tests):**
+- Complete Markdown: the live thinking preview renders through `render_agent_body`, so `**bold**`
+  and other emphasis delimiters no longer leak into the preview.
+- Complete top-level HTML comments: a line that is entirely a top-level `<!-- ... -->` comment is
+  removed before the Markdown renderable is built.
+- Malformed/incomplete input: an unterminated `<!-- ...` (and other partial markup) is preserved as
+  readable streaming text; nothing raises out of the Live loop.
+- Fenced literal examples: a `<!-- ... -->` inside a fenced code block renders verbatim (fence-aware
+  split via `iter_fence_aware_lines`).
+- Mixed prose+comment line: left fully intact (markers included) — the stripper is line-anchored, so
+  it only removes whole-line comments and never deletes visible prose.
+- Stable tree rows: every activity-tree running detail renders with `shell_style(ShellTone.MUTED)`;
+  the lifecycle marker running pulse (`blink_visible`) is unchanged.
+- Verb-spinner shimmer: `activity_status_line` / `_todo_activity_line` remain the only coral verb
+  shimmer, including reduced-motion and no-color fallbacks.
+
+**Two confirmed root causes:** (1) `_ContentBlock._compose_thinking_stream` built a plain
+`Text(preview, ...)`, bypassing Markdown; (2) `render_activity_tree` called `shimmer_text` on each
+`running` detail, animating one tree row.
+
+**Evidence (fresh terminal output):**
+- Focused TUI set (6 modules): `178 passed, 1 warning` (the warning is pre-existing pytest temp-dir
+  cleanup from unrelated `knowledge_base` tests, not this change).
+- Full package unit `tests`: `6927 passed, 9 skipped, 1 xfailed`.
+- Separate `tests_e2e`: `65 passed, 4 skipped`. `make test-pythinker-code` exit 0, no failures.
+- Static gate `make check-pythinker-code`: ruff `All checks passed!`, `1250 files already formatted`,
+  pyright `0 errors, 0 warnings, 0 informations`, ty clean, `All checks passed!`.
+- `git diff --check`: clean (no output).
+
+**Quality-review verdicts:** Task 1 review — spec ✅, one Important plan-mandated regex bug
+(non-greedy `.*?` backtracking swallowed visible prose on a mixed line); fixed (tempered token
+`(?:(?!-->).)*?`) + regression test, re-review ✅. Task 2 review — ✅ approved, no issues (RED
+corroborated: `#c68d7e` = `activity_verb`). Task 3 docs review — ✅ accurate & truthful. Final
+whole-branch review (Opus, C01–C15 + failure-truthfulness) — **Ready to merge: Yes**, zero
+Critical/Important/Minor.
+
+**Approved deviations:** the plan-mandated comment regex was tightened with maintainer approval to
+stop same-line silent prose deletion. **Remaining blockers:** none. A line of two adjacent complete
+comments with zero prose between them (`<!-- a --><!-- b -->`) is now preserved — an accepted
+safe-direction narrowing (under-stripping a marker beats deleting prose), pinned by test.
+
+### Agent core deepening program (2026-07-10)
+
+- [x] Execute `docs/superpowers/plans/2026-07-10-agent-core-deepening.md` on
+      `feat/agent-core-deepening` using TDD and subagent-driven task reviews.
+- [x] Phase 1: characterize provider handoff, static prompt, JSONL, agent projections,
+      and Toolset facade behavior.
+- [x] Phase 2: ship bounded `SkillCatalog` discovery with exhaustive compatibility.
+- [x] Phase 3: ship observable request assembly and `/prompt-manifest`.
+- [x] Phase 4: ship transactional Context replacement and disk-first appends.
+- [x] Phase 5: ship WARN-mode resolved agent catalogue with strict-mode tests.
+- [x] Phase 6: characterize Toolset, record thresholds, and extract only if measured.
+- [x] Run full guards, gates, two-axis review, and document the final result here.
+
+#### Review: agent core deepening
+
+- Outcome: all six approved phases shipped on the umbrella branch. Bounded skill
+  discovery, observable request assembly, transactional Context persistence, and
+  resolved agent definitions retain their documented compatibility projections.
+  `/prompt-manifest` exposes only sanitized in-memory assembly metadata.
+- Toolset decision: NO-GO on private extraction. The controlled execution-pipeline
+  attempt worsened median framework overhead from 99.568352% to 99.606995% and was
+  reverted. The reproducible schema-v2 report contains 18 scenarios and seven
+  command-generated decisions. Five true 500-tool registry p95 values were
+  3.245000, 2.934625, 3.091542, 4.716500, and 3.079834 ms; none crossed 5 ms.
+- Deviation: deterministic fault characterization exposed an exception-atomicity
+  defect in MCP registry publication. The surgical rollback preserves the previous
+  registry and re-raises the original registration failure. Final review also
+  replaced mock state with real `CompactionResult` and `TaskView` instances and
+  bounded optimistic revert conflicts to three attempts before surfacing the typed
+  generation conflict.
+- Compatibility windows: `Runtime.skills` remains until internal exact lookups have
+  migrated and repository search proves it removable. Unknown agent fields warn in
+  this release and become errors in the following minor release. `LaborMarket`,
+  `AgentTypeDefinition`, and generated Markdown wrappers remain through that
+  strict-default release; their earliest removal is the next minor release, subject
+  to direct-launch parity and migration checks.
+- Verification: `make check-pythinker-code` passed Ruff, formatting, Pyright, and ty;
+  `make test-pythinker-code` exited 0 after collecting 6,932 package tests and then
+  passed 65 E2E tests with four skips; provider snapshots passed 39 tests; the
+  Toolset/fault matrix passed 96 tests; focused guard fixes passed 32 tests; and
+  `git diff --check` passed. Expected Loguru/Python deprecation and pytest temporary
+  cleanup warnings remain non-blocking.
+- Review: Task 13 rereview approved the reproducible decision builder, true p95
+  samples, handle-level cancellation recovery, and MCP observability. Final Standards
+  and Spec reviews found no Critical/Important implementation defect; their release
+  metadata blockers were resolved here. Pythinker, clean-code, test, and docs guard
+  passes found no remaining ship blocker.
+- Blockers: none.
+
 ### Plan: publishable benchmark comparison (2026-07-05)
 
 - [ ] Execute `docs/superpowers/plans/2026-07-05-publishable-benchmark-comparison.md`

@@ -205,7 +205,6 @@ def test_no_old_repo_owner_references() -> None:
         old_owner + ".github.io/Pythinker-Code",
     ]
     skip_dirs = {
-        "graphify-out",
         ".git",
         "dist",
         ".vitepress",

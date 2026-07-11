@@ -41,10 +41,16 @@ from pythinker_code.notifications import (
     NotificationView,
     build_notification_message,
     extract_notification_ids,
+    is_notification_message,
 )
 from pythinker_code.prompt_templates import PromptTemplate, expand_prompt_template
 from pythinker_code.prompts import BUDGET_CONTINUATION_NUDGE
 from pythinker_code.skill import Skill, read_skill_text_with_local_specialization
+from pythinker_code.skill.catalog import (
+    SkillProjectionOutcome,
+    SkillProjectionStatus,
+    render_skill_prompt_view,
+)
 from pythinker_code.soul import (
     LLMNotSet,
     LLMNotSupported,
@@ -54,8 +60,8 @@ from pythinker_code.soul import (
     wire_send,
 )
 from pythinker_code.soul.agent import (
+    SKILL_PROMPT_MAX_CHARACTERS,
     Agent,
-    BuiltinSystemPromptArgs,
     Runtime,
     render_agents_md_reminder,
 )
@@ -78,14 +84,16 @@ from pythinker_code.soul.compaction_restore import (
     build_hook_context_message,
     compact_summary_text,
 )
-from pythinker_code.soul.context import Context
+from pythinker_code.soul.context import (
+    Context,
+    ContextCommit,
+    ContextCommittedCancellation,
+    ContextPersistenceError,
+    ContextReplacement,
+)
 from pythinker_code.soul.dynamic_injection import (
-    DynamicInjection,
     DynamicInjectionProvider,
-    collect_within_budget,
-    dynamic_to_candidate,
     injection_budget_from_runtime,
-    normalize_history,
 )
 from pythinker_code.soul.dynamic_injections.active_skills import ActiveSkillInjectionProvider
 from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
@@ -102,6 +110,7 @@ from pythinker_code.soul.flow_runner import FLOW_COMMAND_PREFIX, FlowRunner
 from pythinker_code.soul.live_tokens import add_total_output_tokens
 from pythinker_code.soul.message import (
     check_message,
+    is_system_reminder_message,
     system,
     system_reminder,
     tool_result_to_message,
@@ -110,6 +119,30 @@ from pythinker_code.soul.permission import (
     permission_profile_for_runtime,
     reset_step_permission_profile,
     set_step_permission_profile,
+)
+from pythinker_code.soul.request_assembly import (
+    AGENTS_MD_SOURCE_POLICY,
+    AssembledRequest,
+    FragmentBudgetClass,
+    FragmentPersistence,
+    FragmentRequirement,
+    FragmentTruncation,
+    RequestAssembler,
+    RequestAssemblyError,
+    RequestAssemblyInput,
+    RequestFragment,
+    RequestManifest,
+    RequestSourceResult,
+    SourceApplicability,
+    SourceResultStatus,
+    TrustedSourcePolicy,
+)
+from pythinker_code.soul.request_lifecycle import (
+    PreparedSources,
+    RequestLifecycle,
+    RequestLifecycleError,
+    SourceAcknowledgement,
+    failed_manifest,
 )
 from pythinker_code.soul.slash import registry as soul_slash_registry
 from pythinker_code.soul.toolset import PythinkerToolset
@@ -154,6 +187,7 @@ if TYPE_CHECKING:
 
 
 SKILL_COMMAND_PREFIX = "skill:"
+_EXPLICIT_SKILL_RE = re.compile(r"(?:\$|/skill:)([\w.:-]+)", re.IGNORECASE)
 
 
 def _safe_cwd(fallback: str) -> str:
@@ -166,6 +200,24 @@ def _safe_cwd(fallback: str) -> str:
         return str(Path.cwd())
     except FileNotFoundError:
         return str(fallback)
+
+
+def _explicit_skill_names(task: str) -> tuple[str, ...]:
+    """Return explicit skill mentions in left-to-right message order."""
+    return tuple(match.group(1) for match in _EXPLICIT_SKILL_RE.finditer(task))
+
+
+def _latest_real_user_text(history: Sequence[Message]) -> str | None:
+    """Return the latest user task, excluding injected and notification messages."""
+    for message in reversed(history):
+        if message.role != "user":
+            continue
+        if is_notification_message(message) or is_system_reminder_message(message):
+            continue
+        text = message.extract_text(" ").strip()
+        if text:
+            return text
+    return None
 
 
 def classify_llm_system(chat_provider: object | None) -> str:
@@ -356,24 +408,54 @@ def _user_message_with_hook_context(
     return Message(role="user", content=[*base, reminder])
 
 
-def _with_agents_md_preamble(
-    history: Sequence[Message], builtin_args: BuiltinSystemPromptArgs
-) -> list[Message]:
-    """Return *history* with the merged AGENTS.md prepended as a leading user-role
-    ``<system-reminder>``, or a plain copy of *history* when no AGENTS.md applies.
+@dataclass(frozen=True, slots=True)
+class _PreparedRequest:
+    assembled: AssembledRequest
+    acknowledgements: tuple[SourceAcknowledgement, ...]
 
-    The preamble is assembled fresh from ``builtin_args`` on every step and is NEVER
-    appended to ``context.history``. That is precisely what keeps the project instructions
-    immune to the two failure modes a persisted home would hit: context compaction cannot
-    summarize them away (they are not in the history it rewrites), and the dynamic-injection
-    token budget cannot truncate them (they are not a budgeted injection). The input is left
-    unmutated. See :func:`pythinker_code.soul.agent.render_agents_md_reminder`.
-    """
-    reminder = render_agents_md_reminder(builtin_args)
-    if reminder is None:
-        return list(history)
-    preamble = Message(role="user", content=[system_reminder(reminder)])
-    return [preamble, *history]
+
+_SKILL_SOURCE = "skill_catalog"
+_SKILL_KEY = "task_candidates"
+_SIDE_QUESTION_SOURCE = "side_question"
+_SIDE_QUESTION_KEY = "question"
+
+
+def _provided_source(policy: TrustedSourcePolicy, content: str) -> RequestSourceResult:
+    return RequestSourceResult(
+        source=policy.source,
+        key=policy.key,
+        status=SourceResultStatus.PROVIDED,
+        fragment=RequestFragment(
+            key=policy.key,
+            content=content,
+            source=policy.source,
+            requirement=policy.requirement,
+            persistence=policy.persistence,
+            priority=policy.priority,
+            truncatable=policy.truncation is FragmentTruncation.ALLOWED,
+        ),
+        reason_code=None,
+    )
+
+
+def _not_applicable_source(policy: TrustedSourcePolicy) -> RequestSourceResult:
+    return RequestSourceResult(
+        source=policy.source,
+        key=policy.key,
+        status=SourceResultStatus.NOT_APPLICABLE,
+        fragment=None,
+        reason_code=None,
+    )
+
+
+def _failed_source(policy: TrustedSourcePolicy, reason_code: str) -> RequestSourceResult:
+    return RequestSourceResult(
+        source=policy.source,
+        key=policy.key,
+        status=SourceResultStatus.FAILED,
+        fragment=None,
+        reason_code=reason_code,
+    )
 
 
 def _should_nudge_truncation(
@@ -532,6 +614,8 @@ class PythinkerSoul:
         self._deliberation_generation = 0
         self._sleep_inhibitor = SleepInhibitor(enabled=agent.runtime.config.prevent_idle_sleep)
         self._compaction = SimpleCompaction(base_prompt=self._runtime.config.compact_prompt)
+        self.latest_skill_projection_outcome: SkillProjectionOutcome | None = None
+        self.latest_request_manifest: RequestManifest | None = None
 
         for tool in agent.toolset.tools:
             if tool.name == SendDMail_NAME:
@@ -588,6 +672,8 @@ class PythinkerSoul:
                 else [AutoModeInjectionProvider()]
             ),
         ]
+        self._request_lifecycle = RequestLifecycle(self._injection_providers)
+        self._notified_context_generations: set[int] = set()
         self._hook_engine: HookEngine = HookEngine()
         self._stop_hook_active: bool = False
         if self._runtime.role == "root":
@@ -666,69 +752,119 @@ class PythinkerSoul:
     def add_injection_provider(self, provider: DynamicInjectionProvider) -> None:
         """Register an additional dynamic injection provider."""
         self._injection_providers.append(provider)
+        self._request_lifecycle.sync_providers(self._injection_providers)
 
     def rearm_injection(self, key: str) -> None:
         """Re-arm matching dynamic injection providers after related state changes."""
-        for provider in self._injection_providers:
-            try:
-                provider.rearm(key)
-            except Exception:
-                logger.debug("injection provider rearm failed")
+        failures = self._request_lifecycle.rearm(self._injection_providers, key)
+        for failure in failures:
+            logger.debug("injection provider rearm failed", exc_info=failure)
 
-    async def _collect_injections(self) -> list[DynamicInjection]:
-        """Collect dynamic injections from all registered providers."""
-        injections: list[DynamicInjection] = []
-        for provider in self._injection_providers:
-            try:
-                result = await provider.get_injections(self._context.history, self)
-                injections.extend(result)
-            except Exception as exc:
-                from pythinker_code.telemetry.errors import report_handled_error
+    async def _required_request_sources(self) -> PreparedSources:
+        return await self._request_lifecycle.prepare_required(
+            self._injection_providers,
+            self._context.history,
+            self,
+            self._report_provider_failure,
+        )
 
-                report_handled_error(
-                    exc,
-                    site="soul.injection.get",
-                    provider=type(provider).__name__,
-                )
-                logger.warning(
-                    "injection provider %s failed",
-                    type(provider).__name__,
-                    exc_info=True,
-                )
-        memory_config = getattr(self._runtime.config, "memory", None)
-        if not getattr(memory_config, "injection_bus", True):
-            return injections
-        candidates = [dynamic_to_candidate(injection) for injection in injections]
-        budget = injection_budget_from_runtime(self._runtime).injection_budget_tokens
-        budgeted = collect_within_budget(candidates, budget)
-        return [
-            DynamicInjection(type=candidate.type, content=candidate.content)
-            for candidate in budgeted
-        ]
+    async def _optional_request_sources(self) -> PreparedSources:
+        return await self._request_lifecycle.prepare_optional(
+            self._injection_providers,
+            self._context.history,
+            self,
+            self._report_provider_failure,
+            enabled=self._runtime.config.memory.injection_bus,
+        )
 
-    async def _notify_injection_providers_compacted(self) -> None:
-        """Notify all injection providers that the context has been compacted.
+    @staticmethod
+    def _report_provider_failure(provider: DynamicInjectionProvider, error: Exception) -> None:
+        from pythinker_code.telemetry.errors import report_handled_error
+
+        report_handled_error(
+            error,
+            site="soul.injection.get",
+            provider=type(provider).__name__,
+        )
+        logger.warning(
+            "injection provider %s failed",
+            type(provider).__name__,
+            exc_info=True,
+        )
+
+    async def notify_history_rebuilt(self) -> None:
+        """Advance request lifecycle state after history is replaced or cleared.
 
         Failures are isolated per-provider so a buggy third-party provider
-        cannot abort compaction (which would skip CompactionEnd wire events
-        and PostCompact telemetry).
+        cannot prevent other providers from rearming against the new history.
         """
-        for provider in self._injection_providers:
-            try:
-                await provider.on_context_compacted()
-            except Exception as exc:
-                from pythinker_code.telemetry.errors import report_handled_error
+        self._request_lifecycle.context_rebuilt()
 
-                report_handled_error(
-                    exc,
-                    site="soul.injection.on_context_compacted",
-                    provider=type(provider).__name__,
-                )
-                logger.warning(
-                    "injection provider %s on_context_compacted failed",
-                    type(provider).__name__,
-                    exc_info=True,
-                )
+        async def notify_providers() -> None:
+            for provider in self._injection_providers:
+                try:
+                    await provider.on_context_compacted()
+                except asyncio.CancelledError as exc:
+                    from pythinker_code.telemetry.errors import report_handled_error
+
+                    report_handled_error(
+                        exc,
+                        site="soul.injection.on_context_compacted",
+                        provider=type(provider).__name__,
+                    )
+                    logger.warning(
+                        "injection provider %s cancelled its context callback",
+                        type(provider).__name__,
+                        exc_info=True,
+                    )
+                except Exception as exc:
+                    from pythinker_code.telemetry.errors import report_handled_error
+
+                    report_handled_error(
+                        exc,
+                        site="soul.injection.on_context_compacted",
+                        provider=type(provider).__name__,
+                    )
+                    logger.warning(
+                        "injection provider %s on_context_compacted failed",
+                        type(provider).__name__,
+                        exc_info=True,
+                    )
+
+        notification_task = asyncio.create_task(notify_providers())
+        try:
+            await asyncio.shield(notification_task)
+        except asyncio.CancelledError as cancellation:
+            await _settle_shielded(notification_task)
+            try:
+                notification_task.result()
+            except BaseException as notification_error:
+                raise cancellation from notification_error
+            raise
+
+    async def _notify_context_commit(self, commit: ContextCommit) -> None:
+        if commit.generation in self._notified_context_generations:
+            return
+        self._notified_context_generations.add(commit.generation)
+        await self.notify_history_rebuilt()
+
+    async def _complete_history_replacement(self, operation: Awaitable[ContextCommit]) -> None:
+        try:
+            commit = await operation
+        except ContextCommittedCancellation as cancellation:
+            await self._notify_context_commit(cancellation.commit)
+            raise
+        except ContextPersistenceError as error:
+            if error.commit is not None:
+                await self._notify_context_commit(error.commit)
+            raise
+        await self._notify_context_commit(commit)
+
+    async def clear_context(self) -> None:
+        await self._complete_history_replacement(self._context.clear(self._agent.system_prompt))
+
+    async def _revert_context_to(self, checkpoint_id: int) -> None:
+        await self._complete_history_replacement(self._context.revert_to(checkpoint_id))
 
     async def notify_auto_changed(self, enabled: bool) -> None:
         """Notify dynamic injection providers that auto mode changed."""
@@ -1797,7 +1933,7 @@ class PythinkerSoul:
                 )
 
             if back_to_the_future is not None:
-                await self._context.revert_to(back_to_the_future.checkpoint_id)
+                await self._revert_context_to(back_to_the_future.checkpoint_id)
                 # The reverted history no longer contains the last step's calls,
                 # so they must not seed cross-step dedup for the next step.
                 self._last_tool_calls = []
@@ -1806,6 +1942,188 @@ class PythinkerSoul:
 
             # Consume any pending steers between steps
             await self._consume_pending_steers()
+
+    def _agents_request_source(
+        self,
+    ) -> tuple[TrustedSourcePolicy, RequestSourceResult]:
+        reminder = render_agents_md_reminder(self._runtime.builtin_args)
+        if reminder is None:
+            return AGENTS_MD_SOURCE_POLICY, _not_applicable_source(AGENTS_MD_SOURCE_POLICY)
+        return AGENTS_MD_SOURCE_POLICY, _provided_source(AGENTS_MD_SOURCE_POLICY, reminder)
+
+    def _skill_request_sources(
+        self, task: str
+    ) -> tuple[tuple[TrustedSourcePolicy, ...], tuple[RequestSourceResult, ...]]:
+        policy = TrustedSourcePolicy(
+            source=_SKILL_SOURCE,
+            key=_SKILL_KEY,
+            requirement=FragmentRequirement.BEST_EFFORT,
+            persistence=FragmentPersistence.REQUEST_ONLY,
+            priority=0,
+            budget_class=FragmentBudgetClass.BUDGETED,
+            truncation=FragmentTruncation.FORBIDDEN,
+            applicability=SourceApplicability.MAY_BE_NOT_APPLICABLE,
+            failure_reason_codes=(
+                "invalid_projection_budget",
+                "projection_budget_too_small",
+                "skill_projection_failed",
+            ),
+        )
+        if not task:
+            self.latest_skill_projection_outcome = None
+            return (policy,), (_not_applicable_source(policy),)
+        try:
+            outcome = self._runtime.skill_catalog.prompt_view(
+                task,
+                max_characters=SKILL_PROMPT_MAX_CHARACTERS - len(system_reminder("").text),
+                explicit_names=_explicit_skill_names(task),
+                active_names=self._runtime.session.state.active_skills,
+            )
+        except Exception:
+            logger.warning("Skill candidate projection failed", exc_info=True)
+            self.latest_skill_projection_outcome = None
+            return (policy,), (_failed_source(policy, "skill_projection_failed"),)
+        self.latest_skill_projection_outcome = outcome
+        if outcome.status is not SkillProjectionStatus.READY:
+            logger.warning(
+                "Skill candidate projection status={status} reason={reason}",
+                status=outcome.status.value,
+                reason=outcome.reason_code or "none",
+            )
+        if outcome.view is None or not outcome.view.matches:
+            if outcome.status is SkillProjectionStatus.FAILED:
+                return (policy,), (_failed_source(policy, "skill_projection_failed"),)
+            return (policy,), (_not_applicable_source(policy),)
+        return (policy,), (_provided_source(policy, render_skill_prompt_view(outcome.view)),)
+
+    async def _assemble_request(
+        self,
+        task: str,
+        extra_sources: Sequence[tuple[TrustedSourcePolicy, RequestSourceResult]] = (),
+    ) -> _PreparedRequest:
+        assembly_started = time.monotonic()
+        try:
+            agents_policy, agents_result = self._agents_request_source()
+            request = RequestAssemblyInput(
+                system_prompt=self._agent.system_prompt,
+                persisted_history=tuple(self._context.history),
+                current_task=task,
+                budget_tokens=injection_budget_from_runtime(self._runtime).injection_budget_tokens,
+                history_generation=self._request_lifecycle.history_generation,
+            )
+            required = await self._required_request_sources()
+            required_policies = (agents_policy, *required.policies)
+            required_results = (agents_result, *required.results)
+            if extra_sources:
+                extra_policies, extra_results = zip(*extra_sources, strict=True)
+                required_policies = (*required_policies, *extra_policies)
+                required_results = (*required_results, *extra_results)
+            await RequestAssembler(required_policies, required_results).assemble(request)
+
+            optional = await self._optional_request_sources()
+            skill_policies, skill_results = self._skill_request_sources(task)
+            policies = (*required_policies, *optional.policies, *skill_policies)
+            source_results = (*required_results, *optional.results, *skill_results)
+            assembled = await RequestAssembler(policies, source_results).assemble(request)
+        except RequestAssemblyError as error:
+            self.latest_request_manifest = error.manifest
+            self._record_request_assembly_telemetry(error.manifest, assembly_started)
+            raise
+        except asyncio.CancelledError:
+            raise
+        except RequestLifecycleError as error:
+            manifest = failed_manifest(error.reason_code, None)
+            self.latest_request_manifest = manifest
+            self._record_request_assembly_telemetry(manifest, assembly_started)
+            raise
+        except Exception as error:
+            failure = RequestLifecycleError("request_source_adapter_failed")
+            manifest = failed_manifest(failure.reason_code, None)
+            self.latest_request_manifest = manifest
+            self._record_request_assembly_telemetry(manifest, assembly_started)
+            raise failure from error
+        self.latest_request_manifest = assembled.manifest
+        self._record_request_assembly_telemetry(assembled.manifest, assembly_started)
+        return _PreparedRequest(
+            assembled,
+            (*required.acknowledgements, *optional.acknowledgements),
+        )
+
+    @staticmethod
+    def _record_request_assembly_telemetry(
+        manifest: RequestManifest,
+        assembly_started: float,
+    ) -> None:
+        from pythinker_code.telemetry import metrics
+
+        try:
+            metrics.record_request_assembly(
+                manifest,
+                duration_seconds=time.monotonic() - assembly_started,
+            )
+        except Exception:
+            logger.warning("Request assembly telemetry failed", exc_info=True)
+
+    async def _persist_assembled_history(self, prepared: _PreparedRequest) -> None:
+        if not prepared.assembled.history_appends:
+            return
+
+        async def _commit_and_finalize() -> None:
+            try:
+                await self._context.append_message(prepared.assembled.history_appends)
+            except Exception as error:
+                raise RequestLifecycleError("context_persistence_failed") from error
+            try:
+                self._request_lifecycle.finalize(
+                    prepared.assembled.manifest,
+                    prepared.acknowledgements,
+                )
+            except RequestLifecycleError:
+                raise
+            except Exception as error:
+                raise RequestLifecycleError("provider_finalization_failed") from error
+
+        commit_task = asyncio.create_task(_commit_and_finalize())
+        try:
+            await asyncio.shield(commit_task)
+        except asyncio.CancelledError as cancellation:
+            await _settle_shielded(commit_task)
+            commit_error: BaseException | None = None
+            try:
+                commit_task.result()
+            except BaseException as error:
+                commit_error = error
+            self.latest_request_manifest = failed_manifest(
+                "context_persistence_cancelled",
+                prepared.assembled.manifest,
+            )
+            if commit_error is not None:
+                raise cancellation from commit_error
+            raise
+        except RequestLifecycleError as error:
+            self.latest_request_manifest = failed_manifest(
+                error.reason_code,
+                prepared.assembled.manifest,
+            )
+            raise
+
+    async def assemble_side_request(self, question: str, reminder_text: str) -> AssembledRequest:
+        policy = TrustedSourcePolicy(
+            source=_SIDE_QUESTION_SOURCE,
+            key=_SIDE_QUESTION_KEY,
+            requirement=FragmentRequirement.REQUIRED,
+            persistence=FragmentPersistence.REQUEST_ONLY,
+            priority=-100,
+            budget_class=FragmentBudgetClass.BUDGETED,
+            truncation=FragmentTruncation.FORBIDDEN,
+            applicability=SourceApplicability.ALWAYS,
+            failure_reason_codes=("side_question_invalid",),
+        )
+        content = f"{reminder_text}\n\n{question}"
+        prepared = await self._assemble_request(
+            question, ((policy, _provided_source(policy, content)),)
+        )
+        return prepared.assembled
 
     async def _step(self) -> StepOutcome | None:
         """Run a single step and return a stop outcome, or None to continue."""
@@ -1854,23 +2172,10 @@ class PythinkerSoul:
                 on_notification=_append_notification,
             )
 
-        # Dynamic injection
-        injections = await self._collect_injections()
-        if injections:
-            combined_reminders = "\n".join(system_reminder(inj.content).text for inj in injections)
-            await self._context.append_message(
-                Message(
-                    role="user",
-                    content=[TextPart(text=combined_reminders)],
-                )
-            )
-
-        # Prepend the merged AGENTS.md as a leading <system-reminder> (assembled fresh from
-        # runtime args, never persisted to history) so the project instructions are immune to
-        # compaction and the injection budget, then normalize to merge adjacent user messages.
-        effective_history = normalize_history(
-            _with_agents_md_preamble(self._context.history, self._runtime.builtin_args)
-        )
+        task = _latest_real_user_text(self._context.history) or ""
+        prepared_request = await self._assemble_request(task)
+        await self._persist_assembled_history(prepared_request)
+        effective_history = prepared_request.assembled.provider_history
 
         # Capture tool results as they stream in. If the batch is interrupted
         # mid-flight, already-completed calls must keep their real output rather
@@ -2353,8 +2658,10 @@ class PythinkerSoul:
         when there is nothing worth pruning. Runs silently — no compaction wire
         events — since it may fire often and is not a user-visible summary.
         """
+        snapshot_generation = self._context.mutation_generation
+        snapshot = tuple(self._context.history)
         capped, cap_freed = cap_stale_tool_result_bodies(
-            self._context.history,
+            snapshot,
             protect_last=self._loop_control.prune_protect_last,
             max_chars=self._loop_control.prune_tool_result_max_chars,
         )
@@ -2368,11 +2675,6 @@ class PythinkerSoul:
             return False
 
         before_tokens = self._context.token_count
-        # Snapshot history first: clear() rotates the backing file, so a mid-rebuild
-        # failure would otherwise leave the context as just the system prompt. Reuse the
-        # same clear+rebuild primitive compact_context uses (the supported way to mutate
-        # the append-only JSONL context), but roll back to the snapshot if it throws.
-        snapshot = list(self._context.history)
         # Reduce the AUTHORITATIVE pre-prune count by the estimated tokens freed, rather
         # than replacing it with a full heuristic re-estimate of the remaining history. A
         # full re-estimate can over-count the survivors (chars/4 overshoots code/markup),
@@ -2381,20 +2683,16 @@ class PythinkerSoul:
         # pruning can only lower the count (pruned ⊆ snapshot ⇒ delta ≥ 0).
         freed_tokens = estimate_text_tokens(snapshot) - estimate_text_tokens(pruned)
         pruned_tokens = max(0, before_tokens - max(0, freed_tokens))
-        await self._context.clear()
-        try:
-            await self._context.write_system_prompt(self._agent.system_prompt)
-            await self._checkpoint()
-            await self._context.append_message(pruned)
-            await self._context.update_token_count(pruned_tokens)
-        except Exception:
-            await self._context.clear()
-            await self._context.write_system_prompt(self._agent.system_prompt)
-            await self._checkpoint()
-            if snapshot:
-                await self._context.append_message(snapshot)
-            await self._context.update_token_count(before_tokens)
-            raise
+        await self._context.replace_history(
+            ContextReplacement(
+                system_prompt=self._agent.system_prompt,
+                messages=tuple(pruned),
+                token_count=pruned_tokens,
+                create_checkpoint=True,
+                checkpoint_user_marker=self._checkpoint_with_user_message,
+            ),
+            expected_generation=snapshot_generation,
+        )
         # Unlike full compaction, pruning preserves every non-tool message verbatim
         # (only tool-result *bodies* are elided), so prior dynamic injections survive in
         # history. Do NOT re-arm injection providers here, or one-shot fragments (e.g. the
@@ -2445,6 +2743,7 @@ class PythinkerSoul:
 
         trigger_reason = "manual" if custom_instruction else "auto"
         before_tokens = self._context.token_count
+        history_generation = self._context.mutation_generation
         history_before_compaction = tuple(self._context.history)
         from pythinker_code.hooks import events
 
@@ -2488,85 +2787,71 @@ class PythinkerSoul:
                 self._session_cost_usd += estimate_cost_usd(
                     compaction_result.usage, self.model_name
                 )
-            await self._context.clear()
-            try:
-                await self._context.write_system_prompt(self._agent.system_prompt)
-                await self._checkpoint()
-                await self._context.append_message(compaction_result.messages)
-                estimated_token_count = compaction_result.estimated_token_count
-                summary_text = compact_summary_text(compaction_result.messages)
+            replacement_messages = list(compaction_result.messages)
+            estimated_token_count = compaction_result.estimated_token_count
+            summary_text = compact_summary_text(compaction_result.messages)
 
-                if restore_context.messages:
-                    await self._context.append_message(restore_context.messages)
-                    estimated_token_count += estimate_text_tokens(restore_context.messages)
+            if restore_context.messages:
+                replacement_messages.extend(restore_context.messages)
+                estimated_token_count += estimate_text_tokens(restore_context.messages)
 
-                if self._runtime.role == "root":
-                    active_task_snapshot = build_active_task_snapshot(
-                        self._runtime.background_tasks
+            if self._runtime.role == "root":
+                active_task_snapshot = build_active_task_snapshot(self._runtime.background_tasks)
+                if active_task_snapshot is not None:
+                    active_task_message = Message(
+                        role="user",
+                        content=[
+                            system(
+                                "The following background tasks are still active"
+                                " after compaction. Use TaskList if you need to"
+                                " re-enumerate them later."
+                            ),
+                            TextPart(text=active_task_snapshot),
+                        ],
                     )
-                    if active_task_snapshot is not None:
-                        active_task_message = Message(
-                            role="user",
-                            content=[
-                                system(
-                                    "The following background tasks are still active"
-                                    " after compaction. Use TaskList if you need to"
-                                    " re-enumerate them later."
-                                ),
-                                TextPart(text=active_task_snapshot),
-                            ],
-                        )
-                        await self._context.append_message(active_task_message)
-                        estimated_token_count += estimate_text_tokens([active_task_message])
+                    replacement_messages.append(active_task_message)
+                    estimated_token_count += estimate_text_tokens([active_task_message])
 
-                post_compact_results = await self._hook_engine.trigger(
-                    "PostCompact",
-                    matcher_value=trigger_reason,
-                    input_data=events.post_compact(
-                        session_id=self._runtime.session.id,
-                        cwd=_safe_cwd(str(self._runtime.work_dir)),
-                        trigger=trigger_reason,
-                        estimated_token_count=estimated_token_count,
-                        compact_summary=summary_text,
+            post_compact_results = await self._hook_engine.trigger(
+                "PostCompact",
+                matcher_value=trigger_reason,
+                input_data=events.post_compact(
+                    session_id=self._runtime.session.id,
+                    cwd=_safe_cwd(str(self._runtime.work_dir)),
+                    trigger=trigger_reason,
+                    estimated_token_count=estimated_token_count,
+                    compact_summary=summary_text,
+                ),
+            )
+            session_start_results = await self._hook_engine.trigger(
+                "SessionStart",
+                matcher_value="compact",
+                input_data=events.session_start(
+                    session_id=self._runtime.session.id,
+                    cwd=_safe_cwd(str(self._runtime.work_dir)),
+                    source="compact",
+                ),
+            )
+            hook_context_message = build_hook_context_message(
+                result.additional_context
+                for result in [*post_compact_results, *session_start_results]
+            )
+            if hook_context_message is not None:
+                replacement_messages.append(hook_context_message)
+                estimated_token_count += estimate_text_tokens([hook_context_message])
+
+            await self._complete_history_replacement(
+                self._context.replace_history(
+                    ContextReplacement(
+                        system_prompt=self._agent.system_prompt,
+                        messages=tuple(replacement_messages),
+                        token_count=estimated_token_count,
+                        create_checkpoint=True,
+                        checkpoint_user_marker=self._checkpoint_with_user_message,
                     ),
+                    expected_generation=history_generation,
                 )
-                session_start_results = await self._hook_engine.trigger(
-                    "SessionStart",
-                    matcher_value="compact",
-                    input_data=events.session_start(
-                        session_id=self._runtime.session.id,
-                        cwd=_safe_cwd(str(self._runtime.work_dir)),
-                        source="compact",
-                    ),
-                )
-                hook_context_message = build_hook_context_message(
-                    result.additional_context
-                    for result in [*post_compact_results, *session_start_results]
-                )
-                if hook_context_message is not None:
-                    await self._context.append_message(hook_context_message)
-                    estimated_token_count += estimate_text_tokens([hook_context_message])
-
-                # Estimate token count so context_usage is not reported as 0%
-                await self._context.update_token_count(estimated_token_count)
-
-                # Notify dynamic injection providers that history has been rebuilt so
-                # they can reset any one-shot throttling state. Failures are isolated
-                # per-provider so compaction completion (wire event + telemetry) is
-                # not affected by a buggy provider.
-                await self._notify_injection_providers_compacted()
-            except Exception:
-                # Rebuild faulted after clear() rotated the backing file. Restore
-                # the pre-compaction history so an I/O fault cannot truncate the
-                # live context to just the system prompt. Same primitive as
-                # prune_context.
-                await self._context.clear()
-                await self._context.write_system_prompt(self._agent.system_prompt)
-                await self._checkpoint()
-                if history_before_compaction:
-                    await self._context.append_message(list(history_before_compaction))
-                await self._context.update_token_count(before_tokens)
-                raise
+            )
 
         except Exception:
             from pythinker_code.telemetry import track

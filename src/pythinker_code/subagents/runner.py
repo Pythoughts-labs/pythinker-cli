@@ -305,7 +305,9 @@ class ForegroundSubagentRunner:
         actual_type = prepared.actual_type
         resumed = prepared.resumed
 
-        type_def = self._runtime.labor_market.require_builtin_type(actual_type)
+        from pythinker_code.soul.agent import require_agent_type_definition
+
+        type_def = require_agent_type_definition(self._runtime, actual_type)
         launch_spec = prepared.record.launch_spec
         if req.model is not None:
             launch_spec = replace(
@@ -487,7 +489,9 @@ class ForegroundSubagentRunner:
             )
 
         actual_type = req.requested_type or "coder"
-        type_def = self._runtime.labor_market.require_builtin_type(actual_type)
+        from pythinker_code.soul.agent import require_agent_type_definition
+
+        type_def = require_agent_type_definition(self._runtime, actual_type)
         agent_id = f"a{uuid.uuid4().hex[:8]}"
         record = self._store.create_instance(
             agent_id=agent_id,

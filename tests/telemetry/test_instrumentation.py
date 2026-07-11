@@ -853,6 +853,7 @@ class TestCompactionTracking:
     def _make_soul(self, *, before_tokens: int, estimated_after: int) -> Any:
         """Construct a minimal PythinkerSoul stub bypassing __init__."""
         from pythinker_code.soul.pythinkersoul import PythinkerSoul
+        from pythinker_code.soul.request_lifecycle import RequestLifecycle
 
         soul = object.__new__(PythinkerSoul)
 
@@ -866,10 +867,7 @@ class TestCompactionTracking:
         ctx = MagicMock()
         ctx.token_count = before_tokens
         ctx.history = []
-        ctx.clear = AsyncMock()
-        ctx.write_system_prompt = AsyncMock()
-        ctx.append_message = AsyncMock()
-        ctx.update_token_count = AsyncMock()
+        ctx.replace_history = AsyncMock()
         soul._context = ctx
 
         soul._hook_engine = MagicMock()
@@ -885,6 +883,7 @@ class TestCompactionTracking:
         soul._loop_control = loop_control
 
         soul._checkpoint = AsyncMock()
+        soul._checkpoint_with_user_message = False
 
         # _run_with_connection_recovery returns a value with .messages and
         # .estimated_token_count — shape it with MagicMock to avoid depending
@@ -900,6 +899,8 @@ class TestCompactionTracking:
         soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)
 
         soul._injection_providers = []
+        soul._request_lifecycle = RequestLifecycle([])
+        soul._notified_context_generations = set()
         return soul
 
     @pytest.mark.asyncio

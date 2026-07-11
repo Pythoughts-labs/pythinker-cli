@@ -23,6 +23,7 @@ from pythinker_code.soul.agent import (
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.denwarenji import DenwaRenji
 from pythinker_code.soul.toolset import PythinkerToolset
+from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.utils.environment import Environment
 
 
@@ -77,11 +78,29 @@ async def test_render_agent_system_prompt_builds_args_without_runtime(
     assert "${PYTHINKER_" not in prompt
 
 
+@pytest.mark.asyncio
+async def test_system_prompt_skill_policy_is_static_and_omits_catalogue_paths(
+    temp_work_dir: HostPath,
+    config: Config,
+) -> None:
+    from pythinker_code.agentspec import DEFAULT_AGENT_FILE
+    from pythinker_code.soul.agent import render_agent_system_prompt
+
+    first = await render_agent_system_prompt(DEFAULT_AGENT_FILE, temp_work_dir, config)
+    second = await render_agent_system_prompt(DEFAULT_AGENT_FILE, temp_work_dir, config)
+
+    first_skills = first.split("## 12. Skills", 1)[1]
+    second_skills = second.split("## 12. Skills", 1)[1]
+    assert first_skills == second_skills
+    assert "Task-relevant skill candidates arrive with each request" in first_skills
+    assert "Path:" not in first_skills
+
+
 def test_render_agents_md_reminder_present(builtin_args: BuiltinSystemPromptArgs):
     """The merged AGENTS.md renders as an authoritative, fenced <system-reminder> body.
 
     AGENTS.md is delivered as a session-start preamble (a user-role system-reminder),
-    not baked into the system prompt — see render_agents_md_reminder / _with_agents_md_preamble.
+    not baked into the system prompt — see render_agents_md_reminder / RequestAssembler.
     """
     from pythinker_code.soul.agent import render_agents_md_reminder
 
@@ -522,6 +541,65 @@ async def test_load_agent_registers_builtin_subagent_types(runtime: Runtime):
         assert builtin_type.agent_file.samefile(builtin_type_yaml)
 
 
+@pytest.fixture
+def agent_projection_files(tmp_path: Path) -> tuple[Path, Path]:
+    (tmp_path / "root-system.md").write_text("Root prompt", encoding="utf-8")
+    (tmp_path / "child-system.md").write_text("Child prompt", encoding="utf-8")
+    child_file = tmp_path / "child.yaml"
+    child_file.write_text(
+        "version: 1\n"
+        "agent:\n"
+        '  name: "Child"\n'
+        "  system_prompt_path: ./child-system.md\n"
+        '  tools: ["pythinker_code.tools.think:Think"]\n'
+        '  allowed_tools: ["pythinker_code.tools.think:Think"]\n'
+        '  model: "characterized-model"\n'
+        '  when_to_use: "Use for exact contract tests."\n'
+        "  hidden: true\n",
+        encoding="utf-8",
+    )
+    root_file = tmp_path / "root.yaml"
+    root_file.write_text(
+        "version: 1\n"
+        "agent:\n"
+        '  name: "Root"\n'
+        "  system_prompt_path: ./root-system.md\n"
+        '  tools: ["pythinker_code.tools.think:Think"]\n'
+        "  subagents:\n"
+        "    analyst:\n"
+        "      path: ./child.yaml\n"
+        '      description: "Literal projected agent"\n',
+        encoding="utf-8",
+    )
+    return root_file, child_file
+
+
+async def test_load_agent_preserves_literal_type_projection_and_toolset_facade(
+    runtime: Runtime,
+    agent_projection_files: tuple[Path, Path],
+) -> None:
+    root_file, child_file = agent_projection_files
+
+    agent = await load_agent(root_file, runtime, mcp_configs=[])
+
+    assert runtime.labor_market.require_builtin_type("analyst") == AgentTypeDefinition(
+        name="analyst",
+        description="Literal projected agent",
+        agent_file=child_file,
+        when_to_use="Use for exact contract tests.",
+        default_model="characterized-model",
+        tool_policy=ToolPolicy(
+            mode="allowlist",
+            tools=("pythinker_code.tools.think:Think",),
+        ),
+        supports_background=False,
+        required_mcp_servers=(),
+    )
+    assert isinstance(agent.toolset, PythinkerToolset)
+    assert runtime.mcp_status == agent.toolset.mcp_status_snapshot
+    assert agent.toolset.find("Think") is not None
+
+
 async def test_load_agent_starts_mcp_in_background(runtime: Runtime, monkeypatch):
     called: dict[str, bool] = {}
 
@@ -610,3 +688,67 @@ def system_prompt_file() -> Generator[Path, Any, Any]:
         system_md.write_text("Test system prompt with ${PYTHINKER_NOW} and ${CUSTOM_ARG}")
 
         yield system_md
+
+
+def test_extend_escaping_agent_roots_is_rejected(tmp_path: Path) -> None:
+    # An `extend:` that traverses outside the spec's own directory (and the
+    # built-in agents dir) is rejected fail-closed as defense-in-depth, since
+    # the resolved path is otherwise loaded directly.
+    from pythinker_code.agentspec import AgentSpecError, load_agent_spec
+
+    (tmp_path / "outside-system.md").write_text("outside", encoding="utf-8")
+    (tmp_path / "outside.yaml").write_text(
+        "version: 1\nagent:\n  name: outside\n"
+        "  system_prompt_path: ./outside-system.md\n  tools: []\n",
+        encoding="utf-8",
+    )
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "system.md").write_text("child", encoding="utf-8")
+    (agents / "child.yaml").write_text(
+        "version: 1\nagent:\n  name: child\n"
+        "  system_prompt_path: ./system.md\n  tools: []\n"
+        "  extend: ../outside.yaml\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AgentSpecError, match="outside the permitted"):
+        load_agent_spec(agents / "child.yaml")
+
+
+def test_subagent_path_escaping_agent_roots_is_rejected(tmp_path: Path) -> None:
+    from pythinker_code.agentspec import AgentSpecError, load_agent_spec
+
+    (tmp_path / "outside.yaml").write_text("version: 1\nagent:\n  name: x\n", encoding="utf-8")
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "system.md").write_text("root", encoding="utf-8")
+    (agents / "root.yaml").write_text(
+        "version: 1\nagent:\n  name: root\n"
+        "  system_prompt_path: ./system.md\n  tools: []\n"
+        "  subagents:\n    analyst:\n      path: ../outside.yaml\n"
+        '      description: "d"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AgentSpecError, match="outside the permitted"):
+        load_agent_spec(agents / "root.yaml")
+
+
+def test_sibling_extend_within_agent_root_still_loads(tmp_path: Path) -> None:
+    # Regression guard: the containment check must not reject the normal
+    # `./sibling.yaml` shape every shipped spec uses.
+    from pythinker_code.agentspec import load_agent_spec
+
+    (tmp_path / "base-system.md").write_text("base", encoding="utf-8")
+    (tmp_path / "base.yaml").write_text(
+        "version: 1\nagent:\n  name: base\n  system_prompt_path: ./base-system.md\n  tools: []\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "child.yaml").write_text(
+        "version: 1\nagent:\n  name: child\n  extend: ./base.yaml\n",
+        encoding="utf-8",
+    )
+
+    resolved = load_agent_spec(tmp_path / "child.yaml")
+    assert resolved.name == "child"

@@ -17,6 +17,13 @@ from typing import Any
 from opentelemetry import metrics as _metrics
 from opentelemetry.metrics import Counter, Histogram, Meter
 
+from pythinker_code.soul.request_assembly import (
+    FragmentRequirement,
+    FragmentStatus,
+    RequestManifest,
+    opaque_manifest_identifier,
+)
+
 # ---------------------------------------------------------------------------
 # Module-level instrument handles
 # ---------------------------------------------------------------------------
@@ -40,6 +47,11 @@ turn_step_count: Histogram = _meter.create_histogram(
     "pythinker.turn.step_count",
     description="Number of inner steps (LLM calls + tool loops) per turn.",
     unit="1",
+)
+request_assembly_duration_seconds: Histogram = _meter.create_histogram(
+    "pythinker.request_assembly.duration_seconds",
+    description="Request assembly duration with sanitized admission aggregates.",
+    unit="s",
 )
 
 # --- LLM-level ---
@@ -103,6 +115,7 @@ def bind(meter: Meter) -> None:
     """
     global _meter
     global turn_total, turn_duration_seconds, turn_step_count
+    global request_assembly_duration_seconds
     global llm_calls_total, llm_duration_seconds, llm_input_tokens, llm_output_tokens
     global llm_cache_read_tokens, llm_cache_creation_tokens
     global tool_calls_total, tool_duration_seconds, errors_total
@@ -122,6 +135,11 @@ def bind(meter: Meter) -> None:
         "pythinker.turn.step_count",
         description="Number of inner steps (LLM calls + tool loops) per turn.",
         unit="1",
+    )
+    request_assembly_duration_seconds = meter.create_histogram(
+        "pythinker.request_assembly.duration_seconds",
+        description="Request assembly duration with sanitized admission aggregates.",
+        unit="s",
     )
     llm_calls_total = meter.create_counter(
         "pythinker.llm.calls_total",
@@ -181,6 +199,35 @@ def record_turn(*, duration_seconds: float, step_count: int, stop_reason: str) -
     turn_total.add(1, attrs)
     turn_duration_seconds.record(duration_seconds, attrs)
     turn_step_count.record(step_count, attrs)
+
+
+def record_request_assembly(
+    manifest: RequestManifest,
+    *,
+    duration_seconds: float,
+) -> None:
+    """Record content-free request admission aggregates."""
+    outcomes = manifest.outcomes
+    attrs: dict[str, Any] = {
+        "source_ids": tuple(
+            dict.fromkeys(opaque_manifest_identifier(outcome.source) for outcome in outcomes)
+        ),
+        "required_count": sum(
+            outcome.requirement is FragmentRequirement.REQUIRED for outcome in outcomes
+        ),
+        "optional_count": sum(
+            outcome.requirement is FragmentRequirement.BEST_EFFORT for outcome in outcomes
+        ),
+        "included_count": sum(outcome.status is FragmentStatus.INCLUDED for outcome in outcomes),
+        "omitted_count": sum(
+            outcome.status is FragmentStatus.OMITTED_BUDGET for outcome in outcomes
+        ),
+        "truncated_count": sum(outcome.status is FragmentStatus.TRUNCATED for outcome in outcomes),
+        "degraded_count": sum(outcome.status is FragmentStatus.DEGRADED for outcome in outcomes),
+        "failed_count": sum(outcome.status is FragmentStatus.FAILED for outcome in outcomes),
+        "budget_limit": manifest.budget_tokens,
+    }
+    request_assembly_duration_seconds.record(duration_seconds, attrs)
 
 
 # Model-name → family table. ``gen_ai.system`` only reflects the transport
