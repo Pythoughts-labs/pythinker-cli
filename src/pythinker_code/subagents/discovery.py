@@ -52,6 +52,7 @@ class MarkdownAgentSpec:
     when_to_use: str = ""
     required_mcp_servers: tuple[str, ...] = ()
     steps: int | None = None
+    prompt_content: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +269,7 @@ def parse_markdown_agent(
         when_to_use=when_to_use,
         required_mcp_servers=required_mcp_servers,
         steps=steps,
+        prompt_content=content,
     )
 
 
@@ -296,15 +298,18 @@ def materialize_markdown_agent_specs(
         seen_filenames.add(filename.casefold())
         wrapper_path = output_dir / f"{filename}.yaml"
         prompt_path = output_dir / f"{filename}.system.md"
-        try:
-            prompt_text = Path(str(agent.prompt_file)).read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning(
-                "Failed to read markdown agent prompt {path}: {error}",
-                path=agent.prompt_file,
-                error=exc,
-            )
-            prompt_text = ""
+        if agent.prompt_content is not None:
+            prompt_text = agent.prompt_content
+        else:
+            try:
+                prompt_text = Path(str(agent.prompt_file)).read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read markdown agent prompt {path}: {error}",
+                    path=agent.prompt_file,
+                    error=exc,
+                )
+                continue
         prompt_path.write_text(strip_frontmatter(prompt_text).strip(), encoding="utf-8")
         payload: dict[str, Any] = {
             "version": 1,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -16,6 +17,7 @@ from pythinker_code.agentspec import (
     ResolvedAgentSpec,
     SubagentSpec,
     load_agent_spec_validated,
+    render_agent_field_segment,
 )
 from pythinker_code.exception import AgentSpecError
 from pythinker_code.subagents.discovery import (
@@ -141,7 +143,7 @@ async def resolve_agent_catalogue(
     reported_yaml_fields: set[tuple[Path, tuple[str, ...]]] = set()
     _append_yaml_diagnostics(diagnostics, root_validations, reported_yaml_fields)
 
-    for ordinal, (declared_name, declared_spec) in enumerate(root_spec.subagents.items()):
+    for declared_name, declared_spec in root_spec.subagents.items():
         normalized = normalize_agent_name(declared_name)
         if normalized in entries:
             raise AgentSpecError("Required YAML agent name collision after normalization")
@@ -159,7 +161,7 @@ async def resolve_agent_catalogue(
             supports_background=not launch_spec.hidden,
             provenance=AgentProvenance(
                 source_kind="yaml",
-                source_id=f"yaml:required:{ordinal}:{declared_spec.path.name}",
+                source_id=f"yaml:required:{_safe_source_token(declared_spec.path)}",
                 scope="required",
                 precedence=0,
             ),
@@ -200,7 +202,7 @@ def _append_yaml_diagnostics(
     validations: tuple[AgentSpecSourceValidation, ...],
     reported: set[tuple[Path, tuple[str, ...]]],
 ) -> None:
-    for ordinal, validation in enumerate(validations):
+    for validation in validations:
         identity = (validation.source_path, validation.field_paths)
         if identity in reported:
             continue
@@ -208,7 +210,7 @@ def _append_yaml_diagnostics(
         diagnostics.append(
             AgentDiagnostic(
                 source_kind="yaml",
-                safe_path=f"required[{ordinal}]/{validation.source_path.name}",
+                safe_path=f"required/{_safe_source_token(validation.source_path)}",
                 field_path=", ".join(validation.field_paths),
                 severity="warning",
                 reason_code="unknown_field",
@@ -228,12 +230,25 @@ def _resolve_markdown_source(
 ) -> None:
     try:
         frontmatter = parse_frontmatter(source.content) or {}
-        unknown_fields = tuple(sorted(key for key in frontmatter if key not in _MARKDOWN_FIELDS))
+        unknown_fields: list[str] = []
+        has_invalid_key = False
+        for key in cast("dict[object, object]", frontmatter):
+            if isinstance(key, str) and key in _MARKDOWN_FIELDS:
+                continue
+            segment, is_unsafe = render_agent_field_segment(key)
+            unknown_fields.append(segment)
+            has_invalid_key = has_invalid_key or is_unsafe
+        unknown_fields.sort()
         if unknown_fields:
             diagnostics.append(
-                _unknown_markdown_diagnostic(source, unknown_fields, unknown_field_policy)
+                _unknown_markdown_diagnostic(
+                    source,
+                    tuple(unknown_fields),
+                    unknown_field_policy,
+                    invalid_key=has_invalid_key,
+                )
             )
-            if unknown_field_policy is UnknownFieldPolicy.FORBID:
+            if has_invalid_key or unknown_field_policy is UnknownFieldPolicy.FORBID:
                 return
         spec = parse_markdown_agent(
             source.content,
@@ -288,7 +303,7 @@ def _resolve_markdown_source(
             return
         definition = definitions[0]
         launch_spec, _ = load_agent_spec_validated(definition.agent_file)
-    except (AgentSpecError, OSError, ValueError):
+    except (AgentSpecError, OSError):
         diagnostics.append(
             _source_diagnostic(
                 source,
@@ -320,14 +335,20 @@ def _unknown_markdown_diagnostic(
     source: MarkdownAgentSource,
     field_paths: tuple[str, ...],
     policy: UnknownFieldPolicy,
+    *,
+    invalid_key: bool = False,
 ) -> AgentDiagnostic:
     return AgentDiagnostic(
         source_kind="markdown",
         safe_path=source.safe_path,
         field_path=", ".join(field_paths),
-        severity="error" if policy is UnknownFieldPolicy.FORBID else "warning",
-        reason_code="unknown_field",
-        message="Optional markdown agent contains unknown fields",
+        severity=("error" if invalid_key or policy is UnknownFieldPolicy.FORBID else "warning"),
+        reason_code="invalid_field_key" if invalid_key else "unknown_field",
+        message=(
+            "Optional markdown agent contains an invalid field key"
+            if invalid_key
+            else "Optional markdown agent contains unknown fields"
+        ),
     )
 
 
@@ -369,3 +390,9 @@ def _freeze_launch_spec(spec: ResolvedAgentSpec) -> ResolvedAgentSpec:
         exclude_tools=cast("list[str]", tuple(spec.exclude_tools)),
         subagents=cast("dict[str, SubagentSpec]", subagents),
     )
+
+
+def _safe_source_token(path: Path) -> str:
+    resolved_path = str(path.resolve())
+    digest = hashlib.sha256(resolved_path.encode(encoding="utf-8")).hexdigest()[:12]
+    return f"{digest}:{path.name}"

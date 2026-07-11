@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pythinker_host.path import HostPath
 
 from pythinker_code.subagents.catalogue import UnknownFieldPolicy, resolve_agent_catalogue
-from pythinker_code.subagents.discovery import AgentScope, ScopedAgentRoot
+from pythinker_code.subagents.discovery import AgentScope, MarkdownAgentSource, ScopedAgentRoot
 
 
 def _root_agent(tmp_path: Path) -> Path:
@@ -211,3 +212,116 @@ async def test_malformed_markdown_isolated_with_safe_diagnostic(tmp_path: Path) 
     assert [entry.name for entry in catalogue.values()] == ["good"]
     assert [d.reason_code for d in catalogue.diagnostics] == ["invalid_known_field"]
     assert str(tmp_path) not in repr(catalogue.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_catalogue_materializes_captured_markdown_content_without_rereading_source(
+    tmp_path: Path,
+) -> None:
+    prompt_file = tmp_path / "worker.md"
+    prompt_file.write_text("MUTATED AFTER DISCOVERY", encoding="utf-8")
+    source = MarkdownAgentSource(
+        content="---\nname: worker\ndescription: worker\n---\nCAPTURED BODY",
+        prompt_file=HostPath.unsafe_from_local_path(prompt_file),
+        scope="project",
+        root_ordinal=0,
+        safe_path="project[0]/worker.md",
+    )
+
+    async def captured_sources(
+        *_args: object, **_kwargs: object
+    ) -> tuple[MarkdownAgentSource, ...]:
+        return (source,)
+
+    with patch(
+        "pythinker_code.subagents.catalogue.discover_markdown_agent_sources",
+        captured_sources,
+    ):
+        catalogue = await resolve_agent_catalogue(
+            agent_file=_root_agent(tmp_path),
+            markdown_roots=(),
+            materialized_dir=tmp_path / "generated",
+        )
+
+    launch_prompt = catalogue.require("worker").launch_spec.system_prompt_path
+    assert launch_prompt.read_text(encoding="utf-8") == "CAPTURED BODY"
+
+
+@pytest.mark.asyncio
+async def test_materialization_io_failure_skips_optional_entry_with_diagnostic(
+    tmp_path: Path,
+) -> None:
+    agents = _markdown_root(tmp_path / "agents")
+    _write_markdown(Path(str(agents.root)) / "worker.md", name="worker", description="worker")
+    blocked_output = tmp_path / "blocked"
+    blocked_output.write_text("not a directory", encoding="utf-8")
+
+    catalogue = await resolve_agent_catalogue(
+        agent_file=_root_agent(tmp_path),
+        markdown_roots=(agents,),
+        materialized_dir=blocked_output,
+    )
+
+    assert catalogue.values() == ()
+    assert [d.reason_code for d in catalogue.diagnostics] == ["materialization_failure"]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_materialization_value_error_propagates(
+    tmp_path: Path,
+) -> None:
+    agents = _markdown_root(tmp_path / "agents")
+    _write_markdown(Path(str(agents.root)) / "worker.md", name="worker", description="worker")
+
+    with (
+        patch(
+            "pythinker_code.subagents.catalogue.materialize_markdown_agent_specs",
+            side_effect=ValueError("programming defect"),
+        ),
+        pytest.raises(ValueError, match="programming defect"),
+    ):
+        await resolve_agent_catalogue(
+            agent_file=_root_agent(tmp_path),
+            markdown_roots=(agents,),
+            materialized_dir=tmp_path / "generated",
+        )
+
+
+@pytest.mark.asyncio
+async def test_unsafe_markdown_keys_are_isolated_without_raw_key_or_value(
+    tmp_path: Path,
+) -> None:
+    agents = _markdown_root(tmp_path / "agents")
+    local = Path(str(agents.root))
+    (local / "bad.md").write_text(
+        "---\nname: bad\n42: value\nMY_SECRET_TOKEN: do-not-leak\n---\nBody",
+        encoding="utf-8",
+    )
+    _write_markdown(local / "good.md", name="good", description="good")
+
+    catalogue = await resolve_agent_catalogue(
+        agent_file=_root_agent(tmp_path),
+        markdown_roots=(agents,),
+        materialized_dir=tmp_path / "generated",
+    )
+
+    assert [entry.name for entry in catalogue.values()] == ["good"]
+    rendered = repr(catalogue.diagnostics)
+    assert "MY_SECRET_TOKEN" not in rendered
+    assert "do-not-leak" not in rendered
+    assert "field[" in rendered
+
+
+@pytest.mark.asyncio
+async def test_canonical_markdown_source_is_deduplicated_across_roots(tmp_path: Path) -> None:
+    agents = _markdown_root(tmp_path / "agents")
+    _write_markdown(Path(str(agents.root)) / "worker.md", name="worker", description="worker")
+
+    catalogue = await resolve_agent_catalogue(
+        agent_file=_root_agent(tmp_path),
+        markdown_roots=(agents, agents),
+        materialized_dir=tmp_path / "generated",
+    )
+
+    assert [entry.name for entry in catalogue.values()] == ["worker"]
+    assert catalogue.diagnostics == ()

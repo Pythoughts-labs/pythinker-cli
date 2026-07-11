@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
@@ -179,8 +181,11 @@ def _load_agent_spec(
         raise AgentSpecError(f"Agent spec file must contain a mapping: {agent_file}")
     data = cast("dict[str, Any]", data)
 
-    unknown_fields = _unknown_agent_spec_fields(data)
+    unknown_fields, has_invalid_field_key = _unknown_agent_spec_fields(data)
     if unknown_fields:
+        if has_invalid_field_key:
+            fields = ", ".join(unknown_fields)
+            raise AgentSpecError(f"Invalid agent field key: {fields}")
         if _forbid_unknown_fields:
             fields = ", ".join(unknown_fields)
             raise AgentSpecError(f"Unknown fields in required agent source: {fields}")
@@ -258,24 +263,70 @@ def _load_agent_spec(
     return agent_spec
 
 
-def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[str, ...]:
-    unknown = [key for key in data if key not in {"version", "agent"}]
+def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
+    unknown: list[str] = []
+    has_invalid_key = False
+    for key in cast("dict[object, object]", data):
+        if isinstance(key, str) and key in {"version", "agent"}:
+            continue
+        segment, is_unsafe = render_agent_field_segment(key)
+        unknown.append(segment)
+        has_invalid_key = has_invalid_key or is_unsafe
     raw_agent = data.get("agent")
     if not isinstance(raw_agent, dict):
-        return tuple(sorted(unknown))
+        return tuple(sorted(unknown)), has_invalid_key
     agent = cast("dict[str, Any]", raw_agent)
     known_agent_fields = set(AgentSpec.model_fields)
-    unknown.extend(f"agent.{key}" for key in agent if key not in known_agent_fields)
+    for key in cast("dict[object, object]", agent):
+        if isinstance(key, str) and key in known_agent_fields:
+            continue
+        segment, is_unsafe = render_agent_field_segment(key)
+        unknown.append(f"agent.{segment}")
+        has_invalid_key = has_invalid_key or is_unsafe
     raw_subagents = agent.get("subagents")
     if isinstance(raw_subagents, dict):
         known_subagent_fields = set(SubagentSpec.model_fields)
         for name, raw_subagent in cast("dict[object, object]", raw_subagents).items():
-            if not isinstance(name, str) or not isinstance(raw_subagent, dict):
+            name_segment, unsafe_name = render_agent_field_segment(name)
+            has_invalid_key = has_invalid_key or unsafe_name
+            if unsafe_name:
+                unknown.append(f"agent.subagents.{name_segment}")
+            if not isinstance(raw_subagent, dict):
                 continue
-            subagent = cast("dict[str, object]", raw_subagent)
-            unknown.extend(
-                f"agent.subagents.{name}.{key}"
-                for key in subagent
-                if key not in known_subagent_fields
-            )
-    return tuple(sorted(unknown))
+            for key in cast("dict[object, object]", raw_subagent):
+                if isinstance(key, str) and key in known_subagent_fields:
+                    continue
+                segment, is_unsafe = render_agent_field_segment(key)
+                unknown.append(f"agent.subagents.{name_segment}.{segment}")
+                has_invalid_key = has_invalid_key or is_unsafe
+    return tuple(sorted(unknown)), has_invalid_key
+
+
+_FIELD_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_SENSITIVE_FIELD_HINTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "credential",
+    "auth",
+)
+
+
+def render_agent_field_segment(value: object) -> tuple[str, bool]:
+    """Return a stable diagnostic segment and whether the raw key is unsafe."""
+    if isinstance(value, str):
+        lowered = value.casefold()
+        if _FIELD_IDENTIFIER_RE.fullmatch(value) and not any(
+            hint in lowered for hint in _SENSITIVE_FIELD_HINTS
+        ):
+            return value, False
+        digest_input = f"str:{value}"
+    else:
+        digest_input = f"{type(value).__qualname__}:{value!r}"
+    digest = hashlib.sha256(digest_input.encode(encoding="utf-8")).hexdigest()[:12]
+    return f"field[{digest}]", True
