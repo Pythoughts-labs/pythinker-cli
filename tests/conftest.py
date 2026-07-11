@@ -267,6 +267,7 @@ def runtime(
         skill_catalog=skill_catalog,
         skills=skill_catalog.exhaustive_mapping(),
         agent_catalogue=None,
+        agent_type_projection=None,
         oauth=OAuthManager(config),
         additional_dirs=[],
         skills_dirs=[],

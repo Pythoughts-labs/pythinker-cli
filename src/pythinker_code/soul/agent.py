@@ -6,7 +6,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pydantic
 from jinja2 import FileSystemLoader, StrictUndefined, TemplateError, UndefinedError
@@ -239,6 +240,7 @@ class Runtime:
     additional_dirs: list[HostPath]
     skills_dirs: list[HostPath]
     agent_catalogue: ResolvedAgentCatalogue | None = None
+    agent_type_projection: Mapping[str, AgentTypeDefinition] | None = None
     prompt_templates: dict[str, PromptTemplate] = field(default_factory=dict[str, PromptTemplate])
     mcp_tools: dict[str, ToolType] = field(default_factory=dict[str, ToolType])
     """Connected MCP tools, keyed `mcp__<server>__<tool>`, shared with subagent allowlists."""
@@ -489,6 +491,7 @@ class Runtime:
             additional_dirs=self.additional_dirs,
             skills_dirs=self.skills_dirs,
             agent_catalogue=self.agent_catalogue,
+            agent_type_projection=self.agent_type_projection,
             # Share the parent's connected MCP tools so allowlisted subagents can attach them
             mcp_tools=self.mcp_tools,
             subagent_store=self.subagent_store,
@@ -520,6 +523,9 @@ class Agent:
 
 def agent_type_definitions(runtime: Runtime) -> Mapping[str, AgentTypeDefinition]:
     """Return catalogue-projected definitions in their compatibility insertion order."""
+    projection = getattr(runtime, "agent_type_projection", None)
+    if isinstance(projection, Mapping):
+        return cast("Mapping[str, AgentTypeDefinition]", projection)
     labor_market = getattr(runtime, "labor_market", None)
     compatibility_types = getattr(labor_market, "builtin_types", {}) or {}
     return compatibility_types
@@ -527,10 +533,11 @@ def agent_type_definitions(runtime: Runtime) -> Mapping[str, AgentTypeDefinition
 
 def get_agent_type_definition(runtime: Runtime, name: str) -> AgentTypeDefinition | None:
     """Resolve an internal agent reader through the catalogue without changing LaborMarket."""
-    if runtime.agent_catalogue is not None:
+    if runtime.agent_catalogue is not None and runtime.agent_type_projection is not None:
         entry = runtime.agent_catalogue.get(name)
         if entry is not None:
-            return runtime.labor_market.get_builtin_type(entry.name)
+            return runtime.agent_type_projection.get(entry.name)
+        return runtime.agent_type_projection.get(name)
     return runtime.labor_market.get_builtin_type(name)
 
 
@@ -572,7 +579,7 @@ def _catalogue_entries_in_compatibility_order(
     declared_entries = tuple(catalogue.require(name) for name in declared_subagents)
     optional_entries = sorted(
         (entry for entry in catalogue.values() if entry.normalized_name not in declared_normalized),
-        key=lambda entry: (entry.provenance.precedence, entry.provenance.source_id),
+        key=lambda entry: entry.name,
     )
     return (*declared_entries, *optional_entries)
 
@@ -609,13 +616,16 @@ async def _publish_agent_catalogue(
     # with no markdown sources; preserve the session layout during the rollout.
     materialized_dir.mkdir(parents=True, exist_ok=True)
     _log_agent_catalogue_diagnostics(catalogue)
-    projections = tuple(
+    resolved_projections = tuple(
         _project_agent_entry(entry)
         for entry in _catalogue_entries_in_compatibility_order(catalogue, declared_subagents)
     )
-    for type_def in projections:
+    compatibility_projection = dict(runtime.labor_market.builtin_types)
+    compatibility_projection.update((type_def.name, type_def) for type_def in resolved_projections)
+    for type_def in resolved_projections:
         runtime.labor_market.add_builtin_type(type_def)
     runtime.agent_catalogue = catalogue
+    runtime.agent_type_projection = MappingProxyType(compatibility_projection)
 
 
 async def load_agent(
