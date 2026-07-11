@@ -4,15 +4,18 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from pythinker_core.message import Message
 from pythinker_core.tooling.empty import EmptyToolset
 from pythinker_host.path import HostPath
 
+import pythinker_code.soul.context as context_module
 import pythinker_code.soul.pythinkersoul as pythinkersoul_module
 import pythinker_code.soul.slash as slash_module
 from pythinker_code.skill import Skill
 from pythinker_code.skill.flow import Flow, FlowEdge, FlowNode
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
+from pythinker_code.soul.dynamic_injection import DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.utils.slashcmd import SlashCommand
 
@@ -27,6 +30,17 @@ def _make_flow() -> Flow:
         "END": [],
     }
     return Flow(nodes=nodes, outgoing=outgoing, begin_id="BEGIN", end_id="END")
+
+
+class _RearmProvider(DynamicInjectionProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_injections(self, history, soul):  # noqa: ANN001
+        return []
+
+    async def on_context_compacted(self) -> None:
+        self.calls += 1
 
 
 def test_flow_skill_registers_skill_and_flow_commands(runtime: Runtime, tmp_path: Path) -> None:
@@ -202,3 +216,43 @@ async def test_clear_slash_notifies_lifecycle_only_after_coherent_reset(
 
     assert context.file_backend.read_bytes() == before_bytes
     notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_visible_durability_error_rearms_before_propagating(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Current system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history-durability.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    provider = _RearmProvider()
+    soul._injection_providers = [provider]  # pyright: ignore[reportPrivateUsage]
+    await context.append_message(Message(role="user", content="old"))
+    lifecycle_generation = soul._request_lifecycle.history_generation  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+    monkeypatch.setattr(slash_module, "wire_send", lambda _message: None)
+
+    def fail_directory_sync(_path: Path) -> bool:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(
+        context_module,
+        "_sync_parent_directory",
+        fail_directory_sync,
+    )
+
+    with pytest.raises(
+        context_module.ContextPersistenceError,
+        match="power-loss durability is uncertain",
+    ):
+        await soul.run("/clear")
+
+    assert context.system_prompt == "Current system prompt."
+    assert context.history == []
+    assert soul._request_lifecycle.history_generation == lifecycle_generation + 1  # pyright: ignore[reportPrivateUsage]
+    assert provider.calls == 1

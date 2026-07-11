@@ -791,27 +791,52 @@ class PythinkerSoul:
         Failures are isolated per-provider so a buggy third-party provider
         cannot prevent other providers from rearming against the new history.
         """
-        for provider in self._injection_providers:
-            try:
-                await provider.on_context_compacted()
-            except Exception as exc:
-                from pythinker_code.telemetry.errors import report_handled_error
-
-                report_handled_error(
-                    exc,
-                    site="soul.injection.on_context_compacted",
-                    provider=type(provider).__name__,
-                )
-                logger.warning(
-                    "injection provider %s on_context_compacted failed",
-                    type(provider).__name__,
-                    exc_info=True,
-                )
         self._request_lifecycle.context_rebuilt()
 
-    async def _revert_context_to(self, checkpoint_id: int) -> None:
-        await self._context.revert_to(checkpoint_id)
+        async def notify_providers() -> None:
+            for provider in self._injection_providers:
+                try:
+                    await provider.on_context_compacted()
+                except Exception as exc:
+                    from pythinker_code.telemetry.errors import report_handled_error
+
+                    report_handled_error(
+                        exc,
+                        site="soul.injection.on_context_compacted",
+                        provider=type(provider).__name__,
+                    )
+                    logger.warning(
+                        "injection provider %s on_context_compacted failed",
+                        type(provider).__name__,
+                        exc_info=True,
+                    )
+
+        notification_task = asyncio.create_task(notify_providers())
+        try:
+            await asyncio.shield(notification_task)
+        except asyncio.CancelledError as cancellation:
+            await _settle_shielded(notification_task)
+            try:
+                notification_task.result()
+            except BaseException as notification_error:
+                raise cancellation from notification_error
+            raise
+
+    async def _complete_history_replacement(self, operation: Awaitable[object]) -> None:
+        replacement_generation = self._context.replacement_generation
+        try:
+            await operation
+        except BaseException:
+            if self._context.replacement_generation != replacement_generation:
+                await self.notify_history_rebuilt()
+            raise
         await self.notify_history_rebuilt()
+
+    async def clear_context(self) -> None:
+        await self._complete_history_replacement(self._context.clear(self._agent.system_prompt))
+
+    async def _revert_context_to(self, checkpoint_id: int) -> None:
+        await self._complete_history_replacement(self._context.revert_to(checkpoint_id))
 
     async def notify_auto_changed(self, enabled: bool) -> None:
         """Notify dynamic injection providers that auto mode changed."""
@@ -2601,8 +2626,10 @@ class PythinkerSoul:
         when there is nothing worth pruning. Runs silently — no compaction wire
         events — since it may fire often and is not a user-visible summary.
         """
+        snapshot_generation = self._context.mutation_generation
+        snapshot = tuple(self._context.history)
         capped, cap_freed = cap_stale_tool_result_bodies(
-            self._context.history,
+            snapshot,
             protect_last=self._loop_control.prune_protect_last,
             max_chars=self._loop_control.prune_tool_result_max_chars,
         )
@@ -2616,7 +2643,6 @@ class PythinkerSoul:
             return False
 
         before_tokens = self._context.token_count
-        snapshot = tuple(self._context.history)
         # Reduce the AUTHORITATIVE pre-prune count by the estimated tokens freed, rather
         # than replacing it with a full heuristic re-estimate of the remaining history. A
         # full re-estimate can over-count the survivors (chars/4 overshoots code/markup),
@@ -2632,7 +2658,8 @@ class PythinkerSoul:
                 token_count=pruned_tokens,
                 create_checkpoint=True,
                 checkpoint_user_marker=self._checkpoint_with_user_message,
-            )
+            ),
+            expected_generation=snapshot_generation,
         )
         # Unlike full compaction, pruning preserves every non-tool message verbatim
         # (only tool-result *bodies* are elided), so prior dynamic injections survive in
@@ -2684,6 +2711,7 @@ class PythinkerSoul:
 
         trigger_reason = "manual" if custom_instruction else "auto"
         before_tokens = self._context.token_count
+        history_generation = self._context.mutation_generation
         history_before_compaction = tuple(self._context.history)
         from pythinker_code.hooks import events
 
@@ -2780,18 +2808,18 @@ class PythinkerSoul:
                 replacement_messages.append(hook_context_message)
                 estimated_token_count += estimate_text_tokens([hook_context_message])
 
-            await self._context.replace_history(
-                ContextReplacement(
-                    system_prompt=self._agent.system_prompt,
-                    messages=tuple(replacement_messages),
-                    token_count=estimated_token_count,
-                    create_checkpoint=True,
-                    checkpoint_user_marker=self._checkpoint_with_user_message,
+            await self._complete_history_replacement(
+                self._context.replace_history(
+                    ContextReplacement(
+                        system_prompt=self._agent.system_prompt,
+                        messages=tuple(replacement_messages),
+                        token_count=estimated_token_count,
+                        create_checkpoint=True,
+                        checkpoint_user_marker=self._checkpoint_with_user_message,
+                    ),
+                    expected_generation=history_generation,
                 )
             )
-
-            # Notify only after the visible generation commits successfully.
-            await self.notify_history_rebuilt()
 
         except Exception:
             from pythinker_code.telemetry import track

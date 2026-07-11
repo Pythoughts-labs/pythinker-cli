@@ -61,8 +61,16 @@ class ContextPersistenceError(OSError):
         super().__init__(message)
 
 
-class _ContextGenerationChanged(RuntimeError):
-    """The live generation changed while a semantic replacement was prepared."""
+class ContextGenerationConflictError(RuntimeError):
+    """A semantic replacement was prepared from a stale Context generation."""
+
+    def __init__(self, expected_generation: int, actual_generation: int) -> None:
+        self.expected_generation = expected_generation
+        self.actual_generation = actual_generation
+        super().__init__(
+            "context generation changed while preparing history replacement "
+            f"(expected {expected_generation}, found {actual_generation})"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +584,8 @@ class Context:
         self._system_prompt: str | None = None
         self._tail_repaired: bool = False
         self._mutation_lock = asyncio.Lock()
+        self._mutation_generation = 0
+        self._replacement_generation = 0
 
     def _tail_repair_prefix(self, state: _ContextState) -> str:
         """One-time torn-line terminator for the append paths.
@@ -598,7 +608,7 @@ class Context:
             tail_repaired=self._tail_repaired,
         )
 
-    def _swap_state(self, state: _ContextState) -> None:
+    def _swap_state(self, state: _ContextState, *, replacement_commit: bool = False) -> None:
         self._history[:] = state.history
         self._token_count = state.token_count
         self._pending_messages = state.pending_messages
@@ -606,6 +616,9 @@ class Context:
         self._next_checkpoint_id = state.next_checkpoint_id
         self._system_prompt = state.system_prompt
         self._tail_repaired = state.tail_repaired
+        self._mutation_generation += 1
+        if replacement_commit:
+            self._replacement_generation = self._mutation_generation
 
     async def restore(self) -> bool:
         async with self._mutation_lock:
@@ -674,6 +687,14 @@ class Context:
     def file_backend(self) -> Path:
         return self._file_backend
 
+    @property
+    def mutation_generation(self) -> int:
+        return self._mutation_generation
+
+    @property
+    def replacement_generation(self) -> int:
+        return self._replacement_generation
+
     async def write_system_prompt(self, prompt: str) -> None:
         """Write the system prompt as the first record of the context file.
 
@@ -702,12 +723,19 @@ class Context:
         self,
         replacement: ContextReplacement,
         *,
-        _expected_live_bytes: bytes | None = None,
+        expected_generation: int | None = None,
     ) -> ContextCommit:
+        if expected_generation is not None and type(expected_generation) is not int:
+            raise TypeError("expected_generation must be an integer or None")
         records = _replacement_records(replacement)
         serialized_records = _serialize_replacement_records(self._file_backend, records)
 
         async with self._mutation_lock:
+            if expected_generation is not None and expected_generation != self._mutation_generation:
+                raise ContextGenerationConflictError(
+                    expected_generation,
+                    self._mutation_generation,
+                )
             next_state, accepted = _reduce_context_records(
                 _empty_context_state(),
                 records,
@@ -736,11 +764,6 @@ class Context:
             if cancellation is not None:
                 _cleanup_replacement_path(temp_path, cancellation)
                 raise cancellation
-            if _expected_live_bytes is not None and live_bytes != _expected_live_bytes:
-                changed = _ContextGenerationChanged()
-                _cleanup_replacement_path(temp_path, changed)
-                raise changed
-
             rotated_file: Path | None = None
             if live_bytes is not None:
                 try:
@@ -790,7 +813,7 @@ class Context:
                     await asyncio.to_thread(os.replace, temp_path, self._file_backend)
                 except OSError as error:
                     raise _persistence_error("atomic_replacement", self._file_backend) from error
-                self._swap_state(next_state)
+                self._swap_state(next_state, replacement_commit=True)
 
             try:
                 _, cancellation = await _settle_awaitable(commit_visible_generation())
@@ -885,6 +908,7 @@ class Context:
                 )
                 raise ValueError(f"Checkpoint {checkpoint_id} does not exist")
 
+            source_generation = self._mutation_generation
             source_bytes = await asyncio.to_thread(self._file_backend.read_bytes)
             records: list[dict[str, Any]] = []
             line_numbers: list[int] = []
@@ -941,9 +965,9 @@ class Context:
                         persist_token_count=persist_token_count,
                         repair_history=True,
                     ),
-                    _expected_live_bytes=source_bytes,
+                    expected_generation=source_generation,
                 )
-            except _ContextGenerationChanged:
+            except ContextGenerationConflictError:
                 continue
             return
 

@@ -18,7 +18,8 @@ from pythinker_code.soul.compaction_restore import (
     build_hook_context_message,
     compact_summary_text,
 )
-from pythinker_code.soul.context import Context
+from pythinker_code.soul.context import Context, ContextGenerationConflictError
+from pythinker_code.soul.dynamic_injection import DynamicInjectionProvider
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 
 
@@ -27,6 +28,32 @@ def _tool_call(name: str, arguments: str) -> ToolCall:
         id=f"{name}-1",
         function=ToolCall.FunctionBody(name=name, arguments=arguments),
     )
+
+
+class _BlockingRearmProvider(DynamicInjectionProvider):
+    def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
+        self.calls = 0
+        self._entered = entered
+        self._release = release
+
+    async def get_injections(self, history, soul):  # noqa: ANN001
+        return []
+
+    async def on_context_compacted(self) -> None:
+        self.calls += 1
+        self._entered.set()
+        await self._release.wait()
+
+
+class _RecordingRearmProvider(DynamicInjectionProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_injections(self, history, soul):  # noqa: ANN001
+        return []
+
+    async def on_context_compacted(self) -> None:
+        self.calls += 1
 
 
 @pytest.mark.asyncio
@@ -305,6 +332,97 @@ async def test_compact_context_emits_end_when_compaction_fails(
         before_tokens=context.token_count,
         success=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_compact_context_rejects_stale_replacement_after_concurrent_append(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history-concurrent.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    runtime.session.state.active_skills = []
+    await context.append_message(Message(role="user", content="compact me"))
+    fake_result = MagicMock()
+    fake_result.messages = [Message(role="user", content="compacted")]
+    fake_result.estimated_token_count = 5
+    fake_result.usage = None
+    soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
+    soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
+    replacement_entered = asyncio.Event()
+    release_replacement = asyncio.Event()
+    real_replace = context.replace_history
+
+    async def delayed_replace(replacement, **kwargs):  # noqa: ANN001, ANN003
+        replacement_entered.set()
+        await release_replacement.wait()
+        return await real_replace(replacement, **kwargs)
+
+    context.replace_history = delayed_replace  # type: ignore[method-assign]
+    with patch("pythinker_code.soul.pythinkersoul.wire_send"):
+        compact = asyncio.create_task(soul.compact_context())
+        await replacement_entered.wait()
+        concurrent = Message(role="user", content="concurrent append wins")
+        await context.append_message(concurrent)
+        release_replacement.set()
+        with pytest.raises(ContextGenerationConflictError):
+            await compact
+
+    assert context.history[-1] == concurrent
+
+
+@pytest.mark.asyncio
+async def test_compact_visible_commit_cancellation_settles_rearm_under_second_cancel(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history-cancel.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    runtime.session.state.active_skills = []
+    await context.append_message(Message(role="user", content="compact me"))
+    fake_result = MagicMock()
+    fake_result.messages = [Message(role="user", content="compacted")]
+    fake_result.estimated_token_count = 5
+    fake_result.usage = None
+    soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
+    soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    blocking = _BlockingRearmProvider(entered, release)
+    recording = _RecordingRearmProvider()
+    soul._injection_providers = [blocking, recording]  # pyright: ignore[reportPrivateUsage]
+    lifecycle_generation = soul._request_lifecycle.history_generation  # pyright: ignore[reportPrivateUsage]
+    real_replace = context.replace_history
+
+    async def commit_then_cancel(replacement, **kwargs):  # noqa: ANN001, ANN003
+        await real_replace(replacement, **kwargs)
+        raise asyncio.CancelledError()
+
+    context.replace_history = commit_then_cancel  # type: ignore[method-assign]
+    with patch("pythinker_code.soul.pythinkersoul.wire_send"):
+        compact = asyncio.create_task(soul.compact_context())
+        await asyncio.wait_for(entered.wait(), timeout=0.2)
+        compact.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await compact
+
+    assert blocking.calls == 1
+    assert recording.calls == 1
+    assert soul._request_lifecycle.history_generation == lifecycle_generation + 1  # pyright: ignore[reportPrivateUsage]
+    assert context.history[-1].extract_text("") == "compacted"
 
 
 def test_display_path_skips_out_of_workspace_absolute_paths(tmp_path: Path) -> None:

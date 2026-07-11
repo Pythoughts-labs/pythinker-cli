@@ -1251,6 +1251,31 @@ def test_parent_directory_sync_non_posix_is_explicitly_unsupported(
     assert context_module._sync_parent_directory(tmp_path) is False
 
 
+@pytest.mark.asyncio
+async def test_expected_generation_conflict_precedes_replacement_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(tmp_path / "context.jsonl")
+    expected_generation = context.mutation_generation
+    await context.append_message(_message("concurrent"))
+    before_bytes = context.file_backend.read_bytes()
+    monkeypatch.setattr(
+        context_module.tempfile,
+        "mkstemp",
+        lambda *args, **kwargs: pytest.fail("generation conflict touched replacement I/O"),
+    )
+
+    with pytest.raises(context_module.ContextGenerationConflictError):
+        await context.replace_history(
+            _replacement(_message("stale")),
+            expected_generation=expected_generation,
+        )
+
+    assert context.file_backend.read_bytes() == before_bytes
+    assert context.history[-1] == _message("concurrent")
+
+
 @pytest.mark.parametrize("unsupported_errno", [errno.EINVAL, errno.ENOTSUP])
 def test_parent_directory_sync_treats_known_posix_errors_as_unsupported(
     tmp_path: Path,

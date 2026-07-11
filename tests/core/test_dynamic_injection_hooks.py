@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from pythinker_core.message import Message
 from pythinker_core.tooling.empty import EmptyToolset
 
+import pythinker_code.soul.context as context_module
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
@@ -18,10 +22,14 @@ from pythinker_code.soul.request_lifecycle import RequestLifecycle
 class _BoomProvider(DynamicInjectionProvider):
     """Buggy provider that raises from both hooks."""
 
+    def __init__(self) -> None:
+        self.on_context_compacted_calls = 0
+
     async def get_injections(self, history, soul) -> list[DynamicInjection]:  # noqa: ARG002
         raise RuntimeError("boom")
 
     async def on_context_compacted(self) -> None:
+        self.on_context_compacted_calls += 1
         raise RuntimeError("boom-compact")
 
 
@@ -40,6 +48,18 @@ class _RecordingProvider(DynamicInjectionProvider):
         self.on_context_compacted_calls += 1
 
 
+class _BlockingProvider(_RecordingProvider):
+    def __init__(self, entered: asyncio.Event, release: asyncio.Event) -> None:
+        super().__init__()
+        self._entered = entered
+        self._release = release
+
+    async def on_context_compacted(self) -> None:
+        self.on_context_compacted_calls += 1
+        self._entered.set()
+        await self._release.wait()
+
+
 async def test_compacted_hook_isolates_provider_failures(runtime: Runtime, tmp_path: Path) -> None:
     """A buggy provider must not abort compaction notification of later providers."""
     agent = Agent(
@@ -55,6 +75,48 @@ async def test_compacted_hook_isolates_provider_failures(runtime: Runtime, tmp_p
 
     await soul.notify_history_rebuilt()
 
+    assert recorder.on_context_compacted_calls == 1
+
+
+async def test_revert_visible_durability_error_rearms_all_providers_before_propagating(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    agent = Agent(
+        name="Test Agent",
+        system_prompt="Test system prompt.",
+        toolset=EmptyToolset(),
+        runtime=runtime,
+    )
+    context = Context(file_backend=tmp_path / "history.jsonl")
+    soul = PythinkerSoul(agent, context=context)
+    boom = _BoomProvider()
+    recorder = _RecordingProvider()
+    soul._injection_providers = [boom, recorder]  # pyright: ignore[reportPrivateUsage]
+    await context.append_message(Message(role="user", content="before"))
+    await context.checkpoint(add_user_message=False)
+    await context.append_message(Message(role="assistant", content="after"))
+    lifecycle_generation = soul._request_lifecycle.history_generation  # pyright: ignore[reportPrivateUsage]
+
+    def fail_directory_sync(_path: Path) -> bool:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr(
+        context_module,
+        "_sync_parent_directory",
+        fail_directory_sync,
+    )
+
+    with pytest.raises(
+        context_module.ContextPersistenceError,
+        match="power-loss durability is uncertain",
+    ):
+        await soul._revert_context_to(0)  # pyright: ignore[reportPrivateUsage]
+
+    assert [message.extract_text("") for message in context.history] == ["before"]
+    assert soul._request_lifecycle.history_generation == lifecycle_generation + 1  # pyright: ignore[reportPrivateUsage]
+    assert boom.on_context_compacted_calls == 1
     assert recorder.on_context_compacted_calls == 1
 
 

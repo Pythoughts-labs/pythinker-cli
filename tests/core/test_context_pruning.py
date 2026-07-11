@@ -88,7 +88,7 @@ import pytest  # noqa: E402
 from pythinker_core.tooling.simple import SimpleToolset  # noqa: E402
 
 from pythinker_code.soul.agent import Agent, Runtime  # noqa: E402
-from pythinker_code.soul.context import Context  # noqa: E402
+from pythinker_code.soul.context import Context, ContextGenerationConflictError  # noqa: E402
 from pythinker_code.soul.pythinkersoul import PythinkerSoul  # noqa: E402
 
 
@@ -256,3 +256,33 @@ async def test_prune_context_noop_when_nothing_stale(runtime, tmp_path) -> None:
 
     assert did_prune is False  # protected + small → nothing to prune
     assert soul.context.history[-1].extract_text("") == "small"
+
+
+@pytest.mark.asyncio
+async def test_prune_context_rejects_stale_replacement_after_concurrent_append(
+    runtime, tmp_path
+) -> None:
+    runtime.config.loop_control.prune_protect_last = 2
+    runtime.config.loop_control.prune_min_chars = 2000
+    context, soul = _make_soul(runtime, tmp_path)
+    await context.write_system_prompt("sys")
+    await context.append_message(_seed_prunable())
+    replacement_entered = asyncio.Event()
+    release_replacement = asyncio.Event()
+    real_replace = context.replace_history
+
+    async def delayed_replace(replacement, **kwargs):  # noqa: ANN001, ANN003
+        replacement_entered.set()
+        await release_replacement.wait()
+        return await real_replace(replacement, **kwargs)
+
+    context.replace_history = delayed_replace  # type: ignore[method-assign]
+    prune = asyncio.create_task(soul.prune_context())
+    await replacement_entered.wait()
+    concurrent = Message(role="user", content="concurrent append wins")
+    await context.append_message(concurrent)
+    release_replacement.set()
+
+    with pytest.raises(ContextGenerationConflictError):
+        await prune
+    assert context.history[-1] == concurrent
