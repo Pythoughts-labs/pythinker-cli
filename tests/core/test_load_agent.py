@@ -23,6 +23,7 @@ from pythinker_code.soul.agent import (
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.denwarenji import DenwaRenji
 from pythinker_code.soul.toolset import PythinkerToolset
+from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.utils.environment import Environment
 
 
@@ -520,6 +521,65 @@ async def test_load_agent_registers_builtin_subagent_types(runtime: Runtime):
         assert builtin_type.name == "coder"
         assert builtin_type.description == "A sub agent"
         assert builtin_type.agent_file.samefile(builtin_type_yaml)
+
+
+@pytest.fixture
+def agent_projection_files(tmp_path: Path) -> tuple[Path, Path]:
+    (tmp_path / "root-system.md").write_text("Root prompt", encoding="utf-8")
+    (tmp_path / "child-system.md").write_text("Child prompt", encoding="utf-8")
+    child_file = tmp_path / "child.yaml"
+    child_file.write_text(
+        "version: 1\n"
+        "agent:\n"
+        '  name: "Child"\n'
+        "  system_prompt_path: ./child-system.md\n"
+        '  tools: ["pythinker_code.tools.think:Think"]\n'
+        '  allowed_tools: ["pythinker_code.tools.think:Think"]\n'
+        '  model: "characterized-model"\n'
+        '  when_to_use: "Use for exact contract tests."\n'
+        "  hidden: true\n",
+        encoding="utf-8",
+    )
+    root_file = tmp_path / "root.yaml"
+    root_file.write_text(
+        "version: 1\n"
+        "agent:\n"
+        '  name: "Root"\n'
+        "  system_prompt_path: ./root-system.md\n"
+        '  tools: ["pythinker_code.tools.think:Think"]\n'
+        "  subagents:\n"
+        "    analyst:\n"
+        "      path: ./child.yaml\n"
+        '      description: "Literal projected agent"\n',
+        encoding="utf-8",
+    )
+    return root_file, child_file
+
+
+async def test_load_agent_preserves_literal_type_projection_and_toolset_facade(
+    runtime: Runtime,
+    agent_projection_files: tuple[Path, Path],
+) -> None:
+    root_file, child_file = agent_projection_files
+
+    agent = await load_agent(root_file, runtime, mcp_configs=[])
+
+    assert runtime.labor_market.require_builtin_type("analyst") == AgentTypeDefinition(
+        name="analyst",
+        description="Literal projected agent",
+        agent_file=child_file,
+        when_to_use="Use for exact contract tests.",
+        default_model="characterized-model",
+        tool_policy=ToolPolicy(
+            mode="allowlist",
+            tools=("pythinker_code.tools.think:Think",),
+        ),
+        supports_background=False,
+        required_mcp_servers=(),
+    )
+    assert isinstance(agent.toolset, PythinkerToolset)
+    assert runtime.mcp_status == agent.toolset.mcp_status_snapshot
+    assert agent.toolset.find("Think") is not None
 
 
 async def test_load_agent_starts_mcp_in_background(runtime: Runtime, monkeypatch):

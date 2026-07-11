@@ -3,8 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pythinker_code.soul.agent import Runtime
+from pythinker_code.soul.dynamic_injection import DynamicInjection
 from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
+from pythinker_code.subagents.registry import LaborMarket
 from pythinker_code.wire.types import AgentListDelta
 
 
@@ -42,6 +46,77 @@ def test_format_agent_line_no_restrictions() -> None:
     line = format_agent_line(_type("coder", "Use for implementation"))
 
     assert "Tools: *" in line
+
+
+def test_agent_type_projects_to_literal_prompt_and_wire_contract(tmp_path: Path) -> None:
+    from pythinker_code.soul.dynamic_injections.agent_list import format_agent_line
+
+    type_definition = AgentTypeDefinition(
+        name="reviewer",
+        description="Checks compatibility",
+        agent_file=tmp_path / "reviewer.yaml",
+        when_to_use="  Use   after changes.  ",
+        default_model="characterized-model",
+        tool_policy=ToolPolicy(
+            mode="allowlist",
+            tools=(
+                "package.alpha:ReadFile",
+                "package.beta:ReadFile",
+                "package.beta:Glob",
+            ),
+        ),
+        supports_background=False,
+        required_mcp_servers=("context7",),
+    )
+
+    assert format_agent_line(type_definition) == (
+        "- `reviewer`: Checks compatibility (Tools: ReadFile, Glob). "
+        "When to use: Use after changes."
+    )
+
+
+async def test_provider_projects_literal_agent_type_without_field_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.soul.dynamic_injections.agent_list import AgentListInjectionProvider
+
+    labor_market = LaborMarket()
+    labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name="reviewer",
+            description="Checks compatibility",
+            agent_file=tmp_path / "reviewer.yaml",
+            when_to_use="Use after changes.",
+            default_model="characterized-model",
+            tool_policy=ToolPolicy(
+                mode="allowlist",
+                tools=("package.alpha:ReadFile", "package.beta:Glob"),
+            ),
+            supports_background=False,
+            required_mcp_servers=("context7",),
+        )
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        "pythinker_code.soul.dynamic_injections.agent_list.wire_send",
+        lambda message: captured.append(message),
+    )
+    soul = SimpleNamespace(
+        runtime=SimpleNamespace(labor_market=labor_market),
+        is_subagent=False,
+    )
+
+    injections = await AgentListInjectionProvider().get_injections([], soul)  # type: ignore[arg-type]
+
+    line = "- `reviewer`: Checks compatibility (Tools: ReadFile, Glob). When to use: Use after changes."
+    assert injections == [
+        DynamicInjection(
+            type="agent_list",
+            content="Available agent types (regenerated when subagent specs change):\n" + line,
+        )
+    ]
+    assert captured == [AgentListDelta(items=(line,), complete=True)]
 
 
 async def test_provider_emits_root_agent_list_and_wire_delta(runtime: Runtime, monkeypatch) -> None:

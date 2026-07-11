@@ -34,6 +34,21 @@ def _message_dict(role: Role, text: str) -> dict:
     )
 
 
+@pytest.fixture
+def mixed_context_jsonl(tmp_path: Path) -> Path:
+    path = tmp_path / "mixed-context.jsonl"
+    path.write_text(
+        '{"role":"_system_prompt","content":"Frozen prompt"}\n'
+        '{"role":"user","content":"Before checkpoint"}\n'
+        '{"role":"_checkpoint","id":3}\n'
+        '{"role":"assistant","content":"Recorded answer"}\n'
+        '{"role":"_usage","token_count":144}\n'
+        '{"role":"user","content":"After usage"}\n',
+        encoding="utf-8",
+    )
+    return path
+
+
 # --- write_system_prompt tests ---
 
 
@@ -80,6 +95,23 @@ async def test_write_system_prompt_prepends_to_existing(tmp_path: Path) -> None:
 
 
 # --- restore tests ---
+
+
+@pytest.mark.asyncio
+async def test_restore_preserves_literal_mixed_record_contract(mixed_context_jsonl: Path) -> None:
+    ctx = Context(file_backend=mixed_context_jsonl)
+
+    restored = await ctx.restore()
+
+    assert restored is True
+    assert ctx.system_prompt == "Frozen prompt"
+    assert ctx.n_checkpoints == 4
+    assert ctx.token_count == 144
+    assert tuple(ctx.history) == (
+        Message(role="user", content=[TextPart(text="Before checkpoint")]),
+        Message(role="assistant", content=[TextPart(text="Recorded answer")]),
+        Message(role="user", content=[TextPart(text="After usage")]),
+    )
 
 
 @pytest.mark.asyncio
