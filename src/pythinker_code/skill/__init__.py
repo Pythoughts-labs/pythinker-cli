@@ -567,10 +567,21 @@ class Skill(BaseModel):
     model can tell user-scope from project-scope skills."""
 
 
+@dataclass(frozen=True, slots=True)
+class SkillDiscoveryIssue:
+    name: str
+    source_kind: Literal["root", "directory", "flat_file"]
+    path: HostPath
+    scope: SkillScope
+    reason_code: str
+    safe_reason: str
+
+
 async def discover_skills(
     skills_dir: HostPath,
     *,
     scope: SkillScope,
+    diagnostic_collector: Callable[[SkillDiscoveryIssue], None] | None = None,
 ) -> list[Skill]:
     """Discover all skills in the given directory.
 
@@ -596,6 +607,17 @@ async def discover_skills(
             path=skills_dir,
             error=exc,
         )
+        _collect_discovery_issue(
+            diagnostic_collector,
+            SkillDiscoveryIssue(
+                name="",
+                source_kind="root",
+                path=skills_dir,
+                scope=scope,
+                reason_code="unreadable_skill_root",
+                safe_reason="Skill root could not be read.",
+            ),
+        )
         return []
     if not is_dir:
         return []
@@ -618,6 +640,17 @@ async def discover_skills(
                     path=entry,
                     error=exc,
                 )
+                _collect_discovery_issue(
+                    diagnostic_collector,
+                    SkillDiscoveryIssue(
+                        name=entry.name,
+                        source_kind="directory",
+                        path=entry,
+                        scope=scope,
+                        reason_code="unreadable_skill_source",
+                        safe_reason="Skill source could not be read.",
+                    ),
+                )
                 continue
             try:
                 skill = parse_skill_text(
@@ -625,6 +658,17 @@ async def discover_skills(
                 )
             except Exception as exc:
                 logger.info("Skipping invalid skill at {}: {}", skill_md, exc)
+                _collect_discovery_issue(
+                    diagnostic_collector,
+                    SkillDiscoveryIssue(
+                        name=entry.name,
+                        source_kind="directory",
+                        path=skill_md,
+                        scope=scope,
+                        reason_code="invalid_skill_metadata",
+                        safe_reason="Skill metadata could not be parsed.",
+                    ),
+                )
                 continue
             skills_by_name[normalize_skill_name(skill.name)] = skill
     except OSError as exc:
@@ -633,7 +677,18 @@ async def discover_skills(
             path=skills_dir,
             error=exc,
         )
-        return sorted(skills_by_name.values(), key=lambda s: s.name)
+        _collect_discovery_issue(
+            diagnostic_collector,
+            SkillDiscoveryIssue(
+                name="",
+                source_kind="root",
+                path=skills_dir,
+                scope=scope,
+                reason_code="unreadable_skill_root",
+                safe_reason="Skill root could not be enumerated.",
+            ),
+        )
+        return sorted(skills_by_name.values(), key=lambda skill: skill.name)
 
     # Pass 2: flat ``.md`` form, skipping names already claimed by a subdir.
     try:
@@ -646,6 +701,17 @@ async def discover_skills(
                     "Skipping unstattable entry {path}: {error}",
                     path=entry,
                     error=exc,
+                )
+                _collect_discovery_issue(
+                    diagnostic_collector,
+                    SkillDiscoveryIssue(
+                        name=entry.name,
+                        source_kind="flat_file",
+                        path=entry,
+                        scope=scope,
+                        reason_code="unreadable_skill_source",
+                        safe_reason="Skill source could not be inspected.",
+                    ),
                 )
                 continue
             if not entry.name.lower().endswith(".md"):
@@ -666,6 +732,17 @@ async def discover_skills(
                 )
             except Exception as exc:
                 logger.info("Skipping invalid flat skill at {}: {}", entry, exc)
+                _collect_discovery_issue(
+                    diagnostic_collector,
+                    SkillDiscoveryIssue(
+                        name=_strip_md_suffix(entry.name),
+                        source_kind="flat_file",
+                        path=entry,
+                        scope=scope,
+                        reason_code="invalid_skill_metadata",
+                        safe_reason="Skill metadata could not be parsed.",
+                    ),
+                )
                 continue
 
             key = normalize_skill_name(skill.name)
@@ -684,8 +761,27 @@ async def discover_skills(
             path=skills_dir,
             error=exc,
         )
+        _collect_discovery_issue(
+            diagnostic_collector,
+            SkillDiscoveryIssue(
+                name="",
+                source_kind="root",
+                path=skills_dir,
+                scope=scope,
+                reason_code="unreadable_skill_root",
+                safe_reason="Skill root could not be enumerated.",
+            ),
+        )
 
-    return sorted(skills_by_name.values(), key=lambda s: s.name)
+    return sorted(skills_by_name.values(), key=lambda skill: skill.name)
+
+
+def _collect_discovery_issue(
+    collector: Callable[[SkillDiscoveryIssue], None] | None,
+    issue: SkillDiscoveryIssue,
+) -> None:
+    if collector is not None:
+        collector(issue)
 
 
 _DESCRIPTION_FALLBACK_MAX_LEN = 240
@@ -868,3 +964,8 @@ def _is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
     if count < fence_len:
         return False
     return not line[count:].strip()
+
+
+from pythinker_code.skill.catalog import (  # noqa: E402
+    SkillCatalog as SkillCatalog,
+)
