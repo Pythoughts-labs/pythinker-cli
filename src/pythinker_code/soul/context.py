@@ -117,16 +117,13 @@ async def _settle_sync_commit(operation: Callable[[], None]) -> asyncio.Cancelle
         cancellation = error
         while not commit_task.done():
             with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.shield(commit_task)
+                await asyncio.wait({commit_task})
 
     try:
         commit_task.result()
     except BaseException as commit_error:
         if cancellation is not None:
-            raise BaseExceptionGroup(
-                "Context commit failed while cancellation was pending",
-                (cancellation, commit_error),
-            ) from commit_error
+            raise cancellation from commit_error
         raise
     return cancellation
 

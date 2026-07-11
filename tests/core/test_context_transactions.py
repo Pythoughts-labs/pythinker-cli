@@ -61,11 +61,14 @@ class _AppendFileProxy:
         return self._wrapped.__exit__(*args)
 
     def write(self, payload: str) -> int:
-        if self._failure_point == "block_write":
+        if self._failure_point in {"block_write", "block_write_fail"}:
             assert self._entered is not None
             assert self._release is not None
             self._entered.set()
             self._release.wait()
+        if self._failure_point == "block_write_fail":
+            self._wrapped.write(payload[: len(payload) // 2])
+            raise OSError("write failed after cancellation")
         if self._failure_point == "write":
             self._wrapped.write(payload[: len(payload) // 2])
             raise OSError("write failed")
@@ -264,6 +267,83 @@ async def test_append_cancellation_during_close_keeps_new_disk_and_memory_cohere
 
 
 @pytest.mark.asyncio
+async def test_cancelled_append_with_worker_failure_remains_cancelled_and_rolls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    old_bytes = context_path.read_bytes()
+    old_memory = _memory(context)
+    write_entered = threading.Event()
+    release_write = threading.Event()
+
+    _patch_append_open(
+        monkeypatch,
+        context_path,
+        "block_write_fail",
+        entered=write_entered,
+        release=release_write,
+    )
+    append = asyncio.create_task(context.append_message(_message("not committed")))
+    assert await asyncio.to_thread(write_entered.wait, 5)
+
+    append.cancel()
+    release_write.set()
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await append
+
+    assert append.cancelled()
+    assert isinstance(cancellation.value.__cause__, OSError)
+    assert str(cancellation.value.__cause__) == "write failed after cancellation"
+    assert context_path.read_bytes() == old_bytes
+    assert _memory(context) == old_memory
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_settles_commit_before_final_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = tmp_path / "context.jsonl"
+    context = Context(context_path)
+    await context.append_message(_message("existing"))
+    committed = _message("committed despite repeated cancellation")
+    close_entered = threading.Event()
+    release_close = threading.Event()
+
+    _patch_append_open(
+        monkeypatch,
+        context_path,
+        "block_close",
+        entered=close_entered,
+        release=release_close,
+    )
+    append = asyncio.create_task(context.append_message(committed))
+    assert await asyncio.to_thread(close_entered.wait, 5)
+
+    append.cancel()
+    second_cancellation_sent = asyncio.Event()
+
+    def cancel_again() -> None:
+        append.cancel()
+        second_cancellation_sent.set()
+
+    asyncio.get_running_loop().call_soon(cancel_again)
+    await second_cancellation_sent.wait()
+    release_close.set()
+    with pytest.raises(asyncio.CancelledError):
+        await append
+
+    assert append.cancelled()
+    assert list(context.history)[-1] == committed
+    restored = Context(context_path)
+    assert await restored.restore()
+    assert list(restored.history) == list(context.history)
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_failure_keeps_id_and_optional_marker_uncommitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -423,6 +503,7 @@ async def test_system_prompt_failure_leaves_nonexistent_file_and_memory_unchange
         await context.write_system_prompt("new prompt")
 
     assert not context_path.exists()
+    assert not list(tmp_path.glob(f"{context_path.name}*.tmp"))
     assert _memory(context) == old_memory
 
     monkeypatch.undo()
