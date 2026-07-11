@@ -946,7 +946,14 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
         shell.send_line("start cancellable command")
         shell.read_until_contains("Bash(sleep 5", after=cancel_mark)
         shell.send_key("escape")
-        shell.read_until_contains("Interrupted by user", after=cancel_mark)
+        # The "Interrupted by user" acknowledgement only prints after the soul
+        # re-raises the cancellation, which first awaits a shielded, disk-first
+        # context append (the interrupted-tool marker write) so history never
+        # keeps an unanswered tool_call. That append hops through the shared
+        # thread pool, so under heavy CPU contention the acknowledgement can
+        # legitimately trail the default 15s budget; give this one wait generous
+        # headroom to keep the e2e stable on loaded CI without masking a hang.
+        shell.read_until_contains("Interrupted by user", after=cancel_mark, timeout=45.0)
         cancel_prompt_mark = shell.mark()
         _read_until_prompt(shell, after=cancel_prompt_mark)
 
