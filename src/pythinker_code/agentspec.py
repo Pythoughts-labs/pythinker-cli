@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from pythinker_code.exception import AgentSpecError
 
@@ -89,6 +89,14 @@ class ResolvedAgentSpec:
     subagents: dict[str, SubagentSpec]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AgentSpecSourceValidation:
+    """Unknown fields observed in one canonical YAML source before projection."""
+
+    source_path: Path
+    field_paths: tuple[str, ...]
+
+
 def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
     """
     Load agent specification from file.
@@ -97,7 +105,22 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         FileNotFoundError: If the agent spec file is not found.
         AgentSpecError: If the agent spec is not valid.
     """
-    agent_spec = _load_agent_spec(agent_file)
+    agent_spec, _ = load_agent_spec_validated(agent_file)
+    return agent_spec
+
+
+def load_agent_spec_validated(
+    agent_file: Path,
+    *,
+    forbid_unknown_fields: bool = False,
+) -> tuple[ResolvedAgentSpec, tuple[AgentSpecSourceValidation, ...]]:
+    """Load a spec and report raw unknown fields from every inherited source."""
+    validations: dict[Path, AgentSpecSourceValidation] = {}
+    agent_spec = _load_agent_spec(
+        agent_file,
+        _validations=validations,
+        _forbid_unknown_fields=forbid_unknown_fields,
+    )
     assert agent_spec.extend is None, "agent extension should be recursively resolved"
     if isinstance(agent_spec.name, Inherit):
         raise AgentSpecError("Agent name is required")
@@ -111,7 +134,7 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         agent_spec.exclude_tools = []
     if isinstance(agent_spec.subagents, Inherit):
         agent_spec.subagents = {}
-    return ResolvedAgentSpec(
+    resolved = ResolvedAgentSpec(
         name=agent_spec.name,
         system_prompt_path=agent_spec.system_prompt_path,
         system_prompt_args=agent_spec.system_prompt_args,
@@ -127,9 +150,16 @@ def load_agent_spec(agent_file: Path) -> ResolvedAgentSpec:
         exclude_tools=agent_spec.exclude_tools or [],
         subagents=agent_spec.subagents or {},
     )
+    return resolved, tuple(validations.values())
 
 
-def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> AgentSpec:
+def _load_agent_spec(
+    agent_file: Path,
+    _visited: set[Path] | None = None,
+    *,
+    _validations: dict[Path, AgentSpecSourceValidation] | None = None,
+    _forbid_unknown_fields: bool = False,
+) -> AgentSpec:
     resolved = agent_file.resolve()
     if _visited is None:
         _visited = set()
@@ -149,11 +179,25 @@ def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> Age
         raise AgentSpecError(f"Agent spec file must contain a mapping: {agent_file}")
     data = cast("dict[str, Any]", data)
 
+    unknown_fields = _unknown_agent_spec_fields(data)
+    if unknown_fields:
+        if _forbid_unknown_fields:
+            fields = ", ".join(unknown_fields)
+            raise AgentSpecError(f"Unknown fields in required agent source: {fields}")
+        if _validations is not None and resolved not in _validations:
+            _validations[resolved] = AgentSpecSourceValidation(
+                source_path=resolved,
+                field_paths=unknown_fields,
+            )
+
     version = str(data.get("version", DEFAULT_AGENT_SPEC_VERSION))
     if version not in SUPPORTED_AGENT_SPEC_VERSIONS:
         raise AgentSpecError(f"Unsupported agent spec version: {version}")
 
-    agent_spec = AgentSpec(**data.get("agent", {}))
+    try:
+        agent_spec = AgentSpec(**data.get("agent", {}))
+    except (TypeError, ValidationError) as exc:
+        raise AgentSpecError("Agent spec contains an invalid known field") from exc
     if isinstance(agent_spec.system_prompt_path, Path):
         agent_spec.system_prompt_path = (
             agent_file.parent / agent_spec.system_prompt_path
@@ -166,7 +210,12 @@ def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> Age
             base_agent_file = DEFAULT_AGENT_FILE
         else:
             base_agent_file = (agent_file.parent / agent_spec.extend).absolute()
-        base_agent_spec = _load_agent_spec(base_agent_file, _visited)
+        base_agent_spec = _load_agent_spec(
+            base_agent_file,
+            _visited,
+            _validations=_validations,
+            _forbid_unknown_fields=_forbid_unknown_fields,
+        )
         if not isinstance(agent_spec.name, Inherit):
             base_agent_spec.name = agent_spec.name
         if not isinstance(agent_spec.system_prompt_path, Inherit):
@@ -207,3 +256,26 @@ def _load_agent_spec(agent_file: Path, _visited: set[Path] | None = None) -> Age
                 base_agent_spec.subagents = agent_spec.subagents
         agent_spec = base_agent_spec
     return agent_spec
+
+
+def _unknown_agent_spec_fields(data: dict[str, Any]) -> tuple[str, ...]:
+    unknown = [key for key in data if key not in {"version", "agent"}]
+    raw_agent = data.get("agent")
+    if not isinstance(raw_agent, dict):
+        return tuple(sorted(unknown))
+    agent = cast("dict[str, Any]", raw_agent)
+    known_agent_fields = set(AgentSpec.model_fields)
+    unknown.extend(f"agent.{key}" for key in agent if key not in known_agent_fields)
+    raw_subagents = agent.get("subagents")
+    if isinstance(raw_subagents, dict):
+        known_subagent_fields = set(SubagentSpec.model_fields)
+        for name, raw_subagent in cast("dict[object, object]", raw_subagents).items():
+            if not isinstance(name, str) or not isinstance(raw_subagent, dict):
+                continue
+            subagent = cast("dict[str, object]", raw_subagent)
+            unknown.extend(
+                f"agent.subagents.{name}.{key}"
+                for key in subagent
+                if key not in known_subagent_fields
+            )
+    return tuple(sorted(unknown))
