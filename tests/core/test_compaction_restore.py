@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pythinker_core.message import Message, TextPart, ToolCall
@@ -12,6 +12,7 @@ from pythinker_host.path import HostPath
 from pythinker_code.hooks.runner import HookResult
 from pythinker_code.skill import Skill
 from pythinker_code.soul.agent import Agent, Runtime
+from pythinker_code.soul.compaction import CompactionResult
 from pythinker_code.soul.compaction_restore import (
     _display_path,
     build_compaction_restore_context,
@@ -166,9 +167,10 @@ async def test_compact_context_restores_files_and_hook_context(
         )
     )
 
-    fake_result = MagicMock()
-    fake_result.messages = [Message(role="user", content=[TextPart(text="compacted summary")])]
-    fake_result.estimated_token_count = 10
+    fake_result = CompactionResult(
+        messages=[Message(role="user", content=[TextPart(text="compacted summary")])],
+        usage=None,
+    )
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
     soul._checkpoint = AsyncMock()  # pyright: ignore[reportPrivateUsage]
     soul.notify_history_rebuilt = AsyncMock()
@@ -259,10 +261,10 @@ async def test_compact_context_replacement_failure_preserves_generation(
         context.n_checkpoints,
     )
 
-    fake_result = MagicMock()
-    fake_result.messages = [Message(role="user", content=[TextPart(text="compacted-summary")])]
-    fake_result.estimated_token_count = 5
-    fake_result.usage = None
+    fake_result = CompactionResult(
+        messages=[Message(role="user", content=[TextPart(text="compacted-summary")])],
+        usage=None,
+    )
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
     soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
     replace_history = AsyncMock(side_effect=error)
@@ -353,10 +355,10 @@ async def test_compact_context_rejects_stale_replacement_after_concurrent_append
     soul = PythinkerSoul(agent, context=context)
     runtime.session.state.active_skills = []
     await context.append_message(Message(role="user", content="compact me"))
-    fake_result = MagicMock()
-    fake_result.messages = [Message(role="user", content="compacted")]
-    fake_result.estimated_token_count = 5
-    fake_result.usage = None
+    fake_result = CompactionResult(
+        messages=[Message(role="user", content="compacted")],
+        usage=None,
+    )
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
     soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
     replacement_entered = asyncio.Event()
@@ -396,10 +398,10 @@ async def test_compact_visible_commit_cancellation_settles_rearm_under_second_ca
     soul = PythinkerSoul(agent, context=context)
     runtime.session.state.active_skills = []
     await context.append_message(Message(role="user", content="compact me"))
-    fake_result = MagicMock()
-    fake_result.messages = [Message(role="user", content="compacted")]
-    fake_result.estimated_token_count = 5
-    fake_result.usage = None
+    fake_result = CompactionResult(
+        messages=[Message(role="user", content="compacted")],
+        usage=None,
+    )
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
     soul._hook_engine.trigger = AsyncMock(return_value=[])  # pyright: ignore[reportPrivateUsage]
     entered = asyncio.Event()

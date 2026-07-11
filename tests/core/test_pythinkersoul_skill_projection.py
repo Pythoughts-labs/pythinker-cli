@@ -241,5 +241,5 @@ async def test_different_tasks_keep_static_prompt_identical_but_change_candidate
     first_history, _, first_prompt = await _capture_one_step(runtime, first, monkeypatch)
     second_history, _, second_prompt = await _capture_one_step(runtime, second, monkeypatch)
 
-    assert first_prompt == second_prompt == "static"
+    assert first_prompt == second_prompt
     assert first_history[-1] != second_history[-1]

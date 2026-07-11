@@ -10,6 +10,13 @@ from pythinker_core.message import Message
 from pythinker_core.tooling import ToolError
 
 from pythinker_code.agentspec import DEFAULT_AGENT_FILE, load_agent_spec
+from pythinker_code.background.models import (
+    TaskConsumerState,
+    TaskControl,
+    TaskRuntime,
+    TaskSpec,
+    TaskView,
+)
 from pythinker_code.soul.agent import (
     Agent as SoulAgent,
 )
@@ -309,11 +316,19 @@ async def test_populated_markdown_catalogue_drives_casefolded_background_launch(
     )
     created: list[dict[str, object]] = []
 
-    def create_agent_task(**kwargs: object) -> SimpleNamespace:
+    def create_agent_task(**kwargs: object) -> TaskView:
         created.append(kwargs)
-        return SimpleNamespace(
-            spec=SimpleNamespace(id="catalogue-task", kind="agent", description="worker"),
-            runtime=SimpleNamespace(status="starting"),
+        return TaskView(
+            spec=TaskSpec(
+                id="catalogue-task",
+                kind="agent",
+                session_id=runtime.session.id,
+                description="worker",
+                tool_call_id="test",
+            ),
+            runtime=TaskRuntime(status="starting"),
+            control=TaskControl(),
+            consumer=TaskConsumerState(),
         )
 
     monkeypatch.setattr(runtime.background_tasks, "create_agent_task", create_agent_task)
