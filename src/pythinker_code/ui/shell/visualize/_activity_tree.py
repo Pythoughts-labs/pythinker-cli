@@ -11,7 +11,7 @@ from rich.text import Text
 
 from pythinker_code.ui.shell.components.render_utils import cell_width, truncate_to_width
 from pythinker_code.ui.shell.design_system import ShellTone, shell_style, status_icon
-from pythinker_code.ui.shell.motion import blink_visible, shimmer_text
+from pythinker_code.ui.shell.motion import blink_visible
 
 ActivityState = Literal["running", "completed", "failed", "waiting", "denied", "interrupted"]
 
@@ -50,10 +50,7 @@ def render_activity_tree(
         text.append(" ")
         text.append(prefix, style=shell_style(ShellTone.MUTED))
         detail = truncate_to_width(row.detail, available)
-        if row.state == "running":
-            text.append_text(shimmer_text(detail, clock))
-        else:
-            text.append(detail, style=shell_style(ShellTone.MUTED))
+        text.append(detail, style=shell_style(ShellTone.MUTED))
         rendered.append(text)
     if hidden:
         rendered.insert(

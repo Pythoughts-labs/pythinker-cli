@@ -386,7 +386,7 @@ def test_thinking_stream_preview_has_standard_gap_after_activity_line():
     _assert_blank_line_after_activity(console.export_text(), "Thinking")
 
 
-def test_thinking_stream_preview_uses_transcript_bullet_after_activity_line():
+def test_thinking_stream_preview_renders_complete_markdown():
     block = _ContentBlock(is_think=True, show_thinking_stream=True)
     block.append("**Preparing report generation**")
     console = Console(record=True, width=120, color_system=None)
@@ -394,7 +394,53 @@ def test_thinking_stream_preview_uses_transcript_bullet_after_activity_line():
     output = console.export_text()
 
     assert "Thinking" in output
-    assert "\n\n⏺ **Preparing report generation**" in output
+    assert "\n\n⏺ Preparing report generation" in output
+    assert "**Preparing report generation**" not in output
+
+
+def test_thinking_stream_preview_hides_complete_top_level_html_comments():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("Visible before.\n\n<!-- internal separator -->\n\nVisible after.")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "Visible before." in output
+    assert "Visible after." in output
+    assert "internal separator" not in output
+    assert "<!--" not in output
+    assert "-->" not in output
+
+
+def test_thinking_stream_preview_keeps_inline_comment_line_intact():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("<!-- a --> visible middle <!-- b -->")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "visible middle" in output
+    assert "<!--" in output  # mixed line is NOT a whole-line comment block; left intact
+
+
+def test_thinking_stream_preview_preserves_incomplete_markup():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("**Planning agent\n\n<!-- incomplete")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+    output = console.export_text()
+
+    assert "**Planning agent" in output
+    assert "<!-- incomplete" in output
+
+
+def test_thinking_stream_preview_preserves_comment_example_in_fenced_code():
+    block = _ContentBlock(is_think=True, show_thinking_stream=True)
+    block.append("```markdown\n<!-- literal example -->\n```")
+    console = Console(record=True, width=120, color_system=None)
+    console.print(block.compose())
+
+    assert "<!-- literal example -->" in console.export_text()
 
 
 def _style_for(renderable: Text, text: str) -> Style:
@@ -622,6 +668,56 @@ class TestShowThinkingStream:
         plain = result.plain
         assert "Thinking" in plain
         assert "tokens" in plain
+
+    def test_stream_mode_reuses_rendered_preview_across_ticks(self, monkeypatch):
+        """The markdown render runs once per preview change, not per Live tick.
+
+        The Live area refreshes on the spinner's own animation cadence with no new
+        content; ``_render_thinking_preview`` (regex + markdown parse) must be
+        served from cache on those ticks and only recomputed when pending changes.
+        """
+        from pythinker_code.ui.shell.visualize import _blocks
+
+        calls: list[str] = []
+        original = _blocks._render_thinking_preview
+
+        def counting(preview: str):
+            calls.append(preview)
+            return original(preview)
+
+        monkeypatch.setattr(_blocks, "_render_thinking_preview", counting)
+
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**first reasoning line**")
+        block.compose()
+        block.compose()  # unchanged pending -> served from cache
+        assert len(calls) == 1
+
+        block.append("\n**second reasoning line**")
+        block.compose()  # pending changed -> recompute
+        assert len(calls) == 2
+
+    def test_stream_mode_cached_preview_matches_uncached_render(self, monkeypatch):
+        """Caching is behavior-preserving: composed output is byte-identical to a
+        fresh (uncached) render of the same reasoning content across ticks."""
+        from pythinker_code.ui.shell.visualize import _blocks
+
+        # Freeze the clock so the elapsed/token-rate status line is identical
+        # across both compose() calls — the comparison targets the cached preview,
+        # not wall-clock timing.
+        monkeypatch.setattr(_blocks.time, "monotonic", lambda: 100.0)
+
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Preparing report generation**")
+
+        first = Console(record=True, width=120, color_system=None)
+        first.print(block.compose())
+        second = Console(record=True, width=120, color_system=None)
+        second.print(block.compose())  # cache hit
+        first_text = first.export_text()
+        assert first_text == second.export_text()
+        assert "Preparing report generation" in first_text
+        assert block._thinking_render_cache_key is not None
 
     def test_compact_mode_compose_final_returns_trace_line(self):
         from rich.text import Text

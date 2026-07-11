@@ -43,6 +43,7 @@ from pythinker_code.ui.shell.components.report_update import (
 )
 from pythinker_code.ui.shell.console import current_console_width
 from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER, TRANSCRIPT_STATUS_MARKER
+from pythinker_code.ui.shell.markdown.fences import iter_fence_aware_lines
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
 from pythinker_code.ui.shell.motion import (
     ActivitySnapshot,
@@ -561,6 +562,34 @@ def _tail_lines(text: str, n: int) -> str:
     return text[pos + 1 :]
 
 
+_COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--(?:(?!-->).)*?-->[ \t]*(?=\r?$)")
+
+
+def _render_thinking_preview(preview: str) -> RenderableType | None:
+    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
+    segments: list[str] = []
+    unfenced: list[str] = []
+
+    def flush_unfenced() -> None:
+        if not unfenced:
+            return
+        segments.append(_COMPLETE_HTML_COMMENT_BLOCK_RE.sub("", "".join(unfenced)))
+        unfenced.clear()
+
+    for line, inside_fence in iter_fence_aware_lines(preview):
+        if inside_fence:
+            flush_unfenced()
+            segments.append(line)
+        else:
+            unfenced.append(line)
+    flush_unfenced()
+
+    cleaned = "".join(segments)
+    if not cleaned.strip():
+        return None
+    return render_agent_body(cleaned)
+
+
 def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
     """Return a character offset advanced by roughly ``cell_budget`` terminal cells."""
     from rich.cells import cell_len
@@ -622,6 +651,10 @@ class _ContentBlock:
         self._scrollback_renderable: RenderableType | None = None
         self._preview_text_cache_key: tuple[int, int, int, bool, str] | None = None
         self._preview_text_cache: str | None = None
+        # Rendered thinking-preview cache (legacy ``show_thinking_stream`` path):
+        # avoids re-running the markdown parse on every Live tick when unchanged.
+        self._thinking_render_cache_key: str | None = None
+        self._thinking_render_cache: RenderableType | None = None
         # Interactive prompt preamble row budget (``None`` = no limit; Rich Live).
         self._preview_row_budget: int | None = None
         self._last_commit_scan_len = 0
@@ -876,6 +909,8 @@ class _ContentBlock:
     def _invalidate_preview_cache(self) -> None:
         self._preview_text_cache_key = None
         self._preview_text_cache = None
+        self._thinking_render_cache_key = None
+        self._thinking_render_cache = None
 
     def _wrap_bullet(self, renderable: RenderableType) -> BulletColumns:
         """First call gets the ``•`` bullet; subsequent calls get a space."""
@@ -1122,13 +1157,16 @@ class _ContentBlock:
         pending = self._pending_text()
         if not pending:
             return spinner
-        preview = self._build_preview(pending, max_lines=_THINKING_PREVIEW_LINES)
+        preview = self._build_preview_cached(pending, max_lines=_THINKING_PREVIEW_LINES)
+        rendered_preview = self._render_thinking_preview_cached(preview)
+        if rendered_preview is None:
+            return spinner
         preview_style = tui_rich_style("thinking_text") + Style(italic=True)
         return Group(
             spinner,
             BLANK_ROW,
             BulletColumns(
-                Text(preview, style=preview_style),
+                rendered_preview,
                 bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=preview_style),
             ),
         )
@@ -1138,6 +1176,21 @@ class _ContentBlock:
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
             width=self._layout_width(),
         )
+
+    def _render_thinking_preview_cached(self, preview: str) -> RenderableType | None:
+        """Render the thinking preview markdown, caching on the preview string.
+
+        Mirrors :meth:`_build_preview_cached` so the markdown parse only runs when
+        the preview content changes, not on every Live refresh tick driven by the
+        spinner animation. The cache is cleared by ``_invalidate_preview_cache``
+        on new content, width, or preview-budget changes.
+        """
+        if preview == self._thinking_render_cache_key:
+            return self._thinking_render_cache
+        rendered = _render_thinking_preview(preview)
+        self._thinking_render_cache_key = preview
+        self._thinking_render_cache = rendered
+        return rendered
 
     def _layout_width(self) -> int:
         width = current_console_width()
