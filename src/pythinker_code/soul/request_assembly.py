@@ -100,6 +100,7 @@ class RequestAssemblyInput:
     persisted_history: tuple[Message, ...]
     current_task: str
     budget_tokens: int
+    history_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,7 @@ class RequestSourceResult:
     status: SourceResultStatus
     fragment: RequestFragment | None
     reason_code: str | None
+    history_generation: int | None = None
 
 
 class RequestAssemblyError(RuntimeError):
@@ -274,11 +276,12 @@ def admit_source_results(
     policies: Sequence[TrustedSourcePolicy],
     source_results: Sequence[RequestSourceResult],
     budget_tokens: int,
+    history_generation: int | None = None,
 ) -> tuple[_Admission, ...]:
     if budget_tokens < 0:
         raise _AssemblyFailure("invalid_budget", ())
     registry = _TrustedSourceRegistry.build(policies)
-    results_by_identity = _validated_results(registry, source_results)
+    results_by_identity = _validated_results(registry, source_results, history_generation)
     ordered_pairs = tuple(
         (policy, results_by_identity[(policy.source, policy.key)]) for policy in registry.ordered()
     )
@@ -289,7 +292,9 @@ def admit_source_results(
 
 
 def _validated_results(
-    registry: _TrustedSourceRegistry, source_results: Sequence[RequestSourceResult]
+    registry: _TrustedSourceRegistry,
+    source_results: Sequence[RequestSourceResult],
+    history_generation: int | None,
 ) -> dict[tuple[str, str], RequestSourceResult]:
     identities = [(source_result.source, source_result.key) for source_result in source_results]
     if len(identities) != len(set(identities)) or len(source_results) != len(registry.policies):
@@ -303,12 +308,18 @@ def _validated_results(
     if set(results) != set(registry.by_identity):
         raise _AssemblyFailure("internal_invariant_violation", ())
     for identity, source_result in results.items():
-        _validate_source_result(registry.by_identity[identity], source_result)
+        _validate_source_result(
+            registry.by_identity[identity],
+            source_result,
+            history_generation,
+        )
     return results
 
 
 def _validate_source_result(
-    policy: TrustedSourcePolicy, source_result: RequestSourceResult
+    policy: TrustedSourcePolicy,
+    source_result: RequestSourceResult,
+    history_generation: int | None,
 ) -> None:
     if source_result.status in {
         SourceResultStatus.PROVIDED,
@@ -317,7 +328,18 @@ def _validate_source_result(
         if source_result.fragment is None or source_result.reason_code is not None:
             raise _AssemblyFailure("source_result_invalid", ())
         _validate_fragment_matches_policy(policy, source_result.fragment)
+        if source_result.status is SourceResultStatus.ALREADY_SATISFIED:
+            if (
+                policy.persistence is not FragmentPersistence.HISTORY
+                or source_result.history_generation is None
+                or source_result.history_generation != history_generation
+            ):
+                raise _AssemblyFailure("source_history_proof_invalid", ())
+        elif source_result.history_generation is not None:
+            raise _AssemblyFailure("source_history_proof_invalid", ())
         return
+    if source_result.history_generation is not None:
+        raise _AssemblyFailure("source_history_proof_invalid", ())
     if source_result.fragment is not None:
         raise _AssemblyFailure("source_result_invalid", ())
     if source_result.status is SourceResultStatus.NOT_APPLICABLE:
@@ -575,7 +597,10 @@ class RequestAssembler:
         boundary_reason = "internal_invariant_violation"
         try:
             admissions = admit_source_results(
-                self._policies, self._source_results, request.budget_tokens
+                self._policies,
+                self._source_results,
+                request.budget_tokens,
+                request.history_generation,
             )
             projection = _project_admissions(admissions, self._policies)
             outcomes = projection.outcomes

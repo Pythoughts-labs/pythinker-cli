@@ -785,12 +785,11 @@ class PythinkerSoul:
             exc_info=True,
         )
 
-    async def _notify_injection_providers_compacted(self) -> None:
-        """Notify all injection providers that the context has been compacted.
+    async def notify_history_rebuilt(self) -> None:
+        """Advance request lifecycle state after history is replaced or cleared.
 
         Failures are isolated per-provider so a buggy third-party provider
-        cannot abort compaction (which would skip CompactionEnd wire events
-        and PostCompact telemetry).
+        cannot prevent other providers from rearming against the new history.
         """
         for provider in self._injection_providers:
             try:
@@ -812,7 +811,7 @@ class PythinkerSoul:
 
     async def _revert_context_to(self, checkpoint_id: int) -> None:
         await self._context.revert_to(checkpoint_id)
-        await self._notify_injection_providers_compacted()
+        await self.notify_history_rebuilt()
 
     async def notify_auto_changed(self, enabled: bool) -> None:
         """Notify dynamic injection providers that auto mode changed."""
@@ -1957,6 +1956,7 @@ class PythinkerSoul:
                 persisted_history=tuple(self._context.history),
                 current_task=task,
                 budget_tokens=injection_budget_from_runtime(self._runtime).injection_budget_tokens,
+                history_generation=self._request_lifecycle.history_generation,
             )
             required = await self._required_request_sources()
             required_policies = (agents_policy, *required.policies)
@@ -1976,6 +1976,9 @@ class PythinkerSoul:
             self.latest_request_manifest = error.manifest
             raise
         except asyncio.CancelledError:
+            raise
+        except RequestLifecycleError as error:
+            self.latest_request_manifest = failed_manifest(error.reason_code, None)
             raise
         except Exception as error:
             failure = RequestLifecycleError("request_source_adapter_failed")
@@ -2009,14 +2012,15 @@ class PythinkerSoul:
         commit_task = asyncio.create_task(_commit_and_finalize())
         try:
             await asyncio.shield(commit_task)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
+            await _settle_shielded(commit_task)
             with contextlib.suppress(Exception):
-                await commit_task
+                commit_task.result()
             self.latest_request_manifest = failed_manifest(
                 "context_persistence_cancelled",
                 prepared.assembled.manifest,
             )
-            raise
+            raise cancellation
         except RequestLifecycleError as error:
             self.latest_request_manifest = failed_manifest(
                 error.reason_code,
@@ -2776,7 +2780,7 @@ class PythinkerSoul:
                 # they can reset any one-shot throttling state. Failures are isolated
                 # per-provider so compaction completion (wire event + telemetry) is
                 # not affected by a buggy provider.
-                await self._notify_injection_providers_compacted()
+                await self.notify_history_rebuilt()
             except Exception:
                 # Rebuild faulted after clear() rotated the backing file. Restore
                 # the pre-compaction history so an I/O fault cannot truncate the

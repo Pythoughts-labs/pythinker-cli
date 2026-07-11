@@ -133,6 +133,7 @@ async def clear(soul: PythinkerSoul, args: str):
     logger.info("Running `/clear`")
     await soul.context.clear()
     await soul.context.write_system_prompt(soul.agent.system_prompt)
+    await soul.notify_history_rebuilt()
     wire_send(TextPart(text="The context has been cleared."))
     snap = soul.status
     wire_send(

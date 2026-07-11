@@ -139,7 +139,7 @@ async def test_compact_context_restores_files_and_hook_context(
     fake_result.estimated_token_count = 10
     soul._run_with_connection_recovery = AsyncMock(return_value=fake_result)  # pyright: ignore[reportPrivateUsage]
     soul._checkpoint = AsyncMock()  # pyright: ignore[reportPrivateUsage]
-    soul._notify_injection_providers_compacted = AsyncMock()  # pyright: ignore[reportPrivateUsage]
+    soul.notify_history_rebuilt = AsyncMock()
     soul._hook_engine.trigger = AsyncMock(  # pyright: ignore[reportPrivateUsage]
         side_effect=[
             [],

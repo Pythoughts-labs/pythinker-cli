@@ -53,7 +53,7 @@ async def test_compacted_hook_isolates_provider_failures(runtime: Runtime, tmp_p
     recorder = _RecordingProvider()
     soul._injection_providers = [_BoomProvider(), recorder]  # pyright: ignore[reportPrivateUsage]
 
-    await soul._notify_injection_providers_compacted()  # pyright: ignore[reportPrivateUsage]
+    await soul.notify_history_rebuilt()
 
     assert recorder.on_context_compacted_calls == 1
 

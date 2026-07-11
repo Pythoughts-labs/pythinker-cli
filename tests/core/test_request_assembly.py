@@ -96,6 +96,85 @@ def _request(*, budget_tokens: int, history: tuple[Message, ...] = ()) -> Reques
     )
 
 
+def _satisfied(policy: TrustedSourcePolicy, content: str, generation: int) -> RequestSourceResult:
+    provided = _provided(policy, content)
+    return RequestSourceResult(
+        source=provided.source,
+        key=provided.key,
+        status=SourceResultStatus.ALREADY_SATISFIED,
+        fragment=provided.fragment,
+        reason_code=None,
+        history_generation=generation,
+    )
+
+
+@pytest.mark.asyncio
+async def test_already_satisfied_requires_matching_history_generation_proof() -> None:
+    permissions = _policy(
+        "permissions",
+        "state",
+        requirement=FragmentRequirement.REQUIRED,
+        persistence=FragmentPersistence.HISTORY,
+    )
+    request = RequestAssemblyInput(
+        system_prompt="stable",
+        persisted_history=(Message(role="user", content="persisted"),),
+        current_task="task",
+        budget_tokens=100,
+        history_generation=7,
+    )
+
+    assembled = await RequestAssembler(
+        (permissions,),
+        (_satisfied(permissions, "current permissions", 7),),
+    ).assemble(request)
+
+    assert assembled.history_appends == ()
+    assert assembled.provider_history == request.persisted_history
+
+
+@pytest.mark.parametrize(
+    ("persistence", "proof_generation"),
+    [
+        (FragmentPersistence.REQUEST_ONLY, 7),
+        (FragmentPersistence.HISTORY, 6),
+        (FragmentPersistence.HISTORY, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_already_satisfied_rejects_request_only_or_stale_proof(
+    persistence: FragmentPersistence,
+    proof_generation: int | None,
+) -> None:
+    policy = _policy(
+        "permissions",
+        "state",
+        requirement=FragmentRequirement.REQUIRED,
+        persistence=persistence,
+    )
+    provided = _provided(policy, "current permissions")
+    result = RequestSourceResult(
+        source=provided.source,
+        key=provided.key,
+        status=SourceResultStatus.ALREADY_SATISFIED,
+        fragment=provided.fragment,
+        reason_code=None,
+        history_generation=proof_generation,
+    )
+    request = RequestAssemblyInput(
+        system_prompt="stable",
+        persisted_history=(),
+        current_task="task",
+        budget_tokens=100,
+        history_generation=7,
+    )
+
+    with pytest.raises(RequestAssemblyError) as caught:
+        await RequestAssembler((policy,), (result,)).assemble(request)
+
+    assert caught.value.reason_code == "source_history_proof_invalid"
+
+
 @pytest.mark.asyncio
 async def test_required_fragments_are_reserved_before_higher_priority_optional_content() -> None:
     required = _policy(

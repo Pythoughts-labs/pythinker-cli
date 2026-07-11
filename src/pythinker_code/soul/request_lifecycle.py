@@ -86,6 +86,22 @@ class RequestLifecycle:
         self._generation = 0
         self._committed: set[tuple[int, str, str]] = set()
         self.sync_providers(providers)
+        self._default_permissions = _exactly_one_role(
+            providers,
+            PermissionsInjectionProvider,
+        )
+        self._default_model_defense = _exactly_one_role(
+            providers,
+            ModelDefenseInjectionProvider,
+        )
+
+    @property
+    def history_generation(self) -> int:
+        return self._generation
+
+    @property
+    def committed_identity_count(self) -> int:
+        return len(self._committed)
 
     def sync_providers(self, providers: Sequence[DynamicInjectionProvider]) -> None:
         for provider in providers:
@@ -247,7 +263,16 @@ class RequestLifecycle:
                 if committed_identity in self._committed
                 else SourceResultStatus.PROVIDED
             )
-            results.append(RequestSourceResult(policy.source, key, status, fragment, None))
+            results.append(
+                RequestSourceResult(
+                    policy.source,
+                    key,
+                    status,
+                    fragment,
+                    None,
+                    self._generation if status is SourceResultStatus.ALREADY_SATISFIED else None,
+                )
+            )
             if status is SourceResultStatus.PROVIDED:
                 acknowledgements.append(
                     SourceAcknowledgement(
@@ -296,6 +321,7 @@ class RequestLifecycle:
 
     def context_rebuilt(self) -> None:
         self._generation += 1
+        self._committed.clear()
 
     def rearm(
         self, providers: Sequence[DynamicInjectionProvider], key: str
@@ -328,19 +354,16 @@ class RequestLifecycle:
             for provider in providers
             if isinstance(provider, ModelDefenseInjectionProvider)
         ]
-        registered = [registration.provider for registration in self._registrations.values()]
+        if len(permissions) > 1 or len(defenses) > 1:
+            raise RequestLifecycleError("ambiguous_required_provider")
         if not permissions:
-            permissions = [
-                provider
-                for provider in registered
-                if isinstance(provider, PermissionsInjectionProvider)
-            ][:1]
+            if self._default_permissions is None:
+                raise RequestLifecycleError("required_provider_missing")
+            permissions = [self._default_permissions]
         if not defenses:
-            defenses = [
-                provider
-                for provider in registered
-                if isinstance(provider, ModelDefenseInjectionProvider)
-            ][:1]
+            if self._default_model_defense is None:
+                raise RequestLifecycleError("required_provider_missing")
+            defenses = [self._default_model_defense]
         return tuple(self._registrations[id(provider)] for provider in (*permissions, *defenses))
 
     def _ordered_optional(
@@ -362,6 +385,14 @@ def _source_base(provider: DynamicInjectionProvider) -> str:
     if isinstance(provider, ModelDefenseInjectionProvider):
         return _MODEL_DEFENSE_SOURCE
     return _stable_identifier(type(provider).__name__.lstrip("_"))
+
+
+def _exactly_one_role(
+    providers: Sequence[DynamicInjectionProvider],
+    role: type[DynamicInjectionProvider],
+) -> DynamicInjectionProvider | None:
+    matches = [provider for provider in providers if isinstance(provider, role)]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _stable_identifier(identifier: str) -> str:

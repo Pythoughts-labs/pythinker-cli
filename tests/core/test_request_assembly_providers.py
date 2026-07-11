@@ -29,6 +29,7 @@ from pythinker_code.soul.request_assembly import (
     RequestSourceError,
     RequestStatus,
 )
+from pythinker_code.soul.request_lifecycle import RequestLifecycleError
 
 
 class _StaticProvider(DynamicInjectionProvider):
@@ -479,3 +480,42 @@ async def test_optional_identity_adapter_failure_replaces_prior_manifest_with_de
         if outcome.source == "BrokenIdentityProvider"
     )
     assert failure.reason_code == "provider_failed"
+
+
+@pytest.mark.parametrize(
+    "duplicates",
+    [
+        [PermissionsInjectionProvider(), PermissionsInjectionProvider()],
+        [ModelDefenseInjectionProvider(), ModelDefenseInjectionProvider()],
+    ],
+)
+@pytest.mark.asyncio
+async def test_ambiguous_required_provider_roles_fail_before_optional_or_model(
+    duplicates: list[DynamicInjectionProvider],
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "ambiguous-required.jsonl")
+    await context.append_message(Message(role="user", content="Do the task"))
+    soul = _soul(runtime, context)
+    optional = _CountingProvider()
+    soul._injection_providers = [*duplicates, optional]
+    model_calls = 0
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        nonlocal model_calls
+        model_calls += 1
+        return _successful_step()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    with pytest.raises(RequestLifecycleError, match="ambiguous_required_provider"):
+        await soul._step()
+
+    assert optional.calls == 0
+    assert model_calls == 0
+    assert soul.latest_request_manifest is not None
+    assert soul.latest_request_manifest.status is RequestStatus.FAILED
+    assert soul.latest_request_manifest.reason_code == "ambiguous_required_provider"

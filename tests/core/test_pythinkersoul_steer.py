@@ -28,6 +28,7 @@ from pythinker_code.soul.context import Context
 from pythinker_code.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 from pythinker_code.soul.message import is_system_reminder_message
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
+from pythinker_code.soul.request_lifecycle import RequestLifecycle
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.wire import Wire
 from pythinker_code.wire.types import (
@@ -383,26 +384,26 @@ async def test_step_merges_plain_steer_with_dynamic_injection_in_model_history(
             _tool_result_futures={},
         )
 
-    soul._injection_providers = [_StaticInjectionProvider()]
+    soul._injection_providers.append(_StaticInjectionProvider())
+    soul._request_lifecycle = RequestLifecycle(soul._injection_providers)
     monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
     monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
 
     outcome = await soul._step()
 
     assert outcome is not None
-    assert soul.context.history[-3:] == [
-        Message(role="user", content=[TextPart(text="Follow user note")]),
-        Message(
-            role="user",
-            content=[TextPart(text="<system-reminder>\nInternal reminder\n</system-reminder>")],
-        ),
-        Message(role="assistant", content=[TextPart(text="done")]),
-    ]
+    assert soul.context.history[-3] == Message(
+        role="user", content=[TextPart(text="Follow user note")]
+    )
+    assert _is_permissions_state_injection(soul.context.history[-2])
+    assert "Internal reminder" in soul.context.history[-2].extract_text(" ")
+    assert soul.context.history[-1] == Message(role="assistant", content=[TextPart(text="done")])
     assert captured_history[-1].role == "user"
-    assert captured_history[-1].content == [
-        TextPart(text="Follow user note"),
-        TextPart(text="<system-reminder>\nInternal reminder\n</system-reminder>"),
-    ]
+    assert captured_history[-1].content[0] == TextPart(text="Follow user note")
+    injection = captured_history[-1].content[1]
+    assert isinstance(injection, TextPart)
+    assert "Permissions state:" in injection.text
+    assert "Internal reminder" in injection.text
 
 
 @pytest.mark.asyncio

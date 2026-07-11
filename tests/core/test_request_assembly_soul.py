@@ -31,6 +31,7 @@ from pythinker_code.soul.dynamic_injections.permissions_state import Permissions
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.soul.request_assembly import RequestSourceError, RequestStatus
 from pythinker_code.soul.request_lifecycle import RequestLifecycleError
+from pythinker_code.soul.slash import clear as clear_context
 
 
 class _StaticProvider(DynamicInjectionProvider):
@@ -451,7 +452,7 @@ async def test_compaction_rebuild_rearms_both_required_security_sources(
     await soul._step()
     await context.clear()
     await context.append_message(Message(role="user", content="Compacted task"))
-    await soul._notify_injection_providers_compacted()
+    await soul.notify_history_rebuilt()
     await soul._step()
 
     assert len(captured) == 2
@@ -491,6 +492,8 @@ async def test_cancellation_during_commit_finishes_commit_and_dedupes_retry(
     step = asyncio.create_task(soul._step())
     await entered.wait()
     step.cancel()
+    await asyncio.sleep(0)
+    step.cancel()
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await step
@@ -502,6 +505,73 @@ async def test_cancellation_during_commit_finishes_commit_and_dedupes_retry(
     await soul._step()
     persisted = "\n".join(message.extract_text() for message in context.history)
     assert persisted.count("Stable plugin reminder") == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_rearms_required_security_sources_for_next_turn(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "clear-generation.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+    soul._injection_providers = [
+        PermissionsInjectionProvider(),
+        ModelDefenseInjectionProvider(
+            (ModelDefenseFragment(name="mock", patterns=("mock",), content="Defense"),)
+        ),
+    ]
+    captured: list[str] = []
+
+    async def capture(
+        _provider: object,
+        _system_prompt: str,
+        _toolset: object,
+        history: Sequence[Message],
+        **_kwargs: object,
+    ) -> StepResult:
+        captured.append("\n".join(message.extract_text() for message in history))
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+    monkeypatch.setattr("pythinker_code.soul.slash.wire_send", lambda _message: None)
+
+    await soul._step()
+    await clear_context(soul, "")  # type: ignore[reportGeneralTypeIssues]
+    await context.append_message(Message(role="user", content="New task"))
+    await soul._step()
+
+    assert len(captured) == 2
+    assert all("Permissions state:" in request for request in captured)
+    assert all("Defense" in request for request in captured)
+    rebuilt = "\n".join(message.extract_text() for message in context.history)
+    assert rebuilt.count("Permissions state:") == 1
+    assert rebuilt.count("Defense") == 1
+
+
+@pytest.mark.asyncio
+async def test_history_rebuild_discards_obsolete_committed_identity_generations(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Context(file_backend=tmp_path / "bounded-generations.jsonl")
+    await context.append_message(Message(role="user", content="Main task"))
+    soul = _soul(runtime, context)
+
+    async def capture(*_args: object, **_kwargs: object) -> StepResult:
+        return _step_result()
+
+    monkeypatch.setattr(pythinker_core, "step", capture)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    await soul._step()
+    assert soul._request_lifecycle.committed_identity_count > 0
+    for _ in range(20):
+        soul._request_lifecycle.context_rebuilt()
+        assert soul._request_lifecycle.committed_identity_count == 0
 
 
 @pytest.mark.asyncio
