@@ -651,6 +651,10 @@ class _ContentBlock:
         self._scrollback_renderable: RenderableType | None = None
         self._preview_text_cache_key: tuple[int, int, int, bool, str] | None = None
         self._preview_text_cache: str | None = None
+        # Rendered thinking-preview cache (legacy ``show_thinking_stream`` path):
+        # avoids re-running the markdown parse on every Live tick when unchanged.
+        self._thinking_render_cache_key: str | None = None
+        self._thinking_render_cache: RenderableType | None = None
         # Interactive prompt preamble row budget (``None`` = no limit; Rich Live).
         self._preview_row_budget: int | None = None
         self._last_commit_scan_len = 0
@@ -905,6 +909,8 @@ class _ContentBlock:
     def _invalidate_preview_cache(self) -> None:
         self._preview_text_cache_key = None
         self._preview_text_cache = None
+        self._thinking_render_cache_key = None
+        self._thinking_render_cache = None
 
     def _wrap_bullet(self, renderable: RenderableType) -> BulletColumns:
         """First call gets the ``•`` bullet; subsequent calls get a space."""
@@ -1151,8 +1157,8 @@ class _ContentBlock:
         pending = self._pending_text()
         if not pending:
             return spinner
-        preview = self._build_preview(pending, max_lines=_THINKING_PREVIEW_LINES)
-        rendered_preview = _render_thinking_preview(preview)
+        preview = self._build_preview_cached(pending, max_lines=_THINKING_PREVIEW_LINES)
+        rendered_preview = self._render_thinking_preview_cached(preview)
         if rendered_preview is None:
             return spinner
         preview_style = tui_rich_style("thinking_text") + Style(italic=True)
@@ -1170,6 +1176,21 @@ class _ContentBlock:
             self._activity_snapshot("Thinking", label_style=tui_rich_style("thinking_text")),
             width=self._layout_width(),
         )
+
+    def _render_thinking_preview_cached(self, preview: str) -> RenderableType | None:
+        """Render the thinking preview markdown, caching on the preview string.
+
+        Mirrors :meth:`_build_preview_cached` so the markdown parse only runs when
+        the preview content changes, not on every Live refresh tick driven by the
+        spinner animation. The cache is cleared by ``_invalidate_preview_cache``
+        on new content, width, or preview-budget changes.
+        """
+        if preview == self._thinking_render_cache_key:
+            return self._thinking_render_cache
+        rendered = _render_thinking_preview(preview)
+        self._thinking_render_cache_key = preview
+        self._thinking_render_cache = rendered
+        return rendered
 
     def _layout_width(self) -> int:
         width = current_console_width()
