@@ -8,10 +8,11 @@ diff scope from a bare prompt.
 from __future__ import annotations
 
 from pythinker_code.subagents.core import GIT_CONTEXT_AGENT_TYPES
+from pythinker_code.subagents.review_target import REVIEWER_AGENT_TYPES
 
 
 def test_explore_and_reviewer_types_receive_git_context() -> None:
-    assert {"explore", "review", "code-reviewer", "security-reviewer"} <= GIT_CONTEXT_AGENT_TYPES
+    assert frozenset({"explore"}) | REVIEWER_AGENT_TYPES == GIT_CONTEXT_AGENT_TYPES
 
 
 def test_gate_names_match_registered_profile_keys() -> None:

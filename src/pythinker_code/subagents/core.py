@@ -22,11 +22,12 @@ from pythinker_code.soul.message import is_system_reminder_message
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.subagents.builder import SubagentBuilder
 from pythinker_code.subagents.models import AgentLaunchSpec, AgentTypeDefinition
+from pythinker_code.subagents.review_target import REVIEWER_AGENT_TYPES
 from pythinker_code.subagents.store import SubagentStore
 
 # NOTE: these must match the registered type names in agents/default/agent.yaml
 # (dashed), which _SUBAGENT_PROFILES also keys on — not the yaml file stems.
-GIT_CONTEXT_AGENT_TYPES = frozenset({"explore", "review", "code-reviewer", "security-reviewer"})
+GIT_CONTEXT_AGENT_TYPES = frozenset({"explore"}) | REVIEWER_AGENT_TYPES
 """Read-oriented agent types whose first prompt gets a git-context prefix.
 
 Exploration and review both orient on repo state (branch, dirty files,
