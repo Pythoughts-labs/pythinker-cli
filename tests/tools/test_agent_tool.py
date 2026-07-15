@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pythinker_core.chat_provider import APIConnectionError, APIStatusError, ChatProviderError
@@ -13,7 +13,13 @@ from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code import scratchpad
 from pythinker_code.approval_runtime import get_current_approval_source_or_none
-from pythinker_code.background import TaskRuntime, TaskSpec
+from pythinker_code.background import (
+    TaskConsumerState,
+    TaskControl,
+    TaskRuntime,
+    TaskSpec,
+    TaskView,
+)
 from pythinker_code.hooks import HookEngine
 from pythinker_code.hooks import events as hook_events
 from pythinker_code.soul import MaxStepsReached, RunCancelled
@@ -24,12 +30,18 @@ from pythinker_code.subagents import AgentLaunchSpec, AgentTypeDefinition, ToolP
 from pythinker_code.subagents.core import SUBAGENT_OUTPUT_LANGUAGE_INSTRUCTION
 from pythinker_code.subagents.review_target import (
     ResolvedReviewTarget,
+    ReviewTarget,
     ReviewTargetErrorCode,
     ReviewTargetResolutionError,
     WorktreeChanges,
 )
 from pythinker_code.subagents.runner import ForegroundRunRequest, ForegroundSubagentRunner
-from pythinker_code.tools.agent import AgentRunConfig, RunAgents
+from pythinker_code.tools.agent import (
+    AgentRunConfig,
+    RunAgents,
+    RunAgentsParams,
+    _run_agents_fingerprint,
+)
 from pythinker_code.wire.types import (
     ApprovalRequest,
     MCPServerSnapshot,
@@ -62,6 +74,17 @@ def _mcp_snapshot(loading: bool, servers: list[tuple[str, str]]) -> MCPStatusSna
         total=len(servers),
         tools=0,
         servers=tuple(MCPServerSnapshot(name=n, status=s) for n, s in servers),  # type: ignore[arg-type]
+    )
+
+
+def _register_agent_type(runtime, name: str) -> None:
+    runtime.labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name=name,
+            description=f"Test {name} agent.",
+            agent_file=runtime.subagent_store.root / f"{name}.yaml",
+            tool_policy=ToolPolicy(mode="inherit"),
+        )
     )
 
 
@@ -2392,6 +2415,207 @@ async def test_foreground_runner_hook_trigger_exception_marks_instance_failed(
     assert records[0].status == "failed"
 
 
+async def test_reviewer_without_target_resolves_auto_before_instance_creation(
+    agent_tool, runtime, monkeypatch
+) -> None:
+    _register_agent_type(runtime, "code-reviewer")
+    resolved = ResolvedReviewTarget(
+        requested_kind="auto",
+        requested_ref=None,
+        kind="commit",
+        head_sha="a" * 40,
+        target_sha="a" * 40,
+        commit_title="HEAD",
+        worktree_state="excluded",
+        prompt="<review-target>HEAD</review-target>",
+        hint="auto -> commit HEAD",
+    )
+    events: list[str] = []
+
+    async def resolve_before_allocation(target, work_dir):
+        assert target == ReviewTarget()
+        assert work_dir == runtime.work_dir
+        assert runtime.subagent_store.list_instances() == []
+        events.append("resolve")
+        return resolved
+
+    async def journal_after_resolution(params, requested_type):
+        events.append("journal")
+
+    resolve = AsyncMock(side_effect=resolve_before_allocation)
+    monkeypatch.setattr("pythinker_code.tools.agent.resolve_review_target", resolve)
+    monkeypatch.setattr(agent_tool, "_journal_foreground_agent_start", journal_after_resolution)
+    run = AsyncMock(return_value=ToolOk(output="status: completed"))
+    monkeypatch.setattr(
+        "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
+        run,
+    )
+
+    result = await agent_tool(
+        agent_tool.params(
+            description="review current changes",
+            prompt="Review the current change",
+            subagent_type="code-reviewer",
+        )
+    )
+
+    assert not result.is_error
+    assert events == ["resolve", "journal"]
+    assert run.await_args is not None
+    request = run.await_args.args[0]
+    assert request.resolved_review_target == resolved
+
+
+async def test_nonreviewer_rejects_review_target_before_allocation(agent_tool, runtime) -> None:
+    _register_agent_type(runtime, "coder")
+    before = runtime.subagent_store.list_instances()
+    result = await agent_tool(
+        agent_tool.params(
+            description="implement change",
+            prompt="write code",
+            subagent_type="coder",
+            review_target=ReviewTarget(kind="commit", ref="HEAD"),
+        )
+    )
+    assert result.is_error
+    assert result.brief == "Invalid review target"
+    assert runtime.subagent_store.list_instances() == before
+
+
+async def test_resume_rejects_review_target_without_resolution(agent_tool, monkeypatch) -> None:
+    resolve = AsyncMock()
+    monkeypatch.setattr("pythinker_code.tools.agent.resolve_review_target", resolve)
+    result = await agent_tool(
+        agent_tool.params(
+            description="continue review",
+            prompt="continue",
+            resume="aexisting",
+            review_target=ReviewTarget(kind="base", ref="main"),
+        )
+    )
+    assert result.is_error
+    assert result.brief == "Invalid review target"
+    resolve.assert_not_awaited()
+
+
+async def test_resolution_failure_creates_no_background_instance_or_task(
+    agent_tool, runtime, monkeypatch
+) -> None:
+    _register_agent_type(runtime, "review")
+    monkeypatch.setattr(
+        "pythinker_code.tools.agent.resolve_review_target",
+        AsyncMock(
+            side_effect=ReviewTargetResolutionError(
+                ReviewTargetErrorCode.missing_ref,
+                "Review target unavailable",
+                "The requested Git ref does not resolve to a commit.",
+            )
+        ),
+    )
+    create_task = Mock()
+    monkeypatch.setattr(runtime.background_tasks, "create_agent_task", create_task)
+    with tool_call_context("Agent"):
+        result = await agent_tool(
+            agent_tool.params(
+                description="review commit",
+                prompt="review",
+                subagent_type="review",
+                review_target=ReviewTarget(kind="commit", ref="missing"),
+                run_in_background=True,
+            )
+        )
+    assert result.is_error
+    assert result.brief == "Review target unavailable"
+    assert runtime.subagent_store.list_instances() == []
+    create_task.assert_not_called()
+
+
+async def test_background_reviewer_forwards_resolved_target_and_reports_safe_hint(
+    agent_tool, runtime, monkeypatch
+) -> None:
+    _register_agent_type(runtime, "review")
+    raw_ref = "refs/heads/private-review-target"
+    stderr = "fatal: private resolver stderr"
+    resolved = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref=raw_ref,
+        kind="base",
+        head_sha="b" * 40,
+        base_ref="main",
+        base_sha="c" * 40,
+        merge_base_sha="a" * 40,
+        attempted_base_refs=(raw_ref,),
+        worktree_changes=WorktreeChanges(staged=False, unstaged=False, untracked=False),
+        worktree_state="live",
+        prompt=f"<review-target>{raw_ref}\n{stderr}</review-target>",
+        hint="base main @ aaaaaaaaaaaa (live)",
+    )
+    events: list[str] = []
+
+    async def resolve_before_allocation(target, work_dir):
+        assert target == ReviewTarget(kind="base", ref=raw_ref)
+        assert work_dir == runtime.work_dir
+        assert runtime.subagent_store.list_instances() == []
+        events.append("resolve")
+        return resolved
+
+    captured: dict[str, object] = {}
+
+    def create_after_resolution(**kwargs):
+        events.append("allocate")
+        captured.update(kwargs)
+        return TaskView(
+            spec=TaskSpec(
+                id="agent-review-safe",
+                kind="agent",
+                session_id=runtime.session.id,
+                description=kwargs["description"],
+                tool_call_id=kwargs["tool_call_id"],
+                timeout_s=kwargs["timeout_s"],
+                dependencies=list(kwargs["dependencies"]),
+                budget_seconds=kwargs["budget_seconds"],
+                synthesis_state="pending",
+                isolation=kwargs["isolation"],
+                kind_payload={
+                    "agent_id": kwargs["agent_id"],
+                    "subagent_type": kwargs["subagent_type"],
+                    "prompt": kwargs["prompt"],
+                    "model_override": kwargs["model_override"],
+                    "launch_mode": "background",
+                    "resolved_review_target": resolved.model_dump(mode="json"),
+                },
+            ),
+            runtime=TaskRuntime(status="starting"),
+            control=TaskControl(),
+            consumer=TaskConsumerState(),
+        )
+
+    monkeypatch.setattr(
+        "pythinker_code.tools.agent.resolve_review_target",
+        AsyncMock(side_effect=resolve_before_allocation),
+    )
+    monkeypatch.setattr(runtime.background_tasks, "create_agent_task", create_after_resolution)
+
+    with tool_call_context("Agent"):
+        result = await agent_tool(
+            agent_tool.params(
+                description="review branch target",
+                prompt="review the selected target",
+                subagent_type="review",
+                review_target=ReviewTarget(kind="base", ref=raw_ref),
+                run_in_background=True,
+            )
+        )
+
+    assert not result.is_error
+    assert events == ["resolve", "allocate"]
+    assert captured["resolved_review_target"] is resolved
+    assert result.output.count(f"review_target: {resolved.hint}") == 1
+    assert "<review-target>" not in result.output
+    assert raw_ref not in result.output
+    assert stderr not in result.output
+
+
 async def test_foreground_start_hook_receives_only_original_caller_prompt(
     runtime,
     monkeypatch,
@@ -2871,6 +3095,100 @@ def test_run_agents_fingerprint_differs_when_child_prompts_differ():
         ],
     )
     assert _run_agents_fingerprint(params_a) != _run_agents_fingerprint(params_c)
+
+
+def test_run_agents_fingerprint_includes_requested_review_targets() -> None:
+    base = RunAgentsParams(
+        summary="review",
+        run_in_background=False,
+        agents=[
+            AgentRunConfig(
+                name="reviewer",
+                prompt="review",
+                subagent_type="review",
+                review_target=ReviewTarget(kind="base", ref="main"),
+            )
+        ],
+    )
+    commit = RunAgentsParams(
+        summary="review",
+        run_in_background=False,
+        agents=[
+            AgentRunConfig(
+                name="reviewer",
+                prompt="review",
+                subagent_type="review",
+                review_target=ReviewTarget(kind="commit", ref="HEAD"),
+            )
+        ],
+    )
+
+    assert _run_agents_fingerprint(base) != _run_agents_fingerprint(commit)
+
+
+@pytest.mark.asyncio
+async def test_run_agents_forwards_targets_and_isolates_one_target_error(
+    runtime,
+    monkeypatch,
+) -> None:
+    for name in ("review", "coder"):
+        runtime.labor_market.add_builtin_type(
+            AgentTypeDefinition(
+                name=name,
+                description=f"Test {name} agent.",
+                agent_file=runtime.subagent_store.root / f"{name}.yaml",
+                tool_policy=ToolPolicy(mode="inherit"),
+            )
+        )
+    resolve = AsyncMock(
+        side_effect=ReviewTargetResolutionError(
+            ReviewTargetErrorCode.invalid_target,
+            "Invalid review target",
+            "A commit target requires a non-blank ref.",
+        )
+    )
+    monkeypatch.setattr("pythinker_code.tools.agent.resolve_review_target", resolve)
+    run = AsyncMock(
+        return_value=ToolOk(output="agent_id: acoder\nstatus: completed\n\n[summary]\ndone")
+    )
+    monkeypatch.setattr(
+        "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
+        run,
+    )
+
+    tool = RunAgents(runtime)
+    with tool_call_context("RunAgents"):
+        result = await tool(
+            tool.params(
+                summary="mixed run",
+                base_prompt="shared",
+                run_in_background=False,
+                agents=[
+                    AgentRunConfig(
+                        name="reviewer",
+                        prompt="review invalid commit",
+                        subagent_type="review",
+                        review_target=ReviewTarget(kind="commit"),
+                    ),
+                    AgentRunConfig(
+                        name="implementer",
+                        prompt="inspect code",
+                        subagent_type="coder",
+                    ),
+                ],
+            )
+        )
+
+    resolve.assert_awaited_once_with(ReviewTarget(kind="commit"), runtime.work_dir)
+    assert run.await_count == 1
+    assert run.await_args is not None
+    coder_request = run.await_args.args[0]
+    assert coder_request.requested_type == "coder"
+    assert coder_request.resolved_review_target is None
+    assert result.is_error
+    assert isinstance(result.output, str)
+    assert "brief: Invalid review target" in result.output
+    assert "done" in result.output
 
 
 async def test_run_agents_foreground_children_run_concurrently(runtime):

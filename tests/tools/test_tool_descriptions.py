@@ -51,6 +51,10 @@ instance can preserve previous findings and work.
 - Use `model` when you need to override the built-in type's default model or the parent agent's current model.
 - Use `resume` when you want to continue an existing instance instead of starting a new one.
 - If an existing subagent already has relevant context or the task is a continuation of its prior work, prefer `resume` over creating a new instance.
+- Fresh `review`, `code-reviewer`, and `security-reviewer` agents receive a deterministic Git
+  target. Omit `review_target` for automatic branch/worktree/HEAD selection, or pass
+  `{kind: uncommitted}`, `{kind: base, ref: main}`, or `{kind: commit, ref: <sha>}`. Do not pass it
+  to non-reviewer types or resumed agents.
 - Default to foreground execution. Use `run_in_background=true` only when the task can continue independently, you do not need the result immediately, and there is a clear benefit to returning control before it finishes.
 - If your only next step is to wait for and synthesize the results (e.g. parallel reviews feeding one report), run in the foreground — `RunAgents` foreground children still execute concurrently and return results inline, with no polling or notification handling. Reserve background for when you have other work to do while children run.
 - Be explicit about whether the subagent should write code, only research, review, or verify.

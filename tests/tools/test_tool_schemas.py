@@ -48,6 +48,29 @@ def test_agent_params_schema(agent_tool: AgentTool):
                     "default": None,
                     "description": "Optional agent ID to resume instead of creating a new instance.",
                 },
+                "review_target": {
+                    "anyOf": [
+                        {
+                            "properties": {
+                                "kind": {
+                                    "default": "auto",
+                                    "description": "Deterministic reviewer Git target mode.",
+                                    "enum": ["auto", "uncommitted", "base", "commit"],
+                                    "type": "string",
+                                },
+                                "ref": {
+                                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                                    "default": None,
+                                    "description": "Optional Git ref for base, required Git ref for commit; maximum 1,024 characters after per-child validation.",
+                                },
+                            },
+                            "type": "object",
+                        },
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Structured Git scope for fresh reviewer agents only. Omit for deterministic auto selection; choose uncommitted, base with optional ref, or commit with required ref. Invalid with non-reviewer types or resume.",
+                },
                 "fork_context": {
                     "default": False,
                     "description": "Seed the new agent with a filtered transcript of this conversation (user requests and assistant replies; tool traffic and thinking are dropped). Use when the child needs the discussion so far without a hand-written context packet. New foreground instances only — invalid with resume or run_in_background.",
