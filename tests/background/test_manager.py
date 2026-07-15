@@ -23,7 +23,12 @@ from pythinker_code.soul.agent import Agent as SoulAgent
 from pythinker_code.soul.context import Context
 from pythinker_code.subagents import AgentLaunchSpec, AgentTypeDefinition, ToolPolicy
 from pythinker_code.subagents.core import SubagentRunSpec
-from pythinker_code.subagents.review_target import ResolvedReviewTarget, WorktreeChanges
+from pythinker_code.subagents.review_target import (
+    ResolvedReviewTarget,
+    ReviewTargetErrorCode,
+    ReviewTargetResolutionError,
+    WorktreeChanges,
+)
 from pythinker_code.wire.types import TextPart
 
 
@@ -462,6 +467,74 @@ async def test_background_runner_transports_original_prompt_and_target(
     assert len(captured) == 1
     assert captured[0].prompt == "original caller task"
     assert captured[0].resolved_review_target == target
+
+
+@pytest.mark.asyncio
+async def test_background_review_target_drift_records_safe_failed_state(
+    runtime,
+    monkeypatch,
+) -> None:
+    runtime.labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name="code-reviewer",
+            description="Test code reviewer.",
+            agent_file=runtime.subagent_store.root / "code-reviewer.yaml",
+            tool_policy=ToolPolicy(mode="inherit"),
+        )
+    )
+    runtime.subagent_store.create_instance(
+        agent_id="adriftbg",
+        description="review drift",
+        launch_spec=AgentLaunchSpec(
+            agent_id="adriftbg",
+            subagent_type="code-reviewer",
+            model_override=None,
+            effective_model=None,
+        ),
+    )
+    target = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref="main",
+        kind="base",
+        head_sha="b" * 40,
+        base_ref="main",
+        base_sha="c" * 40,
+        merge_base_sha="a" * 40,
+        attempted_base_refs=("main",),
+        worktree_changes=WorktreeChanges(staged=False, unstaged=False, untracked=False),
+        worktree_state="live",
+        prompt="<review-target>runtime scope</review-target>",
+        hint="base main",
+    )
+    monkeypatch.setattr(
+        "pythinker_code.background.agent_runner.prepare_soul",
+        AsyncMock(
+            side_effect=ReviewTargetResolutionError(
+                ReviewTargetErrorCode.head_moved,
+                "Review target changed",
+                "HEAD changed before background execution.",
+            )
+        ),
+    )
+
+    view = runtime.background_tasks.create_agent_task(
+        agent_id="adriftbg",
+        subagent_type="code-reviewer",
+        prompt="review current changes",
+        description="review drift",
+        tool_call_id="tool-review-drift",
+        model_override=None,
+        resolved_review_target=target,
+    )
+    await runtime.background_tasks._live_agent_tasks[view.spec.id]
+
+    failed = runtime.background_tasks.store.merged_view(view.spec.id)
+    output = runtime.background_tasks.store.output_path(view.spec.id).read_text(encoding="utf-8")
+    assert failed.runtime.status == "failed"
+    assert failed.runtime.failure_reason == "HEAD changed before background execution."
+    assert runtime.subagent_store.require_instance("adriftbg").status == "failed"
+    assert "HEAD changed before background execution." in output
+    assert "[summary]" not in output
 
 
 @pytest.mark.asyncio

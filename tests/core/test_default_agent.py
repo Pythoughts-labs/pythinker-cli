@@ -488,6 +488,7 @@ When spawning a fresh agent, brief it like a smart colleague who just walked in 
                 "review_target": {
                     "anyOf": [
                         {
+                            "additionalProperties": False,
                             "properties": {
                                 "kind": {
                                     "default": "auto",

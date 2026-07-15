@@ -108,27 +108,28 @@ async def run_git(
         raise ValueError("max_output_bytes must be positive")
     proc: HostProcess | None = None
     completion: asyncio.Task[tuple[int, tuple[bytes, bool], tuple[bytes, bool]]] | None = None
+    deadline = asyncio.get_running_loop().time() + timeout
     try:
-        proc = await pythinker_host.exec(
-            "git",
-            "--no-pager",
-            "--no-optional-locks",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "log.showSignature=false",
-            "-C",
-            cwd,
-            *args,
-        )
-        proc.stdin.close()
-        completion = asyncio.create_task(_collect_process(proc, max_output_bytes))
         try:
-            returncode, stdout_result, stderr_result = await asyncio.wait_for(
-                asyncio.shield(completion), timeout=timeout
-            )
+            async with asyncio.timeout_at(deadline):
+                proc = await pythinker_host.exec(
+                    "git",
+                    "--no-pager",
+                    "--no-optional-locks",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "-c",
+                    "log.showSignature=false",
+                    "-C",
+                    cwd,
+                    *args,
+                )
+                proc.stdin.close()
+                completion = asyncio.create_task(_collect_process(proc, max_output_bytes))
+                returncode, stdout_result, stderr_result = await asyncio.shield(completion)
         except TimeoutError as exc:
-            await _cleanup_process(proc, completion)
+            if proc is not None:
+                await _cleanup_process(proc, completion)
             raise GitCommandError("timeout", args[0] if args else "command") from exc
         stdout_bytes, stdout_truncated = stdout_result
         stderr_bytes, stderr_truncated = stderr_result

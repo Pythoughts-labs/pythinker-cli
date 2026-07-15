@@ -557,6 +557,8 @@ class AgentTool(CallableTool2[Params]):
             # Malformed resume id (store.instance_dir validates [A-Za-z0-9_-]{1,64}).
             logger.warning("Foreground agent resume id was malformed: {err}", err=exc)
             return ToolError(message=str(exc), brief="Agent not found")
+        except ReviewTargetResolutionError as exc:
+            return ToolError(message=str(exc), brief=exc.brief)
         except RuntimeError as exc:
             if "cannot be resumed concurrently" in str(exc):
                 logger.warning("Foreground agent resume rejected: {err}", err=exc)

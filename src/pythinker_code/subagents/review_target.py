@@ -24,10 +24,15 @@ type WorktreeState = Literal["live", "excluded"]
 
 REVIEWER_AGENT_TYPES = frozenset({"review", "code-reviewer", "security-reviewer"})
 MAX_REVIEW_REF_CHARS = 1024
+_FULL_OID_LENGTHS = frozenset({40, 64})
 
 
 class ReviewTarget(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(
+        frozen=True,
+        extra="allow",
+        json_schema_extra={"additionalProperties": False},
+    )
 
     kind: ReviewTargetKind = Field(
         default="auto",
@@ -96,6 +101,12 @@ class ReviewTargetResolutionError(RuntimeError):
 
 
 def validate_review_target(target: ReviewTarget) -> None:
+    if target.model_extra:
+        raise ReviewTargetResolutionError(
+            ReviewTargetErrorCode.invalid_target,
+            "Invalid review target",
+            "review_target contains unsupported fields.",
+        )
     ref = target.ref
     if target.kind == "commit" and ref is None:
         raise ReviewTargetResolutionError(
@@ -158,6 +169,7 @@ def _require_oid(result: GitCommandResult, *, message: str) -> str:
         or not value
         or "\n" in value
         or "\r" in value
+        or len(value) not in _FULL_OID_LENGTHS
         or any(char not in string.hexdigits for char in value)
     ):
         raise ReviewTargetResolutionError(
@@ -168,26 +180,48 @@ def _require_oid(result: GitCommandResult, *, message: str) -> str:
     return value.lower()
 
 
+def _quiet_verification_is_missing(result: GitCommandResult) -> bool:
+    return (
+        result.returncode == 1
+        and not result.stdout
+        and not result.stderr
+        and not result.stdout_truncated
+        and not result.stderr_truncated
+    )
+
+
+def _raise_commit_verification_failed() -> None:
+    raise ReviewTargetResolutionError(
+        ReviewTargetErrorCode.git_failed,
+        "Review target unavailable",
+        "Git could not verify the requested commit.",
+    )
+
+
 async def _try_resolve_commit(cwd: str, ref: str) -> str | None:
     result = await _run_resolver_git(
-        ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"],
         cwd,
     )
-    if result.returncode != 0:
+    if _quiet_verification_is_missing(result):
         return None
+    if result.returncode != 0:
+        _raise_commit_verification_failed()
     return _require_oid(result, message="Git returned an invalid commit identifier.")
 
 
 async def _resolve_commit(cwd: str, ref: str) -> str:
     result = await _run_resolver_git(
-        ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"], cwd
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"], cwd
     )
-    if result.returncode != 0:
+    if _quiet_verification_is_missing(result):
         raise ReviewTargetResolutionError(
             ReviewTargetErrorCode.missing_ref,
             "Review target unavailable",
             "The requested Git ref does not resolve to a commit.",
         )
+    if result.returncode != 0:
+        _raise_commit_verification_failed()
     return _require_oid(result, message="Git returned an invalid commit identifier.")
 
 
@@ -293,14 +327,19 @@ async def _commit_details(cwd: str, target_sha: str) -> tuple[tuple[str, ...], s
     if parents_text.endswith("\r"):
         parents_text = parents_text[:-1]
     tokens = parents_text.split()
+    oid_length = len(target_sha)
     if (
         parents_result.returncode != 0
         or parents_result.stdout_truncated
         or not tokens
         or "\n" in parents_text
         or "\r" in parents_text
-        or tokens[0].lower() != target_sha
-        or any(any(char not in string.hexdigits for char in token) for token in tokens)
+        or oid_length not in _FULL_OID_LENGTHS
+        or tokens[0].lower() != target_sha.lower()
+        or any(
+            len(token) != oid_length or any(char not in string.hexdigits for char in token)
+            for token in tokens
+        )
     ):
         raise ReviewTargetResolutionError(
             ReviewTargetErrorCode.git_failed,

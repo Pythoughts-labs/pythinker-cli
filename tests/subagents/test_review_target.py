@@ -18,6 +18,9 @@ from pythinker_code.subagents.review_target import (
     ReviewTargetResolutionError,
     _commit_details,
     _require_oid,
+    _resolve_commit,
+    _resolve_head,
+    _try_resolve_commit,
     resolve_review_target,
     revalidate_review_target_head,
     validate_review_target,
@@ -92,6 +95,16 @@ async def _make_merge_commit(cwd: Path, title: str) -> tuple[str, str, str]:
 def test_review_target_rejects_invalid_ref_contract(target: ReviewTarget, message: str) -> None:
     with pytest.raises(ReviewTargetResolutionError, match=message):
         validate_review_target(target)
+
+
+def test_review_target_rejects_unknown_fields_after_parsing() -> None:
+    target = ReviewTarget.model_validate({"kind": "base", "branch": "release"})
+
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        validate_review_target(target)
+
+    assert exc_info.value.code == ReviewTargetErrorCode.invalid_target
+    assert "release" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -298,7 +311,7 @@ async def test_commit_root_single_parent_annotated_tag_and_empty_commit(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_commit_rejects_blob_ref_without_raw_git_error(tmp_path: Path) -> None:
+async def test_commit_rejects_blob_ref_as_git_failure_without_raw_error(tmp_path: Path) -> None:
     await _init_repo(tmp_path)
     blob_sha = await _git(tmp_path, "rev-parse", "HEAD:base.txt")
 
@@ -308,7 +321,7 @@ async def test_commit_rejects_blob_ref_without_raw_git_error(tmp_path: Path) -> 
             _host_path(tmp_path),
         )
 
-    assert exc_info.value.code == ReviewTargetErrorCode.missing_ref
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
     assert blob_sha not in str(exc_info.value)
 
 
@@ -355,6 +368,76 @@ async def test_checked_command_timeout_maps_without_leaking_stderr(
         await resolve_review_target(ReviewTarget(), _host_path(tmp_path))
     assert exc_info.value.code == ReviewTargetErrorCode.git_timeout
     assert "stderr" not in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_explicit_commit_fatal_verification_fails_closed(monkeypatch) -> None:
+    run = AsyncMock(
+        return_value=GitCommandResult(
+            stdout="",
+            stderr="private fatal failure",
+            returncode=128,
+        )
+    )
+    monkeypatch.setattr("pythinker_code.subagents.review_target._run_resolver_git", run)
+
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        await _resolve_commit("/repo", "release")
+
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
+    assert "private fatal failure" not in str(exc_info.value)
+    assert run.await_args is not None
+    assert "--quiet" in run.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_head_fatal_verification_is_not_reported_as_missing(monkeypatch) -> None:
+    run = AsyncMock(
+        side_effect=[
+            GitCommandResult(stdout="true\n", stderr="", returncode=0),
+            GitCommandResult(stdout="", stderr="private HEAD failure", returncode=128),
+        ]
+    )
+    monkeypatch.setattr("pythinker_code.subagents.review_target._run_resolver_git", run)
+
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        await _resolve_head("/repo")
+
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
+    assert "private HEAD failure" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_auto_candidate_fatal_verification_is_not_skipped(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "pythinker_code.subagents.review_target._run_resolver_git",
+        AsyncMock(
+            return_value=GitCommandResult(
+                stdout="",
+                stderr="private candidate failure",
+                returncode=1,
+            )
+        ),
+    )
+
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        await _try_resolve_commit("/repo", "origin/main")
+
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
+    assert "private candidate failure" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_quiet_missing_ref_remains_a_missing_ref(monkeypatch) -> None:
+    run = AsyncMock(return_value=GitCommandResult(stdout="", stderr="", returncode=1))
+    monkeypatch.setattr("pythinker_code.subagents.review_target._run_resolver_git", run)
+
+    assert await _try_resolve_commit("/repo", "missing") is None
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        await _resolve_commit("/repo", "missing")
+
+    assert exc_info.value.code == ReviewTargetErrorCode.missing_ref
+    assert all("--quiet" in call.args[0] for call in run.await_args_list)
 
 
 def test_resolved_target_round_trips_as_json() -> None:
@@ -442,6 +525,89 @@ def test_require_oid_rejects_multiline_or_truncated_output() -> None:
             _require_oid(result, message="Invalid Git identifier.")
         assert exc_info.value.code == ReviewTargetErrorCode.git_failed
         assert "secret stderr" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("length", [40, 64])
+def test_require_oid_accepts_full_sha1_and_sha256(length: int) -> None:
+    oid = "A" * length
+
+    assert (
+        _require_oid(
+            GitCommandResult(stdout=f"{oid}\n", stderr="", returncode=0),
+            message="Invalid Git identifier.",
+        )
+        == oid.lower()
+    )
+
+
+@pytest.mark.parametrize("length", [1, 12, 39, 41, 63, 65])
+def test_require_oid_rejects_non_native_lengths(length: int) -> None:
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        _require_oid(
+            GitCommandResult(stdout="a" * length, stderr="private stderr", returncode=0),
+            message="Invalid Git identifier.",
+        )
+
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
+    assert "private stderr" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("length", [40, 64])
+@pytest.mark.asyncio
+async def test_commit_details_accepts_matching_parent_oid_lengths(monkeypatch, length: int) -> None:
+    target_sha = "a" * length
+    parent_sha = "b" * length
+    monkeypatch.setattr(
+        "pythinker_code.subagents.review_target._run_resolver_git",
+        AsyncMock(
+            side_effect=[
+                GitCommandResult(
+                    stdout=f"{target_sha} {parent_sha}\n",
+                    stderr="",
+                    returncode=0,
+                ),
+                GitCommandResult(stdout="title\n", stderr="", returncode=0),
+            ]
+        ),
+    )
+
+    parents, title = await _commit_details("/repo", target_sha)
+
+    assert parents == (parent_sha,)
+    assert title == "title"
+
+
+@pytest.mark.parametrize(
+    ("target_sha", "parent_sha"),
+    [
+        ("a" * 40, "b" * 64),
+        ("a" * 64, "b" * 40),
+        ("a" * 40, "b" * 12),
+        ("a" * 12, "b" * 12),
+    ],
+)
+@pytest.mark.asyncio
+async def test_commit_details_rejects_mixed_or_short_oid_lengths(
+    monkeypatch,
+    target_sha: str,
+    parent_sha: str,
+) -> None:
+    monkeypatch.setattr(
+        "pythinker_code.subagents.review_target._run_resolver_git",
+        AsyncMock(
+            return_value=GitCommandResult(
+                stdout=f"{target_sha} {parent_sha}\n",
+                stderr="private parent failure",
+                returncode=0,
+            )
+        ),
+    )
+
+    with pytest.raises(ReviewTargetResolutionError) as exc_info:
+        await _commit_details("/repo", target_sha)
+
+    assert exc_info.value.code == ReviewTargetErrorCode.git_failed
+    assert "private parent failure" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

@@ -533,6 +533,28 @@ async def test_run_git_timeout_kills_drains_and_reaps(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_git_timeout_includes_process_spawn(monkeypatch) -> None:
+    spawn_cancelled = asyncio.Event()
+
+    async def never_spawn(*_args: object) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            spawn_cancelled.set()
+
+    monkeypatch.setattr(
+        "pythinker_code.subagents.git_context.pythinker_host.exec",
+        never_spawn,
+    )
+
+    with pytest.raises(GitCommandError) as exc_info:
+        await asyncio.wait_for(run_git(["status"], "/repo", timeout=0.001), timeout=0.5)
+
+    assert exc_info.value.category == "timeout"
+    assert spawn_cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_run_git_error_omits_ref(monkeypatch) -> None:
     proc = _FakeProcess(stdout=[], stderr=[], returncode=0, blocked=True)
     monkeypatch.setattr(

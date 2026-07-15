@@ -34,6 +34,7 @@ from pythinker_code.subagents.review_target import (
     ReviewTargetErrorCode,
     ReviewTargetResolutionError,
     WorktreeChanges,
+    validate_review_target,
 )
 from pythinker_code.subagents.runner import ForegroundRunRequest, ForegroundSubagentRunner
 from pythinker_code.tools.agent import (
@@ -2482,6 +2483,54 @@ async def test_nonreviewer_rejects_review_target_before_allocation(agent_tool, r
     assert runtime.subagent_store.list_instances() == before
 
 
+async def test_unknown_review_target_field_rejected_before_agent_allocation(
+    agent_tool,
+    runtime,
+    monkeypatch,
+) -> None:
+    _register_agent_type(runtime, "code-reviewer")
+    resolved = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref=None,
+        kind="commit",
+        head_sha="a" * 40,
+        target_sha="a" * 40,
+        commit_title="HEAD",
+        worktree_state="excluded",
+        prompt="<review-target>HEAD</review-target>",
+        hint="commit HEAD",
+    )
+
+    async def validate_then_resolve(target, _work_dir):
+        validate_review_target(target)
+        return resolved
+
+    monkeypatch.setattr(
+        "pythinker_code.tools.agent.resolve_review_target",
+        validate_then_resolve,
+    )
+    run = AsyncMock(return_value=ToolOk(output="status: completed"))
+    monkeypatch.setattr(
+        "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
+        run,
+    )
+    before = runtime.subagent_store.list_instances()
+
+    result = await agent_tool(
+        agent_tool.params(
+            description="review release",
+            prompt="review release changes",
+            subagent_type="code-reviewer",
+            review_target={"kind": "base", "branch": "release"},
+        )
+    )
+
+    assert result.is_error
+    assert result.brief == "Invalid review target"
+    assert runtime.subagent_store.list_instances() == before
+    run.assert_not_awaited()
+
+
 async def test_resume_rejects_review_target_without_resolution(agent_tool, monkeypatch) -> None:
     resolve = AsyncMock()
     monkeypatch.setattr("pythinker_code.tools.agent.resolve_review_target", resolve)
@@ -2819,6 +2868,55 @@ async def test_foreground_revalidates_review_target_after_start_hook(
     ]
     assert len(records) == 1
     assert records[0].status == "failed"
+
+
+async def test_agent_preserves_public_review_target_drift_error(
+    agent_tool,
+    runtime,
+    monkeypatch,
+) -> None:
+    _register_agent_type(runtime, "code-reviewer")
+    target = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref="main",
+        kind="base",
+        head_sha="b" * 40,
+        base_ref="main",
+        base_sha="c" * 40,
+        merge_base_sha="a" * 40,
+        attempted_base_refs=("main",),
+        worktree_changes=WorktreeChanges(staged=False, unstaged=False, untracked=False),
+        worktree_state="live",
+        prompt="<review-target>runtime scope</review-target>",
+        hint="base main",
+    )
+    monkeypatch.setattr(
+        "pythinker_code.tools.agent.resolve_review_target",
+        AsyncMock(return_value=target),
+    )
+    monkeypatch.setattr(
+        "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
+        AsyncMock(
+            side_effect=ReviewTargetResolutionError(
+                ReviewTargetErrorCode.head_moved,
+                "Review target changed",
+                "HEAD changed after the SubagentStart hook.",
+            )
+        ),
+    )
+
+    result = await agent_tool(
+        agent_tool.params(
+            description="review hook drift",
+            prompt="review current changes",
+            subagent_type="code-reviewer",
+            review_target=ReviewTarget(kind="base", ref="main"),
+        )
+    )
+
+    assert result.is_error
+    assert result.brief == "Review target changed"
+    assert result.message == "HEAD changed after the SubagentStart hook."
 
 
 # ---------------------------------------------------------------------------
@@ -3189,6 +3287,69 @@ async def test_run_agents_forwards_targets_and_isolates_one_target_error(
     assert isinstance(result.output, str)
     assert "brief: Invalid review target" in result.output
     assert "done" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_agents_isolates_unknown_nested_target_field(runtime, monkeypatch) -> None:
+    for name in ("review", "coder"):
+        _register_agent_type(runtime, name)
+    resolved = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref=None,
+        kind="commit",
+        head_sha="a" * 40,
+        target_sha="a" * 40,
+        commit_title="HEAD",
+        worktree_state="excluded",
+        prompt="<review-target>HEAD</review-target>",
+        hint="commit HEAD",
+    )
+
+    async def validate_then_resolve(target, _work_dir):
+        validate_review_target(target)
+        return resolved
+
+    monkeypatch.setattr(
+        "pythinker_code.tools.agent.resolve_review_target",
+        validate_then_resolve,
+    )
+    run = AsyncMock(
+        return_value=ToolOk(output="agent_id: acoder\nstatus: completed\n\n[summary]\ndone")
+    )
+    monkeypatch.setattr(
+        "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
+        run,
+    )
+    tool = RunAgents(runtime)
+
+    with tool_call_context("RunAgents"):
+        result = await tool(
+            tool.params(
+                summary="mixed unknown target",
+                run_in_background=False,
+                agents=[
+                    AgentRunConfig(
+                        name="reviewer",
+                        prompt="review release",
+                        subagent_type="review",
+                        review_target=ReviewTarget.model_validate(
+                            {"kind": "base", "branch": "release"}
+                        ),
+                    ),
+                    AgentRunConfig(
+                        name="implementer",
+                        prompt="inspect code",
+                        subagent_type="coder",
+                    ),
+                ],
+            )
+        )
+
+    assert result.is_error
+    assert isinstance(result.output, str)
+    assert "brief: Invalid review target" in result.output
+    assert "done" in result.output
+    assert run.await_count == 1
 
 
 async def test_run_agents_foreground_children_run_concurrently(runtime):

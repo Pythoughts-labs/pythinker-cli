@@ -117,7 +117,9 @@ All Git operations use the existing async host process boundary with argv elemen
 The current best-effort Git-context helper deliberately collapses command failures to `None`; the
 resolver instead uses a checked wrapper at that same boundary so it can distinguish timeout,
 non-zero exit, and unavailable Git while still exposing only safe categorized errors. Reads are
-bounded, and every timed-out process is killed and reaped.
+bounded. Timeout and cancellation paths make bounded kill, drain, and reap attempts only when a
+process handle exists; cleanup failures never replace the primary failure, and a failed host kill
+can leave the child unreaped.
 
 Every user-provided ref must pass the shape rules above and resolve with
 `git rev-parse --verify --end-of-options <ref>^{commit}`. The explicit option boundary remains even

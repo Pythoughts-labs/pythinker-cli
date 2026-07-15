@@ -51,6 +51,7 @@ def test_agent_params_schema(agent_tool: AgentTool):
                 "review_target": {
                     "anyOf": [
                         {
+                            "additionalProperties": False,
                             "properties": {
                                 "kind": {
                                     "default": "auto",
