@@ -135,6 +135,7 @@ async def test_glm52_request_effort_mapping(
     ("effort", "thinking"),
     [
         ("off", {"type": "disabled"}),
+        ("minimal", {"type": "disabled"}),
         ("high", {"type": "enabled", "clear_thinking": False}),
     ],
 )
@@ -248,6 +249,30 @@ async def test_glm52_exact_replay_does_not_synthesize_missing_reasoning(
     assert "reasoning_content" not in assistant
     assert "[reasoning unavailable]" not in str(assistant)
     assert body["reasoning_effort"] != "medium"
+
+
+@pytest.mark.parametrize(
+    ("effort", "enabled"),
+    [("off", False), ("high", True)],
+)
+async def test_self_hosted_qwen_uses_chat_template_thinking_toggle(
+    effort: ThinkingEffort,
+    enabled: bool,
+) -> None:
+    body = await _captured_body(
+        route=None,
+        provider_key="local",
+        base_url="http://localhost:8080/v1",
+        model_id="Qwen3.6-35B-A3B",
+        max_context_size=262_144,
+        capabilities={"thinking"},
+        effort=effort,
+        history=[Message(role="user", content="hello")],
+        tools=[],
+    )
+
+    assert body["chat_template_kwargs"] == {"enable_thinking": enabled}
+    assert "reasoning_effort" not in body
 
 
 async def test_local_glm_name_has_no_zai_request_policy() -> None:

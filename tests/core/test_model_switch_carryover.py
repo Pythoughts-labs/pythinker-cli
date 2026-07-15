@@ -19,6 +19,7 @@ from pythinker_core.message import Message
 
 from pythinker_code.config import Config
 from pythinker_code.llm import LLM
+from pythinker_code.provider_compatibility import default_provider_compatibility
 from pythinker_code.soul.compaction import SimpleCompaction
 from pythinker_code.wire.types import TextPart
 
@@ -31,7 +32,14 @@ class _FakeChatProvider:
 
 
 def _fake_llm() -> LLM:
-    return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
+    return cast(
+        LLM,
+        SimpleNamespace(
+            chat_provider=_FakeChatProvider(),
+            provider_config=None,
+            compatibility=default_provider_compatibility(),
+        ),
+    )
 
 
 def _history(n_pairs: int = 3) -> list[Message]:

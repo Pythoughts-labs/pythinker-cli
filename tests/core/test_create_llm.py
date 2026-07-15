@@ -795,20 +795,14 @@ def test_create_llm_zai_glm52_activates_explicit_profile_policy(
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
     assert llm.compatibility.profile_id == provider_key.removeprefix("managed:")
+    assert llm.compatibility.reasoning_replay_mode == "exact"
+    assert llm.compatibility.auto_reasoning_effort is False
+    assert llm.compatibility.tool_stream is True
+    assert llm.compatibility.tool_message_conversion == "extract_text"
+    assert llm.compatibility.max_output_tokens == 131_072
     assert llm.chat_provider.thinking_effort is None
     assert llm.thinking is True
     assert llm.thinking_effort == "xhigh"
-    assert llm.chat_provider._reasoning_replay_mode == "exact"  # pyright: ignore[reportPrivateUsage]
-    assert llm.chat_provider._auto_reasoning_effort is False  # pyright: ignore[reportPrivateUsage]
-    assert llm.chat_provider._tool_stream is True  # pyright: ignore[reportPrivateUsage]
-    assert llm.chat_provider._tool_message_conversion == "extract_text"  # pyright: ignore[reportPrivateUsage]
-    assert llm.chat_provider._generation_kwargs == {  # pyright: ignore[reportPrivateUsage]
-        "max_tokens": 131_072,
-        "extra_body": {
-            "thinking": {"type": "enabled", "clear_thinking": False},
-            "reasoning_effort": "max",
-        },
-    }
 
 
 @pytest.mark.parametrize(("thinking", "enabled"), [(False, False), (True, True)])
@@ -831,10 +825,10 @@ def test_create_llm_self_hosted_qwen_uses_chat_template_thinking_toggle(
 
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.compatibility.profile_id == "qwen-template"
+    assert llm.compatibility.thinking_format == "qwen_template"
     assert llm.chat_provider.thinking_effort is None
-    assert llm.chat_provider._generation_kwargs.get("extra_body") == {  # pyright: ignore[reportPrivateUsage]
-        "chat_template_kwargs": {"enable_thinking": enabled}
-    }
+    assert llm.thinking is enabled
 
 
 def test_create_llm_zai_binary_model_maps_minimal_to_disabled() -> None:
@@ -854,13 +848,11 @@ def test_create_llm_zai_binary_model_maps_minimal_to_disabled() -> None:
 
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.compatibility.thinking_format == "zai_binary"
+    assert llm.compatibility.max_output_tokens == 131_072
     assert llm.chat_provider.thinking_effort is None
     assert llm.thinking is False
     assert llm.thinking_effort == "off"
-    assert llm.chat_provider._generation_kwargs == {  # pyright: ignore[reportPrivateUsage]
-        "max_tokens": 131_072,
-        "extra_body": {"thinking": {"type": "disabled"}},
-    }
 
 
 def test_create_llm_local_glm_name_does_not_activate_zai_request_policy() -> None:
@@ -881,8 +873,9 @@ def test_create_llm_local_glm_name_does_not_activate_zai_request_policy() -> Non
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
     assert llm.compatibility.profile_id == "openai-compatible"
-    assert "extra_body" not in llm.chat_provider._generation_kwargs  # pyright: ignore[reportPrivateUsage]
-    assert "max_tokens" not in llm.chat_provider._generation_kwargs  # pyright: ignore[reportPrivateUsage]
+    assert llm.compatibility.thinking_format == "none"
+    assert llm.compatibility.max_output_tokens is None
+    assert llm.compatibility.tool_stream is False
 
 
 def test_clone_llm_with_model_alias_preserves_kimi_thinking_disabled():

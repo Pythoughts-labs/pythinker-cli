@@ -73,9 +73,9 @@ def capped_chat_provider(llm: LLM, max_output_tokens: int) -> ChatProvider:
     usual output budget (e.g. a context-compaction summary) can use this
     instead of hand-picking a provider-specific kwarg name.
     """
-    compatibility = getattr(llm, "compatibility", None)
-    kwarg = compatibility.output_tokens_kwarg if compatibility is not None else "max_tokens"
-    return cast(Any, llm.chat_provider).with_generation_kwargs(**{kwarg: max_output_tokens})
+    return cast(Any, llm.chat_provider).with_generation_kwargs(
+        **{llm.compatibility.output_tokens_kwarg: max_output_tokens}
+    )
 
 
 def supports_deferred_tool_search(llm: LLM | None) -> bool:
@@ -529,11 +529,10 @@ def available_model_thinking_levels(
 ) -> tuple[ThinkingEffort, ...]:
     """Selectable thinking levels for *model*, scoped to provider-specific support.
 
-    Starts from the capability-derived ladder, then narrows to a provider's
-    actually-accepted set when known (currently the OpenAI GPT-5 family) so the
-    selector never offers — and :func:`create_llm` never sends — a level the
-    model rejects. Falls back to the full ladder for models without a known
-    per-model rule.
+    Starts from the capability-derived ladder, then narrows to the resolved
+    provider/model profile's accepted set when known so the selector never offers —
+    and :func:`create_llm` never sends — a level the model rejects. Falls back to
+    the full ladder for models without a known per-model rule.
     """
     base = available_thinking_levels(capabilities)
     scoped_levels = (
