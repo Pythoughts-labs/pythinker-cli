@@ -1,6 +1,6 @@
 # Deterministic reviewer target resolution design
 
-**Status:** Direction approved; written specification awaiting user review
+**Status:** Approved on 2026-07-15
 
 ## Problem
 

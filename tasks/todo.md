@@ -6,9 +6,9 @@
 
 - [x] Reconcile the adoption ledger with current code and Git history.
 - [x] Select the narrow structured-target design; keep `/review` out of scope.
-- [ ] Review and approve
+- [x] Review and approve
       `docs/superpowers/specs/2026-07-15-review-target-resolution-design.md`.
-- [ ] Write the implementation plan with TDD and verification checkpoints.
+- [x] Write the implementation plan with TDD and verification checkpoints.
 - [ ] Implement the approved plan in the isolated feature worktree.
 - [ ] Add the required `CHANGELOG.md` Unreleased entry.
 - [ ] Run focused tests, `make check-pythinker-code`, `make test-pythinker-code`, and final review.
