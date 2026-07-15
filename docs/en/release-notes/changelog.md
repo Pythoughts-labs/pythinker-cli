@@ -18,6 +18,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 ## Unreleased
 
 - **Parallel streamed tool calls are now correlated safely.** Interleaved argument chunks stay attached to their indexed calls, malformed or truncated call streams stop before tool execution, and failed attempts are not retried after output has already been shown.
+- **Provider compatibility and Z.AI routing are now explicit.** Immutable compatibility profiles keep request-format quirks behind the chat-provider boundary, while independent Z.AI Coding Plan and API login routes use separate credentials, endpoints, model identities, catalog refresh, logout, and usage/rate-limit state. Curated GLM requests now apply exact context/output limits, thinking controls, reasoning replay, and tool-stream support without activating for local or unknown models.
 
 ## 0.58.0 (2026-07-11)
 
