@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 
@@ -44,6 +46,20 @@ def strip_invisible_chars(text: str) -> str:
     such as the merged AGENTS.md, which lands in the system prompt verbatim.
     """
     return text.translate(_INVISIBLE_TRANSLATION)
+
+
+def escape_prompt_data(text: str, *, max_chars: int) -> str:
+    """Return bounded, visible, markup-safe data for a structured prompt block."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    cleaned = strip_invisible_chars(text)
+    visible = "".join(
+        " " if char.isspace() or unicodedata.category(char) in {"Cc", "Cf", "Cs"} else char
+        for char in cleaned
+    )
+    if len(visible) > max_chars:
+        visible = visible[: max_chars - 1] + "…"
+    return html.escape(visible, quote=True)
 
 
 @dataclass(frozen=True)
