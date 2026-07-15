@@ -577,6 +577,7 @@ class OpenAIResponsesStreamedMessage:
                     yield ThinkPart(think=chunk.delta)
                 elif isinstance(chunk, ResponseErrorEvent):
                     self._finish_reason = "failed"
+                    return
                 elif isinstance(
                     chunk,
                     (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),

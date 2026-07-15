@@ -435,6 +435,11 @@ async def test_openai_responses_error_event_blocks_tool_callback() -> None:
             sequence_number=2,
             type="error",
         ),
+        ResponseCompletedEvent(
+            response=_response(response_id="response_trailing", status="completed"),
+            sequence_number=3,
+            type="response.completed",
+        ),
     )
     stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
     callbacks: list[ToolCall] = []
