@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from asyncio import Future
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, Self, cast, override, runtime_checkable
 
 import jsonschema
@@ -327,6 +329,53 @@ class ToolResult(BaseModel):
 
 ToolResultFuture = Future[ToolResult]
 type HandleResult = ToolResultFuture | ToolResult
+type ToolCallFingerprint = tuple[str, str]
+
+
+class ToolCancellationTimeoutError(RuntimeError):
+    """One or more cancelled tool tasks did not settle within the safety bound."""
+
+
+@dataclass(frozen=True, slots=True)
+class ToolBatchContext:
+    turn_id: str = ""
+    step_no: int = 0
+    prior_call_fingerprints: tuple[ToolCallFingerprint, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ToolBatchSummary:
+    current_call_fingerprints: tuple[ToolCallFingerprint, ...] = ()
+    dedup_triggered: bool = False
+    consecutive_identical_call_count: int = 0
+    finalized: bool = True
+
+
+@runtime_checkable
+class ToolBatchHandle(Protocol):
+    @property
+    def tool_calls(self) -> Sequence[ToolCall]: ...
+
+    @property
+    def completed_results(self) -> Mapping[str, ToolResult]: ...
+
+    @property
+    def summary(self) -> ToolBatchSummary: ...
+
+    async def results(self) -> list[ToolResult]: ...
+
+    async def cancel_and_settle(self, *, timeout: float | None = None) -> None: ...
+
+
+@runtime_checkable
+class BatchToolset(Protocol):
+    def handle_batch(
+        self,
+        tool_calls: Sequence[ToolCall],
+        context: ToolBatchContext,
+        *,
+        on_tool_result: Callable[[ToolResult], None] | None = None,
+    ) -> ToolBatchHandle: ...
 
 
 @runtime_checkable
