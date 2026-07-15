@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from pythinker_core.message import Message, Role
+from pythinker_core.message import Message, Role, ToolCall
 
 from pythinker_code.soul.context import Context
 from pythinker_code.wire.types import TextPart
@@ -478,6 +478,43 @@ async def test_write_append_messages_then_restore(tmp_path: Path) -> None:
     assert len(ctx2.history) == 2
     assert ctx2.history[0].role == "user"
     assert ctx2.history[1].role == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_correlated_tool_call_persistence_omits_transport_metadata(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "context.jsonl"
+    call = ToolCall(
+        id="call_123",
+        function=ToolCall.FunctionBody(name="read", arguments='{"path":"a.py"}'),
+        stream_index=2,
+    )
+    ctx = Context(file_backend=path)
+
+    await ctx.append_message(Message(role="assistant", content=[], tool_calls=[call]))
+
+    persisted = path.read_text(encoding="utf-8")
+    assert "stream_index" not in persisted
+    assert "stream_call_id" not in persisted
+    assert "name_part" not in persisted
+    record = json.loads(persisted)
+    assert record["tool_calls"][0]["id"] == "call_123"
+    assert record["tool_calls"][0]["function"] == {
+        "name": "read",
+        "arguments": '{"path":"a.py"}',
+    }
+
+    restored = Context(file_backend=path)
+    assert await restored.restore() is True
+    restored_calls = restored.history[0].tool_calls
+    assert restored_calls is not None
+    assert restored_calls == [
+        ToolCall(
+            id="call_123",
+            function=ToolCall.FunctionBody(name="read", arguments='{"path":"a.py"}'),
+        )
+    ]
 
 
 @pytest.mark.asyncio

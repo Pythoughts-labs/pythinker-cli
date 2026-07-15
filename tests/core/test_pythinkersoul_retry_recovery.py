@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from pythinker_core.chat_provider import (
     APIConnectionError,
     APIStatusError,
+    APIStreamProtocolError,
     StreamedMessagePart,
     ThinkingEffort,
     TokenUsage,
@@ -308,6 +309,76 @@ class NonRetryableConnectionProvider:
         return self
 
 
+class StreamProtocolErrorThenSuccessProvider:
+    name = "stream-protocol-error-then-success"
+
+    def __init__(self) -> None:
+        self.generate_attempts = 0
+        self.error = APIStreamProtocolError(
+            "orphan_fragment",
+            response_id="response_safe",
+            stream_index=0,
+            call_id="call_safe",
+            output_published=False,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return "stream-protocol-error-then-success"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StaticStreamedMessage:
+        self.generate_attempts += 1
+        if self.generate_attempts == 1:
+            raise self.error
+        return StaticStreamedMessage([TextPart(text="protocol recovered")])
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
+
+
+class PublishedStreamProtocolErrorProvider:
+    name = "published-stream-protocol-error"
+
+    def __init__(self) -> None:
+        self.generate_attempts = 0
+        self.error = APIStreamProtocolError(
+            "truncated_tool_call",
+            response_id="response_safe",
+            stream_index=0,
+            call_id="call_safe",
+            output_published=True,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return "published-stream-protocol-error"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StaticStreamedMessage:
+        self.generate_attempts += 1
+        raise self.error
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
+
+
 class ConnectionThen401ThenSuccessProvider:
     name = "connection-then-401-then-success"
 
@@ -392,6 +463,83 @@ async def _collect_ui_messages(wire: Wire, seen: list[object]) -> None:
             seen.append(await wire_ui.receive())
         except QueueShutDown:
             return
+
+
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [(False, True), (True, False)],
+)
+def test_stream_protocol_retry_depends_on_publication(
+    published: bool,
+    expected: bool,
+) -> None:
+    error = APIStreamProtocolError(
+        "orphan_fragment",
+        response_id="response_safe",
+        stream_index=0,
+        call_id="call_safe",
+        output_published=published,
+    )
+
+    assert PythinkerSoul._is_retryable_error(error) is expected
+
+
+@pytest.mark.asyncio
+async def test_unpublished_stream_protocol_error_retries_once_then_succeeds(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    runtime.config.loop_control.max_retries_per_step = 2
+    provider = StreamProtocolErrorThenSuccessProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100_000,
+        capabilities=set(),
+    )
+    soul, context = _make_soul(runtime, llm, tmp_path)
+    seen: list[object] = []
+
+    await run_soul(
+        soul,
+        "trigger unpublished protocol retry",
+        lambda wire: _collect_ui_messages(wire, seen),
+        asyncio.Event(),
+    )
+
+    assert provider.generate_attempts == 2
+    retries = [message for message in seen if isinstance(message, StepRetry)]
+    assert len(retries) == 1
+    assert retries[0].error_type == "APIStreamProtocolError"
+    assert retries[0].status_code is None
+    assert context.history[-1].extract_text(" ").strip() == "protocol recovered"
+
+
+@pytest.mark.asyncio
+async def test_published_stream_protocol_error_surfaces_without_retry(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    runtime.config.loop_control.max_retries_per_step = 2
+    provider = PublishedStreamProtocolErrorProvider()
+    llm = LLM(
+        chat_provider=provider,
+        max_context_size=100_000,
+        capabilities=set(),
+    )
+    soul, _ = _make_soul(runtime, llm, tmp_path)
+    seen: list[object] = []
+
+    with pytest.raises(APIStreamProtocolError) as caught:
+        await run_soul(
+            soul,
+            "trigger published protocol failure",
+            lambda wire: _collect_ui_messages(wire, seen),
+            asyncio.Event(),
+        )
+
+    assert caught.value is provider.error
+    assert provider.generate_attempts == 1
+    assert [message for message in seen if isinstance(message, StepRetry)] == []
 
 
 @pytest.mark.asyncio
