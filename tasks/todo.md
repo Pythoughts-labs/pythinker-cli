@@ -9,14 +9,41 @@
 - [x] Review and approve
       `docs/superpowers/specs/2026-07-15-review-target-resolution-design.md`.
 - [x] Write the implementation plan with TDD and verification checkpoints.
-- [ ] Implement the approved plan in the isolated feature worktree.
-- [ ] Add the required `CHANGELOG.md` Unreleased entry.
-- [ ] Run focused tests, `make check-pythinker-code`, `make test-pythinker-code`, and final review.
+- [x] Implement the approved plan in the isolated feature worktree.
+- [x] Add the required `CHANGELOG.md` Unreleased entry.
+- [x] Run focused tests, `make check-pythinker-code`, `make test-pythinker-code`, and final review.
 
 Acceptance: every fresh reviewer receives one pre-resolved authoritative Git target; invalid or
 empty explicit targets fail before child allocation; `Agent` and per-child `RunAgents` behavior is
 identical across foreground and background execution; generic Git context cannot contradict the
 resolved target; non-reviewer and resume behavior remains compatible.
+
+#### Review: deterministic reviewer target resolution
+
+- **Outcome:** structured auto, uncommitted, base, and commit targets now resolve before reviewer
+  allocation; foreground, per-child batch, and background paths preserve the requested and resolved
+  target and fail explicitly at the appropriate boundary.
+- **Reviewed range:** `10aedf26..a12a4840` (seven branch commits, from the design checkpoint through
+  the amended failure-boundary hardening commit).
+- **Focused verification:** the exact 11-file feature set passed `289 passed, 1 warning in 14.43s`.
+- **Static verification:** `make check-pythinker-code` passed with Ruff clean, `1262 files already
+  formatted`, Pyright `0 errors, 0 warnings, 0 informations`, and ty clean.
+- **Repository test gate:** `make test-pythinker-code` remains red solely at
+  `tests/e2e/test_shell_pty_e2e.py::test_shell_cancel_running_command_kills_process_and_recovers`:
+  `1 failed, 7131 passed, 9 skipped, 1 xfailed, 5 warnings in 379.30s`, before the separate
+  `tests_e2e` phase. The isolated branch node also failed because Escape was ignored and the command
+  completed; the identical isolated node fails on clean `main`, proving this is a baseline,
+  out-of-scope blocker rather than a feature regression.
+- **Remaining branch verification:** excluding only that baseline node passed `7131 passed, 9
+  skipped, 1 deselected, 1 xfailed, 5 warnings in 325.71s`; the separate `tests_e2e` suite passed
+  `65 passed, 4 skipped, 1 warning in 89.35s`. `git diff --check` was silent.
+- **Review verdict:** final implementation review after `a12a4840` found no Critical, Important, or
+  Minor findings; C01/C03/C05/C06/C08/C12/C13/C14/C15 all passed; ready to merge: yes.
+- **Approved limitation:** uncommitted/base scopes pin `HEAD` and revalidate it immediately before
+  execution, but the index and worktree remain explicitly live. The feature does not claim an
+  immutable patch snapshot.
+- **Blocker:** the repository-wide package test gate is blocked solely by the reproducible
+  clean-main PTY Escape failure above. No feature-owned failure remains.
 
 ### TUI thinking Markdown and activity motion (2026-07-11)
 

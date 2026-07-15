@@ -1,6 +1,7 @@
 # Deterministic reviewer target resolution design
 
-**Status:** Approved on 2026-07-15
+**Status:** Implemented; feature verified, repository gate baseline-blocked on the clean-main PTY
+Escape test (2026-07-15)
 
 ## Problem
 

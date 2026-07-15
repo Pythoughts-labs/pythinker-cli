@@ -5,6 +5,10 @@ Format: trigger → rule.
 
 ## Subagent orchestration
 
+- **When testing that subagent preparation failed before a prompt snapshot was written**, assert
+  that `prompt.txt` remains empty rather than absent — `SubagentStore` intentionally pre-creates
+  instance files during allocation, so path existence is not evidence of a snapshot write.
+
 - **When dispatching subagents whose results you will immediately synthesize**
   (review + report, parallel analysis with no interleaved work), use
   **foreground fan-out** (`RunAgents` foreground mode) — results return inline,

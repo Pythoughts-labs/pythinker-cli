@@ -48,11 +48,19 @@ generic pythinker agent enhancements — no external product names in code, comm
 
 **Files.** `src/pythinker_code/ui/print/__init__.py`, `<ref>/exec/src/lib.rs`
 
-### `review-mode/deterministic-review-target-resolution-and-prompt-synthesis` — partial, S, high
+### `review-mode/deterministic-review-target-resolution-and-prompt-synthesis` — done, S, high
 
-**Today.** The standalone review engine resolves diffs deterministically with base/staged/working-tree/range modes, fallback refs, and a fallback audit trail (packages/pythinker-review/src/pythinker_review/engine/diff_source.py). But agent-mediated review dispatch leaves git scoping entirely to the model — system.md only instructs it prose-style to compute the merge base (src/pythinker_code/agents/default/system.md:120), and git-context injection is gated to explore subagents only (src/pythinker_code/subagents/core.py:90).
+**Today.** Done. `src/pythinker_code/subagents/review_target.py` resolves structured auto,
+uncommitted, base, and commit targets before child allocation. `subagents/core.py` composes generic
+Git context, the caller task, and the authoritative target in that order and revalidates live
+`HEAD`; the Agent/RunAgents and background manager/runner paths preserve the requested and resolved
+target plus its safe hint across foreground and background execution.
 
-**Verifier note.** Claim CONFIRMED as stated; all three cited anchors verified. The standalone engine is deterministic; the agent-mediated path has no deterministic diff scoping anywhere — the review/code-reviewer subagent specs receive scope purely via the parent's prompt text.
+**Verifier note.** DONE. Resolver, malformed/empty/failure, merge, fallback, and drift behavior is
+pinned by `tests/subagents/test_review_target.py`; prompt ordering and resume behavior by
+`tests/core/test_prepare_soul.py`; tool schema, foreground, and mixed-batch transport by
+`tests/tools/test_agent_tool.py`; and background persistence/transport/failure by
+`tests/background/test_manager.py` and `tests/background/test_task_metadata.py`.
 
 **Adopt.** Add a small resolver (target -> prompt + hint) that precomputes the merge-base SHA via the async git helper and renders one of three template prompts (uncommitted / base-branch-with-sha + backup variant / commit-with-title), then prepend it to the review subagent's prompt at dispatch. Also extend collect_git_context injection in subagents/core.py to reviewer-class agents so every review run starts with branch, dirty files, and merge-base already in context instead of burning turns rediscovering them.
 
