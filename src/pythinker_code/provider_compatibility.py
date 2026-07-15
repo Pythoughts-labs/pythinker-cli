@@ -119,11 +119,11 @@ class ProviderCompatibility:
                     "type": "enabled",
                     "clear_thinking": False,
                 }
-        elif self.thinking_format == "kimi":
+        elif self.thinking_format == "kimi" and effort is not None:
             extra_body["thinking"] = {"type": "enabled" if _effort_enabled(effort) else "disabled"}
-        elif self.thinking_format == "dashscope":
+        elif self.thinking_format == "dashscope" and effort is not None:
             extra_body["enable_thinking"] = _effort_enabled(effort)
-        elif self.thinking_format == "qwen_template":
+        elif self.thinking_format == "qwen_template" and effort is not None:
             extra_body["chat_template_kwargs"] = {"enable_thinking": _effort_enabled(effort)}
 
         return GenerationOverrides(
@@ -152,6 +152,22 @@ _GPT5_REASONING_RE = re.compile(r"gpt-5(?:\.(\d+))?", re.IGNORECASE)
 
 def get_zai_model_policy(model_id: str) -> ZaiModelPolicy | None:
     return _ZAI_MODEL_POLICIES_BY_ID.get(model_id.lower())
+
+
+def get_zai_model_policies() -> tuple[ZaiModelPolicy, ...]:
+    return _ZAI_MODEL_POLICIES
+
+
+def resolve_tool_message_conversion(
+    *,
+    api_family: Literal["anthropic", "openai"],
+    base_url: str | None,
+) -> ToolMessageConversion | None:
+    host, _path = _normalize_endpoint(base_url)
+    native_hosts = _GENUINE_ANTHROPIC_HOSTS if api_family == "anthropic" else _GENUINE_OPENAI_HOSTS
+    if not host or host in native_hosts:
+        return None
+    return "extract_text"
 
 
 def default_provider_compatibility() -> ProviderCompatibility:
@@ -194,7 +210,10 @@ def resolve_provider_compatibility(
             api_family=api_family,
             output_tokens_kwarg=output_kwarg,
             max_output_tokens=None,
-            tool_message_conversion=None if native else "extract_text",
+            tool_message_conversion=resolve_tool_message_conversion(
+                api_family="anthropic",
+                base_url=provider.base_url,
+            ),
             deferred_tool_search=deferred,
             reasoning_key=None,
             reasoning_replay_mode="exact",
@@ -219,6 +238,8 @@ def resolve_provider_compatibility(
         elif provider.type == "openai_legacy" and _is_qwen3_model(model.model):
             profile_id = "qwen-template"
             thinking_format = "qwen_template"
+        elif provider.type == "openai_legacy" and _is_glm_model(model.model):
+            thinking_format = "none"
         elif provider.type == "openai_legacy" and _is_strict_replay_model(model.model):
             replay_mode = "strict_synthetic"
         return ProviderCompatibility(
@@ -226,7 +247,10 @@ def resolve_provider_compatibility(
             api_family=api_family,
             output_tokens_kwarg=output_kwarg,
             max_output_tokens=None,
-            tool_message_conversion=None if native else "extract_text",
+            tool_message_conversion=resolve_tool_message_conversion(
+                api_family="openai",
+                base_url=provider.base_url,
+            ),
             deferred_tool_search=False,
             reasoning_key=reasoning_key,
             reasoning_replay_mode=replay_mode,
@@ -362,6 +386,10 @@ def _is_kimi_model(model_id: str) -> bool:
 def _is_qwen3_model(model_id: str) -> bool:
     normalized = model_id.lower().replace("_", "-")
     return "qwen3" in normalized or "qwen-3" in normalized
+
+
+def _is_glm_model(model_id: str) -> bool:
+    return model_id.lower().replace("_", "-").startswith("glm-")
 
 
 def _is_strict_replay_model(model_id: str) -> bool:

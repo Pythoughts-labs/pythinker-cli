@@ -358,3 +358,8 @@ def test_generic_profile_preserves_unconfigured_effort() -> None:
     )
 
     assert profile.effective_effort(None, None) is None
+    assert profile.request_overrides(model_id="plain-model", effort=None) == GenerationOverrides(
+        native_effort=None,
+        generation_kwargs={},
+        extra_body={},
+    )
