@@ -58,44 +58,51 @@ __all__ = [
 ]
 
 
-def _safe_tool_result_callback(
-    callback: Callable[[ToolResult], object] | None,
-) -> Callable[[ToolResult], None] | None:
-    if callback is None:
-        return None
+class _ToolResultCallbackSupervisor:
+    """Own async result-publication callbacks without making callback errors fatal."""
 
-    loop = asyncio.get_running_loop()
+    def __init__(self, callback: Callable[[ToolResult], object]) -> None:
+        self._callback = callback
+        self._loop = asyncio.get_running_loop()
+        self._futures: set[asyncio.Future[None]] = set()
 
-    def report_failure(error: Exception) -> None:
-        loop.call_exception_handler(
+    def _report_failure(self, error: Exception) -> None:
+        self._loop.call_exception_handler(
             {
                 "message": "Tool result callback failed",
                 "exception_type": type(error).__name__,
             }
         )
 
-    def async_callback_done(future: asyncio.Future[None]) -> None:
+    def _async_callback_done(self, future: asyncio.Future[None]) -> None:
+        self._futures.discard(future)
         try:
             future.result()
         except asyncio.CancelledError:
             return
         except Exception as error:
-            report_failure(error)
+            self._report_failure(error)
 
-    def wrapped(result: ToolResult) -> None:
+    def __call__(self, result: ToolResult) -> None:
         try:
-            outcome = callback(result)
+            outcome = self._callback(result)
         except asyncio.CancelledError:
             return
         except Exception as error:
-            report_failure(error)
+            self._report_failure(error)
             return
 
         if inspect.isawaitable(outcome):
             future = asyncio.ensure_future(cast(Awaitable[None], outcome))
-            future.add_done_callback(async_callback_done)
+            self._futures.add(future)
+            future.add_done_callback(self._async_callback_done)
 
-    return wrapped
+    async def settle(self, *, cancel: bool) -> None:
+        futures = list(self._futures)
+        if cancel:
+            for future in futures:
+                future.cancel()
+        await asyncio.gather(*futures, return_exceptions=True)
 
 
 async def _dispatch_individual_tool_calls(
@@ -170,7 +177,9 @@ async def step(
     The message history is not modified. Batch-capable toolsets receive all calls at once after
     successful terminal assembly; legacy toolsets keep per-call ``handle()`` dispatch.
     """
-    safe_tool_result_callback = _safe_tool_result_callback(on_tool_result)
+    callback_supervisor = (
+        _ToolResultCallbackSupervisor(on_tool_result) if on_tool_result is not None else None
+    )
     result = await generate(
         chat_provider,
         system_prompt,
@@ -184,7 +193,7 @@ async def step(
         tool_batch = toolset.handle_batch(
             tool_calls,
             tool_batch_context or ToolBatchContext(),
-            on_tool_result=safe_tool_result_callback,
+            on_tool_result=callback_supervisor,
         )
         tool_result_futures: dict[str, ToolResultFuture] = {}
     else:
@@ -192,7 +201,7 @@ async def step(
         tool_result_futures = await _dispatch_individual_tool_calls(
             tool_calls,
             toolset,
-            safe_tool_result_callback,
+            callback_supervisor,
         )
 
     return StepResult(
@@ -203,6 +212,7 @@ async def step(
         tool_result_futures,
         truncated=result.truncated,
         _tool_batch=tool_batch,
+        _tool_result_callback_supervisor=callback_supervisor,
     )
 
 
@@ -229,6 +239,12 @@ class StepResult:
     _tool_batch: ToolBatchHandle | None = field(default=None, repr=False, compare=False)
     """@private Supervising handle for batch-capable toolset dispatch."""
 
+    _tool_result_callback_supervisor: _ToolResultCallbackSupervisor | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
     _cancel_settlement_task: asyncio.Task[None] | None = field(
         default=None,
         init=False,
@@ -237,15 +253,20 @@ class StepResult:
     )
 
     async def tool_results(self) -> list[ToolResult]:
-        """Return results in model call order, settling all work if collection fails."""
+        """Return results in model call order, settling all owned work."""
         try:
+            results: list[ToolResult]
             if self._tool_batch is not None:
-                return await self._tool_batch.results()
+                results = await self._tool_batch.results()
+            else:
+                results = []
+                for tool_call in self.tool_calls:
+                    future = self._tool_result_futures[tool_call.id]
+                    results.append(await future)
+                await self._cancel_legacy_futures()
 
-            results: list[ToolResult] = []
-            for tool_call in self.tool_calls:
-                future = self._tool_result_futures[tool_call.id]
-                results.append(await future)
+            if self._tool_result_callback_supervisor is not None:
+                await self._tool_result_callback_supervisor.settle(cancel=False)
             return results
         except BaseException as primary_error:
             try:
@@ -256,20 +277,24 @@ class StepResult:
                 # Preserve the original control-flow/error after supervised settlement.
                 pass
             raise primary_error
-        finally:
-            if self._tool_batch is None:
-                await self.cancel_tool_execution()
 
     async def cancel_tool_execution(self) -> None:
         """Idempotently cancel and settle all owned tool execution."""
         settlement = self._cancel_settlement_task
         if settlement is None:
-            if self._tool_batch is not None:
-                settlement = asyncio.create_task(self._tool_batch.cancel_and_settle())
-            else:
-                settlement = asyncio.create_task(self._cancel_legacy_futures())
+            settlement = asyncio.create_task(self._cancel_and_settle_owned_work())
             object.__setattr__(self, "_cancel_settlement_task", settlement)
         await _await_owned_settlement(settlement)
+
+    async def _cancel_and_settle_owned_work(self) -> None:
+        try:
+            if self._tool_batch is not None:
+                await self._tool_batch.cancel_and_settle()
+            else:
+                await self._cancel_legacy_futures()
+        finally:
+            if self._tool_result_callback_supervisor is not None:
+                await self._tool_result_callback_supervisor.settle(cancel=True)
 
     async def _cancel_legacy_futures(self) -> None:
         futures = list(self._tool_result_futures.values())

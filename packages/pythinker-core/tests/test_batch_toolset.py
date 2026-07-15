@@ -393,6 +393,56 @@ async def test_batch_immediate_callback_exception_is_reported_but_nonfatal() -> 
     ]
 
 
+async def test_tool_results_waits_for_owned_async_callback() -> None:
+    callback_started = asyncio.Event()
+    callback_release = asyncio.Event()
+
+    async def blocking_callback(_result: ToolResult) -> None:
+        callback_started.set()
+        await callback_release.wait()
+
+    result = await step(
+        MockChatProvider([_tool_call("call-1", "First")], finish_reason="tool_calls"),
+        "",
+        RecordingBatchToolset([]),
+        [],
+        on_tool_result=blocking_callback,
+    )
+    results_task = asyncio.create_task(result.tool_results())
+    await callback_started.wait()
+    assert not results_task.done()
+
+    callback_release.set()
+    assert await results_task == [_tool_result(_tool_call("call-1", "First"))]
+
+
+async def test_tool_results_cancellation_settles_owned_async_callback() -> None:
+    callback_started = asyncio.Event()
+    callback_cancelled = asyncio.Event()
+
+    async def blocking_callback(_result: ToolResult) -> None:
+        callback_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            callback_cancelled.set()
+
+    result = await step(
+        MockChatProvider([_tool_call("call-1", "First")], finish_reason="tool_calls"),
+        "",
+        RecordingBatchToolset([]),
+        [],
+        on_tool_result=blocking_callback,
+    )
+    results_task = asyncio.create_task(result.tool_results())
+    await callback_started.wait()
+    results_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await results_task
+    assert callback_cancelled.is_set()
+
+
 async def test_batch_async_callback_exception_is_reported_but_nonfatal() -> None:
     reports: list[dict[str, object]] = []
     reported = asyncio.Event()
@@ -433,7 +483,6 @@ async def test_batch_async_callback_exception_is_reported_but_nonfatal() -> None
 class ConstructionFailureToolset(RecordingBatchToolset):
     def __init__(self) -> None:
         super().__init__([])
-        self.started_work = 0
 
     def handle_batch(
         self,
@@ -446,7 +495,7 @@ class ConstructionFailureToolset(RecordingBatchToolset):
         raise RuntimeError("construction failed")
 
 
-async def test_batch_construction_failure_is_side_effect_free() -> None:
+async def test_batch_construction_failure_propagates_without_callbacks() -> None:
     toolset = ConstructionFailureToolset()
     callbacks: list[ToolResult] = []
 
@@ -459,7 +508,6 @@ async def test_batch_construction_failure_is_side_effect_free() -> None:
             on_tool_result=callbacks.append,
         )
 
-    assert toolset.started_work == 0
     assert callbacks == []
 
 

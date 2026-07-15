@@ -67,23 +67,20 @@ def test_facade_retains_registry_while_engine_owns_execution_state() -> None:
     )
 
 
-def test_facade_handle_and_step_state_delegate_to_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_facade_handle_and_step_state_use_public_execution_contract() -> None:
+    invocations: list[str] = []
     toolset = PythinkerToolset()
+    toolset.add(DelayTool(invocations))
     call = _call("call-1", label="one")
-    expected = ToolResult(tool_call_id=call.id, return_value=ToolOk(output="delegated"))
-    handled: list[ToolCall] = []
-
-    def fake_handle(received: ToolCall) -> ToolResult:
-        handled.append(received)
-        return expected
-
-    monkeypatch.setattr(toolset._execution, "handle", fake_handle)  # pyright: ignore[reportPrivateUsage]
-
-    assert toolset.handle(call) == expected
-    assert handled == [call]
-
     toolset.begin_step([("Delay", '{"label":"before","delay":0}')], step_no=3, turn_id="t")
-    assert toolset.end_step() == []
+
+    handled = toolset.handle(call)
+    assert isinstance(handled, asyncio.Future)
+    result = await handled
+
+    assert result == ToolResult(tool_call_id=call.id, return_value=ToolOk(output="one"))
+    assert invocations == ["one"]
+    assert toolset.end_step() == [("Delay", '{"delay":0,"label":"one"}')]
     assert toolset.dedup_triggered is False
     assert toolset.consecutive_repeat_count == 1
 

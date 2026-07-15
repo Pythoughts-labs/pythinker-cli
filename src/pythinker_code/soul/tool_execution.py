@@ -848,8 +848,12 @@ class _ExecutionBatch:
             return list(await asyncio.gather(*self._watcher_tasks))
         except BaseException:
             self._callbacks_active = False
-            for task in self._watcher_tasks:
-                task.cancel()
+            for index, future in enumerate(self._source_futures):
+                if future.done() and not future.cancelled() and future.exception() is None:
+                    result = future.result()
+                    self._completed_results[result.tool_call_id] = result
+                elif not future.done() and index < len(self._watcher_tasks):
+                    self._watcher_tasks[index].cancel()
             for future in self._source_futures:
                 future.cancel()
             await asyncio.gather(*self._watcher_tasks, return_exceptions=True)
@@ -865,9 +869,11 @@ class _ExecutionBatch:
     async def _wait_for_supervisor(self) -> None:
         try:
             await asyncio.shield(self._supervisor)
-        except BaseException:
+        except asyncio.CancelledError:
             if not self._supervisor.done():
                 raise
+            await asyncio.gather(self._supervisor, return_exceptions=True)
+        except Exception:
             await asyncio.gather(self._supervisor, return_exceptions=True)
 
     async def wait_until_drained(self) -> None:
@@ -877,6 +883,9 @@ class _ExecutionBatch:
         self._callbacks_active = False
         if not self._supervisor.done() and self._supervisor.cancelling() == 0:
             self._supervisor.cancel()
+        if self._supervisor.done():
+            await self._wait_for_supervisor()
+            return
         try:
             await asyncio.wait_for(self._wait_for_supervisor(), timeout=timeout)
         except TimeoutError as error:

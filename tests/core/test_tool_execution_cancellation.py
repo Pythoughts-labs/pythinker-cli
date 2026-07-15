@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import ClassVar
 
 import pytest
@@ -52,6 +53,23 @@ class CancellationIgnoringTool(CallableTool2[NoParams]):
         return ToolOk(output="late")
 
 
+class CompleteAndCancelCallerTool(CallableTool2[NoParams]):
+    name: str = "CompleteAndCancel"
+    description: str = "Complete while cancelling the result collector"
+    params: type[NoParams] = NoParams
+    supports_parallel: ClassVar[bool] = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_target: Callable[[], bool] | None = None
+
+    async def __call__(self, params: NoParams) -> ToolReturnValue:
+        del params
+        assert self.cancel_target is not None
+        asyncio.get_running_loop().call_soon(self.cancel_target)
+        return ToolOk(output="completed before cancellation")
+
+
 class ImmediateTool(CallableTool2[NoParams]):
     name: str = "Immediate"
     description: str = "Complete immediately"
@@ -101,6 +119,18 @@ async def test_invalid_cancellation_timeout_does_not_cancel_work(timeout: float)
     assert not stubborn.cancel_seen.is_set()
     stubborn.release.set()
     assert [result.tool_call_id for result in await batch.results()] == ["stubborn"]
+
+
+async def test_zero_timeout_accepts_already_completed_batch() -> None:
+    immediate = ImmediateTool()
+    toolset = PythinkerToolset()
+    toolset.add(immediate)
+    batch = toolset.handle_batch([_call("done", "Immediate")], ToolBatchContext())
+    assert [result.tool_call_id for result in await batch.results()] == ["done"]
+
+    await batch.cancel_and_settle(timeout=0)
+
+    assert toolset._execution.poisoned is False  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_timeout_poisons_new_batches_until_late_task_is_drained() -> None:
@@ -172,6 +202,33 @@ async def test_timeout_keeps_previously_completed_snapshot_and_blocks_late_callb
     await _wait_until_recovered(toolset)
     await asyncio.sleep(0)
     assert callbacks == ["done"]
+
+
+async def test_completion_racing_cancellation_remains_in_snapshot() -> None:
+    tool = CompleteAndCancelCallerTool()
+    toolset = PythinkerToolset()
+    toolset.add(tool)
+    result = await step(
+        MockChatProvider(
+            [_call("completed", "CompleteAndCancel")],
+            finish_reason="tool_calls",
+        ),
+        "",
+        toolset,
+        [],
+    )
+    waiter = asyncio.create_task(result.tool_results())
+    tool.cancel_target = waiter.cancel
+
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert result.completed_tool_results == {
+        "completed": ToolResult(
+            tool_call_id="completed",
+            return_value=ToolOk(output="completed before cancellation"),
+        )
+    }
 
 
 async def test_repeated_caller_cancellation_cannot_detach_core_settlement() -> None:
