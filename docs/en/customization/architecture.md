@@ -79,7 +79,8 @@ The end-to-end flow when a session starts and processes a turn:
 | `src/pythinker_code/cli/` | Typer command tree and UI-mode routing; lazy-loaded subcommands. | `cli`, `pythinker`, `login`, `logout`, `term`, `acp`, lazy group `info`, `export`, `mcp`, `plugin`, `skill`, `review`, `secscan`, `security-scan`, `debug`, `update`, `dashboard`, `web` |
 | `src/pythinker_code/app.py` | Builds `PythinkerCLI`, `Runtime`, and `PythinkerSoul`; wires telemetry and frontends. | `PythinkerCLI.create`, `PythinkerCLI.run`, `run_shell` / `run_print` / `run_acp` / `run_wire_stdio` |
 | `src/pythinker_code/config.py` | Three-scope config resolution (user → project → local TOML) with env overlay and JSON→TOML migration; `SecretStr` fields; scope locks on `api_key`/`providers`/`services`. | `Config`, `load_config`, `save_config`, `get_config_file` |
-| `src/pythinker_code/llm.py` | Provider/model selection and capability derivation; wires `pythinker-core` backends. | `LLM`, `create_llm`, `augment_provider_with_env_vars`, `derive_model_capabilities` |
+| `src/pythinker_code/llm.py` | Provider/model selection and capability derivation; resolves one compatibility profile and wires `pythinker-core` backends. | `LLM`, `create_llm`, `augment_provider_with_env_vars`, `derive_model_capabilities` |
+| `src/pythinker_code/provider_compatibility.py` | Immutable provider/model compatibility profiles for request format, reasoning replay, generation overrides, output limits, and deferred-tool support. Resolution prefers managed identity, then normalized endpoint/API family. | `ProviderCompatibility`, `resolve_provider_compatibility`, `get_zai_model_policy` |
 | `src/pythinker_code/agentspec.py` | Parses/validates agent YAML specs and resolves `extend`. | `load_agent_spec`, `ResolvedAgentSpec`, `DEFAULT_AGENT_FILE` |
 
 ## Soul: the agent loop
@@ -163,8 +164,19 @@ See `src/pythinker_code/tools/AGENTS.md`.
 Provider modules in `auth/`: `openai`, `anthropic_direct`, `opencode_go`, `minimax`,
 `deepseek`, `openrouter`, `z_ai`, `alibaba`, `lm_studio`, `ollama`, `moonshot`, and
 `github_feedback`. Managed provider keys follow `managed:<platform_id>`; managed model ids
-follow `<platform_id>/<model_id>`. Provider-aware code derives the provider from the active
-model; `/usage` defaults to the active provider, with `/usage all` as the explicit aggregate.
+follow `<platform_id>/<model_id>`. Z.AI has two explicit identities:
+`managed:z-ai-coding` / `z-ai-coding/*` for the Coding Plan route and
+`managed:z-ai-api` / `z-ai-api/*` for the standard API route. Their credentials, model
+catalogs, lifecycle operations, usage notes, and rate-limit snapshots never cross route
+boundaries. Provider-aware code derives the provider from the active model; `/usage` defaults
+to the active provider, with `/usage all` as the explicit aggregate.
+
+`src/pythinker_code/provider_compatibility.py` is the application-side source of provider
+quirks. It resolves before `create_llm()` builds the `ChatProvider`; `PythinkerSoul` consumes
+only generic profile fields (such as supported thinking levels) and stays free of provider-name
+branches. `OpenAILegacy` owns transport
+conversion, including explicit reasoning replay modes and copied per-request generation
+parameters.
 
 ## Benchmark runner
 

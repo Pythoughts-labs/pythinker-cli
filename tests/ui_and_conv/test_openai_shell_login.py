@@ -349,5 +349,86 @@ def test_login_chooser_includes_lm_studio_and_ollama():
     assert "Ollama" in names
 
 
+def test_zai_selector_entries_and_status_keys_are_route_exact() -> None:
+    from pydantic import SecretStr
+
+    from pythinker_code.auth.z_ai import ZAI_API_ROUTE, ZAI_CODING_ROUTE
+    from pythinker_code.config import LLMProvider
+
+    ids = {entry.id for entry in shell_oauth._SELECTOR_PROVIDER_ENTRIES}
+    logout_ids = {entry.id for entry in shell_oauth._LOGOUT_PROVIDER_ENTRIES}
+    assert {"z-ai-coding", "z-ai-api"} <= ids
+    assert {"z-ai-coding", "z-ai-api"} <= logout_ids
+    assert "z-ai" not in ids | logout_ids
+
+    config = Config(is_from_default_location=True)
+    config.providers[ZAI_CODING_ROUTE.provider_key] = LLMProvider(
+        type="openai_legacy",
+        base_url=ZAI_CODING_ROUTE.base_url,
+        api_key=SecretStr("coding"),
+    )
+    assert shell_oauth._get_provider_status(config, "z-ai-coding").source == "configured"
+    assert shell_oauth._get_provider_status(config, "z-ai-api").source == "unconfigured"
+    config.providers[ZAI_API_ROUTE.provider_key] = LLMProvider(
+        type="openai_legacy",
+        base_url=ZAI_API_ROUTE.base_url,
+        api_key=SecretStr("api"),
+    )
+    assert shell_oauth._get_provider_status(config, "z-ai-api").source == "configured"
+
+
+@pytest.mark.parametrize(
+    ("mode", "target_name", "other_name"),
+    [
+        ("z-ai-coding", "login_z_ai_coding_api_key", "login_z_ai_api_key"),
+        ("z-ai-api", "login_z_ai_api_key", "login_z_ai_coding_api_key"),
+    ],
+)
+async def test_shell_login_zai_routes_never_cross_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    target_name: str,
+    other_name: str,
+) -> None:
+    target = Mock(side_effect=_success_event)
+    other = Mock(side_effect=_success_event)
+    monkeypatch.setattr(shell_oauth, target_name, target, raising=False)
+    monkeypatch.setattr(shell_oauth, other_name, other, raising=False)
+    monkeypatch.setattr(shell_oauth, "_prompt_api_key", lambda _label: _async_value("route-key"))
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", lambda _seconds: _async_value(None))
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.login)(_app(), mode)
+
+    assert target.call_args.args[1] == "route-key"
+    other.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("mode", "target_name", "other_name"),
+    [
+        ("z-ai-coding", "logout_z_ai_coding", "logout_z_ai_api"),
+        ("z-ai-api", "logout_z_ai_api", "logout_z_ai_coding"),
+    ],
+)
+async def test_shell_logout_zai_routes_never_cross_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    target_name: str,
+    other_name: str,
+) -> None:
+    target = Mock(side_effect=_success_event)
+    other = Mock(side_effect=_success_event)
+    monkeypatch.setattr(shell_oauth, target_name, target, raising=False)
+    monkeypatch.setattr(shell_oauth, other_name, other, raising=False)
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", lambda _seconds: _async_value(None))
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.logout)(_app(), mode)
+
+    target.assert_called_once()
+    other.assert_not_called()
+
+
 async def _async_value[T](value: T) -> T:
     return value

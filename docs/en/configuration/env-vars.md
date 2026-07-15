@@ -134,6 +134,28 @@ Provides an OpenAI Admin API key for `/usage` cost data. If unset, `/usage` fall
 export OPENAI_ADMIN_KEY="sk-admin-xxx"
 ```
 
+## Z.AI environment variables
+
+Z.AI Coding Plan and Z.AI API use separate credential variables because they are independent
+routes:
+
+| Environment Variable | Route | Base URL |
+| --- | --- | --- |
+| `ZAI_CODING_API_KEY` | Z.AI Coding Plan | `https://api.z.ai/api/coding/paas/v4` |
+| `ZAI_API_KEY` | Z.AI API | `https://api.z.ai/api/paas/v4` |
+
+```sh
+export ZAI_CODING_API_KEY="your-coding-plan-key"
+pythinker login --z-ai-coding
+
+export ZAI_API_KEY="your-api-key"
+pythinker login --z-ai-api
+```
+
+Each login reads only its route's variable. Pythinker does not infer the route from the key,
+fall back to the other variable, migrate credentials, or retry requests across routes. Both
+variables may be set when both routes are configured.
+
 ## Other environment variables
 
 | Environment Variable | Description |

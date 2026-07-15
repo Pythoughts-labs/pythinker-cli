@@ -922,3 +922,77 @@ async def test_refresh_managed_models_isolates_minimax_discovery_failure():
     assert "minimax/m2.7-highspeed" in saved[0].models
     assert saved[0].models["minimax/m2.7-highspeed"].provider == "managed:minimax-anthropic"
     assert "minimax/m2.7-highspeed" in config.models
+
+
+@pytest.mark.parametrize(
+    "api_result",
+    [
+        pytest.param(("degraded", "transport"), id="degraded"),
+        pytest.param(("unauthorized", "unauthorized"), id="unauthorized"),
+        pytest.param(("unconfigured", "unconfigured"), id="unconfigured"),
+    ],
+)
+async def test_refresh_zai_routes_apply_live_catalog_independently(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    api_result: tuple[str, str],
+) -> None:
+    from pythinker_code.auth import kimi, minimax, opencode_go, z_ai
+    from pythinker_code.auth.z_ai import (
+        ZAI_API_ROUTE,
+        ZAI_CODING_ROUTE,
+        ZaiCatalogResult,
+        ZaiModel,
+        ZaiRoute,
+        _apply_z_ai_config,
+    )
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+    _apply_z_ai_config(config, ZAI_CODING_ROUTE, SecretStr("coding"))
+    _apply_z_ai_config(config, ZAI_API_ROUTE, SecretStr("api"))
+    save_config(config)
+    api_before = {
+        key: value.model_copy(deep=True)
+        for key, value in config.models.items()
+        if value.provider == ZAI_API_ROUTE.provider_key
+    }
+
+    async def fake_refresh_zai(_config: Config, route: ZaiRoute) -> ZaiCatalogResult:
+        if route == ZAI_CODING_ROUTE:
+            return ZaiCatalogResult(
+                status="live",
+                models=(ZaiModel("glm-5.1", "GLM-5.1 Live", 333_000),),
+            )
+        status, failure = api_result
+        return ZaiCatalogResult(
+            status=cast(Any, status),
+            models=None,
+            failure=cast(Any, failure),
+        )
+
+    monkeypatch.setattr(z_ai, "refresh_z_ai_models", fake_refresh_zai)
+    monkeypatch.setattr(opencode_go, "refresh_opencode_go_models", AsyncMock(return_value=None))
+    monkeypatch.setattr(minimax, "refresh_minimax_models", AsyncMock(return_value=None))
+    monkeypatch.setattr(kimi, "refresh_kimi_models", AsyncMock(return_value=None))
+
+    changed = await refresh_managed_models(config)
+
+    assert changed is True
+    assert config.models["z-ai-coding/glm-5.1"].max_context_size == 333_000
+    api_after = {
+        key: value
+        for key, value in config.models.items()
+        if value.provider == ZAI_API_ROUTE.provider_key
+    }
+    assert api_after == api_before
+
+    reloaded = load_config()
+    assert reloaded.models["z-ai-coding/glm-5.1"].max_context_size == 333_000
+    reloaded_api = {
+        key: value
+        for key, value in reloaded.models.items()
+        if value.provider == ZAI_API_ROUTE.provider_key
+    }
+    assert reloaded_api == api_before

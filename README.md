@@ -375,6 +375,21 @@ For hosted Pythinker models or ACP terminal auth:
 pythinker login
 ```
 
+Z.AI exposes two independent OpenAI-compatible routes. Choose the route that owns your key;
+both may coexist, and Pythinker never infers, migrates, falls back, or retries across them:
+
+```sh
+# Coding Plan subscription
+pythinker login --z-ai-coding   # reads ZAI_CODING_API_KEY when set
+
+# Standard pay-as-you-go API
+pythinker login --z-ai-api      # reads ZAI_API_KEY when set
+```
+
+These create distinct `z-ai-coding/*` and `z-ai-api/*` model identities. See the
+[provider guide](./docs/en/configuration/providers.md#managed-zai-routes) for endpoints,
+curated GLM capabilities, and route-scoped `/usage` behavior.
+
 ### 💬 Try it out
 
 ```sh

@@ -52,9 +52,15 @@ first assembled request, the command reports that no manifest is available.
 Log in or configure an API platform. After execution, first select a platform:
 
 - **Pythinker**: Automatically opens a browser for OAuth authorization
+- **Z.AI Coding Plan** (`/login z-ai-coding`): Configures the subscription route
+- **Z.AI API** (`/login z-ai-api`): Configures the pay-as-you-go route
 - **Other platforms**: Enter an API key, then select an available model
 
-After configuration, settings are automatically saved to `~/.pythinker/config.toml` and reloaded. See [Providers](../configuration/providers.md) for details.
+The two Z.AI entries are independent and may coexist. Each keeps its own credential, endpoint,
+model prefix, catalog refresh, and logout lifecycle; Pythinker never retries one route through
+the other. After configuration, settings are automatically saved to
+`~/.pythinker/config.toml` and reloaded. See [Providers](../configuration/providers.md) for
+details.
 
 Alias: `/setup`
 
@@ -219,6 +225,10 @@ Usage:
 - `/usage all`: Show usage for every configured provider
 - `/usage <provider-key>`: Show usage for a specific provider
 - `/usage --json`: Output the report as JSON
+
+For Z.AI, the Coding Plan and API reports are labeled separately. Z.AI has no documented
+route-wide usage endpoint, so each report shows an explanatory note and adds cached rate-limit
+headers only from requests made through that exact route.
 
 Aliases: `/status`, `/cost`
 

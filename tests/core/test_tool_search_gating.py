@@ -2,8 +2,8 @@
 
 Regression coverage for the GLM-5.2 ToolSearch loop: `ToolSearch` must only be
 offered to models that genuinely support Anthropic's `tool_reference` /
-`defer_loading` beta. The compat proxies that declare `type="anthropic"` but
-point at their own endpoint (z.ai/GLM, Kimi, MiniMax, opencode) must NOT see it.
+`defer_loading` beta. Compat proxies that declare `type="anthropic"` but point
+at their own endpoint (Kimi, MiniMax, custom bridges) must NOT see it.
 See `pythinker_code.llm.supports_deferred_tool_search`.
 """
 
@@ -15,8 +15,12 @@ from typing import cast
 import pytest
 from pydantic import SecretStr
 
-from pythinker_code.config import LLMProvider
+from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.llm import LLM, supports_deferred_tool_search
+from pythinker_code.provider_compatibility import (
+    default_provider_compatibility,
+    resolve_provider_compatibility,
+)
 
 
 def _llm(provider_type: str | None, base_url: str, model: str) -> LLM:
@@ -25,10 +29,22 @@ def _llm(provider_type: str | None, base_url: str, model: str) -> LLM:
         if provider_type is None
         else LLMProvider(type=cast("str", provider_type), base_url=base_url, api_key=SecretStr("x"))  # type: ignore[arg-type]
     )
+    model_config = LLMModel(
+        provider="test",
+        model=model,
+        max_context_size=200_000,
+    )
+    compatibility = (
+        resolve_provider_compatibility("test", provider, model_config)
+        if provider is not None
+        else default_provider_compatibility()
+    )
     return LLM(
         chat_provider=cast("object", SimpleNamespace(model_name=model)),  # type: ignore[arg-type]
         max_context_size=200_000,
         capabilities=set(),
+        compatibility=compatibility,
+        model_config=model_config,
         provider_config=provider,
     )
 
@@ -42,7 +58,7 @@ def test_genuine_anthropic_supports_tool_search() -> None:
 @pytest.mark.parametrize(
     ("base_url", "label"),
     [
-        ("https://api.z.ai/api/anthropic", "z.ai/GLM"),
+        ("https://proxy.example/anthropic", "custom proxy"),
         ("https://api.moonshot.ai/anthropic", "kimi"),
         ("https://api.minimax.io/anthropic", "minimax"),
     ],
@@ -73,7 +89,7 @@ def test_env_force_enable_overrides_host(monkeypatch: pytest.MonkeyPatch) -> Non
     # Explicit opt-in: user asserts their proxy forwards the beta.
     monkeypatch.setenv("ENABLE_TOOL_SEARCH", "true")
     assert supports_deferred_tool_search(
-        _llm("anthropic", "https://api.z.ai/api/anthropic", "glm-5.2")
+        _llm("anthropic", "https://proxy.example/anthropic", "claude-compatible")
     )
 
 

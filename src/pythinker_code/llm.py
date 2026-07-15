@@ -3,20 +3,24 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from pythinker_core.chat_provider import ChatProvider, ThinkingEffort
 
 from pythinker_code.constant import USER_AGENT
+from pythinker_code.provider_compatibility import (
+    ProviderCompatibility,
+    default_provider_compatibility,
+    openai_gpt_reasoning_levels,
+    resolve_provider_compatibility,
+    resolve_tool_message_conversion,
+)
 from pythinker_code.thinking import (
-    DEFAULT_THINKING_EFFORT,
     available_thinking_levels,
     bool_to_thinking_effort,
-    clamp_thinking_effort,
     normalize_thinking_effort,
     thinking_effort_enabled,
 )
@@ -51,6 +55,7 @@ class LLM:
     chat_provider: ChatProvider
     max_context_size: int
     capabilities: set[ModelCapability]
+    compatibility: ProviderCompatibility = field(default_factory=default_provider_compatibility)
     model_config: LLMModel | None = None
     provider_config: LLMProvider | None = None
     thinking: bool | None = None
@@ -61,18 +66,6 @@ class LLM:
         return self.chat_provider.model_name
 
 
-# Providers whose generation kwargs use `max_output_tokens` instead of the
-# more common `max_tokens` (OpenAI Chat-Completions-shaped and Anthropic
-# providers, plus the first-party `pythinker` provider, all use `max_tokens`).
-_MAX_OUTPUT_TOKENS_KWARG_OVERRIDES: dict[str, str] = {
-    "openai_responses": "max_output_tokens",
-    "openai_codex": "max_output_tokens",
-    "google_genai": "max_output_tokens",
-    "gemini": "max_output_tokens",
-    "vertexai": "max_output_tokens",
-}
-
-
 def capped_chat_provider(llm: LLM, max_output_tokens: int) -> ChatProvider:
     """Return a copy of ``llm.chat_provider`` with its output length capped.
 
@@ -80,39 +73,9 @@ def capped_chat_provider(llm: LLM, max_output_tokens: int) -> ChatProvider:
     usual output budget (e.g. a context-compaction summary) can use this
     instead of hand-picking a provider-specific kwarg name.
     """
-    provider_config = getattr(llm, "provider_config", None)
-    provider_type = getattr(provider_config, "type", None)
-    kwarg = _MAX_OUTPUT_TOKENS_KWARG_OVERRIDES.get(provider_type or "", "max_tokens")
-    return cast(Any, llm.chat_provider).with_generation_kwargs(**{kwarg: max_output_tokens})
-
-
-# Hosts that serve the genuine Anthropic API and therefore accept the
-# `tool_reference` / `defer_loading` beta content blocks that deferred tool
-# search depends on. The Claude API-key path and Anthropic OAuth both route
-# through `api.anthropic.com` (see `auth/anthropic_direct.py:ANTHROPIC_BASE_URL`).
-_GENUINE_ANTHROPIC_HOSTS = frozenset({"api.anthropic.com"})
-
-# Hosts that serve the genuine OpenAI API (as opposed to the many
-# OpenAI-compatible proxies that reuse the chat-completions wire format).
-_GENUINE_OPENAI_HOSTS = frozenset({"api.openai.com"})
-
-
-def _normalize_host(base_url: str | None) -> str:
-    """Lowercased hostname of `base_url`, or "" when absent/unparseable.
-
-    Single source of truth for the genuine-vs-proxy host checks so callers do not
-    re-implement URL parsing (and so trailing slashes, paths, and case never matter).
-    """
-    if not base_url:
-        return ""
-    from urllib.parse import urlparse
-
-    return (urlparse(base_url).hostname or "").lower()
-
-
-# Model-name substrings that do NOT support `tool_reference`. Haiku is the only
-# known unsupported pattern in the deferred tool-search workflow.
-_TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS = ("haiku",)
+    return cast(Any, llm.chat_provider).with_generation_kwargs(
+        **{llm.compatibility.output_tokens_kwarg: max_output_tokens}
+    )
 
 
 def supports_deferred_tool_search(llm: LLM | None) -> bool:
@@ -123,9 +86,9 @@ def supports_deferred_tool_search(llm: LLM | None) -> bool:
     `ToolSearch` only makes sense when the provider supports Anthropic's
     `tool_reference` / `defer_loading` beta, the mechanism Pythinker uses to hold
     large MCP tool sets out of context and discover them on demand. Crucially, MANY
-    providers in this CLI declare `type="anthropic"` yet point at their OWN
-    Anthropic-COMPATIBLE proxy that does NOT forward that beta: z.ai/GLM
-    (`api.z.ai/api/anthropic`), Kimi, MiniMax, and opencode_go. On those — and on
+    providers in this CLI declare `type="anthropic"` yet point at their own
+    Anthropic-compatible proxy that does not forward that beta, including Kimi,
+    MiniMax, and custom bridges. On those — and on
     every non-Anthropic provider — offering `ToolSearch` is pure noise: it just
     re-lists tools the model can already see, and weaker tool-callers (observed
     with GLM-5.2) loop on it, "searching" for tools forever instead of calling
@@ -144,18 +107,9 @@ def supports_deferred_tool_search(llm: LLM | None) -> bool:
     if env is not None:
         return env.strip().lower() not in {"", "0", "false", "no", "off"}
 
-    if llm is None or llm.provider_config is None:
+    if llm is None:
         return False
-    provider = llm.provider_config
-    if provider.type != "anthropic":
-        return False
-    # type="anthropic" is necessary but NOT sufficient — the compat proxies above
-    # share it. Only the genuine Anthropic host forwards the beta.
-    host = _normalize_host(provider.base_url)
-    if host not in _GENUINE_ANTHROPIC_HOSTS:
-        return False
-    model = llm.model_name.lower()
-    return not any(pat in model for pat in _TOOL_REFERENCE_UNSUPPORTED_MODEL_PATTERNS)
+    return llm.compatibility.deferred_tool_search
 
 
 def resolve_tool_result_mode(
@@ -166,8 +120,8 @@ def resolve_tool_result_mode(
     The split that matters is NATIVE endpoint vs COMPATIBILITY PROXY, not which model:
     genuine `api.anthropic.com` / `api.openai.com` consume structured multi-part
     `tool_result` content faithfully, but the many proxies that merely speak the same
-    wire format often do not. z.ai/GLM (`api.z.ai/api/anthropic`) honors only the FIRST
-    content block of an array-form `tool_result`, so the leading `<system>` summary block
+    wire format often do not. Some compatibility bridges honor only the first content
+    block of an array-form `tool_result`, so the leading `<system>` summary block
     reaches the model while the actual tool OUTPUT block is silently dropped — every
     Shell/ReadFile result reads as "success" with no payload (confirmed against GLM-5.2).
 
@@ -180,11 +134,7 @@ def resolve_tool_result_mode(
     Returns `None` to mean "native multi-part" (the provider default) and `"extract_text"`
     to mean "flatten to one string". New families/modes plug in here, not in agent/tool code.
     """
-    host = _normalize_host(base_url)
-    native_hosts = _GENUINE_ANTHROPIC_HOSTS if api_family == "anthropic" else _GENUINE_OPENAI_HOSTS
-    if not host or host in native_hosts:
-        return None
-    return "extract_text"
+    return resolve_tool_message_conversion(api_family=api_family, base_url=base_url)
 
 
 def model_display_name(model_name: str | None, model: LLMModel | None = None) -> str:
@@ -309,6 +259,8 @@ def create_llm(
         )
         return None
 
+    compatibility = resolve_provider_compatibility(model.provider, provider, model)
+
     resolved_api_key = (
         oauth.resolve_api_key(provider.api_key, provider.oauth)
         if oauth and provider.oauth
@@ -352,11 +304,6 @@ def create_llm(
         case "openai_legacy":
             from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacy
 
-            reasoning_key = (
-                provider.reasoning_key
-                if provider.reasoning_key is not None
-                else "reasoning_content"
-            )
             stream = not (
                 _is_alibaba_workspace_endpoint(provider.base_url)
                 and model.model.lower().replace("_", "-") == "deepseek-v3.2"
@@ -366,12 +313,13 @@ def create_llm(
                 base_url=provider.base_url,
                 api_key=resolved_api_key,
                 stream=stream,
-                reasoning_key=reasoning_key,
+                reasoning_key=compatibility.reasoning_key,
+                reasoning_replay_mode=compatibility.reasoning_replay_mode,
+                auto_reasoning_effort=compatibility.auto_reasoning_effort,
+                tool_stream=compatibility.tool_stream,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
                 http_client=rl_http_client,
-                tool_message_conversion=resolve_tool_result_mode(
-                    api_family="openai", base_url=provider.base_url
-                ),
+                tool_message_conversion=compatibility.tool_message_conversion,
             )
         case "openai_responses":
             from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponses
@@ -382,6 +330,7 @@ def create_llm(
                 api_key=resolved_api_key,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
                 http_client=rl_http_client,
+                tool_message_conversion=compatibility.tool_message_conversion,
             )
         case "openai_codex":
             from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponses
@@ -400,6 +349,7 @@ def create_llm(
                 system_prompt_as_instructions=True,
                 default_headers=default_headers,
                 http_client=rl_http_client,
+                tool_message_conversion=compatibility.tool_message_conversion,
             )
         case "anthropic":
             from pythinker_core.contrib.chat_provider.anthropic import Anthropic
@@ -412,9 +362,7 @@ def create_llm(
                 metadata={"user_id": session_id} if session_id else None,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
                 http_client=rl_http_client,
-                tool_message_conversion=resolve_tool_result_mode(
-                    api_family="anthropic", base_url=provider.base_url
-                ),
+                tool_message_conversion=compatibility.tool_message_conversion,
             )
         case "google_genai" | "gemini":
             from pythinker_core.contrib.chat_provider.google_genai import GoogleGenAI
@@ -477,96 +425,21 @@ def create_llm(
         raise ValueError(f"Invalid thinking effort: {thinking_effort!r}")
 
     supports_thinking = "thinking" in capabilities
-    if "always_thinking" in capabilities:
-        # Always-thinking models cannot be disabled. Preserve an explicit
-        # non-off effort; otherwise keep the legacy high-effort default.
-        effective_effort = (
-            requested_effort
-            if requested_effort is not None and requested_effort != "off"
-            else DEFAULT_THINKING_EFFORT
-        )
-    elif supports_thinking:
-        # Clamp to the model's actually-supported levels so a persisted effort
-        # the model rejects (e.g. ``minimal`` on gpt-5.4/5.5) is never sent.
-        effective_effort = (
-            clamp_thinking_effort(
-                requested_effort, available_model_thinking_levels(model, capabilities)
-            )
-            if requested_effort is not None
-            else None
-        )
-    else:
-        # Clamp to the model's supported levels: non-reasoning models have
-        # only the off level, so explicit non-off requests become off instead of
-        # being recorded as active but ignored by the provider.
-        effective_effort = "off" if requested_effort is not None else None
+    effective_effort = compatibility.effective_effort(requested_effort, capabilities)
+    overrides = compatibility.request_overrides(
+        model_id=model.model,
+        effort=effective_effort,
+    )
+    if overrides.native_effort is not None and supports_thinking:
+        chat_provider = chat_provider.with_thinking(overrides.native_effort)
+
+    generation_kwargs = dict(overrides.generation_kwargs)
+    if overrides.extra_body:
+        generation_kwargs["extra_body"] = overrides.extra_body
+    if generation_kwargs:
+        chat_provider = cast(Any, chat_provider).with_generation_kwargs(**generation_kwargs)
 
     thinking_on = thinking_effort_enabled(effective_effort)
-    # DashScope's routing layer rejects reasoning_effort entirely; use
-    # model-specific body fields instead.
-    is_dashscope_legacy = provider.type == "openai_legacy" and _is_dashscope_endpoint(
-        provider.base_url or ""
-    )
-    # Moonshot K2.x models use the provider-specific thinking.type field on Moonshot-style
-    # endpoints, but Alibaba's DashScope-compatible routes use enable_thinking.
-    is_kimi_openai_legacy = (
-        provider.type == "openai_legacy"
-        and _is_kimi_k2_model(model.model)
-        and not is_dashscope_legacy
-    )
-    is_glm_openai_legacy = provider.type == "openai_legacy" and _is_glm_model(model.model)
-    # Qwen3.x exposes a binary `enable_thinking` template toggle, not tiered
-    # reasoning effort; DashScope's own hosted endpoint already sends
-    # `enable_thinking` below, so only apply this for other openai_legacy
-    # routes (e.g. local llama.cpp/vLLM/LM Studio servers).
-    is_qwen3_openai_legacy = (
-        provider.type == "openai_legacy"
-        and _is_qwen3_model(model.model)
-        and not is_dashscope_legacy
-    )
-    if (
-        effective_effort is not None
-        and supports_thinking
-        and not is_kimi_openai_legacy
-        and not is_glm_openai_legacy
-        and not is_dashscope_legacy
-        and not is_qwen3_openai_legacy
-    ):
-        # Only explicitly send thinking controls for models that advertise
-        # reasoning. Some OpenAI-compatible non-reasoning models reject even a
-        # null reasoning_effort field.
-        chat_provider = chat_provider.with_thinking(effective_effort)
-
-    # Moonshot K2.x and GLM use thinking.type on Moonshot-style endpoints.
-    if (is_kimi_openai_legacy or is_glm_openai_legacy) and effective_effort is not None:
-        thinking_body: dict[str, object] = {"type": "enabled" if thinking_on else "disabled"}
-        if is_glm_openai_legacy and thinking_on:
-            # Z.ai documents Preserved Thinking for coding/agent scenarios as
-            # `clear_thinking: false`; OpenAILegacy already replays ThinkPart as
-            # `reasoning_content`, which is the required history field.
-            thinking_body["clear_thinking"] = False
-        chat_provider = cast(Any, chat_provider).with_generation_kwargs(
-            extra_body={"thinking": thinking_body}
-        )
-
-    # DashScope-compatible models use enable_thinking unless handled by a
-    # provider-specific format above.
-    if (
-        is_dashscope_legacy
-        and not is_kimi_openai_legacy
-        and not is_glm_openai_legacy
-        and effective_effort is not None
-    ):
-        chat_provider = cast(Any, chat_provider).with_generation_kwargs(
-            extra_body={"enable_thinking": thinking_on}
-        )
-
-    # Self-hosted Qwen3.x servers (llama.cpp/vLLM/LM Studio) take the same
-    # `enable_thinking` toggle via the template-kwargs extra_body shape.
-    if is_qwen3_openai_legacy and effective_effort is not None:
-        chat_provider = cast(Any, chat_provider).with_generation_kwargs(
-            extra_body={"chat_template_kwargs": {"enable_thinking": thinking_on}}
-        )
 
     # Apply Pythinker AI-specific ``thinking.keep`` (preserved thinking) only when
     # the model is actually in thinking mode; otherwise the API would see a
@@ -583,6 +456,7 @@ def create_llm(
         chat_provider=chat_provider,
         max_context_size=model.max_context_size,
         capabilities=capabilities,
+        compatibility=compatibility,
         model_config=model,
         provider_config=provider,
         thinking=thinking_effort_enabled(effective_effort)
@@ -648,77 +522,33 @@ def derive_model_capabilities(model: LLMModel) -> set[ModelCapability]:
     return capabilities
 
 
-_GPT5_REASONING_RE = re.compile(r"gpt-5(?:\.(\d+))?", re.IGNORECASE)
-
-
-def openai_gpt_reasoning_levels(model_id: str) -> tuple[ThinkingEffort, ...] | None:
-    """Reasoning-effort levels an OpenAI GPT-5-family model actually accepts.
-
-    OpenAI's ``reasoning_effort`` set is model-dependent and has drifted across
-    the GPT-5 line, so the provider-neutral ladder over-offers levels a given
-    model rejects (e.g. ``minimal`` on gpt-5.4/5.5). Returns the supported
-    levels low->high including ``off`` (OpenAI ``none``), or ``None`` when
-    *model_id* is not a recognized GPT-5 reasoning model.
-
-    Matrix (OpenAI docs):
-
-    * ``5.0``                  -> minimal, low, medium, high
-    * ``5.1`` / ``5.2`` / ``5.3`` -> low, medium, high (``minimal`` replaced by ``none``)
-    * ``5.1-codex-max``, ``5.4+`` -> low, medium, high, xhigh (``minimal`` dropped)
-    """
-    match = _GPT5_REASONING_RE.search(model_id)
-    if match is None:
-        return None
-    minor = int(match.group(1)) if match.group(1) else 0
-    if minor == 0:
-        return ("off", "minimal", "low", "medium", "high")
-    if minor >= 4 or "codex-max" in model_id.lower():
-        return ("off", "low", "medium", "high", "xhigh")
-    return ("off", "low", "medium", "high")
-
-
 def available_model_thinking_levels(
-    model: LLMModel, capabilities: Collection[str] | None
+    model: LLMModel,
+    capabilities: Collection[str] | None,
+    compatibility: ProviderCompatibility | None = None,
 ) -> tuple[ThinkingEffort, ...]:
     """Selectable thinking levels for *model*, scoped to provider-specific support.
 
-    Starts from the capability-derived ladder, then narrows to a provider's
-    actually-accepted set when known (currently the OpenAI GPT-5 family) so the
-    selector never offers — and :func:`create_llm` never sends — a level the
-    model rejects. Falls back to the full ladder for models without a known
-    per-model rule.
+    Starts from the capability-derived ladder, then narrows to the resolved
+    provider/model profile's accepted set when known so the selector never offers —
+    and :func:`create_llm` never sends — a level the model rejects. Falls back to
+    the full ladder for models without a known per-model rule.
     """
     base = available_thinking_levels(capabilities)
-    gpt_levels = openai_gpt_reasoning_levels(model.model)
-    if gpt_levels is None:
+    scoped_levels = (
+        compatibility.supported_thinking_levels
+        if compatibility is not None
+        else openai_gpt_reasoning_levels(model.model)
+    )
+    if scoped_levels is None:
         return base
-    allowed = set(gpt_levels)
+    allowed = set(scoped_levels)
     scoped: tuple[ThinkingEffort, ...] = tuple(level for level in base if level in allowed)
     return scoped or base
 
 
 def _is_kimi_k2_model(model_name: str) -> bool:
     return "kimi-k2" in model_name.lower().replace("_", "-")
-
-
-def _is_glm_model(model_name: str) -> bool:
-    return model_name.lower().replace("_", "-").startswith("glm-")
-
-
-def _is_qwen3_model(model_name: str) -> bool:
-    """Qwen3.x (dense and MoE) models only support the chat template's
-    binary `enable_thinking` toggle, not tiered reasoning effort levels.
-    """
-    normalized = model_name.lower().replace("_", "-")
-    return "qwen3" in normalized or "qwen-3" in normalized
-
-
-def _is_dashscope_endpoint(base_url: str) -> bool:
-    """True for any Alibaba DashScope endpoint (standard, intl, workspace)."""
-    from urllib.parse import urlparse
-
-    host = urlparse(base_url).hostname or ""
-    return host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
 
 
 def _is_alibaba_workspace_endpoint(base_url: str) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from inline_snapshot import snapshot
 from pydantic import SecretStr
 from pythinker_core.chat_provider.echo import EchoChatProvider
@@ -766,52 +767,115 @@ def test_create_llm_alibaba_workspace_deepseek_disables_streaming():
     }
 
 
-def test_create_llm_openai_legacy_glm_sends_provider_thinking_body():
+@pytest.mark.parametrize(
+    ("provider_key", "base_url"),
+    [
+        ("managed:z-ai-coding", "https://api.z.ai/api/coding/paas/v4"),
+        ("managed:z-ai-api", "https://api.z.ai/api/paas/v4"),
+    ],
+)
+def test_create_llm_zai_glm52_activates_explicit_profile_policy(
+    provider_key: str,
+    base_url: str,
+) -> None:
     provider = LLMProvider(
         type="openai_legacy",
-        base_url="https://api.example.com/v1",
+        base_url=base_url,
         api_key=SecretStr("test-key"),
     )
     model = LLMModel(
-        provider="glm-provider",
-        model="glm-5.1",
+        provider=provider_key,
+        model="glm-5.2",
+        max_context_size=1_000_000,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking_effort="xhigh")
+
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.compatibility.profile_id == provider_key.removeprefix("managed:")
+    assert llm.compatibility.reasoning_replay_mode == "exact"
+    assert llm.compatibility.auto_reasoning_effort is False
+    assert llm.compatibility.tool_stream is True
+    assert llm.compatibility.tool_message_conversion == "extract_text"
+    assert llm.compatibility.max_output_tokens == 131_072
+    assert llm.chat_provider.thinking_effort is None
+    assert llm.thinking is True
+    assert llm.thinking_effort == "xhigh"
+
+
+@pytest.mark.parametrize(("thinking", "enabled"), [(False, False), (True, True)])
+def test_create_llm_self_hosted_qwen_uses_chat_template_thinking_toggle(
+    thinking: bool, enabled: bool
+) -> None:
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="http://localhost:8080/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="local",
+        model="Qwen3.6-35B-A3B",
         max_context_size=262_144,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking=thinking)
+
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.compatibility.profile_id == "qwen-template"
+    assert llm.compatibility.thinking_format == "qwen_template"
+    assert llm.chat_provider.thinking_effort is None
+    assert llm.thinking is enabled
+
+
+def test_create_llm_zai_binary_model_maps_minimal_to_disabled() -> None:
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.z.ai/api/paas/v4",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="managed:z-ai-api",
+        model="glm-5.1",
+        max_context_size=204_800,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking_effort="minimal")
+
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.compatibility.thinking_format == "zai_binary"
+    assert llm.compatibility.max_output_tokens == 131_072
+    assert llm.chat_provider.thinking_effort is None
+    assert llm.thinking is False
+    assert llm.thinking_effort == "off"
+
+
+def test_create_llm_local_glm_name_does_not_activate_zai_request_policy() -> None:
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="http://localhost:8080/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="local",
+        model="glm-5.2",
+        max_context_size=1_000_000,
         capabilities={"thinking"},
     )
 
     llm = create_llm(provider, model, thinking_effort="high")
+
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
-    assert llm.chat_provider.thinking_effort is None
-    assert llm.thinking is True
-    assert llm.thinking_effort == "high"
-    assert llm.chat_provider._generation_kwargs.get("extra_body") == {  # pyright: ignore[reportPrivateUsage]
-        "thinking": {"type": "enabled", "clear_thinking": False}
-    }
-
-
-def test_create_llm_openai_legacy_glm_sends_disabled_provider_thinking_body():
-    provider = LLMProvider(
-        type="openai_legacy",
-        base_url="https://api.example.com/v1",
-        api_key=SecretStr("test-key"),
-    )
-    model = LLMModel(
-        provider="glm-provider",
-        model="glm-5.1",
-        max_context_size=262_144,
-        capabilities={"thinking"},
-    )
-
-    llm = create_llm(provider, model, thinking_effort="off")
-    assert llm is not None
-    assert isinstance(llm.chat_provider, OpenAILegacy)
-    assert llm.chat_provider.thinking_effort is None
-    assert llm.thinking is False
-    assert llm.thinking_effort == "off"
-    assert llm.chat_provider._generation_kwargs.get("extra_body") == {  # pyright: ignore[reportPrivateUsage]
-        "thinking": {"type": "disabled"}
-    }
+    assert llm.compatibility.profile_id == "openai-compatible"
+    assert llm.compatibility.thinking_format == "none"
+    assert llm.compatibility.max_output_tokens is None
+    assert llm.compatibility.tool_stream is False
 
 
 def test_clone_llm_with_model_alias_preserves_kimi_thinking_disabled():
@@ -894,9 +958,19 @@ def test_resolve_tool_result_mode_native_vs_compat_proxy():
         is None
     )
     assert resolve_tool_result_mode(api_family="openai", base_url="https://api.openai.com") is None
-    # Anthropic-compatible proxies (z.ai/GLM, MiniMax, Kimi) → flatten.
     assert (
-        resolve_tool_result_mode(api_family="anthropic", base_url="https://api.z.ai/api/anthropic")
+        resolve_tool_result_mode(api_family="openai", base_url="https://api.openai.com/v1") is None
+    )
+    assert (
+        resolve_tool_result_mode(api_family="openai", base_url="https://proxy.example/v1")
+        == "extract_text"
+    )
+    # Anthropic-compatible proxies (MiniMax, Kimi, custom bridges) → flatten.
+    assert (
+        resolve_tool_result_mode(
+            api_family="anthropic",
+            base_url="https://proxy.example/anthropic",
+        )
         == "extract_text"
     )
     # OpenAI-compatible proxies (DeepSeek, xAI/Grok, …) → flatten.
@@ -925,18 +999,15 @@ def test_resolve_tool_result_mode_host_normalization():
     )
 
 
-def test_create_llm_zai_anthropic_proxy_flattens_tool_results():
-    # z.ai's Anthropic-compatible proxy only honors the first content block of an
-    # array-form tool_result, so multi-block results (system summary + output) must
-    # be flattened to a single text block or the model never sees the tool output.
+def test_create_llm_anthropic_compat_proxy_flattens_tool_results():
     provider = LLMProvider(
         type="anthropic",
-        base_url="https://api.z.ai/api/anthropic",
+        base_url="https://proxy.example/anthropic",
         api_key=SecretStr("test-key"),
     )
     model = LLMModel(
-        provider="managed:z-ai",
-        model="glm-5.2",
+        provider="anthropic-proxy",
+        model="claude-compatible",
         max_context_size=200_000,
         capabilities=None,
     )

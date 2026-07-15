@@ -74,6 +74,30 @@ def logout_deepseek(*args: Any, **kwargs: Any) -> Any:
     return impl(*args, **kwargs)
 
 
+def login_z_ai_coding_api_key(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.z_ai import login_z_ai_coding_api_key as impl
+
+    return impl(*args, **kwargs)
+
+
+def login_z_ai_api_key(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.z_ai import login_z_ai_api_key as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_z_ai_coding(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.z_ai import logout_z_ai_coding as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_z_ai_api(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.z_ai import logout_z_ai_api as impl
+
+    return impl(*args, **kwargs)
+
+
 def login_lm_studio(*args: Any, **kwargs: Any) -> Any:
     from pythinker_code.auth.lm_studio import login_lm_studio as impl
 
@@ -1437,6 +1461,16 @@ def login(
     ),
     minimax: bool = typer.Option(False, "--minimax", help="Configure MiniMax with an API key."),
     deepseek: bool = typer.Option(False, "--deepseek", help="Configure DeepSeek with an API key."),
+    z_ai_coding: bool = typer.Option(
+        False,
+        "--z-ai-coding",
+        help="Configure a Z.AI Coding Plan subscription key.",
+    ),
+    z_ai_api: bool = typer.Option(
+        False,
+        "--z-ai-api",
+        help="Configure a Z.AI pay-as-you-go API key.",
+    ),
     anthropic: bool = typer.Option(
         False, "--anthropic", help="Configure Anthropic with an API key."
     ),
@@ -1469,6 +1503,8 @@ def login(
                 opencode_go,
                 minimax,
                 deepseek,
+                z_ai_coding,
+                z_ai_api,
                 anthropic,
                 openrouter,
                 lm_studio,
@@ -1478,8 +1514,8 @@ def login(
         if selected_modes > 1:
             typer.echo(
                 "Choose only one of --browser, --headless, --api-key, "
-                "--opencode-go, --minimax, --deepseek, --anthropic, --openrouter, "
-                "--lm-studio, or --ollama.",
+                "--opencode-go, --minimax, --deepseek, --z-ai-coding, --z-ai-api, "
+                "--anthropic, --openrouter, --lm-studio, or --ollama.",
                 err=True,
             )
             return False
@@ -1491,6 +1527,32 @@ def login(
         elif anthropic:
             key = typer.prompt("Anthropic API key", hide_input=True).strip()
             events = login_anthropic_api_key(config, key)
+        elif z_ai_coding:
+            key = (os.getenv("ZAI_CODING_API_KEY") or "").strip()
+            if not key:
+                key = typer.prompt(
+                    "Z.AI Coding Plan API key",
+                    hide_input=True,
+                    default="",
+                    show_default=False,
+                ).strip()
+            if not key:
+                typer.echo("Z.AI Coding Plan API key is required.", err=True)
+                return False
+            events = login_z_ai_coding_api_key(config, key)
+        elif z_ai_api:
+            key = (os.getenv("ZAI_API_KEY") or "").strip()
+            if not key:
+                key = typer.prompt(
+                    "Z.AI API key",
+                    hide_input=True,
+                    default="",
+                    show_default=False,
+                ).strip()
+            if not key:
+                typer.echo("Z.AI API key is required.", err=True)
+                return False
+            events = login_z_ai_api_key(config, key)
         elif deepseek:
             key = typer.prompt("DeepSeek API key", hide_input=True).strip()
             events = login_deepseek_api_key(config, key)
@@ -1569,6 +1631,8 @@ def logout(
     opencode_go: bool = typer.Option(False, "--opencode-go", help="Logout from OpenCode Go."),
     minimax: bool = typer.Option(False, "--minimax", help="Logout from MiniMax."),
     deepseek: bool = typer.Option(False, "--deepseek", help="Logout from DeepSeek."),
+    z_ai_coding: bool = typer.Option(False, "--z-ai-coding", help="Logout from Z.AI Coding Plan."),
+    z_ai_api: bool = typer.Option(False, "--z-ai-api", help="Logout from Z.AI API."),
     anthropic: bool = typer.Option(False, "--anthropic", help="Logout from Anthropic."),
     openrouter: bool = typer.Option(False, "--openrouter", help="Logout from OpenRouter."),
     lm_studio: bool = typer.Option(
@@ -1583,11 +1647,22 @@ def logout(
 
     async def _run() -> bool:
         ok = True
-        selected_modes = (opencode_go, minimax, deepseek, anthropic, openrouter, lm_studio, ollama)
+        selected_modes = (
+            opencode_go,
+            minimax,
+            deepseek,
+            z_ai_coding,
+            z_ai_api,
+            anthropic,
+            openrouter,
+            lm_studio,
+            ollama,
+        )
         if sum(bool(v) for v in selected_modes) > 1:
             typer.echo(
                 "Choose only one of --opencode-go, --minimax, --deepseek, "
-                "--anthropic, --openrouter, --lm-studio, or --ollama.",
+                "--z-ai-coding, --z-ai-api, --anthropic, --openrouter, "
+                "--lm-studio, or --ollama.",
                 err=True,
             )
             return False
@@ -1597,6 +1672,10 @@ def logout(
             events = logout_openrouter(config)
         elif anthropic:
             events = logout_anthropic(config)
+        elif z_ai_coding:
+            events = logout_z_ai_coding(config)
+        elif z_ai_api:
+            events = logout_z_ai_api(config)
         elif deepseek:
             events = logout_deepseek(config)
         elif minimax:

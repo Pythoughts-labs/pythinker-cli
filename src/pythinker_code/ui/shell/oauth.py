@@ -20,7 +20,8 @@ from pythinker_code.auth import (
     OPENAI_CHATGPT_PLATFORM_ID,
     OPENCODE_GO_PLATFORM_ID,
     OPENROUTER_PLATFORM_ID,
-    ZAI_PLATFORM_ID,
+    ZAI_API_PLATFORM_ID,
+    ZAI_CODING_PLATFORM_ID,
 )
 from pythinker_code.auth.alibaba import (
     ALIBABA_PROVIDER_KEY,
@@ -82,9 +83,12 @@ from pythinker_code.auth.openrouter import (
 )
 from pythinker_code.auth.platforms import managed_provider_key
 from pythinker_code.auth.z_ai import (
-    ZAI_PROVIDER_KEY,
+    ZAI_API_ROUTE,
+    ZAI_CODING_ROUTE,
     login_z_ai_api_key,
-    logout_z_ai,
+    login_z_ai_coding_api_key,
+    logout_z_ai_api,
+    logout_z_ai_coding,
 )
 from pythinker_code.cli import Reload
 from pythinker_code.ui.shell.console import console
@@ -159,7 +163,8 @@ _SELECTOR_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="opencode-go", name="OpenCode Go", auth_type="api_key"),
     OAuthProviderEntry(id="minimax", name="MiniMax", auth_type="api_key"),
     OAuthProviderEntry(id="deepseek", name="DeepSeek", auth_type="api_key"),
-    OAuthProviderEntry(id="z-ai", name="Z AI", auth_type="api_key"),
+    OAuthProviderEntry(id="z-ai-coding", name="Z.AI Coding Plan", auth_type="api_key"),
+    OAuthProviderEntry(id="z-ai-api", name="Z.AI API", auth_type="api_key"),
     OAuthProviderEntry(id="moonshot", name="Moonshot", auth_type="api_key"),
     OAuthProviderEntry(id="kimi", name="Kimi Coding Plan", auth_type="api_key"),
     OAuthProviderEntry(id="alibaba", name="Alibaba (DashScope)", auth_type="api_key"),
@@ -185,7 +190,8 @@ _PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
     "opencode-go": (OPENCODE_GO_OPENAI_PROVIDER_KEY, OPENCODE_GO_ANTHROPIC_PROVIDER_KEY),
     "minimax": (MINIMAX_ANTHROPIC_PROVIDER_KEY,),
     "deepseek": (DEEPSEEK_PROVIDER_KEY,),
-    "z-ai": (ZAI_PROVIDER_KEY,),
+    "z-ai-coding": (ZAI_CODING_ROUTE.provider_key,),
+    "z-ai-api": (ZAI_API_ROUTE.provider_key,),
     "moonshot": (MOONSHOT_PROVIDER_KEY,),
     "kimi": (KIMI_PROVIDER_KEY,),
     "alibaba": (ALIBABA_PROVIDER_KEY,),
@@ -202,7 +208,8 @@ _LOGOUT_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="opencode-go", name="OpenCode Go", auth_type="api_key"),
     OAuthProviderEntry(id="minimax", name="MiniMax", auth_type="api_key"),
     OAuthProviderEntry(id="deepseek", name="DeepSeek", auth_type="api_key"),
-    OAuthProviderEntry(id="z-ai", name="Z AI", auth_type="api_key"),
+    OAuthProviderEntry(id="z-ai-coding", name="Z.AI Coding Plan", auth_type="api_key"),
+    OAuthProviderEntry(id="z-ai-api", name="Z.AI API", auth_type="api_key"),
     OAuthProviderEntry(id="moonshot", name="Moonshot", auth_type="api_key"),
     OAuthProviderEntry(id="kimi", name="Kimi Coding Plan", auth_type="api_key"),
     OAuthProviderEntry(id="alibaba", name="Alibaba (DashScope)", auth_type="api_key"),
@@ -283,13 +290,20 @@ async def login(app: Shell, args: str) -> None:
             return
         ok = await _render_oauth_events(login_deepseek_api_key(soul.runtime.config, api_key))
         provider = DEEPSEEK_PLATFORM_ID
-    elif mode == "z-ai":
-        api_key = await _prompt_api_key("Z AI")
+    elif mode == "z-ai-coding":
+        api_key = await _prompt_api_key("Z.AI Coding Plan")
         if not api_key:
-            console.print(f"[{_t.error}]No Z AI API key entered.[/]")
+            console.print(f"[{_t.error}]No Z.AI Coding Plan API key entered.[/]")
+            return
+        ok = await _render_oauth_events(login_z_ai_coding_api_key(soul.runtime.config, api_key))
+        provider = ZAI_CODING_PLATFORM_ID
+    elif mode == "z-ai-api":
+        api_key = await _prompt_api_key("Z.AI API")
+        if not api_key:
+            console.print(f"[{_t.error}]No Z.AI API key entered.[/]")
             return
         ok = await _render_oauth_events(login_z_ai_api_key(soul.runtime.config, api_key))
-        provider = ZAI_PLATFORM_ID
+        provider = ZAI_API_PLATFORM_ID
     elif mode == "moonshot":
         api_key = await _prompt_api_key("Moonshot")
         if not api_key:
@@ -342,8 +356,8 @@ async def login(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /login "
-            "[browser|headless|api-key|opencode-go|minimax|deepseek|z-ai|moonshot|kimi|alibaba|"
-            "anthropic|openrouter|lm-studio|ollama][/]"
+            "[browser|headless|api-key|opencode-go|minimax|deepseek|z-ai-coding|z-ai-api|"
+            "moonshot|kimi|alibaba|anthropic|openrouter|lm-studio|ollama][/]"
         )
         return
     if not ok:
@@ -397,8 +411,10 @@ async def logout(app: Shell, args: str) -> None:
         ok = await _render_oauth_events(logout_anthropic(config))
     elif mode == "deepseek":
         ok = await _render_oauth_events(logout_deepseek(config))
-    elif mode == "z-ai":
-        ok = await _render_oauth_events(logout_z_ai(config))
+    elif mode == "z-ai-coding":
+        ok = await _render_oauth_events(logout_z_ai_coding(config))
+    elif mode == "z-ai-api":
+        ok = await _render_oauth_events(logout_z_ai_api(config))
     elif mode == "moonshot":
         ok = await _render_oauth_events(logout_moonshot(config))
     elif mode == "kimi":
@@ -422,8 +438,8 @@ async def logout(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /logout "
-            "[openai|opencode-go|minimax|deepseek|z-ai|moonshot|kimi|alibaba|anthropic|openrouter|"
-            "lm-studio|ollama|github-feedback][/]"
+            "[openai|opencode-go|minimax|deepseek|z-ai-coding|z-ai-api|moonshot|kimi|"
+            "alibaba|anthropic|openrouter|lm-studio|ollama|github-feedback][/]"
         )
         return
     if not ok:

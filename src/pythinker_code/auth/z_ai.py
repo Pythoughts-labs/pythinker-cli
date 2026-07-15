@@ -3,100 +3,110 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import aiohttp
 from pydantic import SecretStr
 
-from pythinker_code.auth import ZAI_PLATFORM_ID
+from pythinker_code.auth import ZAI_API_PLATFORM_ID, ZAI_CODING_PLATFORM_ID
 from pythinker_code.auth.oauth import OAuthEvent
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
 from pythinker_code.config import Config, LLMModel, LLMProvider, save_config
+from pythinker_code.provider_compatibility import (
+    get_zai_model_policies,
+    get_zai_model_policy,
+)
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
 
-ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
-ZAI_MODELS_URL = "https://api.z.ai/api/anthropic/v1/models"
-ZAI_PROVIDER_KEY = managed_provider_key(ZAI_PLATFORM_ID)
-ZAI_DEFAULT_MODEL_ALIAS = managed_model_key(ZAI_PLATFORM_ID, "glm-5.2")
 ZAI_MODEL_DISCOVERY_TIMEOUT = aiohttp.ClientTimeout(total=15, sock_connect=8, sock_read=10)
+
+type ZaiCatalogStatus = Literal["live", "degraded", "unauthorized", "unconfigured"]
+type ZaiCatalogFailure = Literal[
+    "empty",
+    "http",
+    "malformed",
+    "timeout",
+    "transport",
+    "unauthorized",
+    "unconfigured",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ZaiRoute:
+    platform_id: str
+    display_name: str
+    base_url: str
+    api_key_env: str
+
+    @property
+    def provider_key(self) -> str:
+        return managed_provider_key(self.platform_id)
+
+    @property
+    def models_url(self) -> str:
+        return f"{self.base_url}/models"
+
+
+ZAI_CODING_ROUTE = ZaiRoute(
+    platform_id=ZAI_CODING_PLATFORM_ID,
+    display_name="Z.AI Coding Plan",
+    base_url="https://api.z.ai/api/coding/paas/v4",
+    api_key_env="ZAI_CODING_API_KEY",
+)
+ZAI_API_ROUTE = ZaiRoute(
+    platform_id=ZAI_API_PLATFORM_ID,
+    display_name="Z.AI API",
+    base_url="https://api.z.ai/api/paas/v4",
+    api_key_env="ZAI_API_KEY",
+)
+ZAI_ROUTES = (ZAI_CODING_ROUTE, ZAI_API_ROUTE)
 
 
 @dataclass(frozen=True, slots=True)
 class ZaiModel:
     model_id: str
-    alias_suffix: str
     display_name: str
-    provider_key: str = ZAI_PROVIDER_KEY
-    max_context_size: int = 131_072
-
-    @property
-    def alias(self) -> str:
-        return f"{ZAI_PLATFORM_ID}/{self.alias_suffix}"
+    max_context_size: int
 
 
-# GLM-5.2 is served on z.ai's Anthropic-compatible endpoint under the plain id
-# "glm-5.2", which carries the full 1M-token context window. Verified empirically
-# 2026-06-15 against api.z.ai/api/anthropic: a request with 1,002,378 input
-# tokens succeeded while ~1.05M returned stop_reason="model_context_window_exceeded".
-# The documented "glm-5.2[1m]" suffix is NOT a valid model code here (returns
-# HTTP 400 "Unknown Model") — the plain id already grants 1M, so we use it and
-# set the real window. z.ai's /models listings expose no context field and omit
-# glm-5.2 entirely, so both the id and the size are curated.
-_GLM_5_2 = ZaiModel("glm-5.2", "glm-5.2", "GLM-5.2", max_context_size=1_000_000)
+@dataclass(frozen=True, slots=True)
+class ZaiCatalogResult:
+    status: ZaiCatalogStatus
+    models: tuple[ZaiModel, ...] | None
+    failure: ZaiCatalogFailure | None = None
 
-ZAI_MODELS: tuple[ZaiModel, ...] = (
-    _GLM_5_2,
-    ZaiModel("glm-5.1", "glm-5.1", "GLM-5.1", max_context_size=204_800),
-    ZaiModel("glm-5", "glm-5", "GLM-5"),
-    ZaiModel("glm-5-turbo", "glm-5-turbo", "GLM-5-Turbo"),
-    ZaiModel("glm-4.7", "glm-4.7", "GLM-4.7"),
-    ZaiModel("glm-4.5-air", "glm-4.5-air", "GLM-4.5-Air", max_context_size=98_304),
+    def __post_init__(self) -> None:
+        if self.status == "live":
+            if not self.models or self.failure is not None:
+                raise ValueError("A live Z.AI catalog requires non-empty models and no failure")
+        elif self.models is not None:
+            raise ValueError("A non-live Z.AI catalog must not carry models")
+
+
+def _display_name(model_id: str) -> str:
+    return "-".join(
+        part.upper() if part.lower() == "glm" else part.capitalize() for part in model_id.split("-")
+    )
+
+
+ZAI_MODELS: tuple[ZaiModel, ...] = tuple(
+    ZaiModel(
+        model_id=policy.model_id,
+        display_name=_display_name(policy.model_id),
+        max_context_size=policy.context_tokens,
+    )
+    for policy in get_zai_model_policies()
 )
-
-# Curated models that must always be offered even when z.ai's /models endpoint
-# does not list them. GLM-5.2 is usable for chat but is absent from both the
-# Anthropic and OpenAI-compatible /models listings (verified 2026-06-15), so
-# without pinning it never reaches the model menu and a successful login or
-# periodic refresh would drop it. Discovered entries win for everything else.
-_PINNED_MODELS: tuple[ZaiModel, ...] = (_GLM_5_2,)
+_PINNED_MODEL_IDS = frozenset({"glm-5.2"})
 
 
-def _with_pinned_models(models: tuple[ZaiModel, ...]) -> tuple[ZaiModel, ...]:
-    """Prepend curated pinned models the live catalog omitted, deduped by alias.
-
-    If z.ai later starts returning a pinned model (e.g. it adds "glm-5.2" to its
-    /models listing), the discovered entry already occupies that alias, so the
-    pin is dropped — the API-provided definition wins and the model appears once,
-    never twice. The pin only fills the gap while the endpoint omits it.
-    """
-    present = {model.alias for model in models}
-    missing = tuple(model for model in _PINNED_MODELS if model.alias not in present)
-    return missing + models
-
-
-def get_z_ai_api_key_from_env() -> str | None:
-    value = os.getenv("ZAI_API_KEY")
+def get_z_ai_api_key_from_env(route: ZaiRoute) -> str | None:
+    value = os.getenv(route.api_key_env)
     if value and value.strip():
         return value.strip()
     return None
-
-
-def _is_supported_z_ai_model(model_id: str) -> bool:
-    return model_id.lower().startswith("glm-")
-
-
-def _model_by_id() -> dict[str, ZaiModel]:
-    return {model.model_id: model for model in ZAI_MODELS}
-
-
-def _derive_alias_suffix(model_id: str) -> str:
-    return model_id.lower().strip()
-
-
-def _derive_display_name(model_id: str) -> str:
-    parts = model_id.split("-")
-    return "-".join(p.upper() if p.lower() == "glm" else p.capitalize() for p in parts)
 
 
 def _to_positive_int(value: Any) -> int | None:
@@ -111,8 +121,7 @@ def _to_positive_int(value: Any) -> int | None:
 
 def _context_size_from_item(item: Mapping[str, Any], fallback: int) -> int:
     for key in ("context_length", "max_context_length", "context_window"):
-        parsed = _to_positive_int(item.get(key))
-        if parsed is not None:
+        if (parsed := _to_positive_int(item.get(key))) is not None:
             return parsed
     return fallback
 
@@ -126,102 +135,148 @@ def _display_name_from_item(item: Mapping[str, Any], fallback: str) -> str:
 
 
 def _parse_discovered_models(data: object) -> tuple[ZaiModel, ...] | None:
-    """Return parsed models, or None if the payload is structurally invalid."""
     if not isinstance(data, dict):
         return None
     raw_items = cast(dict[str, Any], data).get("data")
     if not isinstance(raw_items, list):
         return None
 
-    known = _model_by_id()
-    seen: set[str] = set()
     result: list[ZaiModel] = []
+    seen: set[str] = set()
     for raw_item in cast(list[Any], raw_items):
         if not isinstance(raw_item, Mapping):
             continue
         item = cast(Mapping[str, Any], raw_item)
-        model_id = item.get("id")
-        if not isinstance(model_id, str) or not model_id.strip():
+        raw_model_id = item.get("id")
+        if not isinstance(raw_model_id, str):
             continue
-        model_id = model_id.strip()
-        if model_id in seen or not _is_supported_z_ai_model(model_id):
+        model_id = raw_model_id.strip().lower()
+        if not model_id.startswith("glm-") or model_id in seen:
             continue
         seen.add(model_id)
-
-        current = known.get(model_id)
-        alias_suffix = current.alias_suffix if current else _derive_alias_suffix(model_id)
-        display_name = _display_name_from_item(
-            item,
-            current.display_name if current else _derive_display_name(model_id),
-        )
-        max_context_size = _context_size_from_item(
-            item,
-            current.max_context_size if current else 131_072,
-        )
+        policy = get_zai_model_policy(model_id)
+        fallback_context = policy.context_tokens if policy is not None else 131_072
+        fallback_display = _display_name(model_id)
         result.append(
             ZaiModel(
                 model_id=model_id,
-                alias_suffix=alias_suffix,
-                display_name=display_name,
-                provider_key=current.provider_key if current else ZAI_PROVIDER_KEY,
-                max_context_size=max_context_size,
+                display_name=_display_name_from_item(item, fallback_display),
+                max_context_size=_context_size_from_item(item, fallback_context),
             )
         )
     return tuple(result)
 
 
-async def _discover_z_ai_models(api_key: str) -> tuple[ZaiModel, ...] | None:
+def _with_pinned_models(models: tuple[ZaiModel, ...]) -> tuple[ZaiModel, ...]:
+    present = {model.model_id for model in models}
+    pins = tuple(
+        model
+        for model in ZAI_MODELS
+        if model.model_id in _PINNED_MODEL_IDS and model.model_id not in present
+    )
+    return pins + models
+
+
+async def _request_z_ai_models(route: ZaiRoute, api_key: str) -> object:
     async with (
         new_client_session(timeout=ZAI_MODEL_DISCOVERY_TIMEOUT) as session,
         session.get(
-            ZAI_MODELS_URL,
-            headers={"x-api-key": api_key},
-            raise_for_status=True,
+            route.models_url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            raise_for_status=False,
         ) as response,
     ):
-        payload = await response.json(content_type=None)
-    return _parse_discovered_models(payload)
+        if response.status >= 400:
+            raise aiohttp.ClientResponseError(
+                response.request_info,
+                response.history,
+                status=response.status,
+                message="Z.AI model catalog request failed",
+                headers=response.headers,
+            )
+        return await response.json(content_type=None)
+
+
+async def _discover_z_ai_catalog(route: ZaiRoute, api_key: str) -> ZaiCatalogResult:
+    try:
+        payload = await _request_z_ai_models(route, api_key)
+    except aiohttp.ClientResponseError as exc:
+        if exc.status in {401, 403}:
+            return ZaiCatalogResult(
+                status="unauthorized",
+                models=None,
+                failure="unauthorized",
+            )
+        return ZaiCatalogResult(status="degraded", models=None, failure="http")
+    except TimeoutError:
+        return ZaiCatalogResult(status="degraded", models=None, failure="timeout")
+    except aiohttp.ClientError:
+        return ZaiCatalogResult(status="degraded", models=None, failure="transport")
+    except (TypeError, ValueError):
+        return ZaiCatalogResult(status="degraded", models=None, failure="malformed")
+
+    models = _parse_discovered_models(payload)
+    if models is None:
+        return ZaiCatalogResult(status="degraded", models=None, failure="malformed")
+    if not models:
+        return ZaiCatalogResult(status="degraded", models=None, failure="empty")
+    return ZaiCatalogResult(status="live", models=_with_pinned_models(models))
+
+
+def _model_alias(route: ZaiRoute, model_id: str) -> str:
+    return managed_model_key(route.platform_id, model_id)
+
+
+def _to_model_config(route: ZaiRoute, model: ZaiModel) -> LLMModel:
+    policy = get_zai_model_policy(model.model_id)
+    return LLMModel(
+        provider=route.provider_key,
+        model=model.model_id,
+        max_context_size=model.max_context_size,
+        capabilities={"thinking"} if policy is not None else None,
+        display_name=model.display_name,
+    )
 
 
 def _apply_z_ai_config(
     config: Config,
+    route: ZaiRoute,
     api_key: SecretStr,
     models: tuple[ZaiModel, ...] = ZAI_MODELS,
 ) -> None:
-    config.providers[ZAI_PROVIDER_KEY] = LLMProvider(
-        type="anthropic",
-        base_url=ZAI_BASE_URL,
+    config.providers[route.provider_key] = LLMProvider(
+        type="openai_legacy",
+        base_url=route.base_url,
         api_key=api_key,
     )
+    for alias, model in list(config.models.items()):
+        if model.provider == route.provider_key:
+            del config.models[alias]
 
     models = _with_pinned_models(models)
-
-    provider_keys = {ZAI_PROVIDER_KEY}
-    for key, model in list(config.models.items()):
-        if model.provider in provider_keys:
-            del config.models[key]
-
     for model in models:
-        config.models[model.alias] = LLMModel(
-            provider=model.provider_key,
-            model=model.model_id,
-            max_context_size=model.max_context_size,
-            display_name=model.display_name,
-        )
+        config.models[_model_alias(route, model.model_id)] = _to_model_config(route, model)
 
-    fallback = next(
-        (m.alias for m in models),
-        next(iter(config.models), ""),
-    )
-    if ZAI_DEFAULT_MODEL_ALIAS in config.models:
-        config.default_model = ZAI_DEFAULT_MODEL_ALIAS
+    preferred = _model_alias(route, "glm-5.2")
+    if preferred in config.models:
+        config.default_model = preferred
     else:
-        config.default_model = fallback
-    apply_login_thinking_defaults(config, thinking=False, effort="off")
+        route_alias = next(
+            (
+                alias
+                for alias, model in config.models.items()
+                if model.provider == route.provider_key
+            ),
+            "",
+        )
+        config.default_model = route_alias or next(iter(config.models), "")
+    apply_login_thinking_defaults(config, thinking=True, effort="high")
 
 
-async def login_z_ai_api_key(
-    config: Config, api_key: str | None = None
+async def _login_z_ai_route(
+    config: Config,
+    route: ZaiRoute,
+    api_key: str | None,
 ) -> AsyncIterator[OAuthEvent]:
     if not config.is_from_default_location:
         yield OAuthEvent(
@@ -230,36 +285,56 @@ async def login_z_ai_api_key(
         )
         return
 
-    resolved_key = (api_key or get_z_ai_api_key_from_env() or "").strip()
+    resolved_key = (api_key or get_z_ai_api_key_from_env(route) or "").strip()
     if not resolved_key:
-        yield OAuthEvent("error", "Z AI API key is required.")
+        yield OAuthEvent("error", f"{route.display_name} API key is required.")
         return
 
-    models = ZAI_MODELS
-    try:
-        discovered = await _discover_z_ai_models(resolved_key)
-        if discovered is not None and discovered:
-            models = discovered
-    except aiohttp.ClientResponseError as exc:
-        if exc.status in {401, 403}:
-            yield OAuthEvent("error", "Invalid Z AI API key; the key was not saved.")
-            return
+    catalog = await _discover_z_ai_catalog(route, resolved_key)
+    if catalog.status == "unauthorized":
+        yield OAuthEvent(
+            "error",
+            f"Invalid {route.display_name} API key; the key was not saved.",
+        )
+        return
+    if catalog.status == "live":
+        assert catalog.models is not None
+        models = catalog.models
+    elif catalog.status == "degraded":
         yield OAuthEvent(
             "info",
-            "Z AI model listing is unavailable; using the built-in model list.",
+            f"{route.display_name} model listing is unavailable; using the built-in catalog.",
         )
-    except (aiohttp.ClientError, TimeoutError, ValueError):
-        yield OAuthEvent(
-            "info",
-            "Z AI model listing is unavailable; using the built-in model list.",
-        )
+        models = ZAI_MODELS
+    else:
+        yield OAuthEvent("error", f"{route.display_name} could not be configured.")
+        return
 
-    _apply_z_ai_config(config, SecretStr(resolved_key), models=models)
+    _apply_z_ai_config(config, route, SecretStr(resolved_key), models)
     save_config(config)
-    yield OAuthEvent("success", f"Z AI configured with model {config.default_model}.")
+    yield OAuthEvent("success", f"{route.display_name} configured with {config.default_model}.")
 
 
-async def logout_z_ai(config: Config) -> AsyncIterator[OAuthEvent]:
+async def login_z_ai_coding_api_key(
+    config: Config,
+    api_key: str | None = None,
+) -> AsyncIterator[OAuthEvent]:
+    async for event in _login_z_ai_route(config, ZAI_CODING_ROUTE, api_key):
+        yield event
+
+
+async def login_z_ai_api_key(
+    config: Config,
+    api_key: str | None = None,
+) -> AsyncIterator[OAuthEvent]:
+    async for event in _login_z_ai_route(config, ZAI_API_ROUTE, api_key):
+        yield event
+
+
+async def _logout_z_ai_route(
+    config: Config,
+    route: ZaiRoute,
+) -> AsyncIterator[OAuthEvent]:
     if not config.is_from_default_location:
         yield OAuthEvent(
             "error",
@@ -267,62 +342,47 @@ async def logout_z_ai(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    provider_keys = {ZAI_PROVIDER_KEY}
-    config.providers.pop(ZAI_PROVIDER_KEY, None)
-    for key, model in list(config.models.items()):
-        if model.provider in provider_keys:
-            del config.models[key]
-
+    config.providers.pop(route.provider_key, None)
+    for alias, model in list(config.models.items()):
+        if model.provider == route.provider_key:
+            del config.models[alias]
     if config.default_model not in config.models:
         config.default_model = next(iter(config.models), "")
     save_config(config)
-    yield OAuthEvent("success", "Logged out of Z AI successfully.")
+    yield OAuthEvent("success", f"Logged out of {route.display_name} successfully.")
 
 
-def apply_z_ai_models(config: Config, models: tuple[ZaiModel, ...]) -> bool:
-    """Upsert the live Z AI catalog and prune models no longer returned.
+async def logout_z_ai_coding(config: Config) -> AsyncIterator[OAuthEvent]:
+    async for event in _logout_z_ai_route(config, ZAI_CODING_ROUTE):
+        yield event
 
-    Preserves user preferences unless the selected Z AI model disappeared.
-    """
+
+async def logout_z_ai_api(config: Config) -> AsyncIterator[OAuthEvent]:
+    async for event in _logout_z_ai_route(config, ZAI_API_ROUTE):
+        yield event
+
+
+def apply_z_ai_models(
+    config: Config,
+    route: ZaiRoute,
+    models: tuple[ZaiModel, ...],
+) -> bool:
     models = _with_pinned_models(models)
+    aliases = [_model_alias(route, model.model_id) for model in models]
     changed = False
-    aliases: list[str] = []
-    for model in models:
-        alias = model.alias
-        aliases.append(alias)
-        existing = config.models.get(alias)
-        if existing is None:
-            config.models[alias] = LLMModel(
-                provider=model.provider_key,
-                model=model.model_id,
-                max_context_size=model.max_context_size,
-                display_name=model.display_name,
-            )
-            changed = True
-            continue
-        if existing.provider != model.provider_key:
-            existing.provider = model.provider_key
-            changed = True
-        if existing.model != model.model_id:
-            existing.model = model.model_id
-            changed = True
-        if existing.max_context_size != model.max_context_size:
-            existing.max_context_size = model.max_context_size
-            changed = True
-        if existing.display_name != model.display_name:
-            existing.display_name = model.display_name
+    for alias, model in zip(aliases, models, strict=True):
+        updated = _to_model_config(route, model)
+        if config.models.get(alias) != updated:
+            config.models[alias] = updated
             changed = True
 
     alias_set = set(aliases)
     removed_default = False
-    for alias, model_cfg in list(config.models.items()):
-        if model_cfg.provider != ZAI_PROVIDER_KEY:
-            continue
-        if alias in alias_set:
+    for alias, model in list(config.models.items()):
+        if model.provider != route.provider_key or alias in alias_set:
             continue
         del config.models[alias]
-        if config.default_model == alias:
-            removed_default = True
+        removed_default = removed_default or config.default_model == alias
         changed = True
 
     if removed_default:
@@ -334,16 +394,20 @@ def apply_z_ai_models(config: Config, models: tuple[ZaiModel, ...]) -> bool:
     return changed
 
 
-def _z_ai_api_key(config: Config) -> str | None:
-    provider = config.providers.get(ZAI_PROVIDER_KEY)
+def _z_ai_api_key(config: Config, route: ZaiRoute) -> str | None:
+    provider = config.providers.get(route.provider_key)
     if provider is None:
         return None
     value = provider.api_key.get_secret_value().strip()
     return value or None
 
 
-async def refresh_z_ai_models(config: Config) -> tuple[ZaiModel, ...] | None:
-    api_key = _z_ai_api_key(config)
+async def refresh_z_ai_models(config: Config, route: ZaiRoute) -> ZaiCatalogResult:
+    api_key = _z_ai_api_key(config, route)
     if api_key is None:
-        return None
-    return await _discover_z_ai_models(api_key)
+        return ZaiCatalogResult(
+            status="unconfigured",
+            models=None,
+            failure="unconfigured",
+        )
+    return await _discover_z_ai_catalog(route, api_key)

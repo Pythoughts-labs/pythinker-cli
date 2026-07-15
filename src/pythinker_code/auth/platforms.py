@@ -250,8 +250,9 @@ async def refresh_managed_models(config: Config) -> bool:
         refresh_opencode_go_models,
     )
     from pythinker_code.auth.z_ai import (
-        ZAI_PROVIDER_KEY,
-        ZaiModel,
+        ZAI_ROUTES,
+        ZaiCatalogResult,
+        ZaiRoute,
         apply_z_ai_models,
         refresh_z_ai_models,
     )
@@ -264,16 +265,17 @@ async def refresh_managed_models(config: Config) -> bool:
 
     changed = False
     updates: list[tuple[str, str, list[ModelInfo]]] = []
+    z_ai_provider_keys = {route.provider_key for route in ZAI_ROUTES}
     oauth_manager = None
     for provider_key, provider in managed_providers.items():
         # OpenCode Go and MiniMax own provider-specific model discovery. The
         # generic `managed:<platform>` path can't express OpenCode Go's
         # two-provider split, and MiniMax's provider key intentionally includes
         # the wire-shape suffix (`managed:minimax-anthropic`).
-        if provider_key in OPENCODE_GO_PROVIDER_KEYS or provider_key in (
-            MINIMAX_ANTHROPIC_PROVIDER_KEY,
-            ZAI_PROVIDER_KEY,
-            KIMI_PROVIDER_KEY,
+        if (
+            provider_key in OPENCODE_GO_PROVIDER_KEYS
+            or provider_key in {MINIMAX_ANTHROPIC_PROVIDER_KEY, KIMI_PROVIDER_KEY}
+            or provider_key in z_ai_provider_keys
         ):
             continue
         platform_id = parse_managed_provider_key(provider_key)
@@ -430,13 +432,29 @@ async def refresh_managed_models(config: Config) -> bool:
     if minimax_models is not None and apply_minimax_models(config, minimax_models):
         changed = True
 
-    z_ai_models: tuple[ZaiModel, ...] | None = None
-    try:
-        z_ai_models = await refresh_z_ai_models(config)
-    except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-        logger.warning("Failed to refresh Z AI models: {error}", error=exc)
-    if z_ai_models is not None and apply_z_ai_models(config, z_ai_models):
-        changed = True
+    z_ai_results: dict[ZaiRoute, ZaiCatalogResult] = {}
+    for route in ZAI_ROUTES:
+        try:
+            result = await refresh_z_ai_models(config, route)
+        except Exception as exc:
+            logger.warning(
+                "Unexpected Z.AI catalog refresh failure for {route}: {error_type}",
+                route=route.platform_id,
+                error_type=type(exc).__name__,
+            )
+            continue
+        z_ai_results[route] = result
+        if result.status == "live":
+            assert result.models is not None
+            if apply_z_ai_models(config, route, result.models):
+                changed = True
+        elif result.status != "unconfigured":
+            logger.warning(
+                "Z.AI catalog refresh did not update {route}: status={status}, failure={failure}",
+                route=route.platform_id,
+                status=result.status,
+                failure=result.failure,
+            )
 
     kimi_models: tuple[KimiModel, ...] | None = None
     try:
@@ -456,8 +474,12 @@ async def refresh_managed_models(config: Config) -> bool:
             save_changed = True
         if minimax_models is not None and apply_minimax_models(config_for_save, minimax_models):
             save_changed = True
-        if z_ai_models is not None and apply_z_ai_models(config_for_save, z_ai_models):
-            save_changed = True
+        for route, result in z_ai_results.items():
+            if result.status != "live":
+                continue
+            assert result.models is not None
+            if apply_z_ai_models(config_for_save, route, result.models):
+                save_changed = True
         if kimi_models is not None and apply_kimi_models(config_for_save, kimi_models):
             save_changed = True
         if save_changed:

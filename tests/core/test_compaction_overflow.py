@@ -11,14 +11,20 @@ note instead of failing the turn.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import pythinker_core
+from pydantic import SecretStr
 from pythinker_core.chat_provider import APIStatusError
 from pythinker_core.message import Message
 
+from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.llm import LLM, capped_chat_provider
+from pythinker_code.provider_compatibility import (
+    default_provider_compatibility,
+    resolve_provider_compatibility,
+)
 from pythinker_code.soul.compaction import SimpleCompaction
 from pythinker_code.wire.types import TextPart
 
@@ -47,15 +53,33 @@ class _FakeChatProvider:
 
 
 def _fake_llm() -> LLM:
-    return cast(LLM, SimpleNamespace(chat_provider=_FakeChatProvider(), provider_config=None))
-
-
-def _fake_llm_with_provider_type(provider_type: str) -> LLM:
     return cast(
         LLM,
         SimpleNamespace(
             chat_provider=_FakeChatProvider(),
-            provider_config=SimpleNamespace(type=provider_type),
+            provider_config=None,
+            compatibility=default_provider_compatibility(),
+        ),
+    )
+
+
+def _fake_llm_with_provider_type(provider_type: str) -> LLM:
+    provider = LLMProvider(
+        type=cast(Any, provider_type),
+        base_url="https://api.example/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="test",
+        model="test-model",
+        max_context_size=100_000,
+    )
+    return cast(
+        LLM,
+        SimpleNamespace(
+            chat_provider=_FakeChatProvider(),
+            provider_config=provider,
+            compatibility=resolve_provider_compatibility("test", provider, model),
         ),
     )
 

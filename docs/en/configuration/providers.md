@@ -21,6 +21,8 @@ After configuration, Pythinker Code will automatically save settings to `~/.pyth
 | OpenAI ChatGPT Codex | OpenAI managed account login |
 | Pythinker AI Open Platform (pythinker-ai.cn) | China region API endpoint |
 | Pythinker AI Open Platform (pythinker-ai.ai) | Global region API endpoint |
+| Z.AI Coding Plan | Subscription route at `api.z.ai/api/coding/paas/v4` |
+| Z.AI API | Pay-as-you-go route at `api.z.ai/api/paas/v4` |
 | LM Studio | Local models served via LM Studio |
 | Ollama | Local models served via Ollama |
 
@@ -63,6 +65,39 @@ type = "openai_legacy"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-xxx"
 ```
+
+### Managed Z.AI routes
+
+Z.AI Coding Plan and Z.AI API are independent managed routes. Configure the route that owns
+your key; Pythinker does not infer a route from the credential, migrate credentials between
+routes, or retry a request against the other endpoint.
+
+| Route | Login | Provider key | Model prefix | Base URL | Environment variable |
+| --- | --- | --- | --- | --- | --- |
+| Coding Plan | `pythinker login --z-ai-coding` | `managed:z-ai-coding` | `z-ai-coding/` | `https://api.z.ai/api/coding/paas/v4` | `ZAI_CODING_API_KEY` |
+| API | `pythinker login --z-ai-api` | `managed:z-ai-api` | `z-ai-api/` | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY` |
+
+The same routes are available in the interactive selector as `/login z-ai-coding` and
+`/login z-ai-api`. They may coexist in one config; login, catalog refresh, logout, default-model
+repair, and cached rate-limit headers remain scoped to the selected route. `/usage` shows a
+route-specific note because Z.AI does not document a route-wide usage endpoint; after a chat
+request, captured rate-limit headers are displayed for that route when available.
+
+Pythinker applies a provider compatibility profile to its curated GLM catalog:
+
+| Model | Context tokens | Maximum output tokens | Thinking | Streamed tool calls |
+| --- | ---: | ---: | --- | --- |
+| `glm-5.2` | 1,000,000 | 131,072 | Tiered (`high` / `max`) | Yes |
+| `glm-5.1` | 204,800 | 131,072 | Binary | Yes |
+| `glm-5` | 204,800 | 131,072 | Binary | Yes |
+| `glm-5-turbo` | 204,800 | 131,072 | Binary | Yes |
+| `glm-4.7` | 204,800 | 131,072 | Binary | Yes |
+| `glm-4.5-air` | 131,072 | 98,304 | Binary | No |
+
+On these OpenAI-compatible routes, the full-context model id is plain `glm-5.2`;
+`glm-5.2[1m]` is not an alias. Unknown Z.AI models keep conservative request defaults until
+they are curated. Z.AI reasoning replay uses
+only reasoning content the provider returned; Pythinker does not synthesize missing reasoning.
 
 ### `openai_responses`
 

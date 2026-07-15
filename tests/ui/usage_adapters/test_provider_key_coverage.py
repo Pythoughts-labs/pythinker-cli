@@ -29,6 +29,8 @@ ACTIVE_PROVIDER_KEYS = [
     "managed:pythinker-code",
     "managed:pythinker-ai",
     "managed:pythinker_ai-cn",
+    "managed:z-ai-coding",
+    "managed:z-ai-api",
 ]
 
 

@@ -2,13 +2,16 @@
 
 import json
 
+import pytest
 import respx
 from common import COMMON_CASES, Case, make_chat_completion_response, run_test_cases
 from httpx import Response
 from inline_snapshot import snapshot
 
+from pythinker_core.contrib.chat_provider.common import ReasoningReplayMode
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacy
 from pythinker_core.message import Message, TextPart, ThinkPart, ToolCall
+from pythinker_core.tooling import Tool
 
 TEST_CASES: dict[str, Case] = {**COMMON_CASES}
 
@@ -465,6 +468,160 @@ async def test_openai_legacy_reasoning_content_not_forced_on_plain_assistant():
             pass
         body = json.loads(mock.calls.last.request.content.decode())
         assert "reasoning_content" not in body["messages"][1]
+
+
+@pytest.mark.parametrize(
+    ("replay_mode", "expected_reasoning"),
+    [
+        ("exact", None),
+        ("tool_calls", ""),
+        ("strict_synthetic", "[reasoning unavailable]"),
+    ],
+)
+async def test_openai_legacy_explicit_reasoning_replay_modes_override_model_inference(
+    replay_mode: ReasoningReplayMode,
+    expected_reasoning: str | None,
+) -> None:
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="kimi-k2.6",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+            reasoning_replay_mode=replay_mode,
+        )
+        history = [
+            Message(role="user", content="List files"),
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        function=ToolCall.FunctionBody(name="ls", arguments="{}"),
+                    )
+                ],
+            ),
+        ]
+
+        stream = await provider.generate("", [], history)
+        async for _ in stream:
+            pass
+
+        body = json.loads(mock.calls.last.request.content.decode())
+        assistant = body["messages"][1]
+        if expected_reasoning is None:
+            assert "reasoning_content" not in assistant
+        else:
+            assert assistant["reasoning_content"] == expected_reasoning
+
+
+async def test_openai_legacy_omitted_replay_mode_preserves_generic_tool_call_behavior() -> None:
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="plain-model",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+        )
+        history = [
+            Message(
+                role="assistant",
+                content=[],
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        function=ToolCall.FunctionBody(name="ls", arguments="{}"),
+                    )
+                ],
+            )
+        ]
+
+        stream = await provider.generate("", [], history)
+        async for _ in stream:
+            pass
+
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["messages"][0]["reasoning_content"] == ""
+
+
+async def test_openai_legacy_exact_replay_preserves_multiple_think_parts_without_auto_effort():
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="glm-5.2",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+            reasoning_replay_mode="exact",
+            auto_reasoning_effort=False,
+        )
+        history = [
+            Message(
+                role="assistant",
+                content=[
+                    ThinkPart(think="first\n"),
+                    ThinkPart(think="second"),
+                    TextPart(text="visible"),
+                ],
+            )
+        ]
+
+        stream = await provider.generate("", [], history)
+        async for _ in stream:
+            pass
+
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["messages"][0]["reasoning_content"] == "first\nsecond"
+        assert "reasoning_effort" not in body
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+async def test_openai_legacy_tool_stream_merges_with_existing_extra_body(
+    with_tools: bool,
+) -> None:
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="glm-5.2",
+            api_key="test-key",
+            stream=False,
+            tool_stream=True,
+        ).with_generation_kwargs(
+            extra_body={"thinking": {"type": "enabled", "clear_thinking": False}}
+        )
+        tools = (
+            [
+                Tool(
+                    name="read",
+                    description="Read a file",
+                    parameters={"type": "object", "properties": {}},
+                )
+            ]
+            if with_tools
+            else []
+        )
+
+        stream = await provider.generate("", tools, [Message(role="user", content="hello")])
+        async for _ in stream:
+            pass
+
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["thinking"] == {"type": "enabled", "clear_thinking": False}
+        assert body.get("tool_stream") is (True if with_tools else None)
+        assert provider._generation_kwargs == {  # pyright: ignore[reportPrivateUsage]
+            "extra_body": {"thinking": {"type": "enabled", "clear_thinking": False}}
+        }
 
 
 async def test_openai_legacy_reasoning_content_forced_on_known_interleaved_plain_assistant():
