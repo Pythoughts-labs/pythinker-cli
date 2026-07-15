@@ -17,6 +17,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Parallel streamed tool calls are now correlated safely.** Interleaved argument chunks stay attached to their indexed calls, malformed or truncated call streams stop before tool execution, and failed attempts are not retried after output has already been shown.
+
 ## 0.58.0 (2026-07-11)
 
 - **Agent-spec loading is more defensive and truthful.** Subagent `path`, `extend`, and
