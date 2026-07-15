@@ -1,5 +1,5 @@
-from collections.abc import AsyncIterator
-from typing import Literal, cast
+from collections.abc import AsyncIterator, Sequence
+from typing import Literal, Self, cast
 
 import pytest
 from anthropic import AsyncStream as AnthropicAsyncStream
@@ -17,6 +17,7 @@ from openai import AsyncStream
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import (
     Response,
+    ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseFailedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -26,11 +27,14 @@ from openai.types.responses import (
 )
 from openai.types.responses.response import IncompleteDetails
 
+from pythinker_core import generate
+from pythinker_core.chat_provider import StreamedMessage, StreamedMessagePart, ThinkingEffort
 from pythinker_core.chat_provider.pythinker import PythinkerStreamedMessage
 from pythinker_core.contrib.chat_provider.anthropic import AnthropicStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacyStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponsesStreamedMessage
-from pythinker_core.message import ToolCall, ToolCallPart
+from pythinker_core.message import Message, ToolCall, ToolCallPart
+from pythinker_core.tooling import Tool
 
 
 async def _async_events[T](*events: T) -> AsyncIterator[T]:
@@ -80,6 +84,32 @@ def _response(
 
 async def _collect(stream: object) -> list[ToolCall | ToolCallPart]:
     return [part async for part in cast(AsyncIterator[ToolCall | ToolCallPart], stream)]
+
+
+class _StaticStreamProvider:
+    name = "static-stream"
+
+    def __init__(self, stream: StreamedMessage) -> None:
+        self._stream = stream
+
+    @property
+    def model_name(self) -> str:
+        return "static-stream"
+
+    @property
+    def thinking_effort(self) -> ThinkingEffort | None:
+        return None
+
+    async def generate(
+        self,
+        system_prompt: str,
+        tools: Sequence[Tool],
+        history: Sequence[Message],
+    ) -> StreamedMessage:
+        return self._stream
+
+    def with_thinking(self, effort: ThinkingEffort) -> Self:
+        return self
 
 
 async def test_openai_legacy_preserves_tool_call_index_and_id() -> None:
@@ -162,6 +192,126 @@ async def test_pythinker_preserves_tool_call_index_and_id() -> None:
     ]
 
 
+@pytest.mark.parametrize("adapter", ["openai_legacy", "pythinker"])
+async def test_openai_shaped_missing_id_and_late_name_finalize_deterministically(
+    adapter: str,
+) -> None:
+    chunks = _async_events(
+        _chat_chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": None, "arguments": None},
+                }
+            ]
+        ),
+        _chat_chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"path":"a.py"}'},
+                }
+            ]
+        ),
+    )
+    if adapter == "openai_legacy":
+        stream: StreamedMessage = OpenAILegacyStreamedMessage(
+            cast(AsyncStream[ChatCompletionChunk], chunks), reasoning_key=None
+        )
+    else:
+        stream = PythinkerStreamedMessage(cast(AsyncStream[ChatCompletionChunk], chunks))
+    raw_parts: list[ToolCall | ToolCallPart] = []
+
+    async def on_part(part: StreamedMessagePart) -> None:
+        if isinstance(part, (ToolCall, ToolCallPart)):
+            raw_parts.append(part)
+
+    result = await generate(
+        _StaticStreamProvider(stream),
+        "",
+        [],
+        [],
+        on_message_part=on_part,
+    )
+
+    assert raw_parts == [
+        ToolCall(
+            id="",
+            function=ToolCall.FunctionBody(name="", arguments=None),
+            stream_index=0,
+        ),
+        ToolCallPart(
+            arguments_part='{"path":"a.py"}',
+            name_part="read",
+            stream_index=0,
+            stream_call_id=None,
+        ),
+    ]
+    assert result.message.tool_calls == [
+        ToolCall(
+            id="call_fada958acfb8ed05ed05",
+            function=ToolCall.FunctionBody(name="read", arguments='{"path":"a.py"}'),
+        )
+    ]
+
+
+@pytest.mark.parametrize("adapter", ["openai_legacy", "pythinker"])
+async def test_openai_shaped_late_id_without_function_content_is_preserved(
+    adapter: str,
+) -> None:
+    chunks = _async_events(
+        _chat_chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": "read", "arguments": ""},
+                }
+            ]
+        ),
+        _chat_chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "late_call",
+                    "type": "function",
+                    "function": None,
+                }
+            ]
+        ),
+        _chat_chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": None, "arguments": "{}"},
+                }
+            ]
+        ),
+    )
+    if adapter == "openai_legacy":
+        stream: StreamedMessage = OpenAILegacyStreamedMessage(
+            cast(AsyncStream[ChatCompletionChunk], chunks), reasoning_key=None
+        )
+    else:
+        stream = PythinkerStreamedMessage(cast(AsyncStream[ChatCompletionChunk], chunks))
+
+    result = await generate(_StaticStreamProvider(stream), "", [], [])
+
+    assert result.message.tool_calls == [
+        ToolCall(
+            id="late_call",
+            function=ToolCall.FunctionBody(name="read", arguments="{}"),
+        )
+    ]
+
+
 async def test_openai_responses_uses_output_index_and_semantic_call_id() -> None:
     item = ResponseFunctionToolCall(
         arguments="",
@@ -235,6 +385,52 @@ async def test_openai_responses_keeps_response_id_separate_from_item_id() -> Non
     assert isinstance(parts[0], ToolCall)
     assert parts[0].id == "semantic_call"
     assert stream.id == "response_terminal"
+
+
+async def test_openai_responses_generate_preserves_response_and_semantic_call_ids() -> None:
+    events = _async_events(
+        ResponseCreatedEvent(
+            response=_response(response_id="response_created"),
+            sequence_number=0,
+            type="response.created",
+        ),
+        ResponseOutputItemAddedEvent(
+            item=ResponseFunctionToolCall(
+                arguments="",
+                call_id="semantic_call",
+                id="output_item",
+                name="read",
+                status="in_progress",
+                type="function_call",
+            ),
+            output_index=0,
+            sequence_number=1,
+            type="response.output_item.added",
+        ),
+        ResponseFunctionCallArgumentsDeltaEvent(
+            delta="{}",
+            item_id="output_item",
+            output_index=0,
+            sequence_number=2,
+            type="response.function_call_arguments.delta",
+        ),
+        ResponseCompletedEvent(
+            response=_response(response_id="response_terminal", status="completed"),
+            sequence_number=3,
+            type="response.completed",
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    result = await generate(_StaticStreamProvider(stream), "", [], [])
+
+    assert result.id == "response_terminal"
+    assert result.message.tool_calls == [
+        ToolCall(
+            id="semantic_call",
+            function=ToolCall.FunctionBody(name="read", arguments="{}"),
+        )
+    ]
 
 
 class _AnthropicEventStream:

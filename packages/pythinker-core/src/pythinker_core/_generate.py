@@ -5,11 +5,13 @@ from loguru import logger
 
 from pythinker_core.chat_provider import (
     APIEmptyResponseError,
+    APIStreamProtocolError,
     ChatProvider,
     StreamedMessagePart,
     TokenUsage,
 )
-from pythinker_core.message import ContentPart, Message, TextPart, ThinkPart, ToolCall
+from pythinker_core.message import Message, TextPart, ThinkPart, ToolCall
+from pythinker_core.stream_message_assembler import StreamMessageAssembler
 from pythinker_core.tooling import Tool
 from pythinker_core.utils.aio import Callback, callback
 
@@ -46,8 +48,8 @@ async def generate(
         APIEmptyResponseError: If the API returns an empty response.
         ChatProviderError: If any other recognized chat provider error occurs.
     """
-    message = Message(role="assistant", content=[])
-    pending_part: StreamedMessagePart | None = None  # message part that is currently incomplete
+    assembler = StreamMessageAssembler()
+    output_published = False
 
     logger.trace("Generating with history: {history}", history=history)
     stream = await chat_provider.generate(system_prompt, tools, history)
@@ -55,21 +57,30 @@ async def generate(
         logger.trace("Received part: {part}", part=part)
         if on_message_part:
             await callback(on_message_part, part.model_copy(deep=True))
+            output_published = True
 
-        if pending_part is None:
-            pending_part = part
-        elif not pending_part.merge_in_place(part):  # try merge into the pending part
-            # unmergeable part must push the pending part to the buffer
-            _message_append(message, pending_part)
-            if isinstance(pending_part, ToolCall) and on_tool_call:
-                await callback(on_tool_call, pending_part)
-            pending_part = part
+        try:
+            assembler.add(part)
+        except APIStreamProtocolError as error:
+            error.output_published = output_published
+            if error.response_id is None:
+                error.response_id = stream.id
+            raise
 
-    # end of message
-    if pending_part is not None:
-        _message_append(message, pending_part)
-        if isinstance(pending_part, ToolCall) and on_tool_call:
-            await callback(on_tool_call, pending_part)
+    try:
+        message = assembler.finish(
+            response_id=stream.id,
+            finish_reason=stream.finish_reason,
+        )
+    except APIStreamProtocolError as error:
+        error.output_published = output_published
+        if error.response_id is None:
+            error.response_id = stream.id
+        raise
+
+    for tool_call in message.tool_calls or []:
+        if on_tool_call:
+            await callback(on_tool_call, tool_call)
 
     if not message.content and not message.tool_calls:
         raise APIEmptyResponseError("The API returned an empty response.")
@@ -112,16 +123,3 @@ class GenerateResult:
     """The token usage of the generated message."""
     truncated: bool = False
     """True when the response was cut off by the output-token limit (finish_reason 'length')."""
-
-
-def _message_append(message: Message, part: StreamedMessagePart) -> None:
-    match part:
-        case ContentPart():
-            message.content.append(part)
-        case ToolCall():
-            if message.tool_calls is None:
-                message.tool_calls = []
-            message.tool_calls.append(part)
-        case _:
-            # may be an orphaned `ToolCallPart`
-            return
