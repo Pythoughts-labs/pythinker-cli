@@ -837,7 +837,7 @@ make test-pythinker-code`.
 | --- | --- |
 | 0–4 (per phase) | `make check-pythinker-code && make test-pythinker-code` |
 | Tool list change | rebuild wire-handshake snapshot in `tests_e2e/` (`--inline-snapshot=fix`) |
-| Before PR | `## Unreleased` CHANGELOG entry; `pythinker-guard` skill; CodeRabbit green |
+| Before PR | `## Unreleased` CHANGELOG entry; C01–C15 review; CodeRabbit green |
 
 ## File-by-file checklist (the complete port, in build order)
 

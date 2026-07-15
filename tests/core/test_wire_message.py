@@ -276,8 +276,10 @@ async def test_wire_message_serde():
     msg = ToolCall(
         id="call_123",
         function=ToolCall.FunctionBody(name="bash", arguments='{"command": "ls -la"}'),
+        stream_index=2,
     )
-    assert serialize_wire_message(msg) == snapshot(
+    serialized_call = serialize_wire_message(msg)
+    assert serialized_call == snapshot(
         {
             "type": "ToolCall",
             "payload": {
@@ -288,13 +290,24 @@ async def test_wire_message_serde():
             },
         }
     )
-    _test_serde(msg)
-
-    msg = ToolCallPart(arguments_part="}")
-    assert serialize_wire_message(msg) == snapshot(
-        {"type": "ToolCallPart", "payload": {"arguments_part": "}"}}
+    semantic_call = deserialize_wire_message(serialized_call)
+    assert semantic_call == ToolCall(
+        id="call_123",
+        function=ToolCall.FunctionBody(name="bash", arguments='{"command": "ls -la"}'),
     )
-    _test_serde(msg)
+    _test_serde(semantic_call)
+
+    msg = ToolCallPart(
+        arguments_part="}",
+        name_part=None,
+        stream_index=2,
+        stream_call_id="call_123",
+    )
+    serialized_part = serialize_wire_message(msg)
+    assert serialized_part == snapshot({"type": "ToolCallPart", "payload": {"arguments_part": "}"}})
+    semantic_part = deserialize_wire_message(serialized_part)
+    assert semantic_part == ToolCallPart(arguments_part="}")
+    _test_serde(semantic_part)
 
     msg = ToolResult(
         tool_call_id="call_123",

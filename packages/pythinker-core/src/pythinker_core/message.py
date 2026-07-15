@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import Any, ClassVar, Literal, cast, override
 
-from pydantic import BaseModel, GetCoreSchemaHandler, field_serializer, field_validator
+from pydantic import BaseModel, Field, GetCoreSchemaHandler, field_serializer, field_validator
 from pydantic_core import core_schema
 
 from pythinker_core.utils.typing import JsonType
@@ -198,6 +198,7 @@ class ToolCall(BaseModel, MergeableMixin):
     """The function body of the tool call."""
     extras: dict[str, JsonType] | None = None
     """Extra information about the tool call."""
+    stream_index: int | None = Field(default=None, exclude=True, repr=False)
 
     @override
     def merge_in_place(self, other: Any) -> bool:
@@ -215,6 +216,9 @@ class ToolCallPart(BaseModel, MergeableMixin):
 
     arguments_part: str | None = None
     """A part of the arguments of the tool call."""
+    name_part: str | None = Field(default=None, exclude=True, repr=False)
+    stream_index: int | None = Field(default=None, exclude=True, repr=False)
+    stream_call_id: str | None = Field(default=None, exclude=True, repr=False)
 
     @override
     def merge_in_place(self, other: Any) -> bool:

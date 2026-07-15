@@ -630,6 +630,7 @@ class AnthropicStreamedMessage:
                                 yield ToolCall(
                                     id=block.id,
                                     function=ToolCall.FunctionBody(name=block.name, arguments=""),
+                                    stream_index=event.index,
                                 )
                             case "server_tool_use" | "web_search_tool_result":
                                 # ignore
@@ -650,7 +651,10 @@ class AnthropicStreamedMessage:
                             case "thinking_delta":
                                 yield ThinkPart(think=delta.thinking)
                             case "input_json_delta":
-                                yield ToolCallPart(arguments_part=delta.partial_json)
+                                yield ToolCallPart(
+                                    arguments_part=delta.partial_json,
+                                    stream_index=event.index,
+                                )
                             case "signature_delta":
                                 yield ThinkPart(think="", encrypted=delta.signature)
                             case "citations_delta":

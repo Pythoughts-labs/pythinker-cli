@@ -15,7 +15,6 @@ from loguru import logger
 from pythinker_core._generate import GenerateResult, generate
 from pythinker_core.chat_provider import (
     ChatProvider,
-    ChatProviderError,
     StreamedMessagePart,
     TokenUsage,
 )
@@ -74,8 +73,11 @@ async def step(
 
     tool_calls: list[ToolCall] = []
     tool_result_futures: dict[str, ToolResultFuture] = {}
+    tool_callbacks_active = True
 
-    def future_done_callback(future: ToolResultFuture):
+    def future_done_callback(future: ToolResultFuture) -> None:
+        if not tool_callbacks_active:
+            return
         if on_tool_result:
             try:
                 result = future.result()
@@ -83,7 +85,7 @@ async def step(
             except asyncio.CancelledError:
                 return
 
-    async def on_tool_call(tool_call: ToolCall):
+    async def on_tool_call(tool_call: ToolCall) -> None:
         tool_calls.append(tool_call)
         result = toolset.handle(tool_call)
 
@@ -105,12 +107,16 @@ async def step(
             on_message_part=on_message_part,
             on_tool_call=on_tool_call,
         )
-    except (ChatProviderError, asyncio.CancelledError):
-        # cancel all the futures to avoid hanging tasks
-        for future in tool_result_futures.values():
+    except BaseException:
+        # A later terminal dispatch can fail after earlier work was accepted. Deactivate
+        # publication before touching callbacks/tasks: already-queued callbacks cannot be
+        # retracted by remove_done_callback().
+        tool_callbacks_active = False
+        futures = list(tool_result_futures.values())
+        for future in futures:
             future.remove_done_callback(future_done_callback)
             future.cancel()
-        await asyncio.gather(*tool_result_futures.values(), return_exceptions=True)
+        await asyncio.gather(*futures, return_exceptions=True)
         raise
 
     return StepResult(

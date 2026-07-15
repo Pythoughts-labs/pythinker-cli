@@ -157,6 +157,44 @@ class ChatProviderError(Exception):
         super().__init__(message)
 
 
+type StreamProtocolErrorCategory = Literal[
+    "ambiguous_fragment",
+    "conflicting_identity",
+    "conflicting_name",
+    "missing_name",
+    "mixed_correlation",
+    "orphan_fragment",
+    "terminal_failure",
+    "truncated_tool_call",
+]
+
+
+class APIStreamProtocolError(ChatProviderError):
+    """A provider-neutral streamed-message correlation failure."""
+
+    category: StreamProtocolErrorCategory
+    response_id: str | None
+    stream_index: int | None
+    call_id: str | None
+    output_published: bool
+
+    def __init__(
+        self,
+        category: StreamProtocolErrorCategory,
+        *,
+        response_id: str | None = None,
+        stream_index: int | None = None,
+        call_id: str | None = None,
+        output_published: bool = False,
+    ) -> None:
+        super().__init__(f"Stream protocol error: {category}")
+        self.category = category
+        self.response_id = response_id
+        self.stream_index = stream_index
+        self.call_id = call_id
+        self.output_published = output_published
+
+
 class APIConnectionError(ChatProviderError):
     """The error raised when the API connection fails."""
 

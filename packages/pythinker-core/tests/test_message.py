@@ -7,6 +7,7 @@ from pythinker_core.message import (
     TextPart,
     ThinkPart,
     ToolCall,
+    ToolCallPart,
     VideoURLPart,
 )
 
@@ -61,6 +62,28 @@ def test_message_with_tool_calls():
         }
     )
     assert Message.model_validate(dumped) == message
+
+
+def test_tool_call_correlation_metadata_is_excluded_from_serialization():
+    call = ToolCall(
+        id="call_1",
+        function=ToolCall.FunctionBody(name="read", arguments="{}"),
+        stream_index=3,
+    )
+    part = ToolCallPart(
+        arguments_part="{}",
+        name_part="read",
+        stream_index=3,
+        stream_call_id="call_1",
+    )
+
+    assert call.model_dump() == {
+        "type": "function",
+        "id": "call_1",
+        "function": {"name": "read", "arguments": "{}"},
+        "extras": None,
+    }
+    assert part.model_dump() == {"arguments_part": "{}"}
 
 
 def test_message_with_no_content():

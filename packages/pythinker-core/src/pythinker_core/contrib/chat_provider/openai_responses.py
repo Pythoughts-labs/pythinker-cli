@@ -7,8 +7,15 @@ import httpx
 from openai import AsyncStream, OpenAIError
 from openai.types.responses import (
     Response,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseErrorEvent,
+    ResponseFailedEvent,
+    ResponseFunctionCallArgumentsDeltaEvent,
+    ResponseIncompleteEvent,
     ResponseInputItemParam,
     ResponseInputParam,
+    ResponseOutputItemAddedEvent,
     ResponseOutputMessageParam,
     ResponseOutputTextParam,
     ResponseStreamEvent,
@@ -455,13 +462,16 @@ def _map_audio_url_to_file_content(url: str) -> ResponseInputFileContentParam | 
 def _responses_finish_reason(response: Response) -> str | None:
     """Map a Responses API terminal state to the loop's OpenAI-compatible finish reason.
 
-    The Responses API marks an output-token-capped reply with ``status='incomplete'`` and
-    ``incomplete_details.reason='max_output_tokens'``; surface that as ``'length'`` so the
-    loop's truncation recovery fires. Other terminal statuses pass through unchanged.
+    The Responses API marks an incomplete reply with a machine-readable reason. Normalize
+    output-token caps and content filtering to the finish reasons used by callers. Other terminal
+    statuses, including failed and cancelled, pass through unchanged.
     """
     details = response.incomplete_details
-    if details is not None and details.reason == "max_output_tokens":
-        return "length"
+    if response.status == "incomplete" and details is not None:
+        if details.reason == "max_output_tokens":
+            return "length"
+        if details.reason == "content_filter":
+            return "content_filter"
     return response.status
 
 
@@ -537,36 +547,42 @@ class OpenAIResponsesStreamedMessage:
         """Convert streaming Responses events into message parts."""
         try:
             async for chunk in response:
-                if chunk.type == "response.output_text.delta":
+                if isinstance(chunk, ResponseCreatedEvent):
+                    self._id = chunk.response.id
+                elif chunk.type == "response.output_text.delta":
                     yield TextPart(text=chunk.delta)
-                elif chunk.type == "response.output_item.added":
+                elif isinstance(chunk, ResponseOutputItemAddedEvent):
                     item = chunk.item
-                    self._id = item.id
                     if item.type == "function_call":
                         yield ToolCall(
-                            id=item.call_id or str(uuid.uuid4()),
+                            id=item.call_id or "",
                             function=ToolCall.FunctionBody(
                                 name=item.name,
                                 arguments=item.arguments,
                             ),
+                            stream_index=chunk.output_index,
                         )
                 elif chunk.type == "response.output_item.done":
                     item = chunk.item
-                    self._id = item.id
                     if item.type == "reasoning":
                         yield ThinkPart(think="", encrypted=item.encrypted_content)
-                elif chunk.type == "response.function_call_arguments.delta":
-                    yield ToolCallPart(arguments_part=chunk.delta)
+                elif isinstance(chunk, ResponseFunctionCallArgumentsDeltaEvent):
+                    yield ToolCallPart(
+                        arguments_part=chunk.delta,
+                        stream_index=chunk.output_index,
+                    )
                 elif chunk.type == "response.reasoning_summary_part.added":
                     yield ThinkPart(think="")
                 elif chunk.type == "response.reasoning_summary_text.delta":
                     yield ThinkPart(think=chunk.delta)
-                elif chunk.type == "response.completed":
-                    self._usage = chunk.response.usage
-                    self._finish_reason = _responses_finish_reason(chunk.response)
-                elif chunk.type == "response.incomplete":
-                    # The terminal incomplete event carries the max_output_tokens truncation
-                    # (and final usage/status); kept separate so the event type narrows.
+                elif isinstance(chunk, ResponseErrorEvent):
+                    self._finish_reason = "failed"
+                    return
+                elif isinstance(
+                    chunk,
+                    (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+                ):
+                    self._id = chunk.response.id
                     self._usage = chunk.response.usage
                     self._finish_reason = _responses_finish_reason(chunk.response)
         except (OpenAIError, httpx.HTTPError) as e:

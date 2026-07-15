@@ -18,6 +18,7 @@ from pythinker_core.chat_provider import (
     APIConnectionError,
     APIEmptyResponseError,
     APIStatusError,
+    APIStreamProtocolError,
     APITimeoutError,
     RetryableChatProvider,
     ThinkingEffort,
@@ -2968,6 +2969,8 @@ class PythinkerSoul:
             return not bool(getattr(exception, "_pythinker_recovery_exhausted", False))
         if isinstance(exception, APIEmptyResponseError):
             return True
+        if isinstance(exception, APIStreamProtocolError):
+            return not exception.output_published
         if not isinstance(exception, APIStatusError):
             return False
         if exception.status_code == 429 and _is_hard_usage_limit(exception):

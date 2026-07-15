@@ -457,6 +457,7 @@ class PythinkerStreamedMessage:
         self,
         response: AsyncIterator[ChatCompletionChunk],
     ) -> AsyncIterator[StreamedMessagePart]:
+        started_tool_call_indices: set[int] = set()
         try:
             async for chunk in response:
                 if chunk.id:
@@ -483,24 +484,36 @@ class PythinkerStreamedMessage:
 
                 # convert tool calls
                 for tool_call in delta.tool_calls or []:
-                    if not tool_call.function:
+                    function = tool_call.function
+                    if function is None:
+                        if tool_call.id is not None:
+                            yield ToolCallPart(
+                                stream_index=tool_call.index,
+                                stream_call_id=tool_call.id,
+                            )
                         continue
 
-                    if tool_call.function.name:
+                    if tool_call.index not in started_tool_call_indices:
+                        started_tool_call_indices.add(tool_call.index)
                         yield ToolCall(
-                            id=tool_call.id or str(uuid.uuid4()),
+                            id=tool_call.id or "",
                             function=ToolCall.FunctionBody(
-                                name=tool_call.function.name,
-                                arguments=tool_call.function.arguments,
+                                name=function.name or "",
+                                arguments=function.arguments,
                             ),
+                            stream_index=tool_call.index,
                         )
-                    elif tool_call.function.arguments:
+                    elif (
+                        tool_call.id is not None
+                        or function.name is not None
+                        or function.arguments is not None
+                    ):
                         yield ToolCallPart(
-                            arguments_part=tool_call.function.arguments,
+                            arguments_part=function.arguments,
+                            name_part=function.name,
+                            stream_index=tool_call.index,
+                            stream_call_id=tool_call.id,
                         )
-                    else:
-                        # skip empty tool calls
-                        pass
         except (OpenAIError, httpx.HTTPError) as e:
             raise convert_error(e) from e
 
