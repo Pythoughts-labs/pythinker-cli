@@ -466,7 +466,7 @@ def _responses_finish_reason(response: Response) -> str | None:
     statuses, including failed and cancelled, pass through unchanged.
     """
     details = response.incomplete_details
-    if details is not None:
+    if response.status == "incomplete" and details is not None:
         if details.reason == "max_output_tokens":
             return "length"
         if details.reason == "content_filter":

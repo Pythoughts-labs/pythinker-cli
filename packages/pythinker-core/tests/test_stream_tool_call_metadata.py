@@ -304,6 +304,24 @@ async def test_responses_normalizes_incomplete_failed_and_cancelled_reasons(
 
 
 @pytest.mark.parametrize(
+    ("response", "expected_reason"),
+    [
+        (_response(status="failed", incomplete_reason="max_output_tokens"), "failed"),
+        (_response(status="cancelled", incomplete_reason="content_filter"), "cancelled"),
+    ],
+)
+async def test_responses_explicit_status_takes_precedence_over_incomplete_details(
+    response: Response, expected_reason: str
+) -> None:
+    stream = OpenAIResponsesStreamedMessage(response)
+
+    async for _ in stream:
+        pass
+
+    assert stream.finish_reason == expected_reason
+
+
+@pytest.mark.parametrize(
     ("stop_reason", "expected_reason"),
     [("pause_turn", "pause_turn"), ("refusal", "refusal")],
 )
