@@ -29,7 +29,10 @@ from pythinker_core.chat_provider.openai_common import (
     thinking_effort_to_reasoning_effort,
     tool_to_openai,
 )
-from pythinker_core.contrib.chat_provider.common import ToolMessageConversion
+from pythinker_core.contrib.chat_provider.common import (
+    ReasoningReplayMode,
+    ToolMessageConversion,
+)
 from pythinker_core.message import ContentPart, Message, TextPart, ThinkPart, ToolCall, ToolCallPart
 from pythinker_core.tooling import Tool
 
@@ -76,6 +79,9 @@ class OpenAILegacy:
         base_url: str | None = None,
         stream: bool = True,
         reasoning_key: str | None = None,
+        reasoning_replay_mode: ReasoningReplayMode | None = None,
+        auto_reasoning_effort: bool = True,
+        tool_stream: bool = False,
         tool_message_conversion: ToolMessageConversion | None = None,
         **client_kwargs: Any,
     ):
@@ -98,6 +104,11 @@ class OpenAILegacy:
         """The underlying `AsyncOpenAI` client."""
         self._reasoning_effort: ReasoningEffort | Omit = omit
         self._reasoning_key = reasoning_key
+        self._reasoning_replay_mode: ReasoningReplayMode = reasoning_replay_mode or (
+            "strict_synthetic" if _is_strict_interleaved_model(model) else "tool_calls"
+        )
+        self._auto_reasoning_effort = auto_reasoning_effort
+        self._tool_stream = tool_stream
         self._tool_message_conversion: ToolMessageConversion | None = tool_message_conversion
         self._generation_kwargs: OpenAILegacy.GenerationKwargs = {}
 
@@ -124,14 +135,22 @@ class OpenAILegacy:
         messages.extend(self._convert_message(message) for message in history)
 
         generation_kwargs: dict[str, Any] = {}
-        generation_kwargs.update(self._generation_kwargs)
+        generation_kwargs.update(copy.deepcopy(self._generation_kwargs))
+        if self._tool_stream and tools:
+            extra_body = dict(generation_kwargs.get("extra_body") or {})
+            extra_body["tool_stream"] = True
+            generation_kwargs["extra_body"] = extra_body
 
         reasoning_effort = self._reasoning_effort
         # Auto-enable reasoning_effort when the history contains ThinkPart but reasoning
         # was not explicitly configured. This prevents server validation errors from APIs
         # (e.g. One API) that require reasoning_effort when messages contain reasoning_content.
         # See: https://github.com/Pythoughts-labs/pythinker-code/issues/1616
-        if isinstance(reasoning_effort, Omit) and self._reasoning_key:
+        if (
+            self._auto_reasoning_effort
+            and isinstance(reasoning_effort, Omit)
+            and self._reasoning_key
+        ):
             has_think_part = any(
                 isinstance(part, ThinkPart) for message in history for part in message.content
             )
@@ -213,19 +232,15 @@ class OpenAILegacy:
         else:
             message.content = content
         dumped_message = message.model_dump(exclude_none=True)
-        if self._reasoning_key:
-            # Kimi-style interleaved-thinking providers require consistent
-            # reasoning replay metadata on assistant history. At a minimum
-            # tool-call turns need the field, and known strict models are
-            # safest when all assistant turns include it, even if empty.
-            has_tool_calls = message.role == "assistant" and bool(message.tool_calls)
-            strict_interleaved = message.role == "assistant" and _is_strict_interleaved_model(
-                self.model
-            )
-            if reasoning_content or has_tool_calls or strict_interleaved:
-                if strict_interleaved and not reasoning_content:
-                    reasoning_content = message.extract_text() or "[reasoning unavailable]"
-                dumped_message[self._reasoning_key] = reasoning_content
+        if self._reasoning_key and reasoning_content:
+            dumped_message[self._reasoning_key] = reasoning_content
+        elif self._reasoning_key and message.role == "assistant":
+            if self._reasoning_replay_mode == "tool_calls" and message.tool_calls:
+                dumped_message[self._reasoning_key] = ""
+            elif self._reasoning_replay_mode == "strict_synthetic":
+                dumped_message[self._reasoning_key] = (
+                    message.extract_text() or "[reasoning unavailable]"
+                )
         return cast(ChatCompletionMessageParam, dumped_message)
 
 
