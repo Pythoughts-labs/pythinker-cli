@@ -9,11 +9,14 @@ sent.
 
 from __future__ import annotations
 
-from pythinker_code.config import LLMModel
+from pydantic import SecretStr
+
+from pythinker_code.config import LLMModel, LLMProvider
 from pythinker_code.llm import (
     available_model_thinking_levels,
     openai_gpt_reasoning_levels,
 )
+from pythinker_code.provider_compatibility import resolve_provider_compatibility
 from pythinker_code.thinking import clamp_thinking_effort
 
 
@@ -80,6 +83,23 @@ def test_available_model_thinking_levels_non_gpt_keeps_full_ladder() -> None:
         "high",
         "xhigh",
     )
+
+
+def test_available_model_thinking_levels_prefers_profile_override() -> None:
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.z.ai/api/paas/v4",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="managed:z-ai-api",
+        model="glm-4.7",
+        max_context_size=204_800,
+        capabilities={"thinking"},
+    )
+    profile = resolve_provider_compatibility(model.provider, provider, model)
+
+    assert available_model_thinking_levels(model, {"thinking"}, profile) == ("off", "high")
 
 
 def test_unsupported_effort_clamps_up_to_supported() -> None:

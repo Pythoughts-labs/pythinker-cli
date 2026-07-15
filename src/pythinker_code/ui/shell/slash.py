@@ -305,12 +305,24 @@ async def model(app: Shell, args: str):
 
     # Step 2: Determine thinking effort
     capabilities = derive_model_capabilities(selected_model_cfg)
-    from pythinker_code.llm import available_model_thinking_levels
+    from pythinker_code.llm import (
+        available_model_thinking_levels,
+        resolve_provider_compatibility,
+    )
     from pythinker_code.thinking import clamp_thinking_effort
     from pythinker_code.ui.shell.selectors.thinking import ThinkingLevel, run_thinking_selector
 
     native_thinking = model_uses_native_thinking(capabilities)
-    available_efforts = available_model_thinking_levels(selected_model_cfg, capabilities)
+    compatibility = resolve_provider_compatibility(
+        selected_model_cfg.provider,
+        selected_provider,
+        selected_model_cfg,
+    )
+    available_efforts = available_model_thinking_levels(
+        selected_model_cfg,
+        capabilities,
+        compatibility,
+    )
     if native_thinking or available_efforts == ("off",):
         new_effort = "off"
     else:
