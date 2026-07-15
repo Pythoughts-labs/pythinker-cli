@@ -15,10 +15,13 @@ from pythinker_code.ui.shell.usage_adapters.opencode_go import OpenCodeGoAdapter
 from pythinker_code.ui.shell.usage_adapters.openrouter import OpenRouterAdapter
 from pythinker_code.ui.shell.usage_adapters.pythinker import PythinkerAdapter
 from pythinker_code.ui.shell.usage_adapters.pythinker_ai import PythinkerAIAdapter
+from pythinker_code.ui.shell.usage_adapters.z_ai import ZaiUsageAdapter
 
 _pythinker_ai_adapter = PythinkerAIAdapter()
 _minimax_adapter = MiniMaxAdapter()
 _opencode_go_adapter = OpenCodeGoAdapter()
+_zai_coding_adapter = ZaiUsageAdapter("z-ai-coding", "Z.AI Coding Plan")
+_zai_api_adapter = ZaiUsageAdapter("z-ai-api", "Z.AI API")
 
 # A single provider can be registered under several `managed:<platform_id>`
 # keys when the chat path is exposed through both Anthropic-compat and
@@ -47,6 +50,8 @@ ADAPTERS: dict[str, UsageAdapter] = {
     # different host).
     PythinkerAIAdapter.platform_id: _pythinker_ai_adapter,
     "pythinker_ai-cn": _pythinker_ai_adapter,
+    "z-ai-coding": _zai_coding_adapter,
+    "z-ai-api": _zai_api_adapter,
 }
 
 __all__ = ["ADAPTERS", "UsageAdapter", "UsageReport", "UsageRow"]
