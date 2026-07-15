@@ -9,7 +9,7 @@ instead of burning steps until the blunt `max_steps_per_turn` cap.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import Self
 from unittest.mock import patch
@@ -18,7 +18,15 @@ import pytest
 from pydantic import BaseModel
 from pythinker_core.chat_provider import StreamedMessagePart, ThinkingEffort, TokenUsage
 from pythinker_core.message import Message, TextPart, ToolCall
-from pythinker_core.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
+from pythinker_core.tooling import (
+    CallableTool2,
+    ToolBatchContext,
+    ToolBatchHandle,
+    ToolError,
+    ToolOk,
+    ToolResult,
+    ToolReturnValue,
+)
 from pythinker_core.tooling.simple import SimpleToolset
 
 from pythinker_code.llm import LLM
@@ -163,6 +171,41 @@ def _make_soul(
     context = Context(file_backend=tmp_path / "history.jsonl")
     soul = PythinkerSoul(agent, context=context)
     return context, soul
+
+
+class _SummaryOnlyToolset(PythinkerToolset):
+    """Fail if the soul reaches through the batch result into facade execution state."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[ToolBatchContext] = []
+
+    def begin_step(
+        self,
+        previous_calls: list[tuple[str, str]],
+        *,
+        step_no: int = 0,
+        turn_id: str = "",
+    ) -> None:
+        del previous_calls, step_no, turn_id
+        raise AssertionError("PythinkerSoul must pass ToolBatchContext to core")
+
+    def end_step(self) -> list[tuple[str, str]]:
+        raise AssertionError("PythinkerSoul must read StepResult.tool_execution_summary")
+
+    @property
+    def consecutive_repeat_count(self) -> int:
+        raise AssertionError("PythinkerSoul must read StepResult.tool_execution_summary")
+
+    def handle_batch(
+        self,
+        tool_calls: Sequence[ToolCall],
+        context: ToolBatchContext,
+        *,
+        on_tool_result: Callable[[ToolResult], None] | None = None,
+    ) -> ToolBatchHandle:
+        self.contexts.append(context)
+        return super().handle_batch(tool_calls, context, on_tool_result=on_tool_result)
 
 
 def _make_soul_with_pythinker_toolset(
@@ -499,6 +542,39 @@ async def test_consecutive_identical_calls_yield_stuck_outcome(
     assert provider.generate_attempts == 3
     assert record_turn.call_args.kwargs["stop_reason"] == "stuck"
     assert "identical" in context.history[-1].extract_text(" ").lower()
+
+
+@pytest.mark.asyncio
+async def test_soul_routes_execution_state_only_through_batch_context_and_summary(
+    runtime: Runtime,
+    tmp_path: Path,
+) -> None:
+    runtime.config.loop_control.max_consecutive_identical_calls = 3
+    provider = _ScriptedToolCallProvider(["Ok", "Ok", None])
+    llm = LLM(chat_provider=provider, max_context_size=100_000, capabilities=set())
+    runtime = _rebuild_runtime_with_llm(runtime, llm)
+    toolset = _SummaryOnlyToolset()
+    toolset.add(_OkTool())
+    soul = PythinkerSoul(
+        Agent(
+            name="Batch Context Test Agent",
+            system_prompt="Batch context test prompt.",
+            toolset=toolset,
+            runtime=runtime,
+        ),
+        context=Context(file_backend=tmp_path / "batch-context.jsonl"),
+    )
+
+    await run_soul(soul, "go", _drain_ui_messages, asyncio.Event())
+
+    assert [context.step_no for context in toolset.contexts] == [1, 2, 3]
+    assert len({context.turn_id for context in toolset.contexts}) == 1
+    assert toolset.contexts[0].turn_id
+    assert [context.prior_call_fingerprints for context in toolset.contexts] == [
+        (),
+        (("Ok", "{}"),),
+        (("Ok", "{}"),),
+    ]
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pythinker_core import StepResult
 from pythinker_core.message import Message, ToolCall
-from pythinker_core.tooling import ToolResult
+from pythinker_core.tooling import ToolOk, ToolResult
 from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.soul.pythinkersoul as pythinkersoul_module
@@ -268,6 +268,54 @@ async def test_step_persists_assistant_message_when_tool_results_cancelled(
         f"tool message has wrong tool_call_id; "
         f"expected={tool_call.id}, got={tool_messages[0].tool_call_id}"
     )
+
+
+async def test_step_interruption_uses_completed_result_snapshot(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    done_call = ToolCall(
+        id="call-done",
+        function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
+    )
+    pending_call = ToolCall(
+        id="call-pending",
+        function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
+    )
+    done_future = asyncio.get_running_loop().create_future()
+    done_future.set_result(
+        ToolResult(tool_call_id=done_call.id, return_value=ToolOk(output="real output"))
+    )
+    pending_future = _EnteredFuture()
+
+    async def fake_pythinker_core_step(chat_provider, system_prompt, toolset, history, **kwargs):
+        return StepResult(
+            id="step-partial",
+            message=Message(role="assistant", content=[TextPart(text="I'll use tools.")]),
+            usage=None,
+            tool_calls=[done_call, pending_call],
+            _tool_result_futures={
+                done_call.id: done_future,
+                pending_call.id: pending_future,
+            },
+        )
+
+    monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
+
+    step_task = asyncio.create_task(soul._step())
+    await pending_future.entered.wait()
+    step_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await step_task
+
+    tool_messages = {
+        message.tool_call_id: message for message in soul.context.history if message.role == "tool"
+    }
+    assert "real output" in tool_messages[done_call.id].extract_text(" ")
+    assert "interrupted by user" in tool_messages[pending_call.id].extract_text(" ").lower()
 
 
 async def test_step_persists_markers_when_cancelled_twice(
