@@ -20,6 +20,7 @@ from pythinker_core.tooling import (
     ToolBatchContext,
     ToolBatchHandle,
     ToolBatchSummary,
+    ToolCancellationTimeoutError,
     ToolError,
     ToolResultFuture,
 )
@@ -239,6 +240,8 @@ def _emit_tool_use_skipped_if_opted_in(
     )
 
 
+TOOL_CANCELLATION_TIMEOUT_SECONDS = 5.0
+
 _DEFAULT_MAX_CONCURRENT_READERS = 10
 """Cap on concurrent parallel-safe tool calls. A turn that fans out many readers
 (e.g. dozens of FetchURL) overlaps freely up to this bound rather than opening an
@@ -333,6 +336,34 @@ class ToolExecutionEngine:
         self._dedup_triggered = False
         self._step_no = 0
         self._turn_id = ""
+        self._poisoned_batches: set[_ExecutionBatch] = set()
+        self._late_drain_tasks: set[asyncio.Task[None]] = set()
+
+    @property
+    def poisoned(self) -> bool:
+        return bool(self._poisoned_batches)
+
+    def _ensure_healthy(self) -> None:
+        if self.poisoned:
+            raise ToolCancellationTimeoutError(
+                "Tool execution is unavailable while timed-out cancellation finishes"
+            )
+
+    def register_cancellation_timeout(self, batch: _ExecutionBatch) -> None:
+        if batch in self._poisoned_batches:
+            return
+        self._poisoned_batches.add(batch)
+
+        async def drain_late_batch() -> None:
+            try:
+                await batch.wait_until_drained()
+            finally:
+                self._poisoned_batches.discard(batch)
+                logger.info("Timed-out tool cancellation drained; tool execution recovered")
+
+        drain_task = asyncio.create_task(drain_late_batch())
+        self._late_drain_tasks.add(drain_task)
+        drain_task.add_done_callback(self._late_drain_tasks.discard)
 
     def begin_step(
         self,
@@ -471,6 +502,7 @@ class ToolExecutionEngine:
         return tuple(self.prepare(tool_call) for tool_call in tool_calls)
 
     def handle(self, tool_call: ToolCall) -> HandleResult:
+        self._ensure_healthy()
         if not self._step_started or self._step_closed:
             self.begin_step(())
         return self.dispatch(self.prepare(tool_call))
@@ -482,6 +514,7 @@ class ToolExecutionEngine:
         *,
         on_tool_result: Callable[[ToolResult], None] | None = None,
     ) -> ToolBatchHandle:
+        self._ensure_healthy()
         prepared = self.prepare_batch(tool_calls)
         if not self._step_started or self._step_closed:
             self.begin_step(
@@ -764,7 +797,10 @@ class _ExecutionBatch:
         self._source_futures: list[ToolResultFuture] = []
         self._watcher_tasks: list[asyncio.Task[ToolResult]] = []
         self._summary = ToolBatchSummary(finalized=False)
+        self._callbacks_active = True
+        self._settlement_task: asyncio.Task[None] | None = None
         self._supervisor = asyncio.create_task(self._run())
+        self._supervisor.add_done_callback(self._consume_supervisor_failure)
 
     @property
     def tool_calls(self) -> Sequence[ToolCall]:
@@ -778,10 +814,17 @@ class _ExecutionBatch:
     def summary(self) -> ToolBatchSummary:
         return self._summary
 
+    @staticmethod
+    def _consume_supervisor_failure(supervisor: asyncio.Task[list[ToolResult]]) -> None:
+        try:
+            supervisor.exception()
+        except asyncio.CancelledError:
+            return
+
     async def _watch(self, future: ToolResultFuture) -> ToolResult:
         result = await future
         self._completed_results[result.tool_call_id] = result
-        if self._on_tool_result is not None:
+        if self._callbacks_active and self._on_tool_result is not None:
             self._on_tool_result(result)
         return result
 
@@ -803,6 +846,7 @@ class _ExecutionBatch:
             ]
             return list(await asyncio.gather(*self._watcher_tasks))
         except BaseException:
+            self._callbacks_active = False
             for task in self._watcher_tasks:
                 task.cancel()
             for future in self._source_futures:
@@ -815,9 +859,51 @@ class _ExecutionBatch:
             raise
 
     async def results(self) -> list[ToolResult]:
-        return await self._supervisor
+        return await asyncio.shield(self._supervisor)
+
+    async def _wait_for_supervisor(self) -> None:
+        try:
+            await asyncio.shield(self._supervisor)
+        except BaseException:
+            if not self._supervisor.done():
+                raise
+            await asyncio.gather(self._supervisor, return_exceptions=True)
+
+    async def wait_until_drained(self) -> None:
+        await asyncio.gather(self._supervisor, return_exceptions=True)
+
+    async def _bounded_settlement(self, timeout: float) -> None:
+        self._callbacks_active = False
+        if not self._supervisor.done() and self._supervisor.cancelling() == 0:
+            self._supervisor.cancel()
+        try:
+            await asyncio.wait_for(self._wait_for_supervisor(), timeout=timeout)
+        except TimeoutError as error:
+            self._engine.register_cancellation_timeout(self)
+            logger.error(
+                "Tool cancellation timed out after {timeout:g}s; pausing new tool batches until "
+                "late work drains",
+                timeout=timeout,
+            )
+            raise ToolCancellationTimeoutError(
+                f"Tool execution cancellation did not settle within {timeout:g} seconds"
+            ) from error
 
     async def cancel_and_settle(self, *, timeout: float | None = None) -> None:
-        del timeout
-        self._supervisor.cancel()
-        await asyncio.gather(self._supervisor, return_exceptions=True)
+        effective_timeout = TOOL_CANCELLATION_TIMEOUT_SECONDS if timeout is None else timeout
+        if effective_timeout < 0:
+            raise ValueError("tool cancellation timeout cannot be negative")
+
+        settlement = self._settlement_task
+        if settlement is None:
+            settlement = asyncio.create_task(self._bounded_settlement(effective_timeout))
+            settlement.add_done_callback(self._consume_settlement_failure)
+            self._settlement_task = settlement
+        await asyncio.shield(settlement)
+
+    @staticmethod
+    def _consume_settlement_failure(settlement: asyncio.Task[None]) -> None:
+        try:
+            settlement.exception()
+        except asyncio.CancelledError:
+            return
