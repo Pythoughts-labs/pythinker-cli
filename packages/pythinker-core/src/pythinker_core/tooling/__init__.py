@@ -338,6 +338,8 @@ class ToolCancellationTimeoutError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ToolBatchContext:
+    """Immutable cross-step execution metadata supplied when a batch is created."""
+
     turn_id: str = ""
     step_no: int = 0
     prior_call_fingerprints: tuple[ToolCallFingerprint, ...] = ()
@@ -345,6 +347,8 @@ class ToolBatchContext:
 
 @dataclass(frozen=True, slots=True)
 class ToolBatchSummary:
+    """Final normalized call and deduplication state exposed by a batch handle."""
+
     current_call_fingerprints: tuple[ToolCallFingerprint, ...] = ()
     dedup_triggered: bool = False
     consecutive_identical_call_count: int = 0
@@ -353,6 +357,8 @@ class ToolBatchSummary:
 
 @runtime_checkable
 class ToolBatchHandle(Protocol):
+    """Supervises one exception-atomic terminal batch and its ordered results."""
+
     @property
     def tool_calls(self) -> Sequence[ToolCall]: ...
 
@@ -369,6 +375,8 @@ class ToolBatchHandle(Protocol):
 
 @runtime_checkable
 class BatchToolset(Protocol):
+    """Optional additive Toolset protocol for terminal batch dispatch."""
+
     def handle_batch(
         self,
         tool_calls: Sequence[ToolCall],

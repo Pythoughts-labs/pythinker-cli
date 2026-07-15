@@ -87,6 +87,22 @@ def test_cancellation_timeout_default_is_five_seconds() -> None:
     assert tool_execution.TOOL_CANCELLATION_TIMEOUT_SECONDS == 5.0
 
 
+@pytest.mark.parametrize("timeout", [-1.0, float("nan"), float("inf")])
+async def test_invalid_cancellation_timeout_does_not_cancel_work(timeout: float) -> None:
+    stubborn = CancellationIgnoringTool()
+    toolset = PythinkerToolset()
+    toolset.add(stubborn)
+    batch = toolset.handle_batch([_call("stubborn", "Stubborn")], ToolBatchContext())
+    await stubborn.started.wait()
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        await batch.cancel_and_settle(timeout=timeout)
+
+    assert not stubborn.cancel_seen.is_set()
+    stubborn.release.set()
+    assert [result.tool_call_id for result in await batch.results()] == ["stubborn"]
+
+
 async def test_timeout_poisons_new_batches_until_late_task_is_drained() -> None:
     stubborn = CancellationIgnoringTool()
     immediate = ImmediateTool()

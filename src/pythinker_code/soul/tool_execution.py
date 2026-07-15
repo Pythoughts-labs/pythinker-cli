@@ -6,6 +6,7 @@ import copy
 import difflib
 import hashlib
 import json
+import math
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
@@ -891,8 +892,8 @@ class _ExecutionBatch:
 
     async def cancel_and_settle(self, *, timeout: float | None = None) -> None:
         effective_timeout = TOOL_CANCELLATION_TIMEOUT_SECONDS if timeout is None else timeout
-        if effective_timeout < 0:
-            raise ValueError("tool cancellation timeout cannot be negative")
+        if not math.isfinite(effective_timeout) or effective_timeout < 0:
+            raise ValueError("tool cancellation timeout must be finite and non-negative")
 
         settlement = self._settlement_task
         if settlement is None:

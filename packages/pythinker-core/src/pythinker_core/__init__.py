@@ -285,13 +285,9 @@ class StepResult:
 
         completed: dict[str, ToolResult] = {}
         for tool_call_id, future in self._tool_result_futures.items():
-            if not future.done() or future.cancelled():
+            if not future.done() or future.cancelled() or future.exception() is not None:
                 continue
-            try:
-                result = future.result()
-            except BaseException:
-                continue
-            completed[tool_call_id] = result
+            completed[tool_call_id] = future.result()
         return completed
 
     @property
