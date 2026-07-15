@@ -2,6 +2,22 @@
 
 ## Active
 
+### Deterministic reviewer target resolution (2026-07-15)
+
+- [x] Reconcile the adoption ledger with current code and Git history.
+- [x] Select the narrow structured-target design; keep `/review` out of scope.
+- [ ] Review and approve
+      `docs/superpowers/specs/2026-07-15-review-target-resolution-design.md`.
+- [ ] Write the implementation plan with TDD and verification checkpoints.
+- [ ] Implement the approved plan in the isolated feature worktree.
+- [ ] Add the required `CHANGELOG.md` Unreleased entry.
+- [ ] Run focused tests, `make check-pythinker-code`, `make test-pythinker-code`, and final review.
+
+Acceptance: every fresh reviewer receives one pre-resolved authoritative Git target; invalid or
+empty explicit targets fail before child allocation; `Agent` and per-child `RunAgents` behavior is
+identical across foreground and background execution; generic Git context cannot contradict the
+resolved target; non-reviewer and resume behavior remains compatible.
+
 ### TUI thinking Markdown and activity motion (2026-07-11)
 
 - [x] Execute `docs/superpowers/plans/2026-07-11-tui-thinking-markdown-and-activity-motion.md`
