@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from inline_snapshot import snapshot
 from pydantic import SecretStr
 from pythinker_core.chat_provider.echo import EchoChatProvider
@@ -790,6 +791,32 @@ def test_create_llm_openai_legacy_glm_sends_provider_thinking_body():
     }
 
 
+@pytest.mark.parametrize(("thinking", "enabled"), [(False, False), (True, True)])
+def test_create_llm_self_hosted_qwen_uses_chat_template_thinking_toggle(
+    thinking: bool, enabled: bool
+) -> None:
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="http://localhost:8080/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="local",
+        model="Qwen3.6-35B-A3B",
+        max_context_size=262_144,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking=thinking)
+
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.chat_provider.thinking_effort is None
+    assert llm.chat_provider._generation_kwargs.get("extra_body") == {  # pyright: ignore[reportPrivateUsage]
+        "chat_template_kwargs": {"enable_thinking": enabled}
+    }
+
+
 def test_create_llm_openai_legacy_glm_sends_disabled_provider_thinking_body():
     provider = LLMProvider(
         type="openai_legacy",
@@ -894,6 +921,13 @@ def test_resolve_tool_result_mode_native_vs_compat_proxy():
         is None
     )
     assert resolve_tool_result_mode(api_family="openai", base_url="https://api.openai.com") is None
+    assert (
+        resolve_tool_result_mode(api_family="openai", base_url="https://api.openai.com/v1") is None
+    )
+    assert (
+        resolve_tool_result_mode(api_family="openai", base_url="https://proxy.example/v1")
+        == "extract_text"
+    )
     # Anthropic-compatible proxies (z.ai/GLM, MiniMax, Kimi) → flatten.
     assert (
         resolve_tool_result_mode(api_family="anthropic", base_url="https://api.z.ai/api/anthropic")
