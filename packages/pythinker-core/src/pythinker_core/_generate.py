@@ -51,10 +51,14 @@ async def generate(
     assembler = StreamMessageAssembler()
     output_published = False
 
-    logger.trace("Generating with history: {history}", history=history)
+    logger.trace(
+        "Generating with {history_count} history messages and {tool_count} tools",
+        history_count=len(history),
+        tool_count=len(tools),
+    )
     stream = await chat_provider.generate(system_prompt, tools, history)
     async for part in stream:
-        logger.trace("Received part: {part}", part=part)
+        logger.trace("Received stream part: {part_type}", part_type=type(part).__name__)
         if on_message_part:
             await callback(on_message_part, part.model_copy(deep=True))
             output_published = True

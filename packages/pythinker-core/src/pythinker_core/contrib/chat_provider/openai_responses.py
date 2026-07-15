@@ -9,6 +9,7 @@ from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseErrorEvent,
     ResponseFailedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseIncompleteEvent,
@@ -554,7 +555,7 @@ class OpenAIResponsesStreamedMessage:
                     item = chunk.item
                     if item.type == "function_call":
                         yield ToolCall(
-                            id=item.call_id or str(uuid.uuid4()),
+                            id=item.call_id or "",
                             function=ToolCall.FunctionBody(
                                 name=item.name,
                                 arguments=item.arguments,
@@ -574,6 +575,8 @@ class OpenAIResponsesStreamedMessage:
                     yield ThinkPart(think="")
                 elif chunk.type == "response.reasoning_summary_text.delta":
                     yield ThinkPart(think=chunk.delta)
+                elif isinstance(chunk, ResponseErrorEvent):
+                    self._finish_reason = "failed"
                 elif isinstance(
                     chunk,
                     (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),

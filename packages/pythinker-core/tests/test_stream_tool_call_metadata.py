@@ -19,6 +19,7 @@ from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseErrorEvent,
     ResponseFailedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionToolCall,
@@ -28,7 +29,12 @@ from openai.types.responses import (
 from openai.types.responses.response import IncompleteDetails
 
 from pythinker_core import generate
-from pythinker_core.chat_provider import StreamedMessage, StreamedMessagePart, ThinkingEffort
+from pythinker_core.chat_provider import (
+    APIStreamProtocolError,
+    StreamedMessage,
+    StreamedMessagePart,
+    ThinkingEffort,
+)
 from pythinker_core.chat_provider.pythinker import PythinkerStreamedMessage
 from pythinker_core.contrib.chat_provider.anthropic import AnthropicStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacyStreamedMessage
@@ -350,6 +356,101 @@ async def test_openai_responses_uses_output_index_and_semantic_call_id() -> None
             stream_call_id=None,
         ),
     ]
+
+
+async def test_openai_responses_empty_streamed_call_id_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_random_id() -> None:
+        raise AssertionError("streamed Responses call used random ID fallback")
+
+    monkeypatch.setattr(
+        "pythinker_core.contrib.chat_provider.openai_responses.uuid.uuid4",
+        reject_random_id,
+    )
+
+    async def generate_once() -> ToolCall:
+        events = _async_events(
+            ResponseCreatedEvent(
+                response=_response(response_id="response_1"),
+                sequence_number=0,
+                type="response.created",
+            ),
+            ResponseOutputItemAddedEvent(
+                item=ResponseFunctionToolCall(
+                    arguments="{}",
+                    call_id="",
+                    id="output_item",
+                    name="read",
+                    status="completed",
+                    type="function_call",
+                ),
+                output_index=3,
+                sequence_number=1,
+                type="response.output_item.added",
+            ),
+            ResponseCompletedEvent(
+                response=_response(response_id="response_1"),
+                sequence_number=2,
+                type="response.completed",
+            ),
+        )
+        stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+        result = await generate(_StaticStreamProvider(stream), "", [], [])
+        assert result.message.tool_calls is not None
+        return result.message.tool_calls[0]
+
+    first = await generate_once()
+    second = await generate_once()
+
+    assert first == second
+    assert first.id.startswith("call_")
+    assert first.function == ToolCall.FunctionBody(name="read", arguments="{}")
+
+
+async def test_openai_responses_error_event_blocks_tool_callback() -> None:
+    events = _async_events(
+        ResponseCreatedEvent(
+            response=_response(response_id="response_created"),
+            sequence_number=0,
+            type="response.created",
+        ),
+        ResponseOutputItemAddedEvent(
+            item=ResponseFunctionToolCall(
+                arguments="{}",
+                call_id="semantic_call",
+                id="output_item",
+                name="read",
+                status="in_progress",
+                type="function_call",
+            ),
+            output_index=0,
+            sequence_number=1,
+            type="response.output_item.added",
+        ),
+        ResponseErrorEvent(
+            code="server_error",
+            message="provider-private detail",
+            param=None,
+            sequence_number=2,
+            type="error",
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+    callbacks: list[ToolCall] = []
+
+    with pytest.raises(APIStreamProtocolError) as caught:
+        await generate(
+            _StaticStreamProvider(stream),
+            "",
+            [],
+            [],
+            on_tool_call=callbacks.append,
+        )
+
+    assert caught.value.category == "terminal_failure"
+    assert "provider-private detail" not in str(caught.value)
+    assert callbacks == []
 
 
 async def test_openai_responses_keeps_response_id_separate_from_item_id() -> None:

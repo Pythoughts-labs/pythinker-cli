@@ -70,8 +70,9 @@ class _ScriptedStream:
         if self._block_after_parts:
             self.entered_block.set()
             await self._never.wait()
-        if self._terminal_error is not None:
-            raise self._terminal_error
+        terminal_error = self._terminal_error
+        if terminal_error is not None:
+            raise terminal_error
 
     @property
     def id(self) -> str:
@@ -352,7 +353,7 @@ class _ImmediateThenCancelledToolset:
         self.handle_count += 1
         if self.handle_count == 1:
             return ToolResult(tool_call_id=tool_call.id, return_value=ToolOk(output="done"))
-        raise asyncio.CancelledError
+        raise asyncio.CancelledError()
 
 
 async def test_dispatch_rollback_suppresses_queued_completed_callback() -> None:
