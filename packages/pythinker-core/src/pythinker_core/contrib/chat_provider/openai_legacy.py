@@ -342,10 +342,13 @@ class OpenAILegacyStreamedMessage:
                                 name=tool_call.function.name,
                                 arguments=tool_call.function.arguments,
                             ),
+                            stream_index=tool_call.index,
                         )
                     elif tool_call.function.arguments:
                         yield ToolCallPart(
                             arguments_part=tool_call.function.arguments,
+                            stream_index=tool_call.index,
+                            stream_call_id=tool_call.id,
                         )
                     else:
                         # skip empty tool calls
