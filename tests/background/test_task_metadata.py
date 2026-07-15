@@ -48,6 +48,7 @@ async def test_create_agent_task_persists_orchestration_metadata(runtime, monkey
     assert view.spec.isolation == "worktree"
     assert view.spec.kind_payload is not None
     assert view.spec.kind_payload["dependencies"] == ["agent-a", "agent-b"]
+    assert view.spec.kind_payload["resolved_review_target"] is None
 
     task = runtime.background_tasks._live_agent_tasks.pop(view.spec.id)
     task.cancel()

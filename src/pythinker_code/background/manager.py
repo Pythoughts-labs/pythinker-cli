@@ -17,6 +17,7 @@ from pythinker_host.windows import windows_console_detach_flags
 from pythinker_code.config import BackgroundConfig
 from pythinker_code.notifications import NotificationEvent, NotificationManager
 from pythinker_code.session import Session
+from pythinker_code.subagents.review_target import ResolvedReviewTarget
 from pythinker_code.utils.logging import logger
 
 if TYPE_CHECKING:
@@ -336,6 +337,7 @@ class BackgroundTaskManager:
         dependencies: list[str] | None = None,
         budget_seconds: int | None = None,
         isolation: str | None = None,
+        resolved_review_target: ResolvedReviewTarget | None = None,
     ) -> TaskView:
         from .agent_runner import BackgroundAgentRunner
 
@@ -378,6 +380,11 @@ class BackgroundTaskManager:
                 "dependencies": list(dependencies or ()),
                 "budget_seconds": budget_seconds,
                 "isolation": isolation,
+                "resolved_review_target": (
+                    resolved_review_target.model_dump(mode="json")
+                    if resolved_review_target is not None
+                    else None
+                ),
             },
         )
         self._store.create_task(spec)
@@ -402,6 +409,7 @@ class BackgroundTaskManager:
                 timeout_s=effective_timeout,
                 resumed=resumed,
                 isolation=isolation,
+                resolved_review_target=resolved_review_target,
             ).run()
         )
         self._live_agent_tasks[task_id] = task

@@ -23,6 +23,10 @@ from pythinker_code.subagents.builder import SubagentBuilder
 from pythinker_code.subagents.core import SubagentRunSpec, prepare_soul
 from pythinker_code.subagents.models import AgentInstanceRecord, AgentLaunchSpec
 from pythinker_code.subagents.output import SubagentOutputWriter
+from pythinker_code.subagents.review_target import (
+    ResolvedReviewTarget,
+    revalidate_review_target_head,
+)
 from pythinker_code.subagents.store import SubagentStore
 from pythinker_code.subagents.usage import format_usage_lines, usage_extras
 from pythinker_code.utils.logging import logger
@@ -261,6 +265,7 @@ class ForegroundRunRequest:
     model: str | None
     resume: str | None
     fork_context: bool = False
+    resolved_review_target: ResolvedReviewTarget | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -329,6 +334,7 @@ class ForegroundSubagentRunner:
             prompt=req.prompt,
             resumed=resumed,
             fork_history=fork_history,
+            resolved_review_target=req.resolved_review_target,
         )
         self._store.update_instance(
             agent_id,
@@ -389,6 +395,11 @@ class ForegroundSubagentRunner:
                     prompt=req.prompt[:500],
                 ),
             )
+            if req.resolved_review_target is not None:
+                await revalidate_review_target_head(
+                    req.resolved_review_target,
+                    spec.work_dir_override or self._runtime.builtin_args.PYTHINKER_WORK_DIR,
+                )
 
             output_writer.stage("run_soul_start")
             final_response, failure = await run_with_summary_continuation(
@@ -462,6 +473,8 @@ class ForegroundSubagentRunner:
         if resumed and req.requested_type and req.requested_type != actual_type:
             lines.append(f"requested_subagent_type: {req.requested_type}")
         lines.append(f"actual_subagent_type: {actual_type}")
+        if req.resolved_review_target is not None:
+            lines.append(f"review_target: {req.resolved_review_target.hint}")
         lines.append("status: completed")
         # Surface this child's total LLM spend so the orchestrating parent can
         # budget effort across a fan-out instead of discovering it on the bill.

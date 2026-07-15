@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import signal
 import time
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pythinker_core.message import Message
@@ -21,6 +22,8 @@ from pythinker_code.notifications import NotificationDelivery, NotificationEvent
 from pythinker_code.soul.agent import Agent as SoulAgent
 from pythinker_code.soul.context import Context
 from pythinker_code.subagents import AgentLaunchSpec, AgentTypeDefinition, ToolPolicy
+from pythinker_code.subagents.core import SubagentRunSpec
+from pythinker_code.subagents.review_target import ResolvedReviewTarget, WorktreeChanges
 from pythinker_code.wire.types import TextPart
 
 
@@ -341,6 +344,124 @@ async def test_create_agent_task_persists_starting_state(runtime, monkeypatch):
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_create_agent_task_persists_review_target(runtime, monkeypatch) -> None:
+    async def _noop_runner(self) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "pythinker_code.background.agent_runner.BackgroundAgentRunner.run",
+        _noop_runner,
+    )
+    target = ResolvedReviewTarget(
+        requested_kind="commit",
+        requested_ref="abc",
+        kind="commit",
+        head_sha="f" * 40,
+        target_sha="a" * 40,
+        parent_shas=("b" * 40,),
+        commit_title="commit",
+        worktree_state="excluded",
+        prompt="<review-target>commit</review-target>",
+        hint="commit abc",
+    )
+    view = runtime.background_tasks.create_agent_task(
+        agent_id="areview1",
+        subagent_type="code-reviewer",
+        prompt="review it",
+        description="review commit",
+        tool_call_id="tool-review",
+        model_override=None,
+        resolved_review_target=target,
+    )
+    assert view.spec.kind_payload is not None
+    assert view.spec.kind_payload["prompt"] == "review it"
+    assert view.spec.kind_payload["resolved_review_target"] == target.model_dump(mode="json")
+    task = runtime.background_tasks._live_agent_tasks.pop(view.spec.id)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_background_runner_transports_original_prompt_and_target(
+    runtime,
+    monkeypatch,
+) -> None:
+    runtime.labor_market.add_builtin_type(
+        AgentTypeDefinition(
+            name="code-reviewer",
+            description="Test code reviewer.",
+            agent_file=runtime.subagent_store.root / "code-reviewer.yaml",
+            tool_policy=ToolPolicy(mode="inherit"),
+        )
+    )
+    runtime.subagent_store.create_instance(
+        agent_id="areviewbg",
+        description="review",
+        launch_spec=AgentLaunchSpec(
+            agent_id="areviewbg",
+            subagent_type="code-reviewer",
+            model_override=None,
+            effective_model=None,
+        ),
+    )
+    target = ResolvedReviewTarget(
+        requested_kind="base",
+        requested_ref="main",
+        kind="base",
+        head_sha="b" * 40,
+        base_ref="main",
+        base_sha="c" * 40,
+        merge_base_sha="a" * 40,
+        attempted_base_refs=("main",),
+        worktree_changes=WorktreeChanges(
+            staged=False,
+            unstaged=False,
+            untracked=False,
+        ),
+        worktree_state="live",
+        prompt="<review-target>runtime scope</review-target>",
+        hint="base main",
+    )
+    captured: list[SubagentRunSpec] = []
+
+    class _CapturedSpec(Exception):
+        pass
+
+    async def capture_prepare_soul(spec, runtime, builder, store, on_stage=None):
+        captured.append(spec)
+        raise _CapturedSpec
+
+    monkeypatch.setattr(
+        "pythinker_code.background.agent_runner.prepare_soul",
+        capture_prepare_soul,
+    )
+    monkeypatch.setattr(runtime.background_tasks, "_mark_task_running", Mock())
+    runner = BackgroundAgentRunner(
+        runtime=runtime,
+        manager=runtime.background_tasks,
+        task_id="agent-review-target",
+        agent_id="areviewbg",
+        subagent_type="code-reviewer",
+        prompt="original caller task",
+        model_override=None,
+        resolved_review_target=target,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_prepare_isolation_worktree",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(_CapturedSpec):
+        await runner._run_core(Mock())
+
+    assert len(captured) == 1
+    assert captured[0].prompt == "original caller task"
+    assert captured[0].resolved_review_target == target
 
 
 @pytest.mark.asyncio
