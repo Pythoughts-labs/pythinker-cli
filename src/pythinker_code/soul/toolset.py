@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import copy
 import difflib
-import hashlib
 import importlib
 import inspect
-import json
 import re
-import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
-from contextvars import ContextVar
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import timedelta
@@ -20,17 +15,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 
 from pythinker_core.tooling import (
     CallableTool,
-    CallableTool2,
     HandleResult,
     Tool,
+    ToolBatchContext,
+    ToolBatchHandle,
     ToolError,
     ToolOk,
     Toolset,
-)
-from pythinker_core.tooling.error import (
-    ToolNotFoundError,
-    ToolParseError,
-    ToolRuntimeError,
 )
 from pythinker_core.tooling.mcp import convert_mcp_content
 from pythinker_core.utils.typing import JsonType
@@ -38,7 +29,15 @@ from pythinker_host.path import HostPath
 
 from pythinker_code.exception import InvalidToolError, MCPRuntimeError
 from pythinker_code.hooks.engine import HookEngine
-from pythinker_code.telemetry.names import sanitize_telemetry_tool_name
+from pythinker_code.soul import tool_execution as _tool_execution
+from pythinker_code.soul.tool_execution import (
+    ReadWriteGate,
+    ToolCallKey,
+    ToolExecutionEngine,
+    ToolType,
+    get_current_tool_call_or_none,
+    tool_defers_execution_started,
+)
 from pythinker_code.tools import SkipThisTool
 from pythinker_code.utils.logging import logger
 from pythinker_code.wire.types import (
@@ -50,10 +49,8 @@ from pythinker_code.wire.types import (
     TextPart,
     ToolCall,
     ToolCallRequest,
-    ToolExecutionStarted,
     ToolResult,
     ToolReturnValue,
-    ToolUseSkipped,
     VideoURLPart,
 )
 
@@ -66,97 +63,18 @@ if TYPE_CHECKING:
 
     from pythinker_code.soul.agent import Runtime
 
-current_tool_call = ContextVar[ToolCall | None]("current_tool_call", default=None)
-_current_tool_execution_started_ids: ContextVar[set[str] | None] = ContextVar(
-    "current_tool_execution_started_ids", default=None
-)
+current_tool_call = _tool_execution.current_tool_call
+emit_current_tool_execution_started = _tool_execution.emit_current_tool_execution_started
+get_session_id = _tool_execution.get_session_id
+set_session_id = _tool_execution.set_session_id
+_ReadWriteGate = ReadWriteGate
+_tool_defers_execution_started = tool_defers_execution_started
 
 # Per-server timeout for closing MCP clients during teardown, so one hung client
 # cannot block cleanup of the rest (mcpext-3).
 _MCP_CLOSE_TIMEOUT_S = 5.0
 
-_current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
 _MCP_LOG_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-
-
-def set_session_id(sid: str) -> None:
-    _current_session_id.set(sid)
-
-
-def get_session_id() -> str:
-    return _current_session_id.get()
-
-
-def _get_session_id() -> str:
-    return _current_session_id.get()
-
-
-def get_current_tool_call_or_none() -> ToolCall | None:
-    """
-    Get the current tool call or None.
-    Expect to be not None when called from a `__call__` method of a tool.
-    """
-    return current_tool_call.get()
-
-
-def emit_current_tool_execution_started() -> None:
-    """Emit ToolExecutionStarted once for the current tool call, if wire is active."""
-    tool_call = get_current_tool_call_or_none()
-    if tool_call is None:
-        return
-
-    started_ids = _current_tool_execution_started_ids.get()
-    if started_ids is None:
-        started_ids = set[str]()
-        _current_tool_execution_started_ids.set(started_ids)
-    if tool_call.id in started_ids:
-        return
-    started_ids.add(tool_call.id)
-
-    try:
-        from pythinker_code.soul import get_wire_or_none
-
-        if wire := get_wire_or_none():
-            wire.soul_side.send(ToolExecutionStarted(tool_call_id=tool_call.id))
-    except Exception as exc:  # noqa: BLE001 - lifecycle events must not break tool execution
-        logger.debug(
-            "Failed to emit tool execution start: {tool_name} (call_id={call_id}): {error}",
-            tool_name=tool_call.function.name,
-            call_id=tool_call.id,
-            error=exc,
-        )
-
-
-def _emit_tool_use_skipped(
-    *,
-    tool_call_id: str,
-    tool_name: str,
-    reason: Literal["dedup", "policy", "interrupt", "concurrent_inflight"],
-    resumed: bool = False,
-) -> None:
-    try:
-        from pythinker_code.soul import get_wire_or_none
-
-        if wire := get_wire_or_none():
-            wire.soul_side.send(
-                ToolUseSkipped(
-                    tool_call_id=tool_call_id,
-                    tool_name=tool_name,
-                    reason=reason,
-                    resumed=resumed,
-                )
-            )
-    except Exception as exc:  # noqa: BLE001 - observability must not break tool execution
-        logger.debug(
-            "Failed to emit tool skipped event: {tool_name} (call_id={call_id}): {error}",
-            tool_name=tool_name,
-            call_id=tool_call_id,
-            error=exc,
-        )
-
-
-def _tool_defers_execution_started(tool: ToolType) -> bool:
-    return bool(getattr(tool, "emits_tool_execution_started_after_approval", False))
 
 
 def _is_external_side_effect_tool(tool: ToolType) -> bool:
@@ -367,172 +285,10 @@ class McpToolFilter:
         return self.enabled is None or tool_name in self.enabled
 
 
-type ToolType = CallableTool | CallableTool2[Any]
-type ToolCallKey = tuple[str, str]
-
-
 if TYPE_CHECKING:
 
     def type_check(pythinker_toolset: PythinkerToolset):
         _: Toolset = pythinker_toolset
-
-
-_REMINDER_TEXT_1 = (
-    "\n\n<system-reminder>\n"
-    "You are repeating the exact same tool call with identical parameters."
-    " Please carefully analyze the previous result. If the task is not yet complete,"
-    " try a different method or parameters instead of repeating the same call."
-    "\n</system-reminder>"
-)
-
-TOOL_USE_SKIPPED_REASONS = frozenset({"dedup", "policy", "interrupt", "concurrent_inflight"})
-
-
-def _make_reminder_text_2(tool_name: str, repeat_count: int, canonical_args: str) -> str:
-    # Echo only a bounded preview of the arguments: large-payload tools
-    # (WriteFile, MultiEdit) would otherwise re-inject the whole body into
-    # context on every repeat — defeating the reminder by inflating tokens.
-    # Exact identity is preserved by the args_hash in the dedup telemetry.
-    args_limit = 256
-    if len(canonical_args) > args_limit:
-        dropped = len(canonical_args) - args_limit
-        args_preview = f"{canonical_args[:args_limit]}... [truncated {dropped} chars]"
-    else:
-        args_preview = canonical_args
-    return (
-        "\n\n<system-reminder>\n"
-        "You have repeatedly called the same tool with identical parameters many times.\n"
-        "Repeated tool call detected:\n"
-        f"- tool: {tool_name}\n"
-        f"- repeated_times: {repeat_count}\n"
-        f"- arguments: {args_preview}\n"
-        "The previous repeated calls did not make progress. Do not call this exact same tool "
-        "with the exact same arguments again.\n"
-        "Carefully inspect the latest tool result and choose a different next action, "
-        "different parameters, or finish the task if enough evidence has been gathered."
-        "\n</system-reminder>"
-    )
-
-
-def _sort_json_value(value: object) -> object:
-    if isinstance(value, list):
-        return [_sort_json_value(item) for item in cast("list[object]", value)]
-    if isinstance(value, dict):
-        value_dict = cast("dict[str, object]", value)
-        return {key: _sort_json_value(value_dict[key]) for key in sorted(value_dict)}
-    return value
-
-
-def _canonical_tool_arguments(arguments: Any) -> str:
-    try:
-        return json.dumps(
-            _sort_json_value(arguments),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    except (TypeError, ValueError):
-        return str(arguments)
-
-
-def _canonical_tool_arguments_text(arguments: str) -> str:
-    try:
-        return _canonical_tool_arguments(json.loads(arguments, strict=False))
-    except json.JSONDecodeError:
-        return arguments
-
-
-def _normalize_call_key(tool_name: str, arguments: str) -> ToolCallKey:
-    return (tool_name, _canonical_tool_arguments_text(arguments))
-
-
-def _append_reminder_to_return_value(return_value: Any, reminder_text: str) -> Any:
-    """Append dedup reminder text to a ToolReturnValue output."""
-    if not isinstance(return_value, ToolReturnValue):
-        return return_value
-
-    output = return_value.output
-
-    if isinstance(output, str):
-        new_output: str | list[ContentPart] = output + reminder_text
-    else:
-        new_output = list(output)
-        if new_output and isinstance(new_output[-1], TextPart):
-            new_output[-1] = TextPart(text=new_output[-1].text + reminder_text)
-        else:
-            new_output.append(TextPart(text=reminder_text))
-
-    return return_value.model_copy(update={"output": new_output})
-
-
-def _emit_tool_use_skipped_if_opted_in(
-    tool: ToolType,
-    *,
-    tool_call_id: str,
-    tool_name: str,
-    reason: Literal["dedup", "policy", "interrupt", "concurrent_inflight"],
-    resumed: bool = False,
-) -> None:
-    if not getattr(tool, "emits_tool_use_skipped", False):
-        return
-    _emit_tool_use_skipped(
-        tool_call_id=tool_call_id,
-        tool_name=tool_name,
-        reason=reason,
-        resumed=resumed,
-    )
-
-
-_DEFAULT_MAX_CONCURRENT_READERS = 10
-"""Cap on concurrent parallel-safe tool calls. A turn that fans out many readers
-(e.g. dozens of FetchURL) overlaps freely up to this bound rather than opening an
-unbounded number of sockets/file handles at once."""
-
-
-class _ReadWriteGate:
-    """Async reader-writer gate for same-step parallel tool calls.
-
-    Parallel-safe tools (readers) overlap freely up to ``max_concurrent_readers``;
-    a mutating tool (writer) waits for in-flight readers to drain and excludes
-    everything while it runs. Writers hold the lock while draining, which also
-    blocks new readers behind a queued writer — dispatch order stays deterministic
-    and writers cannot starve. Unflagged/plugin-style tools default to the
-    exclusive writer path unless they explicitly declare ``supports_parallel=True``.
-    """
-
-    def __init__(self, max_concurrent_readers: int = _DEFAULT_MAX_CONCURRENT_READERS) -> None:
-        self._writer_lock = asyncio.Lock()
-        self._active_readers = 0
-        self._readers_drained = asyncio.Event()
-        self._readers_drained.set()
-        self._reader_slots = asyncio.Semaphore(max_concurrent_readers)
-
-    @contextlib.asynccontextmanager
-    async def shared(self) -> AsyncGenerator[None]:
-        # Only tools that opted into ``supports_parallel=True`` should enter this
-        # shared path; unflagged/plugin adapters stay exclusive by default.
-        # Cap concurrent readers. Acquire the slot BEFORE the writer lock / counter
-        # bump: a reader still queued here has not incremented _active_readers, so it
-        # never holds _readers_drained open, and writers (which never touch the
-        # semaphore) cannot be starved — keeping the cap deadlock-safe.
-        await self._reader_slots.acquire()
-        try:
-            async with self._writer_lock:
-                self._active_readers += 1
-                self._readers_drained.clear()
-            try:
-                yield
-            finally:
-                self._active_readers -= 1
-                if self._active_readers == 0:
-                    self._readers_drained.set()
-        finally:
-            self._reader_slots.release()
-
-    @contextlib.asynccontextmanager
-    async def exclusive(self) -> AsyncGenerator[None]:
-        async with self._writer_lock:
-            await self._readers_drained.wait()
-            yield
 
 
 class PythinkerToolset:
@@ -544,19 +300,14 @@ class PythinkerToolset:
         self._mcp_loading_task: asyncio.Task[None] | None = None
         self._deferred_mcp_load: tuple[list[MCPConfig], Runtime] | None = None
         self._hook_engine: HookEngine = HookEngine()
-        self._concurrency_gate = _ReadWriteGate()
 
-        # Deduplication state
-        self._previous_step_calls: list[ToolCallKey] = []
-        self._current_step_calls: list[ToolCallKey] = []
-        self._current_step_tasks: dict[ToolCallKey, asyncio.Task[ToolResult]] = {}
-        self._seen_call_keys: set[ToolCallKey] = set()
-        self._consecutive_key: ToolCallKey | None = None
-        self._consecutive_count: int = 0
-        self._step_closed: bool = False
-        self._dedup_triggered: bool = False
-        self._step_no: int = 0
-        self._turn_id: str = ""
+        self._execution = ToolExecutionEngine(
+            runtime,
+            lambda name: self._tool_dict.get(name),
+            lambda: list(self._tool_dict),
+            lambda: self._hook_engine,
+            lambda tool, arguments: self._gated_call(tool, arguments),
+        )
 
     def set_hook_engine(self, engine: HookEngine) -> None:
         self._hook_engine = engine
@@ -756,18 +507,13 @@ class PythinkerToolset:
 
         return True
 
-    async def _gated_call(self, tool: ToolType, arguments: JsonType) -> ToolReturnValue:
-        """Execute under the same-step concurrency policy.
+    @property
+    def _concurrency_gate(self) -> _ReadWriteGate:
+        """Compatibility seam for local characterization probes."""
+        return self._execution._concurrency_gate  # pyright: ignore[reportPrivateUsage]
 
-        Tools declaring ``supports_parallel`` share the gate; everything
-        else (including unflagged plugin/MCP tools — the safe default)
-        runs exclusively so same-step mutations stay ordered.
-        """
-        if getattr(tool, "supports_parallel", False):
-            async with self._concurrency_gate.shared():
-                return await tool.call(arguments)
-        async with self._concurrency_gate.exclusive():
-            return await tool.call(arguments)
+    async def _gated_call(self, tool: ToolType, arguments: JsonType) -> ToolReturnValue:
+        return await self._execution.gated_call(tool, arguments)
 
     def begin_step(
         self,
@@ -776,364 +522,35 @@ class PythinkerToolset:
         step_no: int = 0,
         turn_id: str = "",
     ) -> None:
-        """Called before each step to set up deduplication state."""
-        self._previous_step_calls = [
-            _normalize_call_key(tool_name, arguments) for tool_name, arguments in previous_calls
-        ]
-        self._current_step_calls = []
-        self._current_step_tasks = {}
-        self._step_closed = False
-        self._dedup_triggered = False
-        self._step_no = step_no
-        self._turn_id = turn_id
-        if not self._previous_step_calls:
-            self._seen_call_keys = set()
-            self._consecutive_key = None
-            self._consecutive_count = 0
-        else:
-            self._seen_call_keys.update(self._previous_step_calls)
-            if self._consecutive_key is None and self._consecutive_count == 0:
-                self._advance_consecutive_streak(self._previous_step_calls)
+        """Prepare execution state for one legacy caller step."""
+        self._execution.begin_step(previous_calls, step_no=step_no, turn_id=turn_id)
 
     def end_step(self) -> list[ToolCallKey]:
-        """Called after each step to capture the calls made in this step."""
-        if not self._step_closed:
-            self._advance_consecutive_streak(self._current_step_calls)
-            self._seen_call_keys.update(self._current_step_calls)
-            self._step_closed = True
-        return list(self._current_step_calls)
-
-    def _advance_consecutive_streak(self, calls: list[ToolCallKey]) -> None:
-        for call_key in calls:
-            if call_key == self._consecutive_key:
-                self._consecutive_count += 1
-            else:
-                self._consecutive_key = call_key
-                self._consecutive_count = 1
-
-    def _projected_streak_for_call(self, call_index: int) -> int:
-        consecutive_key = self._consecutive_key
-        consecutive_count = self._consecutive_count
-        for call_key in self._current_step_calls[: call_index + 1]:
-            if call_key == consecutive_key:
-                consecutive_count += 1
-            else:
-                consecutive_key = call_key
-                consecutive_count = 1
-        return consecutive_count
+        """Finalize and return the current step's normalized call fingerprints."""
+        return self._execution.end_step()
 
     @property
     def dedup_triggered(self) -> bool:
-        """Whether a cross-step duplicate was blocked in the current step."""
-        return self._dedup_triggered
+        return self._execution.dedup_triggered
 
     @property
     def consecutive_repeat_count(self) -> int:
-        """Length of the current streak of identical-argument tool calls.
-
-        Tracked independently of each call's reported success/failure, so it
-        still catches a degenerate loop even if a tool falsely reports success
-        on a call that made no progress.
-        """
-        return self._consecutive_count
+        return self._execution.consecutive_repeat_count
 
     def handle(self, tool_call: ToolCall) -> HandleResult:
-        token = current_tool_call.set(tool_call)
-        try:
-            if tool_call.function.name not in self._tool_dict:
-                available = list(self._tool_dict.keys())
-                matches = difflib.get_close_matches(
-                    tool_call.function.name, available, n=1, cutoff=0.6
-                )
-                return ToolResult(
-                    tool_call_id=tool_call.id,
-                    return_value=ToolNotFoundError(
-                        tool_call.function.name,
-                        suggestion=matches[0] if matches else None,
-                    ),
-                )
+        """Compatibility path for third-party per-call core dispatch."""
+        return self._execution.handle(tool_call)
 
-            tool = self._tool_dict[tool_call.function.name]
-
-            if tool_call.function.name == "ToolSearch" and self._runtime is not None:
-                from pythinker_code.llm import supports_deferred_tool_search
-
-                if not supports_deferred_tool_search(self._runtime.llm):
-                    return ToolResult(
-                        tool_call_id=tool_call.id,
-                        return_value=ToolNotFoundError(tool_call.function.name),
-                    )
-
-            try:
-                arguments: JsonType = json.loads(tool_call.function.arguments or "{}", strict=False)
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    "Tool call JSON parse error: {tool_name} (call_id={call_id}): {error}",
-                    tool_name=tool_call.function.name,
-                    call_id=tool_call.id,
-                    error=e,
-                )
-                return ToolResult(tool_call_id=tool_call.id, return_value=ToolParseError(str(e)))
-
-            canonical_args = _canonical_tool_arguments(arguments)
-            call_key = (tool_call.function.name, canonical_args)
-            call_index = len(self._current_step_calls)
-            self._current_step_calls.append(call_key)
-
-            # Same-step dedup: wait for the original task and copy its result.
-            if call_key in self._current_step_tasks:
-                from pythinker_code.telemetry import track
-
-                _emit_tool_use_skipped_if_opted_in(
-                    tool,
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_call.function.name,
-                    reason="dedup",
-                    resumed=True,
-                )
-                track(
-                    "tool_call_dedup_detected",
-                    turn_id=self._turn_id,
-                    step_no=self._step_no,
-                    tool_name=tool_call.function.name,
-                    dup_type="same_step",
-                    args_hash=hashlib.sha256(canonical_args.encode("utf-8")).hexdigest()[:8],
-                )
-                original_task = self._current_step_tasks[call_key]
-
-                async def _await_dup() -> ToolResult:
-                    original_result = await original_task
-                    return ToolResult(
-                        tool_call_id=tool_call.id,
-                        return_value=original_result.return_value,
-                    )
-
-                return asyncio.create_task(_await_dup())
-
-            is_cross_step_dup = call_key in self._seen_call_keys
-            reminder_text: str | None = None
-            if is_cross_step_dup:
-                from pythinker_code.telemetry import track
-
-                track(
-                    "tool_call_dedup_detected",
-                    turn_id=self._turn_id,
-                    step_no=self._step_no,
-                    tool_name=tool_call.function.name,
-                    dup_type="cross_step",
-                    args_hash=hashlib.sha256(canonical_args.encode("utf-8")).hexdigest()[:8],
-                )
-                self._dedup_triggered = True
-                repeat_count = self._projected_streak_for_call(call_index)
-                if repeat_count == 3:
-                    reminder_text = _REMINDER_TEXT_1
-                elif repeat_count in (5, 8):
-                    reminder_text = _make_reminder_text_2(
-                        tool_call.function.name, repeat_count, canonical_args
-                    )
-                if reminder_text is not None:
-                    _emit_tool_use_skipped_if_opted_in(
-                        tool,
-                        tool_call_id=tool_call.id,
-                        tool_name=tool_call.function.name,
-                        reason="dedup",
-                        resumed=False,
-                    )
-
-            async def _call():
-                started_ids_token = _current_tool_execution_started_ids.set(set[str]())
-                try:
-                    return await _call_with_lifecycle()
-                finally:
-                    _current_tool_execution_started_ids.reset(started_ids_token)
-
-            async def _call_with_lifecycle():
-                tool_input_dict = copy.deepcopy(arguments) if isinstance(arguments, dict) else {}
-
-                if self._runtime is not None:
-                    from pythinker_code.soul.permission import check_tool_call_allowed
-
-                    if err := check_tool_call_allowed(
-                        self._runtime,
-                        tool_call.function.name,
-                        tool_input_dict,
-                        tool=tool,
-                    ):
-                        _emit_tool_use_skipped_if_opted_in(
-                            tool,
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.function.name,
-                            reason="policy",
-                        )
-                        return ToolResult(tool_call_id=tool_call.id, return_value=err)
-
-                # --- PreToolUse ---
-                from pythinker_code.hooks import events
-
-                results = await self._hook_engine.trigger(
-                    "PreToolUse",
-                    matcher_value=tool_call.function.name,
-                    input_data=events.pre_tool_use(
-                        session_id=_get_session_id(),
-                        cwd=str(Path.cwd()),
-                        tool_name=tool_call.function.name,
-                        tool_input=copy.deepcopy(tool_input_dict),
-                        tool_call_id=tool_call.id,
-                    ),
-                )
-                for result in results:
-                    if result.action == "block":
-                        _emit_tool_use_skipped_if_opted_in(
-                            tool,
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.function.name,
-                            reason="policy",
-                        )
-                        return ToolResult(
-                            tool_call_id=tool_call.id,
-                            return_value=ToolError(
-                                message=result.reason or "Blocked by PreToolUse hook",
-                                brief="Hook blocked",
-                            ),
-                        )
-
-                # --- Execute tool ---
-                from pythinker_code.telemetry import metrics as _m
-                from pythinker_code.telemetry import otel as _otel
-
-                if not _tool_defers_execution_started(tool):
-                    emit_current_tool_execution_started()
-
-                t0 = time.monotonic()
-                telemetry_tool_name = sanitize_telemetry_tool_name(tool_call.function.name)
-                _tool_span_cm = _otel.start_span(
-                    "pythinker.tool",
-                    {
-                        "tool.name": telemetry_tool_name,
-                        "tool.call_id": tool_call.id,
-                        # GenAI semconv so GenAI-aware backends recognize the tool layer.
-                        "gen_ai.operation.name": "execute_tool",
-                        "gen_ai.tool.name": telemetry_tool_name,
-                    },
-                )
-                _tool_span = _tool_span_cm.__enter__()
-                try:
-                    ret = await self._gated_call(tool, copy.deepcopy(arguments))
-                except Exception as e:
-                    tool_elapsed = time.monotonic() - t0
-                    _tool_span.set_attribute("tool.success", False)
-                    _tool_span.set_attribute("tool.error_type", type(e).__name__)
-                    _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
-                    _tool_span_cm.__exit__(type(e), e, e.__traceback__)
-                    _m.record_tool_call(
-                        tool_name=telemetry_tool_name,
-                        duration_seconds=tool_elapsed,
-                        success=False,
-                        error_type=type(e).__name__,
-                    )
-                    _m.record_error(kind="tool_error", error_type=type(e).__name__)
-                    logger.exception(
-                        "Tool execution failed: {tool_name} (call_id={call_id})",
-                        tool_name=tool_call.function.name,
-                        call_id=tool_call.id,
-                    )
-                    # --- PostToolUseFailure (fire-and-forget) ---
-                    self._hook_engine.fire_and_forget_trigger(
-                        "PostToolUseFailure",
-                        matcher_value=tool_call.function.name,
-                        input_data=events.post_tool_use_failure(
-                            session_id=_get_session_id(),
-                            cwd=str(Path.cwd()),
-                            tool_name=tool_call.function.name,
-                            tool_input=copy.deepcopy(tool_input_dict),
-                            error=str(e),
-                            tool_call_id=tool_call.id,
-                        ),
-                    )
-                    from pythinker_code.telemetry import track
-
-                    _error_type = type(e).__name__
-                    track(
-                        "tool_error",
-                        tool_name=telemetry_tool_name,
-                        error_type=_error_type,
-                    )
-                    track(
-                        "tool_call",
-                        tool_name=telemetry_tool_name,
-                        success=False,
-                        duration_ms=int(tool_elapsed * 1000),
-                        error_type=_error_type,
-                        dup_type="cross_step" if is_cross_step_dup else "normal",
-                    )
-                    return ToolResult(
-                        tool_call_id=tool_call.id,
-                        return_value=ToolRuntimeError(str(e)),
-                    )
-                except BaseException as e:
-                    # CancelledError/KeyboardInterrupt during the tool call: close the
-                    # span in this task so its OTel context token detaches now, not
-                    # later under GC in a different asyncio context.
-                    _tool_span_cm.__exit__(type(e), e, e.__traceback__)
-                    raise
-
-                tool_elapsed = time.monotonic() - t0
-                _tool_succeeded = not isinstance(ret, ToolError)
-                _tool_span.set_attribute("tool.success", _tool_succeeded)
-                if isinstance(ret, ToolError):
-                    _tool_span.set_attribute("tool.error_brief", ret.brief or "")
-                _tool_span.set_attribute("tool.duration_ms", int(tool_elapsed * 1000))
-                _tool_span_cm.__exit__(None, None, None)
-                _m.record_tool_call(
-                    tool_name=telemetry_tool_name,
-                    duration_seconds=tool_elapsed,
-                    success=_tool_succeeded,
-                )
-                logger.info(
-                    "Tool {tool_name} completed in {elapsed:.1f}s (call_id={call_id})",
-                    tool_name=tool_call.function.name,
-                    elapsed=tool_elapsed,
-                    call_id=tool_call.id,
-                )
-                from pythinker_code.telemetry import track as _track_tool_call
-
-                _track_tool_call(
-                    "tool_call",
-                    tool_name=telemetry_tool_name,
-                    success=not isinstance(ret, ToolError),
-                    duration_ms=int(tool_elapsed * 1000),
-                    dup_type="cross_step" if is_cross_step_dup else "normal",
-                )
-
-                # --- PostToolUse (fire-and-forget) ---
-                self._hook_engine.fire_and_forget_trigger(
-                    "PostToolUse",
-                    matcher_value=tool_call.function.name,
-                    input_data=events.post_tool_use(
-                        session_id=_get_session_id(),
-                        cwd=str(Path.cwd()),
-                        tool_name=tool_call.function.name,
-                        tool_input=copy.deepcopy(tool_input_dict),
-                        tool_output=str(ret)[:2000],
-                        tool_call_id=tool_call.id,
-                    ),
-                )
-
-                # Append the dedup reminder inline (no-op on errors) so the
-                # returned task is the tool task itself: cancelling it cancels
-                # the tool, rather than orphaning it behind a wrapper task.
-                if reminder_text is not None:
-                    return ToolResult(
-                        tool_call_id=tool_call.id,
-                        return_value=_append_reminder_to_return_value(ret, reminder_text),
-                    )
-                return ToolResult(tool_call_id=tool_call.id, return_value=ret)
-
-            task = asyncio.create_task(_call())
-            self._current_step_tasks[call_key] = task
-            return task
-        finally:
-            current_tool_call.reset(token)
+    def handle_batch(
+        self,
+        tool_calls: Sequence[ToolCall],
+        context: ToolBatchContext,
+        *,
+        on_tool_result: Callable[[ToolResult], None] | None = None,
+    ) -> ToolBatchHandle:
+        """Create one supervised execution batch after terminal response assembly."""
+        calls = tuple(tool_calls)
+        return self._execution.handle_batch(calls, context, on_tool_result=on_tool_result)
 
     def register_external_tool(
         self,

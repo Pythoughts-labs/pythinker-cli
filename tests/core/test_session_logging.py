@@ -205,7 +205,7 @@ class TestToolExecutionLogging:
             function=ToolCall.FunctionBody(name="FailingTool", arguments="{}"),
         )
 
-        with patch("pythinker_code.soul.toolset.logger") as mock_logger:
+        with patch("pythinker_code.soul.tool_execution.logger") as mock_logger:
             result = toolset.handle(tool_call)
             if isinstance(result, asyncio.Task):
                 await result
@@ -230,7 +230,7 @@ class TestToolExecutionLogging:
             function=ToolCall.FunctionBody(name="DummyTool", arguments="{invalid json}"),
         )
 
-        with patch("pythinker_code.soul.toolset.logger") as mock_logger:
+        with patch("pythinker_code.soul.tool_execution.logger") as mock_logger:
             toolset.handle(tool_call)
             mock_logger.warning.assert_called()
             assert "DummyTool" in str(mock_logger.warning.call_args)
