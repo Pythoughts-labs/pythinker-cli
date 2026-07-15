@@ -143,33 +143,6 @@ validated, never trusted.
   abstraction, custom logic where native features or existing helpers suffice, and changes a junior
   maintainer would struggle to follow.
 
-## Guardrails: pythinker-guard Skill
-
-**REQUIRED BACKGROUND:** Before committing any changes to Pythinker code, **use the
-`pythinker-guard` skill** to enforce the non-negotiable rules above against time pressure and
-sunk-cost rationalization.
-
-**When to use:** Invoke `pythinker-guard` BEFORE:
-- Committing changes to Pythinker codebase
-- Opening a PR
-- Declaring a feature complete
-
-**What it prevents:** The skill enforces:
-- Surgical changes (no drive-by refactors, reformatting, or cleanup)
-- Explicit error contracts (no bare `except`, no silent failures)
-- Type safety (all new functions typed; `make check` passes)
-- Test-driven development (tests written first, gate passed locally)
-- Fail-closed behavior (errors distinguished and logged, never swallowed)
-
-The skill specifically guards against 5 pressure vectors that trigger violations:
-1. Time scarcity → shortcuts in testing, typing, error handling
-2. Sunk-cost fallacy → skipping types/tests because "we've already built most of it"
-3. Confidence illusion → "it's obvious this works" → silent errors
-4. Proximity heuristic → "we're in the file anyway" → unrelated cleanup
-5. Inversion of priorities → "tests slow us down" → untestable design
-
-See the skill itself for verification checkpoints, hard stops, and escalation triggers.
-
 ## Quick commands
 
 Use these first; they encode the supported local workflow.
