@@ -19,6 +19,8 @@ async def _success_event(*_args: object, **_kwargs: object) -> AsyncIterator[OAu
 
 
 def _patch_config(monkeypatch: pytest.MonkeyPatch) -> Config:
+    monkeypatch.delenv("ZAI_CODING_API_KEY", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
     config = Config(is_from_default_location=True)
     monkeypatch.setattr("pythinker_code.cli.load_config", lambda: config, raising=False)
     return config
@@ -74,6 +76,30 @@ def test_cli_logout_zai_routes_dispatch_only_named_wrapper(
     assert result.exit_code == 0, result.output
     assert target.call_args.args == (config,)
     other.assert_not_called()
+
+
+def test_cli_login_zai_uses_only_the_named_route_environment_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _patch_config(monkeypatch)
+    coding = Mock(side_effect=_success_event)
+    api = Mock(side_effect=_success_event)
+    monkeypatch.setattr(
+        "pythinker_code.cli.login_z_ai_coding_api_key",
+        coding,
+        raising=False,
+    )
+    monkeypatch.setattr("pythinker_code.cli.login_z_ai_api_key", api, raising=False)
+    monkeypatch.setenv("ZAI_CODING_API_KEY", "coding-env-key")
+    monkeypatch.setenv("ZAI_API_KEY", "api-env-key")
+
+    coding_result = runner.invoke(cli, ["login", "--z-ai-coding"])
+    api_result = runner.invoke(cli, ["login", "--z-ai-api"])
+
+    assert coding_result.exit_code == 0, coding_result.output
+    assert api_result.exit_code == 0, api_result.output
+    assert coding.call_args.args == (config, "coding-env-key")
+    assert api.call_args.args == (config, "api-env-key")
 
 
 def test_cli_login_zai_json_emits_route_events(monkeypatch: pytest.MonkeyPatch) -> None:

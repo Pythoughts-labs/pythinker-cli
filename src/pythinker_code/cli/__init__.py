@@ -1528,23 +1528,27 @@ def login(
             key = typer.prompt("Anthropic API key", hide_input=True).strip()
             events = login_anthropic_api_key(config, key)
         elif z_ai_coding:
-            key = typer.prompt(
-                "Z.AI Coding Plan API key",
-                hide_input=True,
-                default="",
-                show_default=False,
-            ).strip()
+            key = (os.getenv("ZAI_CODING_API_KEY") or "").strip()
+            if not key:
+                key = typer.prompt(
+                    "Z.AI Coding Plan API key",
+                    hide_input=True,
+                    default="",
+                    show_default=False,
+                ).strip()
             if not key:
                 typer.echo("Z.AI Coding Plan API key is required.", err=True)
                 return False
             events = login_z_ai_coding_api_key(config, key)
         elif z_ai_api:
-            key = typer.prompt(
-                "Z.AI API key",
-                hide_input=True,
-                default="",
-                show_default=False,
-            ).strip()
+            key = (os.getenv("ZAI_API_KEY") or "").strip()
+            if not key:
+                key = typer.prompt(
+                    "Z.AI API key",
+                    hide_input=True,
+                    default="",
+                    show_default=False,
+                ).strip()
             if not key:
                 typer.echo("Z.AI API key is required.", err=True)
                 return False
