@@ -25,6 +25,7 @@ from pythinker_core.chat_provider import (
     TokenUsage,
 )
 from pythinker_core.message import Message, ToolCall
+from pythinker_core.tooling import ToolBatchContext, ToolCancellationTimeoutError
 from pythinker_core.tooling.error import ToolRuntimeError
 from tenacity import RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential_jitter
 
@@ -627,8 +628,8 @@ class PythinkerSoul:
 
         self._steer_queue: asyncio.Queue[str | list[ContentPart]] = asyncio.Queue()
         self._prompt_queue_lock = asyncio.Lock()
-        # Tool calls made in the previous step, fed to the toolset's dedup
-        # tracking at the start of each step (see PythinkerToolset.begin_step).
+        # Normalized calls from the previous batch summary, carried into the next
+        # ToolBatchContext for cross-step deduplication.
         self._last_tool_calls: list[tuple[str, str]] = []
         self._current_turn_id: str = ""
         self._plan_mode: bool = self._runtime.session.state.plan_mode
@@ -2182,26 +2183,13 @@ class PythinkerSoul:
         await self._persist_assembled_history(prepared_request)
         effective_history = prepared_request.assembled.provider_history
 
-        # Capture tool results as they stream in. If the batch is interrupted
-        # mid-flight, already-completed calls must keep their real output rather
-        # than being overwritten with a synthetic "interrupted" marker; only the
-        # still-pending calls get the marker (see the CancelledError handler).
-        completed_tool_results: dict[str, ToolResult] = {}
-
         def _on_tool_result(tool_result: ToolResult) -> None:
-            completed_tool_results[tool_result.tool_call_id] = tool_result
             wire_send(tool_result)
 
         async def _run_step_once() -> StepResult:
-            # Reset per-step dedup state. Inside the retry wrapper on purpose: a
-            # retried step must not await tool tasks cancelled by the failed attempt.
-            if isinstance(self._agent.toolset, PythinkerToolset):
-                self._agent.toolset.begin_step(
-                    self._last_tool_calls,
-                    step_no=self._current_step_no,
-                    turn_id=self._current_turn_id,
-                )
-            # run an LLM step (may be interrupted)
+            # Run an LLM step (may be interrupted). The terminal batch receives all
+            # execution state atomically; retries that fail before batch construction
+            # cannot leave per-step tool state behind.
             from pythinker_code.telemetry import metrics as _m
             from pythinker_code.telemetry import otel as _otel
 
@@ -2232,6 +2220,11 @@ class PythinkerSoul:
                                 effective_history,
                                 on_message_part=wire_send,
                                 on_tool_result=_on_tool_result,
+                                tool_batch_context=ToolBatchContext(
+                                    turn_id=self._current_turn_id,
+                                    step_no=self._current_step_no,
+                                    prior_call_fingerprints=tuple(self._last_tool_calls),
+                                ),
                             )
                     finally:
                         reset_step_permission_profile(profile_token)
@@ -2368,18 +2361,25 @@ class PythinkerSoul:
         with deliberation_scope(deliberation_context_id, deliberation_generation):
             try:
                 results = await result.tool_results()
-            except asyncio.CancelledError:
-                # Interrupted mid-tool: persist the assistant message plus a result
+            except (asyncio.CancelledError, ToolCancellationTimeoutError) as interruption:
+                # Interrupted or timed out mid-tool: persist the assistant message plus a result
                 # for every tool_call so the next turn does not see unanswered
-                # tool_calls (which providers reject). Keep the real output of calls
-                # that already completed (streamed via on_tool_result); only the
-                # still-pending calls get a synthetic interruption marker. Shield the
-                # write from the same cancellation so it completes, then re-raise.
+                # tool_calls (which providers reject). Keep successful outputs from
+                # the StepResult's authoritative completion snapshot; only still-pending
+                # calls get a truthful synthetic marker. Shield the write from the
+                # same cancellation so it completes, then re-raise the original error.
+                completed_tool_results = result.completed_tool_results
+                pending_message = (
+                    "Tool call completion is unknown because cancellation did not settle; "
+                    "the operation may still be running and must not be retried automatically."
+                    if isinstance(interruption, ToolCancellationTimeoutError)
+                    else "Tool call interrupted by user."
+                )
                 interrupted = [
                     completed_tool_results.get(tc.id)
                     or ToolResult(
                         tool_call_id=tc.id,
-                        return_value=ToolRuntimeError(message="Tool call interrupted by user."),
+                        return_value=ToolRuntimeError(message=pending_message),
                     )
                     for tc in result.tool_calls
                 ]
@@ -2393,9 +2393,8 @@ class PythinkerSoul:
                 raise
         logger.debug("Got tool results: {results}", results=results)
 
-        # Update dedup tracking for the next step
-        if isinstance(self._agent.toolset, PythinkerToolset):
-            self._last_tool_calls = self._agent.toolset.end_step()
+        batch_summary = result.tool_execution_summary
+        self._last_tool_calls = list(batch_summary.current_call_fingerprints)
 
         # If a tool (EnterPlanMode/ExitPlanMode) changed plan mode during execution,
         # send a corrected StatusUpdate so the client sees the up-to-date state.
@@ -2523,8 +2522,8 @@ class PythinkerSoul:
             # success on a call that never made progress, which the all-error
             # check above can't see.
             repeat_threshold = self._loop_control.max_consecutive_identical_calls
-            if repeat_threshold and isinstance(self._agent.toolset, PythinkerToolset):
-                repeat_count = self._agent.toolset.consecutive_repeat_count
+            if repeat_threshold:
+                repeat_count = batch_summary.consecutive_identical_call_count
                 if repeat_count >= repeat_threshold:
                     from pythinker_code.telemetry import track
 

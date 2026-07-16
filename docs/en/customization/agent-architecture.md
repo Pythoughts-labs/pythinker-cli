@@ -180,8 +180,9 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   Core[pythinker_core.step]
-  Call[ToolCall]
-  Toolset[PythinkerToolset.handle]
+  Calls[Terminal ToolCall batch]
+  Toolset[PythinkerToolset.handle_batch]
+  Engine[ToolExecutionEngine]
   Parse[Parse JSON arguments]
   Pre[PreToolUse hooks]
   Execute[tool.call(arguments)]
@@ -193,10 +194,13 @@ flowchart LR
   Post[PostToolUse or PostToolUseFailure hooks]
   Telemetry[Telemetry]
   Result[ToolResult]
+  Batch[ToolBatchHandle]
+  Step[StepResult.tool_results]
+  Soul[PythinkerSoul]
   Context[tool_result_to_message -> Context]
   Wire[Wire event stream]
 
-  Core --> Call --> Toolset --> Parse --> Pre --> Execute
+  Core --> Calls --> Toolset --> Engine --> Parse --> Pre --> Execute
   Execute --> Builtin
   Execute --> Plugin
   Execute --> MCP
@@ -208,12 +212,26 @@ flowchart LR
   Builtin --> Result
   Approval --> Result
   Result --> Post --> Telemetry
-  Result --> Core
+  Result --> Batch --> Step --> Soul
   Result --> Wire
-  Result --> Context
+  Soul --> Context
 ```
 
-The toolset is both a registry and an execution boundary. It hides tools from the LLM when needed, validates tool names, parses JSON arguments, triggers hooks, converts exceptions to `ToolRuntimeError`, and returns async `ToolResult` tasks to `pythinker_core.step`. The advertised tool list is filtered by the active execution profile, subagent/root role, plan-mode state, and hard permission profile before each model call; tool-specific execution guards still run even if a hidden tool is somehow called. MCP tools are registered as local wrappers. Wire external tools are sent to the active Wire client as `ToolCallRequest` messages and wait for a client-provided result.
+The toolset is both a registry and an execution boundary. For Pythinker Soul, `pythinker_core.step`
+passes the complete terminal call batch and immutable `ToolBatchContext` to
+`PythinkerToolset.handle_batch`. Its non-exported `ToolExecutionEngine` validates tool names, parses
+JSON arguments, applies duplicate/consecutive-call policy, schedules calls through the reader-writer
+gate, triggers hooks, converts exceptions to `ToolRuntimeError`, and supervises ordered results and
+bounded cancellation through a `ToolBatchHandle`. `StepResult.tool_results()` settles that owned
+batch before Soul appends the assistant and tool messages to `Context`. Core's per-call
+`Toolset.handle()` path remains only as the compatibility fallback for toolsets that do not
+implement `BatchToolset`.
+
+The advertised tool list is filtered by the active execution profile, subagent/root role,
+plan-mode state, and hard permission profile before each model call; tool-specific execution guards
+still run even if a hidden tool is somehow called. MCP tools are registered as local wrappers. Wire
+external tools are sent to the active Wire client as `ToolCallRequest` messages and wait for a
+client-provided result.
 
 ## Subagent graph
 
