@@ -205,12 +205,20 @@ class TestToolExecutionLogging:
             function=ToolCall.FunctionBody(name="FailingTool", arguments="{}"),
         )
 
-        with patch("pythinker_code.soul.toolset.logger") as mock_logger:
+        from loguru import logger as loguru_logger
+
+        records: list[str] = []
+        loguru_logger.enable("pythinker_code")
+        sink_id = loguru_logger.add(lambda message: records.append(str(message)), level="ERROR")
+        try:
             result = toolset.handle(tool_call)
             if isinstance(result, asyncio.Task):
                 await result
-            mock_logger.exception.assert_called()
-            assert "FailingTool" in str(mock_logger.exception.call_args)
+        finally:
+            loguru_logger.remove(sink_id)
+            loguru_logger.disable("pythinker_code")
+
+        assert any("FailingTool" in record for record in records)
 
     async def test_toolset_json_parse_error_logged(self):
         """When tool call arguments are invalid JSON, toolset should log a WARNING."""
@@ -230,10 +238,18 @@ class TestToolExecutionLogging:
             function=ToolCall.FunctionBody(name="DummyTool", arguments="{invalid json}"),
         )
 
-        with patch("pythinker_code.soul.toolset.logger") as mock_logger:
+        from loguru import logger as loguru_logger
+
+        records: list[str] = []
+        loguru_logger.enable("pythinker_code")
+        sink_id = loguru_logger.add(lambda message: records.append(str(message)), level="WARNING")
+        try:
             toolset.handle(tool_call)
-            mock_logger.warning.assert_called()
-            assert "DummyTool" in str(mock_logger.warning.call_args)
+        finally:
+            loguru_logger.remove(sink_id)
+            loguru_logger.disable("pythinker_code")
+
+        assert any("DummyTool" in record for record in records)
 
 
 class TestFileToolLogging:

@@ -3,12 +3,21 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import BaseModel
 from pythinker_core import StepResult
+from pythinker_core.chat_provider.mock import MockChatProvider
 from pythinker_core.message import Message, ToolCall
-from pythinker_core.tooling import ToolResult
+from pythinker_core.tooling import (
+    CallableTool2,
+    ToolCancellationTimeoutError,
+    ToolOk,
+    ToolResult,
+    ToolReturnValue,
+)
 from pythinker_core.tooling.empty import EmptyToolset
 
 import pythinker_code.soul.pythinkersoul as pythinkersoul_module
@@ -16,6 +25,7 @@ from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.approval import Approval
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul, TurnOutcome
+from pythinker_code.soul.toolset import PythinkerToolset
 from pythinker_code.wire.types import StepBegin, StepInterrupted, TextPart, TurnBegin, TurnEnd
 
 
@@ -43,6 +53,52 @@ class _EnteredFuture(asyncio.Future[ToolResult]):
     def __await__(self):
         self.entered.set()
         return super().__await__()
+
+
+class _NoParams(BaseModel):
+    pass
+
+
+class _CancellationIgnoringTool(CallableTool2[_NoParams]):
+    name = "Stubborn"
+    description = "Wait until released, including after cancellation"
+    params = _NoParams
+    supports_parallel: ClassVar[bool] = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.cancel_seen = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = asyncio.Event()
+
+    async def __call__(self, params: _NoParams) -> ToolReturnValue:
+        del params
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancel_seen.set()
+            await self.release.wait()
+        finally:
+            self.finished.set()
+        return ToolOk(output="late output")
+
+
+class _ImmediateTool(CallableTool2[_NoParams]):
+    name = "Immediate"
+    description = "Complete immediately"
+    params = _NoParams
+    supports_parallel: ClassVar[bool] = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished = asyncio.Event()
+
+    async def __call__(self, params: _NoParams) -> ToolReturnValue:
+        del params
+        self.finished.set()
+        return ToolOk(output="real output")
 
 
 @pytest.mark.asyncio
@@ -268,6 +324,120 @@ async def test_step_persists_assistant_message_when_tool_results_cancelled(
         f"tool message has wrong tool_call_id; "
         f"expected={tool_call.id}, got={tool_messages[0].tool_call_id}"
     )
+
+
+async def test_step_interruption_uses_completed_result_snapshot(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul = _make_soul(runtime, tmp_path)
+    done_call = ToolCall(
+        id="call-done",
+        function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
+    )
+    pending_call = ToolCall(
+        id="call-pending",
+        function=ToolCall.FunctionBody(name="Noop", arguments="{}"),
+    )
+    done_future = asyncio.get_running_loop().create_future()
+    done_future.set_result(
+        ToolResult(tool_call_id=done_call.id, return_value=ToolOk(output="real output"))
+    )
+    pending_future = _EnteredFuture()
+
+    async def fake_pythinker_core_step(chat_provider, system_prompt, toolset, history, **kwargs):
+        return StepResult(
+            id="step-partial",
+            message=Message(role="assistant", content=[TextPart(text="I'll use tools.")]),
+            usage=None,
+            tool_calls=[done_call, pending_call],
+            _tool_result_futures={
+                done_call.id: done_future,
+                pending_call.id: pending_future,
+            },
+        )
+
+    monkeypatch.setattr(pythinkersoul_module.pythinker_core, "step", fake_pythinker_core_step)
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _msg: None)
+
+    step_task = asyncio.create_task(soul._step())
+    await pending_future.entered.wait()
+    step_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await step_task
+
+    tool_messages = {
+        message.tool_call_id: message for message in soul.context.history if message.role == "tool"
+    }
+    assert "real output" in tool_messages[done_call.id].extract_text(" ")
+    assert "interrupted by user" in tool_messages[pending_call.id].extract_text(" ").lower()
+
+
+async def test_step_timeout_persists_completed_and_completion_unknown_results(
+    runtime: Runtime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("pythinker_core._STEP_CANCELLATION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        "pythinker_code.soul.tool_execution.TOOL_CANCELLATION_TIMEOUT_SECONDS", 0.01
+    )
+    done_call = ToolCall(
+        id="call-done",
+        function=ToolCall.FunctionBody(name="Immediate", arguments="{}"),
+    )
+    pending_call = ToolCall(
+        id="call-pending",
+        function=ToolCall.FunctionBody(name="Stubborn", arguments="{}"),
+    )
+    assert runtime.llm is not None
+    runtime.llm.chat_provider = MockChatProvider(
+        [done_call, pending_call],
+        finish_reason="tool_calls",
+    )
+    immediate = _ImmediateTool()
+    stubborn = _CancellationIgnoringTool()
+    toolset = PythinkerToolset()
+    toolset.add(immediate)
+    toolset.add(stubborn)
+    soul = PythinkerSoul(
+        Agent(
+            name="Timeout lineage agent",
+            system_prompt="Test prompt.",
+            toolset=toolset,
+            runtime=runtime,
+        ),
+        context=Context(file_backend=tmp_path / "history.jsonl"),
+    )
+    monkeypatch.setattr(pythinkersoul_module, "wire_send", lambda _message: None)
+
+    step_task = asyncio.create_task(soul._step())
+    await stubborn.started.wait()
+    await immediate.finished.wait()
+    await asyncio.sleep(0)
+    step_task.cancel()
+
+    try:
+        with pytest.raises(ToolCancellationTimeoutError):
+            await step_task
+
+        history = list(soul.context.history)
+        assistant_messages = [message for message in history if message.role == "assistant"]
+        tool_messages = {
+            message.tool_call_id: message for message in history if message.role == "tool"
+        }
+        assert len(assistant_messages) == 1
+        assert set(tool_messages) == {done_call.id, pending_call.id}
+        assert "real output" in tool_messages[done_call.id].extract_text(" ")
+        pending_text = tool_messages[pending_call.id].extract_text(" ").lower()
+        assert "completion is unknown" in pending_text
+        assert "may still be running" in pending_text
+        assert "must not be retried automatically" in pending_text
+        assert soul._last_tool_calls == []  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stubborn.release.set()
+        await asyncio.wait_for(stubborn.finished.wait(), timeout=1)
 
 
 async def test_step_persists_markers_when_cancelled_twice(

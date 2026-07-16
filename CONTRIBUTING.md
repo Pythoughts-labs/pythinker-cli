@@ -48,3 +48,19 @@ If you believe a new runtime dependency is genuinely necessary:
    automatically so reviewers know to look for the justification.
 
 Dev-only dependencies under `[dependency-groups]` are not subject to this policy.
+
+## Tool-execution characterization
+
+Changes to `soul/tool_execution.py`, execution scheduling, deduplication, the reader/writer gate, or
+MCP publication should run the deterministic local characterization harness:
+
+```bash
+uv run python scripts/benchmark_toolset.py --scenario all --runs 5 --output before-or-after.json
+```
+
+For before/after evidence, use the same machine, Python environment, fixture matrix, warm-up count,
+and five-run command at both revisions. Keep the raw JSON and report timing regressions as well as
+improvements; do not discard samples or use `--smoke` for final evidence. Confirm every scenario has
+zero leaked tasks/processes/sessions, all cancellation and recovery flags are true, registry hashes
+are stable, and deterministic decision states are derived by the harness. Treat results as directional
+local engineering evidence, not universal product telemetry.

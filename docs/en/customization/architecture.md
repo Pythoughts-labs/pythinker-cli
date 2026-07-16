@@ -66,8 +66,10 @@ The end-to-end flow when a session starts and processes a turn:
 4. **Core loop** — `src/pythinker_code/soul/pythinkersoul.py:PythinkerSoul.run` handles user
    input and slash commands, calls the LLM through `pythinker_core.step`, runs tools, gates
    side effects through approvals, injects dynamic reminders, and compacts the context.
-5. **Tool execution** — `src/pythinker_code/soul/toolset.py:PythinkerToolset` loads built-in
-   and MCP tools, injects dependencies, executes calls, and returns structured results.
+5. **Tool execution** — `src/pythinker_code/soul/toolset.py:PythinkerToolset` owns the
+   built-in/MCP registry, visibility, and dependency injection facade. The private
+   `src/pythinker_code/soul/tool_execution.py:ToolExecutionEngine` executes terminal batches,
+   deduplicates calls, orders results, and supervises bounded cancellation.
 6. **Wire and UI** — `src/pythinker_code/soul/run_soul` connects the soul to
    `src/pythinker_code/wire/`; Shell, Print, ACP, Web, and Dashboard frontends consume Wire events.
 
@@ -99,7 +101,8 @@ canonical list lives in `src/pythinker_code/wire/types.py` (`Event` union): `Ste
 | `src/pythinker_code/soul/pythinkersoul.py` | Core loop: user input, slash commands, LLM calls, tool runs, compaction, telemetry spans. | `PythinkerSoul`, `PythinkerSoul.run`, `FLOW_COMMAND_PREFIX` |
 | `src/pythinker_code/soul/agent.py` | `Runtime` and `Agent` construction, system-prompt assembly, AGENTS.md discovery. | `Runtime`, `Agent`, `load_agent`, `load_agents_md`, `BuiltinSystemPromptArgs` |
 | `src/pythinker_code/soul/context.py` | Conversation history, checkpoints, JSONL persistence. | `Context` |
-| `src/pythinker_code/soul/toolset.py` | Loads built-in + MCP tools, injects deps, executes calls. | `PythinkerToolset` |
+| `src/pythinker_code/soul/toolset.py` | Owns built-in + MCP registration, visibility, dependency injection, and the legacy per-call facade. | `PythinkerToolset` |
+| `src/pythinker_code/soul/tool_execution.py` | Private batch execution state machine: preparation, deduplication, reader/writer scheduling, callbacks, ordered results, bounded cancellation, poison, and late-task recovery. | `ToolExecutionEngine` |
 | `src/pythinker_code/soul/slash.py` | Slash-command registry and dispatch. | `registry` |
 | `src/pythinker_code/soul/dynamic_injection.py` (+ `dynamic_injections/`) | Injects budgeted `<system-reminder>` content per step: plan-mode, auto-mode, model-defense, LSP diagnostics. | `DynamicInjectionProvider` |
 | `src/pythinker_code/soul/permission.py` | Per-step permission profiles (`read_only`/`plan`/`ask`/`implement`/`review`/`verify`) and destructiveness classification. | `tool_destructive_reason`, `shell_command_signature` |
@@ -299,7 +302,7 @@ Both frontends build with `tsc -b && vite build` and are synced into the Python 
 
 | Path | Purpose | Key entry points and interfaces |
 | --- | --- | --- |
-| `packages/pythinker-core/` | LLM abstraction: message models, streaming chat providers, tool abstractions, and the `generate`/`step` primitives. Independently versioned (1.x). | `generate`, `step`, `Message`, `ContentPart`, `ToolCall`, `ChatProvider`, `Toolset`, `ToolReturnValue`/`ToolOk`/`ToolError`, `CallableTool2`, `DisplayBlock`; contrib providers (`Anthropic`, `GoogleGenAI`, `OpenAIResponses`) and `LinearContext` |
+| `packages/pythinker-core/` | LLM abstraction: message models, streaming chat providers, optional batch/legacy tool dispatch, and the `generate`/`step` primitives. Independently versioned (1.x). | `generate`, `step`, `StepResult`, `Message`, `ContentPart`, `ToolCall`, `ChatProvider`, `Toolset`, `BatchToolset`, `ToolBatchHandle`, `ToolReturnValue`/`ToolOk`/`ToolError`, `CallableTool2`, `DisplayBlock`; contrib providers (`Anthropic`, `GoogleGenAI`, `OpenAIResponses`) and `LinearContext` |
 | `packages/pythinker-host/` | OS abstraction for filesystem + shell across local and SSH backends via a context-var-dispatched `Host` protocol. | `Host`, `HostPath`, `LocalHost`, `HostProcess`, `get_current_host`/`set_current_host` |
 | `packages/pythinker-review/` | Standalone review/security/debug engine and stateful Reviewflow; strict Pydantic schemas with fail-closed evidence validation. State in `.pythinker-review/` and `.pythinker-review-flow/`. See `packages/pythinker-review/AGENTS.md`. | `run_engine`, `ReviewLLM`, `Finding`, `RawFinding`, `ReviewerOutput`, Reviewflow `init`/`map`/`review`/`fix` |
 | `packages/pythinker-code/` | Thin distribution package exposing the `pythinker-code` script. | — |

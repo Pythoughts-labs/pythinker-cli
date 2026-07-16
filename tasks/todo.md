@@ -2,87 +2,58 @@
 
 ## Active
 
-### PR #208 review remediation (2026-07-15)
+### PR #207 cancellation-state review fix (2026-07-15)
 
-- [x] Fetch current CI, CodeRabbit, Code Quality, Codecov, and unresolved thread state.
-- [x] Classify all 12 inline findings, including the exact-head incremental review, and advisory
-      pre-merge notices against repository standards.
-- [x] Add failing regressions for approved behavioral findings before production edits.
-- [x] Fix remote metadata authorization, cleanup exception handling, and review-target rendering.
-- [x] Rewrite over-mocked tests through public APIs and clear static test-quality findings.
-- [x] Add a red-green regression that prevents caller prompts from forging review boundaries.
-- [x] Re-run focused coverage, `make check-pythinker-code`, and `make test-pythinker-code`.
-- [x] Perform final diff review and prepare the follow-up commit without tool trailers.
+- [x] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`
+      with a failing regression test before production edits.
+- [x] Keep cancelled/failed batch fingerprints out of committed dedup and consecutive-call state.
+- [x] Preserve completed-result snapshots, callback suppression, bounded cancellation, timeout
+      poisoning, and successful finalized summaries.
+- [x] Run focused tests, core and CLI package gates, and `git diff --check`.
+- [x] Bound cancellation-resistant async result callbacks under the StepResult ownership deadline.
+- [x] Persist completed results and explicit completion-unknown markers when cancellation times out.
+- [x] Connect engine late-drain ownership to bounded toolset/runtime cleanup.
+- [x] Preserve caller cancellation until after MCP teardown completes.
+- [x] Update the public architecture flow from per-call Soul dispatch to the batch engine path.
+- [x] Complete task-scoped and whole-branch reviews with no open Critical/Important findings.
+- [ ] Push the PR head, confirm the latest CodeRabbit review succeeds, reply to the remaining false
+      positive with evidence, and resolve it through GitHub GraphQL.
 
-Acceptance: unapproved remotes cannot leak project metadata; cleanup preserves cancellation semantics
-without swallowing process-control exceptions; tests assert supported public behavior; every inline
-finding has a verified disposition; and the pushed head has fresh local gate evidence.
+Acceptance: after successful call A and cancelled call B, retrying B with A as the authoritative
+prior context is not a cross-step duplicate and starts a fresh consecutive streak at 1. All PR
+review threads are resolved only after the tested fix is present on GitHub.
 
-#### Review: PR #208 review remediation
+#### Review: PR #207 cancellation-state review fix
 
-- **Outcome:** all 12 fetched inline findings were addressed: unapproved remote metadata no longer
-  exposes a project identity; lower-authority caller prompts cannot forge review boundaries;
-  cleanup preserves cancellation while allowing process-control exceptions to propagate; review
-  tests use supported public boundaries; and static style findings are cleared.
-- **TDD evidence:** the remote-metadata and process-control regressions initially failed together
-  (`2 failed, 52 passed`) and passed after the production fixes (`54 passed`). The exact-head
-  delimiter-forgery regression then failed before escaping (`1 failed`) and passed with its affected
-  background tests after the fix (`3 passed`).
-- **Focused verification:** the full changed-feature set passed `304 passed, 1 warning`; focused
-  coverage reported zero missing statements in `git_context.py` and `review_target.py`.
-- **Static verification:** the follow-up `make check-pythinker-code` passed with Ruff clean, `1262
-  files already formatted`, Pyright `0 errors, 0 warnings, 0 informations`, and ty clean.
-- **Repository test gate:** the follow-up `make test-pythinker-code` completed the unit suite with
-  only the known baseline PTY Escape failure: `1 failed, 7146 passed, 9 skipped, 1 xfailed, 5
-  warnings`. The identical isolated node reproduced because Escape was ignored and the command
-  completed; it was previously reproduced on clean `main` and is unrelated to prompt composition.
-  separate `tests_e2e` suite passed `65 passed, 4 skipped, 1 warning`.
-- **Review verdict:** the follow-up independent review found no Critical, Important, or Minor
-  findings; `git diff --check` was silent. Ready to push to the existing PR branch.
-- **Blockers:** none.
-
-### Deterministic reviewer target resolution (2026-07-15)
-
-- [x] Reconcile the adoption ledger with current code and Git history.
-- [x] Select the narrow structured-target design; keep `/review` out of scope.
-- [x] Review and approve
-      `docs/superpowers/specs/2026-07-15-review-target-resolution-design.md`.
-- [x] Write the implementation plan with TDD and verification checkpoints.
-- [x] Implement the approved plan in the isolated feature worktree.
-- [x] Add the required `CHANGELOG.md` Unreleased entry.
-- [x] Run focused tests, `make check-pythinker-code`, `make test-pythinker-code`, and final review.
-
-Acceptance: every fresh reviewer receives one pre-resolved authoritative Git target; invalid or
-empty explicit targets fail before child allocation; `Agent` and per-child `RunAgents` behavior is
-identical across foreground and background execution; generic Git context cannot contradict the
-resolved target; non-reviewer and resume behavior remains compatible.
-
-#### Review: deterministic reviewer target resolution
-
-- **Outcome:** structured auto, uncommitted, base, and commit targets now resolve before reviewer
-  allocation; foreground, per-child batch, and background paths preserve the requested and resolved
-  target and fail explicitly at the appropriate boundary.
-- **Reviewed range:** `10aedf26..a12a4840` (seven branch commits, from the design checkpoint through
-  the amended failure-boundary hardening commit).
-- **Focused verification:** the exact 11-file feature set passed `289 passed, 1 warning in 14.43s`.
-- **Static verification:** `make check-pythinker-code` passed with Ruff clean, `1262 files already
-  formatted`, Pyright `0 errors, 0 warnings, 0 informations`, and ty clean.
-- **Repository test gate:** `make test-pythinker-code` remains red solely at
-  `tests/e2e/test_shell_pty_e2e.py::test_shell_cancel_running_command_kills_process_and_recovers`:
-  `1 failed, 7131 passed, 9 skipped, 1 xfailed, 5 warnings in 379.30s`, before the separate
-  `tests_e2e` phase. The isolated branch node also failed because Escape was ignored and the command
-  completed; the identical isolated node fails on clean `main`, proving this is a baseline,
-  out-of-scope blocker rather than a feature regression.
-- **Remaining branch verification:** excluding only that baseline node passed `7131 passed, 9
-  skipped, 1 deselected, 1 xfailed, 5 warnings in 325.71s`; the separate `tests_e2e` suite passed
-  `65 passed, 4 skipped, 1 warning in 89.35s`. `git diff --check` was silent.
-- **Review verdict:** final implementation review after `a12a4840` found no Critical, Important, or
-  Minor findings; C01/C03/C05/C06/C08/C12/C13/C14/C15 all passed; ready to merge: yes.
-- **Approved limitation:** uncommitted/base scopes pin `HEAD` and revalidate it immediately before
-  execution, but the index and worktree remain explicitly live. The feature does not claim an
-  immutable patch snapshot.
-- **Blocker:** the repository-wide package test gate is blocked solely by the reproducible
-  clean-main PTY Escape failure above. No feature-owned failure remains.
+- Root cause: `_ExecutionBatch._run()` finalized the engine step before watcher settlement. A
+  cancelled or failed batch therefore committed fingerprints that `PythinkerSoul` correctly kept
+  out of authoritative conversation state, causing a later retry to appear duplicated.
+- Behavior: successful watcher settlement now commits the step exactly once. Cancellation or
+  failure preserves previously committed fingerprints and completed-result snapshots while
+  discarding only the current uncommitted step state before re-raising the original exception.
+- TDD evidence: the new regression first failed because the retry reported
+  `dedup_triggered is True` and consecutive count 2; after the fix it passed with no duplicate,
+  consecutive count 1, and two real blocking-tool invocations. The final callback and
+  engine/Soul cancellation regressions passed 92 focused tests across the core and CLI packages.
+- Package evidence: `make test-pythinker-core` reported 433 passed. `make check-pythinker-core`
+  passed Ruff, formatting, and Pyright with 0 errors; its repository-configured non-blocking `ty`
+  step retained 62 existing provider/third-party diagnostics outside the changed files.
+  `make check-pythinker-code` passed Ruff, formatting, Pyright with 0 errors, and blocking `ty`.
+  The final cancellation/MCP set reported 57 passed. The main CLI suite reported 7,073 passed, 9
+  skipped, and 1 expected xfail; separate `tests_e2e` reported 65 passed and 4 skipped. The
+  VitePress documentation build and `git diff --check` also passed.
+- Review: the task-scoped review approved the transactional rollback and the follow-up Pyright
+  correction. A leading-underscore sibling call initially triggered strict `reportPrivateUsage`;
+  the final `abort_step()` seam is documented and remains internal through the non-exported engine,
+  without a suppression. The first whole-branch review correctly blocked publication on three
+  Important cancellation-lifecycle gaps: callback settlement was unbounded, cancellation timeout
+  skipped context lineage repair, and engine late-drain work was absent from runtime cleanup. The
+  implementation now bounds all owned cancellation under one deadline, preserves truthful timeout
+  lineage, joins retained engine work during cleanup, and documents the batch path. The latest-head
+  CodeRabbit review then found that caller cancellation during engine cleanup could skip MCP
+  teardown. A real cancellation regression reproduced the leak before the fix and now proves MCP
+  closure precedes re-raising `CancelledError`. Fresh local re-review has no remaining
+  Critical/Important issue; final GitHub re-review and closeout remain pending.
 
 ### TUI thinking Markdown and activity motion (2026-07-11)
 

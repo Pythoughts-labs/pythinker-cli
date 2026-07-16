@@ -1,0 +1,3177 @@
+{
+  "schema_version": 2,
+  "environment": {
+    "python_version": "3.14.6",
+    "python_implementation": "CPython",
+    "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O"
+  },
+  "scenarios": [
+    {
+      "fixture": {
+        "kind": "execution_safe",
+        "size": 1,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "safe"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1526291,
+            1487209,
+            1484000,
+            1463083,
+            1452291
+          ],
+          "median_ns": 1484000,
+          "p95_ns": 1526291,
+          "throughput_per_second": 673.8544474393531,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            12833,
+            8667,
+            8584,
+            6208,
+            5292
+          ],
+          "median_ns": 8584,
+          "p95_ns": 12833,
+          "throughput_per_second": 116495.80615097856,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7542,
+            7375,
+            7417,
+            6292,
+            5500
+          ],
+          "median_ns": 7375,
+          "p95_ns": 7542,
+          "throughput_per_second": 135593.22033898305,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1518749,
+            1479834,
+            1476583,
+            1456791,
+            1446791
+          ],
+          "median_ns": 1476583,
+          "p95_ns": 1518749,
+          "throughput_per_second": 677.2392747309159,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 46240,
+      "retained_object_delta": 23319,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7468667,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 1,
+      "operation_count": 5,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_safe",
+        "size": 10,
+        "concurrency": 10,
+        "payload_bytes": null,
+        "composition": "safe"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            13702041,
+            13796333,
+            14075459,
+            14030459,
+            14134583
+          ],
+          "median_ns": 14030459,
+          "p95_ns": 14134583,
+          "throughput_per_second": 712.7350573491573,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            54999,
+            52541,
+            53832,
+            54377,
+            50167
+          ],
+          "median_ns": 53832,
+          "p95_ns": 54999,
+          "throughput_per_second": 185763.11487591025,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            53709,
+            50877,
+            55207,
+            55960,
+            49542
+          ],
+          "median_ns": 53709,
+          "p95_ns": 55960,
+          "throughput_per_second": 186188.53451004488,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            13648332,
+            13745456,
+            14020252,
+            13974499,
+            14085041
+          ],
+          "median_ns": 13974499,
+          "p95_ns": 14085041,
+          "throughput_per_second": 715.589159940546,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 126298,
+      "retained_object_delta": 72078,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7543625,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 10,
+      "operation_count": 50,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_safe",
+        "size": 100,
+        "concurrency": 100,
+        "payload_bytes": null,
+        "composition": "safe"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            138307250,
+            140739416,
+            140765541,
+            142424458,
+            140010583
+          ],
+          "median_ns": 140739416,
+          "p95_ns": 142424458,
+          "throughput_per_second": 710.5330037748629,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            488915,
+            491914,
+            485499,
+            504250,
+            496756
+          ],
+          "median_ns": 491914,
+          "p95_ns": 504250,
+          "throughput_per_second": 203287.56652585615,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            487457,
+            491338,
+            507875,
+            491333,
+            477665
+          ],
+          "median_ns": 491333,
+          "p95_ns": 507875,
+          "throughput_per_second": 203527.95354677987,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            137819793,
+            140248078,
+            140257666,
+            141933125,
+            139532918
+          ],
+          "median_ns": 140248078,
+          "p95_ns": 141933125,
+          "throughput_per_second": 713.0222490464362,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 995124,
+      "retained_object_delta": 557756,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7543500,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 100,
+      "operation_count": 500,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_exclusive",
+        "size": 1,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "exclusive"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1450417,
+            1460166,
+            1457084,
+            1470375,
+            1462792
+          ],
+          "median_ns": 1460166,
+          "p95_ns": 1470375,
+          "throughput_per_second": 684.8536399286108,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            4375,
+            4250,
+            3792,
+            3625,
+            3875
+          ],
+          "median_ns": 3875,
+          "p95_ns": 4375,
+          "throughput_per_second": 258064.51612903227,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5917,
+            5583,
+            5250,
+            5375,
+            5417
+          ],
+          "median_ns": 5417,
+          "p95_ns": 5917,
+          "throughput_per_second": 184604.0243677312,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1444500,
+            1454583,
+            1451834,
+            1465000,
+            1457375
+          ],
+          "median_ns": 1454583,
+          "p95_ns": 1465000,
+          "throughput_per_second": 687.4822543643093,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 35960,
+      "retained_object_delta": 13013,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7508000,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 1,
+      "operation_count": 5,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_exclusive",
+        "size": 10,
+        "concurrency": 10,
+        "payload_bytes": null,
+        "composition": "exclusive"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            14090833,
+            13882084,
+            13820250,
+            13685375,
+            14155583
+          ],
+          "median_ns": 13882084,
+          "p95_ns": 14155583,
+          "throughput_per_second": 720.3529383628568,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            38164,
+            36251,
+            36874,
+            36915,
+            38208
+          ],
+          "median_ns": 36915,
+          "p95_ns": 38208,
+          "throughput_per_second": 270892.59108763374,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            50460,
+            48085,
+            49708,
+            48207,
+            49957
+          ],
+          "median_ns": 49708,
+          "p95_ns": 50460,
+          "throughput_per_second": 201174.86118934577,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            14040373,
+            13833999,
+            13770542,
+            13637168,
+            14105626
+          ],
+          "median_ns": 13833999,
+          "p95_ns": 14105626,
+          "throughput_per_second": 722.8567820483433,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 116964,
+      "retained_object_delta": 63262,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7186125,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 10,
+      "operation_count": 50,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_exclusive",
+        "size": 100,
+        "concurrency": 100,
+        "payload_bytes": null,
+        "composition": "exclusive"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            137456542,
+            138724458,
+            138688500,
+            138603875,
+            136136333
+          ],
+          "median_ns": 138603875,
+          "p95_ns": 138724458,
+          "throughput_per_second": 721.4805502371416,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            360038,
+            356825,
+            355999,
+            378710,
+            348752
+          ],
+          "median_ns": 356825,
+          "p95_ns": 378710,
+          "throughput_per_second": 280249.42198556714,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            467083,
+            471585,
+            471242,
+            518256,
+            481167
+          ],
+          "median_ns": 471585,
+          "p95_ns": 518256,
+          "throughput_per_second": 212050.84979378054,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            136989459,
+            138252873,
+            138217258,
+            138085619,
+            135655166
+          ],
+          "median_ns": 138085619,
+          "p95_ns": 138252873,
+          "throughput_per_second": 724.1883747503061,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 944555,
+      "retained_object_delta": 531669,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7266583,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 100,
+      "operation_count": 500,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_mixed",
+        "size": 1,
+        "concurrency": 2,
+        "payload_bytes": null,
+        "composition": "reader/writer pairs"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2840583,
+            2893042,
+            2866375,
+            2797167,
+            2880292
+          ],
+          "median_ns": 2866375,
+          "p95_ns": 2893042,
+          "throughput_per_second": 697.7454101434739,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            153167,
+            151166,
+            150750,
+            130124,
+            124292
+          ],
+          "median_ns": 150750,
+          "p95_ns": 153167,
+          "throughput_per_second": 13266.998341625207,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            214792,
+            211917,
+            203001,
+            179709,
+            173500
+          ],
+          "median_ns": 203001,
+          "p95_ns": 214792,
+          "throughput_per_second": 9852.16821592012,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2625791,
+            2681125,
+            2663374,
+            2617458,
+            2706792
+          ],
+          "median_ns": 2663374,
+          "p95_ns": 2706792,
+          "throughput_per_second": 750.9272073692993,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "8c718a5dc30b54eeabc4aba7d1a5910c7d3b727e3547c8f82451d70bb73c7ba6",
+      "allocation_peak_bytes": 46283,
+      "retained_object_delta": 18465,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7344750,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 2,
+      "operation_count": 10,
+      "category_counts": {
+        "builtin": 2
+      },
+      "projection_counts": {
+        "visible": 2
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_mixed",
+        "size": 10,
+        "concurrency": 20,
+        "payload_bytes": null,
+        "composition": "reader/writer pairs"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            26570959,
+            26555667,
+            27220458,
+            27181917,
+            28015500
+          ],
+          "median_ns": 27181917,
+          "p95_ns": 28015500,
+          "throughput_per_second": 735.7832782728311,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            23852167,
+            23836416,
+            24405250,
+            24385208,
+            25153208
+          ],
+          "median_ns": 24385208,
+          "p95_ns": 25153208,
+          "throughput_per_second": 820.1693420043823,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1380083,
+            1357879,
+            1370043,
+            1405250,
+            1415079
+          ],
+          "median_ns": 1380083,
+          "p95_ns": 1415079,
+          "throughput_per_second": 14491.882009995052,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            25190876,
+            25197788,
+            25850415,
+            25776667,
+            26600421
+          ],
+          "median_ns": 25776667,
+          "p95_ns": 26600421,
+          "throughput_per_second": 775.895502704054,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "8c718a5dc30b54eeabc4aba7d1a5910c7d3b727e3547c8f82451d70bb73c7ba6",
+      "allocation_peak_bytes": 207439,
+      "retained_object_delta": 102052,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 6978833,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 20,
+      "operation_count": 100,
+      "category_counts": {
+        "builtin": 2
+      },
+      "projection_counts": {
+        "visible": 2
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "execution_mixed",
+        "size": 100,
+        "concurrency": 200,
+        "payload_bytes": null,
+        "composition": "reader/writer pairs"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            285567708,
+            296809125,
+            286243625,
+            282915167,
+            285880458
+          ],
+          "median_ns": 285880458,
+          "p95_ns": 296809125,
+          "throughput_per_second": 699.5931145458009,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            282590584,
+            293620459,
+            283111417,
+            279883541,
+            282825125
+          ],
+          "median_ns": 282825125,
+          "p95_ns": 293620459,
+          "throughput_per_second": 707.1507526072869,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            13612582,
+            15122739,
+            13771673,
+            13783700,
+            13531714
+          ],
+          "median_ns": 13771673,
+          "p95_ns": 15122739,
+          "throughput_per_second": 14522.563816320646,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            271955126,
+            281686386,
+            272471952,
+            269131467,
+            272348744
+          ],
+          "median_ns": 272348744,
+          "p95_ns": 281686386,
+          "throughput_per_second": 734.3525696597301,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "8c718a5dc30b54eeabc4aba7d1a5910c7d3b727e3547c8f82451d70bb73c7ba6",
+      "allocation_peak_bytes": 1916270,
+      "retained_object_delta": 981343,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 7680750,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 200,
+      "operation_count": 1000,
+      "category_counts": {
+        "builtin": 2
+      },
+      "projection_counts": {
+        "visible": 2
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "dedupe",
+        "size": 1024,
+        "concurrency": 2,
+        "payload_bytes": 1024,
+        "composition": "same-step duplicate payload"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1535708,
+            1485791,
+            1515084,
+            1516584,
+            1549041
+          ],
+          "median_ns": 1516584,
+          "p95_ns": 1549041,
+          "throughput_per_second": 659.3765989882526,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7208,
+            5625,
+            5708,
+            5500,
+            5250
+          ],
+          "median_ns": 5625,
+          "p95_ns": 7208,
+          "throughput_per_second": 177777.77777777778,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            6125,
+            5792,
+            5375,
+            5083,
+            5041
+          ],
+          "median_ns": 5375,
+          "p95_ns": 6125,
+          "throughput_per_second": 186046.51162790696,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1529583,
+            1479999,
+            1509709,
+            1511501,
+            1544000
+          ],
+          "median_ns": 1511501,
+          "p95_ns": 1544000,
+          "throughput_per_second": 661.5940048997652,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 45775,
+      "retained_object_delta": 17012,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 2,
+      "operation_count": 5,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "dedupe",
+        "size": 102400,
+        "concurrency": 2,
+        "payload_bytes": 102400,
+        "composition": "same-step duplicate payload"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1884208,
+            1896708,
+            1984791,
+            1926083,
+            1984959
+          ],
+          "median_ns": 1926083,
+          "p95_ns": 1984959,
+          "throughput_per_second": 519.1884254209191,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5458,
+            5333,
+            7917,
+            6875,
+            5583
+          ],
+          "median_ns": 5583,
+          "p95_ns": 7917,
+          "throughput_per_second": 179115.17105498837,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5334,
+            5375,
+            7292,
+            6292,
+            5625
+          ],
+          "median_ns": 5625,
+          "p95_ns": 7292,
+          "throughput_per_second": 177777.77777777778,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1878874,
+            1891333,
+            1977499,
+            1919791,
+            1979334
+          ],
+          "median_ns": 1919791,
+          "p95_ns": 1979334,
+          "throughput_per_second": 520.8900343839512,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 869202,
+      "retained_object_delta": 16475,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 2,
+      "operation_count": 5,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "dedupe",
+        "size": 1048576,
+        "concurrency": 2,
+        "payload_bytes": 1048576,
+        "composition": "same-step duplicate payload"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "end_to_end": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5878750,
+            5783542,
+            6220833,
+            5802792,
+            6150000
+          ],
+          "median_ns": 5878750,
+          "p95_ns": 6220833,
+          "throughput_per_second": 170.1041888156496,
+          "within_run_samples_ns": []
+        },
+        "read_write_gate_wait": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7375,
+            6792,
+            7750,
+            8000,
+            7250
+          ],
+          "median_ns": 7375,
+          "p95_ns": 8000,
+          "throughput_per_second": 135593.22033898305,
+          "within_run_samples_ns": []
+        },
+        "tool_call": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            6125,
+            6083,
+            7208,
+            6750,
+            7750
+          ],
+          "median_ns": 6750,
+          "p95_ns": 7750,
+          "throughput_per_second": 148148.14814814815,
+          "within_run_samples_ns": []
+        },
+        "framework_overhead": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5872625,
+            5777459,
+            6213625,
+            5796042,
+            6142250
+          ],
+          "median_ns": 5872625,
+          "p95_ns": 6213625,
+          "throughput_per_second": 170.28160320129413,
+          "within_run_samples_ns": []
+        },
+        "lookup_suggestion": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "json_parse_canonicalize": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "deduplication": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "permission_approval": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "pre_hook": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "post_hook_reminder": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        },
+        "telemetry_wire": {
+          "measurement_status": "unmeasured",
+          "reason": "current Toolset exposes no stable boundary for this subphase",
+          "samples_ns": [],
+          "median_ns": null,
+          "p95_ns": null,
+          "throughput_per_second": null,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "c739117bf452f76c6574d251f8e498ab5fb71099c5a47b4ae7cd27e71bf315a2",
+      "allocation_peak_bytes": 8674621,
+      "retained_object_delta": 15859,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 2,
+      "operation_count": 5,
+      "category_counts": {
+        "builtin": 1
+      },
+      "projection_counts": {
+        "visible": 1
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "advertisement",
+        "size": 50,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "builtin/plugin/MCP-style names with hidden entries"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "visibility_enabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            286500,
+            275833,
+            287000,
+            285667,
+            297208
+          ],
+          "median_ns": 286500,
+          "p95_ns": 297208,
+          "throughput_per_second": 174520.0698080279,
+          "within_run_samples_ns": []
+        },
+        "visibility_enabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            284000,
+            284542,
+            306584,
+            286292,
+            317750
+          ],
+          "median_ns": 286292,
+          "p95_ns": 317750,
+          "throughput_per_second": 174646.86404090928,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            6584,
+            7375,
+            6792,
+            6334,
+            6917
+          ],
+          "median_ns": 6792,
+          "p95_ns": 7375,
+          "throughput_per_second": 7361601.884570083,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            5291,
+            5542,
+            5458,
+            5167,
+            5791
+          ],
+          "median_ns": 5458,
+          "p95_ns": 5791,
+          "throughput_per_second": 9160864.785635764,
+          "within_run_samples_ns": []
+        },
+        "repeated_unchanged_projection": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1140666,
+            1132375,
+            1124875,
+            1163083,
+            1249417
+          ],
+          "median_ns": 1140666,
+          "p95_ns": 1249417,
+          "throughput_per_second": 43834.04081475209,
+          "within_run_samples_ns": []
+        },
+        "registry_projection_p95": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            298625,
+            286417,
+            297584,
+            297417,
+            318417
+          ],
+          "median_ns": 297584,
+          "p95_ns": 318417,
+          "throughput_per_second": 168019.78601000053,
+          "within_run_samples_ns": [
+            [
+              291083,
+              286625,
+              287500,
+              287750,
+              287583,
+              295167,
+              285125,
+              287709,
+              288500,
+              291625,
+              295834,
+              298625,
+              297917,
+              322917,
+              289250,
+              282708,
+              276875,
+              277416,
+              279917,
+              276625
+            ],
+            [
+              284250,
+              286417,
+              284166,
+              282958,
+              283750,
+              284750,
+              321459,
+              278250,
+              272500,
+              271208,
+              271500,
+              271209,
+              270500,
+              270125,
+              270750,
+              270125,
+              270709,
+              270625,
+              273709,
+              271000
+            ],
+            [
+              290583,
+              293834,
+              287167,
+              291959,
+              291000,
+              289416,
+              289375,
+              295750,
+              291833,
+              297584,
+              290000,
+              294167,
+              294291,
+              326000,
+              286542,
+              279375,
+              272833,
+              277958,
+              272584,
+              279667
+            ],
+            [
+              289959,
+              287792,
+              291417,
+              291000,
+              286750,
+              287875,
+              286875,
+              289500,
+              289792,
+              291000,
+              297417,
+              317625,
+              285500,
+              274334,
+              272167,
+              274167,
+              281334,
+              275208,
+              272708,
+              277084
+            ],
+            [
+              334166,
+              303750,
+              308708,
+              306667,
+              307792,
+              306500,
+              308583,
+              305833,
+              308833,
+              303583,
+              315250,
+              304208,
+              309125,
+              318417,
+              312458,
+              315042,
+              308375,
+              304125,
+              309667,
+              304292
+            ]
+          ]
+        },
+        "rebuild_after_mcp_publication": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            56458,
+            45959,
+            49833,
+            50959,
+            53084
+          ],
+          "median_ns": 50959,
+          "p95_ns": 56458,
+          "throughput_per_second": 981180.9493906866,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "91398880bf75436e99f298a4b5b639ab91a13d6bb2a211a3fa510015f449fa95",
+      "allocation_peak_bytes": 6574978,
+      "retained_object_delta": 5835954,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 0,
+      "operation_count": 250,
+      "category_counts": {
+        "builtin": 17,
+        "plugin": 17,
+        "mcp": 16
+      },
+      "projection_counts": {
+        "enabled_hidden": 45,
+        "enabled_unhidden": 50,
+        "disabled_hidden": 45,
+        "disabled_unhidden": 50,
+        "rebuild": 50,
+        "repeated": 50
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "advertisement",
+        "size": 500,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "builtin/plugin/MCP-style names with hidden entries"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "visibility_enabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2559333,
+            2638042,
+            2725750,
+            2790500,
+            2968750
+          ],
+          "median_ns": 2725750,
+          "p95_ns": 2968750,
+          "throughput_per_second": 183435.7516279923,
+          "within_run_samples_ns": []
+        },
+        "visibility_enabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2780708,
+            2669375,
+            3019667,
+            3002917,
+            3225000
+          ],
+          "median_ns": 3002917,
+          "p95_ns": 3225000,
+          "throughput_per_second": 166504.76853006592,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            44791,
+            42834,
+            44708,
+            43458,
+            67334
+          ],
+          "median_ns": 44708,
+          "p95_ns": 67334,
+          "throughput_per_second": 11183680.773016015,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            43458,
+            41834,
+            45125,
+            44250,
+            46041
+          ],
+          "median_ns": 44250,
+          "p95_ns": 46041,
+          "throughput_per_second": 11299435.028248588,
+          "within_run_samples_ns": []
+        },
+        "repeated_unchanged_projection": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            11304375,
+            11213833,
+            12185166,
+            12161541,
+            12150125
+          ],
+          "median_ns": 12150125,
+          "p95_ns": 12185166,
+          "throughput_per_second": 41151.84000164607,
+          "within_run_samples_ns": []
+        },
+        "registry_projection_p95": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2932625,
+            2949875,
+            3128791,
+            3172083,
+            3138791
+          ],
+          "median_ns": 3128791,
+          "p95_ns": 3172083,
+          "throughput_per_second": 159806.13598031955,
+          "within_run_samples_ns": [
+            [
+              2825584,
+              2791625,
+              2752375,
+              2819917,
+              2854208,
+              2725666,
+              2791625,
+              2925291,
+              2847500,
+              2850750,
+              2932625,
+              2938541,
+              2717750,
+              2829417,
+              2860875,
+              2770500,
+              2773250,
+              2831416,
+              2894875,
+              2687709
+            ],
+            [
+              2876209,
+              2961375,
+              2798542,
+              2849125,
+              2936916,
+              2856917,
+              2758417,
+              2890834,
+              2898958,
+              2738291,
+              2842000,
+              2854209,
+              2836666,
+              2801000,
+              2778000,
+              2862000,
+              2849708,
+              2862958,
+              2934041,
+              2949875
+            ],
+            [
+              3111000,
+              3151708,
+              3081417,
+              3081541,
+              3074792,
+              3068125,
+              3079750,
+              3038500,
+              3039375,
+              3064500,
+              3061583,
+              3055416,
+              3071166,
+              3052834,
+              3036333,
+              3035208,
+              3107041,
+              3128791,
+              3099208,
+              3108792
+            ],
+            [
+              3204125,
+              2990375,
+              3119375,
+              3124708,
+              3027500,
+              3039917,
+              3089625,
+              3073500,
+              3022542,
+              3094833,
+              3172083,
+              3111000,
+              3146292,
+              3024708,
+              3075750,
+              3069333,
+              2993125,
+              2976875,
+              3004625,
+              2964208
+            ],
+            [
+              3095167,
+              3138791,
+              3047125,
+              2982167,
+              3023417,
+              3120791,
+              3046042,
+              3155500,
+              3104042,
+              2925000,
+              2948041,
+              3041750,
+              2993917,
+              2961250,
+              2958000,
+              3052416,
+              2949541,
+              3077042,
+              3091208,
+              2953792
+            ]
+          ]
+        },
+        "rebuild_after_mcp_publication": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            415791,
+            381458,
+            393750,
+            446667,
+            408083
+          ],
+          "median_ns": 408083,
+          "p95_ns": 446667,
+          "throughput_per_second": 1225240.9436315652,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "fd65db87d53a9d0420eae828c8caa4d54b5ead8fb090f7ae2878371ca84108d4",
+      "allocation_peak_bytes": 11239230,
+      "retained_object_delta": 6176287,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 0,
+      "operation_count": 2500,
+      "category_counts": {
+        "builtin": 167,
+        "plugin": 167,
+        "mcp": 166
+      },
+      "projection_counts": {
+        "enabled_hidden": 450,
+        "enabled_unhidden": 500,
+        "disabled_hidden": 450,
+        "disabled_unhidden": 500,
+        "rebuild": 500,
+        "repeated": 500
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "advertisement",
+        "size": 5000,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "builtin/plugin/MCP-style names with hidden entries"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "visibility_enabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            28031958,
+            28205292,
+            28847500,
+            31373375,
+            30476458
+          ],
+          "median_ns": 28847500,
+          "p95_ns": 31373375,
+          "throughput_per_second": 173325.2448219083,
+          "within_run_samples_ns": []
+        },
+        "visibility_enabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            31255459,
+            31582208,
+            31714250,
+            34058875,
+            34510750
+          ],
+          "median_ns": 31714250,
+          "p95_ns": 34510750,
+          "throughput_per_second": 157657.83520026488,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_hidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            577709,
+            699542,
+            548709,
+            692708,
+            1086666
+          ],
+          "median_ns": 692708,
+          "p95_ns": 1086666,
+          "throughput_per_second": 7218048.586128643,
+          "within_run_samples_ns": []
+        },
+        "visibility_disabled_unhidden": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            459709,
+            469083,
+            419375,
+            472875,
+            734875
+          ],
+          "median_ns": 469083,
+          "p95_ns": 734875,
+          "throughput_per_second": 10659094.445972249,
+          "within_run_samples_ns": []
+        },
+        "repeated_unchanged_projection": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            122283541,
+            124810875,
+            123635291,
+            133679041,
+            132310250
+          ],
+          "median_ns": 124810875,
+          "p95_ns": 133679041,
+          "throughput_per_second": 40060.61170551044,
+          "within_run_samples_ns": []
+        },
+        "registry_projection_p95": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            32233042,
+            31767416,
+            31563583,
+            35000500,
+            33366416
+          ],
+          "median_ns": 32233042,
+          "p95_ns": 35000500,
+          "throughput_per_second": 155120.3265270464,
+          "within_run_samples_ns": [
+            [
+              30843917,
+              30271541,
+              30318708,
+              30829625,
+              29914541,
+              30608042,
+              30319458,
+              30001833,
+              30525500,
+              30343667,
+              30147709,
+              30573458,
+              30414334,
+              30025125,
+              30410542,
+              30456083,
+              32717333,
+              32233042,
+              31673416,
+              32097292
+            ],
+            [
+              31257833,
+              30528167,
+              30722208,
+              31149459,
+              30660208,
+              30664125,
+              31104833,
+              30459875,
+              31105291,
+              31899833,
+              31224292,
+              31028791,
+              31130625,
+              30975958,
+              30809916,
+              30737209,
+              31767416,
+              31146667,
+              31064750,
+              30551125
+            ],
+            [
+              30815167,
+              30942084,
+              30354208,
+              31027542,
+              30880166,
+              30347417,
+              31563583,
+              30431167,
+              31167667,
+              30490583,
+              30705291,
+              30633291,
+              30701208,
+              30656417,
+              31840000,
+              30154833,
+              30870417,
+              30687375,
+              30471583,
+              30955541
+            ],
+            [
+              34628209,
+              33479500,
+              32939333,
+              32195041,
+              32645541,
+              32821916,
+              32606333,
+              32748791,
+              32218917,
+              42639542,
+              33055333,
+              35000500,
+              34429167,
+              32881917,
+              33168209,
+              32750084,
+              33168125,
+              33324000,
+              33051959,
+              33617958
+            ],
+            [
+              33060167,
+              33101375,
+              33930917,
+              33366416,
+              32892708,
+              32829833,
+              32728542,
+              32595917,
+              32966833,
+              32818042,
+              32752584,
+              32812084,
+              32882083,
+              32513917,
+              32825084,
+              33093334,
+              33157959,
+              33246167,
+              32876583,
+              32956500
+            ]
+          ]
+        },
+        "rebuild_after_mcp_publication": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            3643250,
+            3744334,
+            3701750,
+            5440625,
+            4034083
+          ],
+          "median_ns": 3744334,
+          "p95_ns": 5440625,
+          "throughput_per_second": 1335350.9596099067,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "875959264842f6837daa22baebc202ca0055c523e46ad47dcd72b690337a549d",
+      "allocation_peak_bytes": 47176192,
+      "retained_object_delta": 9646821,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 0,
+      "operation_count": 25000,
+      "category_counts": {
+        "builtin": 1667,
+        "plugin": 1667,
+        "mcp": 1666
+      },
+      "projection_counts": {
+        "enabled_hidden": 4500,
+        "enabled_unhidden": 5000,
+        "disabled_hidden": 4500,
+        "disabled_unhidden": 5000,
+        "rebuild": 5000,
+        "repeated": 5000
+      },
+      "lifecycle_status": "completed"
+    },
+    {
+      "fixture": {
+        "kind": "mcp",
+        "size": 1,
+        "concurrency": 1,
+        "payload_bytes": null,
+        "composition": "deterministic fake server inventory publication"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "startup_to_ready": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1808621542,
+            1827940167,
+            1893547417,
+            1845301125,
+            1822315500
+          ],
+          "median_ns": 1827940167,
+          "p95_ns": 1893547417,
+          "throughput_per_second": 0.5470638580261582,
+          "within_run_samples_ns": []
+        },
+        "mcp_lifecycle": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7716125,
+            7398000,
+            7398042,
+            7672166,
+            7213500
+          ],
+          "median_ns": 7398042,
+          "p95_ns": 7716125,
+          "throughput_per_second": 135.17090062478692,
+          "within_run_samples_ns": []
+        },
+        "time_to_first_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7690375,
+            7373542,
+            7376084,
+            7643416,
+            7189375
+          ],
+          "median_ns": 7376084,
+          "p95_ns": 7690375,
+          "throughput_per_second": 135.57329336271115,
+          "within_run_samples_ns": []
+        },
+        "time_to_settled_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            7716125,
+            7398000,
+            7398042,
+            7672166,
+            7213500
+          ],
+          "median_ns": 7398042,
+          "p95_ns": 7716125,
+          "throughput_per_second": 135.17090062478692,
+          "within_run_samples_ns": []
+        },
+        "cleanup": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            157833,
+            120917,
+            117125,
+            135333,
+            154667
+          ],
+          "median_ns": 135333,
+          "p95_ns": 157833,
+          "throughput_per_second": 7389.180761528969,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "dbb4989c3be2949f3beb5de69201d9a11de843d0cdb7622ed4cdee85e624c7af",
+      "allocation_peak_bytes": 6495823,
+      "retained_object_delta": 5786678,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 1,
+      "operation_count": 5,
+      "category_counts": {
+        "mcp": 1
+      },
+      "projection_counts": {
+        "visible": 1,
+        "visible_at_first_publication": 1
+      },
+      "lifecycle_status": "settled"
+    },
+    {
+      "fixture": {
+        "kind": "mcp",
+        "size": 10,
+        "concurrency": 10,
+        "payload_bytes": null,
+        "composition": "deterministic fake server inventory publication"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "startup_to_ready": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1862035667,
+            1887324000,
+            1942169166,
+            1894862875,
+            1919955125
+          ],
+          "median_ns": 1894862875,
+          "p95_ns": 1942169166,
+          "throughput_per_second": 5.277426737277757,
+          "within_run_samples_ns": []
+        },
+        "mcp_lifecycle": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            70314375,
+            65988167,
+            66929125,
+            67292584,
+            67562708
+          ],
+          "median_ns": 67292584,
+          "p95_ns": 70314375,
+          "throughput_per_second": 148.60478533563224,
+          "within_run_samples_ns": []
+        },
+        "time_to_first_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            70279458,
+            65949792,
+            66888625,
+            67257209,
+            67526333
+          ],
+          "median_ns": 67257209,
+          "p95_ns": 70279458,
+          "throughput_per_second": 148.68294638869122,
+          "within_run_samples_ns": []
+        },
+        "time_to_settled_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            70314375,
+            65988167,
+            66929125,
+            67292584,
+            67562708
+          ],
+          "median_ns": 67292584,
+          "p95_ns": 70314375,
+          "throughput_per_second": 148.60478533563224,
+          "within_run_samples_ns": []
+        },
+        "cleanup": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            311416,
+            311000,
+            343875,
+            306042,
+            306417
+          ],
+          "median_ns": 311000,
+          "p95_ns": 343875,
+          "throughput_per_second": 32154.340836012863,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "6ec6fba74b1a57a8542826141c146955b0860dfed1633019e5b384cd43c83a64",
+      "allocation_peak_bytes": 11020106,
+      "retained_object_delta": 5958601,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 1,
+      "operation_count": 50,
+      "category_counts": {
+        "mcp": 10
+      },
+      "projection_counts": {
+        "visible": 10,
+        "visible_at_first_publication": 10
+      },
+      "lifecycle_status": "settled"
+    },
+    {
+      "fixture": {
+        "kind": "mcp",
+        "size": 50,
+        "concurrency": 50,
+        "payload_bytes": null,
+        "composition": "deterministic fake server inventory publication"
+      },
+      "warmups": 1,
+      "iterations": 5,
+      "phases": {
+        "startup_to_ready": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            2139653292,
+            2167554084,
+            2118934625,
+            2214617833,
+            2404288583
+          ],
+          "median_ns": 2167554084,
+          "p95_ns": 2404288583,
+          "throughput_per_second": 23.067475164324435,
+          "within_run_samples_ns": []
+        },
+        "mcp_lifecycle": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            328712250,
+            326005500,
+            330230333,
+            404207167,
+            406366208
+          ],
+          "median_ns": 330230333,
+          "p95_ns": 406366208,
+          "throughput_per_second": 151.4094709161681,
+          "within_run_samples_ns": []
+        },
+        "time_to_first_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            328659375,
+            325956875,
+            330177291,
+            404158334,
+            406320500
+          ],
+          "median_ns": 330177291,
+          "p95_ns": 406320500,
+          "throughput_per_second": 151.43379439744692,
+          "within_run_samples_ns": []
+        },
+        "time_to_settled_inventory": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            328712250,
+            326005500,
+            330230333,
+            404207167,
+            406366208
+          ],
+          "median_ns": 330230333,
+          "p95_ns": 406366208,
+          "throughput_per_second": 151.4094709161681,
+          "within_run_samples_ns": []
+        },
+        "cleanup": {
+          "measurement_status": "measured",
+          "reason": null,
+          "samples_ns": [
+            1016958,
+            1001417,
+            1047084,
+            1064459,
+            1146041
+          ],
+          "median_ns": 1047084,
+          "p95_ns": 1146041,
+          "throughput_per_second": 47751.66080276272,
+          "within_run_samples_ns": []
+        }
+      },
+      "registry_hash": "0e78cd556e01ea5799fec4eb49b30e74f35299ddfebc6a0cd5e9d56358792951",
+      "allocation_peak_bytes": 12145143,
+      "retained_object_delta": 6651320,
+      "cancellation": {
+        "completed": true,
+        "completion_ns": 0,
+        "queued_reader_completed": true,
+        "queued_writer_completed": true,
+        "recovery_completed": true
+      },
+      "leaks": {
+        "tasks": 0,
+        "processes": 0,
+        "sessions": 0
+      },
+      "task_count_peak": 1,
+      "operation_count": 250,
+      "category_counts": {
+        "mcp": 50
+      },
+      "projection_counts": {
+        "visible": 50,
+        "visible_at_first_publication": 50
+      },
+      "lifecycle_status": "settled"
+    }
+  ],
+  "decisions": [
+    {
+      "name": "execution_framework_overhead_percent_short_safe_size_1",
+      "threshold": 10.0,
+      "values": [
+        99.50586094001733,
+        99.50410466854356,
+        99.50020215633423,
+        99.56994920999014,
+        99.62128802010065
+      ],
+      "rerun_values": null,
+      "crossing_count": 5,
+      "median": 99.50586094001733,
+      "primary_state": "crossed",
+      "rerun_state": null,
+      "state": "crossed",
+      "rerun_required": false
+    },
+    {
+      "name": "mcp_lifecycle_startup_percent_10_servers",
+      "threshold": 20.0,
+      "values": [
+        3.776209889324317,
+        3.4963878486152877,
+        3.4461017182063536,
+        3.551316820221094,
+        3.5189732885032923
+      ],
+      "rerun_values": null,
+      "crossing_count": 0,
+      "median": 3.5189732885032923,
+      "primary_state": "uncrossed",
+      "rerun_state": null,
+      "state": "uncrossed",
+      "rerun_required": false
+    },
+    {
+      "name": "mcp_cleanup_seconds_1_servers",
+      "threshold": 6.0,
+      "values": [
+        0.000157833,
+        0.000120917,
+        0.000117125,
+        0.000135333,
+        0.000154667
+      ],
+      "rerun_values": null,
+      "crossing_count": 0,
+      "median": 0.000135333,
+      "primary_state": "uncrossed",
+      "rerun_state": null,
+      "state": "uncrossed",
+      "rerun_required": false
+    },
+    {
+      "name": "mcp_cleanup_seconds_10_servers",
+      "threshold": 6.0,
+      "values": [
+        0.000311416,
+        0.000311,
+        0.000343875,
+        0.000306042,
+        0.000306417
+      ],
+      "rerun_values": null,
+      "crossing_count": 0,
+      "median": 0.000311,
+      "primary_state": "uncrossed",
+      "rerun_state": null,
+      "state": "uncrossed",
+      "rerun_required": false
+    },
+    {
+      "name": "mcp_cleanup_seconds_50_servers",
+      "threshold": 6.0,
+      "values": [
+        0.001016958,
+        0.001001417,
+        0.001047084,
+        0.001064459,
+        0.001146041
+      ],
+      "rerun_values": null,
+      "crossing_count": 0,
+      "median": 0.001047084,
+      "primary_state": "uncrossed",
+      "rerun_state": null,
+      "state": "uncrossed",
+      "rerun_required": false
+    },
+    {
+      "name": "registry_projection_p95_ms_500_tools",
+      "threshold": 5.0,
+      "values": [
+        2.932625,
+        2.949875,
+        3.128791,
+        3.172083,
+        3.138791
+      ],
+      "rerun_values": null,
+      "crossing_count": 0,
+      "median": 3.128791,
+      "primary_state": "uncrossed",
+      "rerun_state": null,
+      "state": "uncrossed",
+      "rerun_required": false
+    },
+    {
+      "name": "mixed_gate_wait_end_to_end_percent_10_pairs",
+      "threshold": 25.0,
+      "values": [
+        89.76780627300656,
+        89.760185650769,
+        89.65774932956676,
+        89.71114141802434,
+        89.78318430868626
+      ],
+      "rerun_values": null,
+      "crossing_count": 5,
+      "median": 89.760185650769,
+      "primary_state": "crossed",
+      "rerun_state": null,
+      "state": "crossed",
+      "rerun_required": false
+    }
+  ]
+}
