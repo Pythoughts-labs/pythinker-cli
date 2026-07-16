@@ -25,7 +25,7 @@ from pythinker_core.chat_provider import (
     TokenUsage,
 )
 from pythinker_core.message import Message, ToolCall
-from pythinker_core.tooling import ToolBatchContext
+from pythinker_core.tooling import ToolBatchContext, ToolCancellationTimeoutError
 from pythinker_core.tooling.error import ToolRuntimeError
 from tenacity import RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential_jitter
 
@@ -2361,19 +2361,25 @@ class PythinkerSoul:
         with deliberation_scope(deliberation_context_id, deliberation_generation):
             try:
                 results = await result.tool_results()
-            except asyncio.CancelledError:
-                # Interrupted mid-tool: persist the assistant message plus a result
+            except (asyncio.CancelledError, ToolCancellationTimeoutError) as interruption:
+                # Interrupted or timed out mid-tool: persist the assistant message plus a result
                 # for every tool_call so the next turn does not see unanswered
                 # tool_calls (which providers reject). Keep successful outputs from
                 # the StepResult's authoritative completion snapshot; only still-pending
-                # calls get a synthetic interruption marker. Shield the
-                # write from the same cancellation so it completes, then re-raise.
+                # calls get a truthful synthetic marker. Shield the write from the
+                # same cancellation so it completes, then re-raise the original error.
                 completed_tool_results = result.completed_tool_results
+                pending_message = (
+                    "Tool call completion is unknown because cancellation did not settle; "
+                    "the operation may still be running and must not be retried automatically."
+                    if isinstance(interruption, ToolCancellationTimeoutError)
+                    else "Tool call interrupted by user."
+                )
                 interrupted = [
                     completed_tool_results.get(tc.id)
                     or ToolResult(
                         tool_call_id=tc.id,
-                        return_value=ToolRuntimeError(message="Tool call interrupted by user."),
+                        return_value=ToolRuntimeError(message=pending_message),
                     )
                     for tc in result.tool_calls
                 ]

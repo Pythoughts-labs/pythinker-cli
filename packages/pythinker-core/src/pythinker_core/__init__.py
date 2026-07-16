@@ -38,6 +38,8 @@ from . import chat_provider, contrib, message, tooling, utils
 
 logger.disable("pythinker_core")
 
+_STEP_CANCELLATION_TIMEOUT_SECONDS = 5.0
+
 __all__ = [
     # submodules
     "chat_provider",
@@ -97,12 +99,22 @@ class _ToolResultCallbackSupervisor:
             self._futures.add(future)
             future.add_done_callback(self._async_callback_done)
 
-    async def settle(self, *, cancel: bool) -> None:
+    async def settle(self, *, cancel: bool, timeout: float | None = None) -> None:
         futures = list(self._futures)
         if cancel:
             for future in futures:
                 future.cancel()
-        await asyncio.gather(*futures, return_exceptions=True)
+        if not futures:
+            return
+        if timeout is None:
+            await asyncio.wait(futures)
+            return
+
+        _, pending = await asyncio.wait(futures, timeout=timeout)
+        if pending:
+            raise ToolCancellationTimeoutError(
+                f"Tool result callback cancellation did not settle within {timeout:g} seconds"
+            )
 
 
 async def _dispatch_individual_tool_calls(
@@ -287,14 +299,32 @@ class StepResult:
         await _await_owned_settlement(settlement)
 
     async def _cancel_and_settle_owned_work(self) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _STEP_CANCELLATION_TIMEOUT_SECONDS
         try:
             if self._tool_batch is not None:
-                await self._tool_batch.cancel_and_settle()
+                await self._tool_batch.cancel_and_settle(timeout=max(0.0, deadline - loop.time()))
             else:
                 await self._cancel_legacy_futures()
-        finally:
+        except BaseException as primary_error:
             if self._tool_result_callback_supervisor is not None:
-                await self._tool_result_callback_supervisor.settle(cancel=True)
+                try:
+                    await self._tool_result_callback_supervisor.settle(
+                        cancel=True,
+                        timeout=max(0.0, deadline - loop.time()),
+                    )
+                except BaseException as callback_error:
+                    primary_error.add_note(
+                        "Owned tool-result callback cleanup also failed: "
+                        f"{type(callback_error).__name__}: {callback_error}"
+                    )
+            raise
+
+        if self._tool_result_callback_supervisor is not None:
+            await self._tool_result_callback_supervisor.settle(
+                cancel=True,
+                timeout=max(0.0, deadline - loop.time()),
+            )
 
     async def _cancel_legacy_futures(self) -> None:
         futures = list(self._tool_result_futures.values())

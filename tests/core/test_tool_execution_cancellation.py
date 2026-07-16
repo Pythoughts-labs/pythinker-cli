@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 from pydantic import BaseModel
@@ -17,7 +17,7 @@ from pythinker_core.tooling import (
 )
 
 from pythinker_code.soul import tool_execution
-from pythinker_code.soul.toolset import PythinkerToolset
+from pythinker_code.soul.toolset import MCPServerInfo, PythinkerToolset
 from pythinker_code.wire.types import ToolCall, ToolResult
 
 
@@ -86,6 +86,14 @@ class ImmediateTool(CallableTool2[NoParams]):
         return ToolOk(output="done")
 
 
+class RecordingClient:
+    def __init__(self) -> None:
+        self.closed = asyncio.Event()
+
+    async def close(self) -> None:
+        self.closed.set()
+
+
 def _call(call_id: str, name: str) -> ToolCall:
     return ToolCall(
         id=call_id,
@@ -103,6 +111,14 @@ async def _wait_until_recovered(toolset: PythinkerToolset) -> None:
 
 def test_cancellation_timeout_default_is_five_seconds() -> None:
     assert tool_execution.TOOL_CANCELLATION_TIMEOUT_SECONDS == 5.0
+
+
+@pytest.mark.parametrize("timeout", [-1.0, float("nan"), float("inf")])
+async def test_engine_cleanup_rejects_invalid_timeout(timeout: float) -> None:
+    toolset = PythinkerToolset()
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        await toolset._execution.cleanup(timeout=timeout)  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.parametrize("timeout", [-1.0, float("nan"), float("inf")])
@@ -246,6 +262,60 @@ async def test_timeout_keeps_previously_completed_snapshot_and_blocks_late_callb
     assert callbacks == ["done"]
 
 
+async def test_toolset_cleanup_waits_for_timed_out_engine_work() -> None:
+    stubborn = CancellationIgnoringTool()
+    toolset = PythinkerToolset()
+    toolset.add(stubborn)
+    batch = toolset.handle_batch([_call("stubborn", "Stubborn")], ToolBatchContext())
+    await stubborn.started.wait()
+    with pytest.raises(ToolCancellationTimeoutError):
+        await batch.cancel_and_settle(timeout=0.01)
+
+    cleanup_task = asyncio.create_task(toolset.cleanup())
+    try:
+        await asyncio.sleep(0)
+        assert not cleanup_task.done()
+
+        stubborn.release.set()
+        await asyncio.wait_for(cleanup_task, timeout=1)
+        assert stubborn.finished.is_set()
+        assert toolset._execution.poisoned is False  # pyright: ignore[reportPrivateUsage]
+    finally:
+        stubborn.release.set()
+        await asyncio.wait_for(stubborn.finished.wait(), timeout=1)
+        await asyncio.gather(cleanup_task, return_exceptions=True)
+
+
+async def test_toolset_cleanup_closes_mcp_before_reporting_engine_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tool_execution, "TOOL_CANCELLATION_TIMEOUT_SECONDS", 0.01)
+    stubborn = CancellationIgnoringTool()
+    client = RecordingClient()
+    toolset = PythinkerToolset()
+    toolset.add(stubborn)
+    toolset._mcp_servers["recording"] = MCPServerInfo(  # pyright: ignore[reportPrivateUsage]
+        status="connected",
+        client=cast(Any, client),
+        tools=[],
+        resources=[],
+        prompts=[],
+    )
+    batch = toolset.handle_batch([_call("stubborn", "Stubborn")], ToolBatchContext())
+    await stubborn.started.wait()
+    with pytest.raises(ToolCancellationTimeoutError):
+        await batch.cancel_and_settle(timeout=0.01)
+
+    try:
+        with pytest.raises(ToolCancellationTimeoutError, match="cleanup did not settle"):
+            await toolset.cleanup()
+        assert client.closed.is_set()
+    finally:
+        stubborn.release.set()
+        await asyncio.wait_for(stubborn.finished.wait(), timeout=1)
+        await _wait_until_recovered(toolset)
+
+
 async def test_completion_racing_cancellation_remains_in_snapshot() -> None:
     tool = CompleteAndCancelCallerTool()
     toolset = PythinkerToolset()
@@ -302,6 +372,7 @@ async def test_repeated_caller_cancellation_cannot_detach_core_settlement() -> N
 async def test_core_surfaces_timeout_then_engine_recovers_without_task_warnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("pythinker_core._STEP_CANCELLATION_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(tool_execution, "TOOL_CANCELLATION_TIMEOUT_SECONDS", 0.01)
     reports: list[dict[str, object]] = []
     loop = asyncio.get_running_loop()

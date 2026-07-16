@@ -366,6 +366,24 @@ class ToolExecutionEngine:
         self._late_drain_tasks.add(drain_task)
         drain_task.add_done_callback(self._late_drain_tasks.discard)
 
+    async def cleanup(self, *, timeout: float | None = None) -> None:
+        """Wait a bounded interval for retained late-cancellation observers."""
+        effective_timeout = TOOL_CANCELLATION_TIMEOUT_SECONDS if timeout is None else timeout
+        if not math.isfinite(effective_timeout) or effective_timeout < 0:
+            raise ValueError("tool cleanup timeout must be finite and non-negative")
+
+        drain_tasks = list(self._late_drain_tasks)
+        if not drain_tasks:
+            return
+
+        done, pending = await asyncio.wait(drain_tasks, timeout=effective_timeout)
+        for task in done:
+            task.result()
+        if pending:
+            raise ToolCancellationTimeoutError(
+                f"Tool execution cleanup did not settle within {effective_timeout:g} seconds"
+            )
+
     def begin_step(
         self,
         previous_calls: Sequence[ToolCallKey],

@@ -19,6 +19,7 @@ from pythinker_core.tooling import (
     Tool,
     ToolBatchContext,
     ToolBatchHandle,
+    ToolCancellationTimeoutError,
     ToolError,
     ToolOk,
     Toolset,
@@ -1067,6 +1068,12 @@ class PythinkerToolset:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._mcp_loading_task
 
+        execution_error: ToolCancellationTimeoutError | None = None
+        try:
+            await self._execution.cleanup()
+        except ToolCancellationTimeoutError as error:
+            execution_error = error
+
         # Close every MCP client concurrently with a per-server timeout, so one
         # hung or slow client cannot block teardown of the rest (mcpext-3).
         async def _close(info: MCPServerInfo) -> None:
@@ -1077,6 +1084,8 @@ class PythinkerToolset:
                 logger.debug("MCP client close failed/timed out: {error}", error=exc)
 
         await asyncio.gather(*(_close(info) for info in self._mcp_servers.values()))
+        if execution_error is not None:
+            raise execution_error
 
 
 @dataclass(slots=True)

@@ -59,6 +59,8 @@ class CompletedBatch:
             consecutive_identical_call_count=1 if calls else 0,
         )
         self.cancelled = False
+        self.cancel_timeout: float | None = None
+        self.cancel_error: BaseException | None = None
 
     @property
     def tool_calls(self) -> list[ToolCall]:
@@ -80,8 +82,10 @@ class CompletedBatch:
         return list(self._results)
 
     async def cancel_and_settle(self, *, timeout: float | None = None) -> None:
-        del timeout
         self.cancelled = True
+        self.cancel_timeout = timeout
+        if self.cancel_error is not None:
+            raise self.cancel_error
 
 
 class RecordingBatchToolset:
@@ -441,6 +445,70 @@ async def test_tool_results_cancellation_settles_owned_async_callback() -> None:
     with pytest.raises(asyncio.CancelledError):
         await results_task
     assert callback_cancelled.is_set()
+
+
+@pytest.mark.parametrize(
+    "batch_error",
+    [None, ToolCancellationTimeoutError("batch cancellation failed first")],
+)
+async def test_tool_results_cancellation_bounds_resistant_async_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    batch_error: ToolCancellationTimeoutError | None,
+) -> None:
+    monkeypatch.setattr("pythinker_core._STEP_CANCELLATION_TIMEOUT_SECONDS", 0.01)
+    callback_started = asyncio.Event()
+    callback_cancelled = asyncio.Event()
+    callback_release = asyncio.Event()
+    callback_finished = asyncio.Event()
+
+    async def resistant_callback(_result: ToolResult) -> None:
+        callback_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            callback_cancelled.set()
+            await callback_release.wait()
+        finally:
+            callback_finished.set()
+
+    toolset = RecordingBatchToolset([])
+    result = await step(
+        MockChatProvider([_tool_call("call-1", "First")], finish_reason="tool_calls"),
+        "",
+        toolset,
+        [],
+        on_tool_result=resistant_callback,
+    )
+    assert toolset.batch is not None
+    toolset.batch.cancel_error = batch_error
+    results_task = asyncio.create_task(result.tool_results())
+    await callback_started.wait()
+    results_task.cancel()
+
+    try:
+        done, pending = await asyncio.wait({results_task}, timeout=0.1)
+        assert done == {results_task}
+        assert pending == set()
+        if batch_error is None:
+            with pytest.raises(ToolCancellationTimeoutError, match="callback cancellation"):
+                await results_task
+        else:
+            with pytest.raises(
+                ToolCancellationTimeoutError, match="batch cancellation failed first"
+            ) as caught:
+                await results_task
+            assert len(caught.value.__notes__) == 1
+            assert caught.value.__notes__[0].startswith(
+                "Owned tool-result callback cleanup also failed: "
+                "ToolCancellationTimeoutError: Tool result callback cancellation did not settle"
+            )
+        assert callback_cancelled.is_set()
+        assert toolset.batch.cancel_timeout is not None
+        assert 0 <= toolset.batch.cancel_timeout <= 0.01
+    finally:
+        callback_release.set()
+        await asyncio.wait_for(callback_finished.wait(), timeout=1)
+        await asyncio.gather(results_task, return_exceptions=True)
 
 
 async def test_batch_async_callback_exception_is_reported_but_nonfatal() -> None:

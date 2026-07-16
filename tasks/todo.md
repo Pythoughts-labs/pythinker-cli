@@ -4,19 +4,53 @@
 
 ### PR #207 cancellation-state review fix (2026-07-15)
 
-- [ ] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`
+- [x] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`
       with a failing regression test before production edits.
-- [ ] Keep cancelled/failed batch fingerprints out of committed dedup and consecutive-call state.
-- [ ] Preserve completed-result snapshots, callback suppression, bounded cancellation, timeout
+- [x] Keep cancelled/failed batch fingerprints out of committed dedup and consecutive-call state.
+- [x] Preserve completed-result snapshots, callback suppression, bounded cancellation, timeout
       poisoning, and successful finalized summaries.
-- [ ] Run focused tests, core and CLI package gates, and `git diff --check`.
-- [ ] Complete task-scoped and whole-branch reviews with no open Critical/Important findings.
+- [x] Run focused tests, core and CLI package gates, and `git diff --check`.
+- [x] Bound cancellation-resistant async result callbacks under the StepResult ownership deadline.
+- [x] Persist completed results and explicit completion-unknown markers when cancellation times out.
+- [x] Connect engine late-drain ownership to bounded toolset/runtime cleanup.
+- [x] Update the public architecture flow from per-call Soul dispatch to the batch engine path.
+- [x] Complete task-scoped and whole-branch reviews with no open Critical/Important findings.
 - [ ] Push the PR head, confirm the latest CodeRabbit review succeeds, reply to the remaining false
       positive with evidence, and resolve it through GitHub GraphQL.
 
 Acceptance: after successful call A and cancelled call B, retrying B with A as the authoritative
 prior context is not a cross-step duplicate and starts a fresh consecutive streak at 1. All PR
 review threads are resolved only after the tested fix is present on GitHub.
+
+#### Review: PR #207 cancellation-state review fix
+
+- Root cause: `_ExecutionBatch._run()` finalized the engine step before watcher settlement. A
+  cancelled or failed batch therefore committed fingerprints that `PythinkerSoul` correctly kept
+  out of authoritative conversation state, causing a later retry to appear duplicated.
+- Behavior: successful watcher settlement now commits the step exactly once. Cancellation or
+  failure preserves previously committed fingerprints and completed-result snapshots while
+  discarding only the current uncommitted step state before re-raising the original exception.
+- TDD evidence: the new regression first failed because the retry reported
+  `dedup_triggered is True` and consecutive count 2; after the fix it passed with no duplicate,
+  consecutive count 1, and two real blocking-tool invocations. The final callback and
+  engine/Soul cancellation regressions passed 92 focused tests across the core and CLI packages.
+- Package evidence: `make test-pythinker-core` reported 433 passed. `make check-pythinker-core`
+  passed Ruff, formatting, and Pyright with 0 errors; its repository-configured non-blocking `ty`
+  step retained 62 existing provider/third-party diagnostics outside the changed files.
+  `make check-pythinker-code` passed Ruff, formatting, Pyright with 0 errors, and blocking `ty`.
+  The main CLI suite reported 7,072 passed, 9 skipped, and 1 expected xfail; separate `tests_e2e`
+  reported 65 passed and 4 skipped. The VitePress documentation build and `git diff --check` also
+  passed.
+- Review: the task-scoped review approved the transactional rollback and the follow-up Pyright
+  correction. A leading-underscore sibling call initially triggered strict `reportPrivateUsage`;
+  the final `abort_step()` seam is documented and remains internal through the non-exported engine,
+  without a suppression. The first whole-branch review correctly blocked publication on three
+  Important cancellation-lifecycle gaps: callback settlement was unbounded, cancellation timeout
+  skipped context lineage repair, and engine late-drain work was absent from runtime cleanup. The
+  implementation now bounds all owned cancellation under one deadline, preserves truthful timeout
+  lineage, joins retained engine work during cleanup, and documents the batch path. Fresh local
+  task-scoped and whole-branch reviews found no remaining Critical/Important issue; GitHub closeout
+  remains pending.
 
 ### TUI thinking Markdown and activity motion (2026-07-11)
 
