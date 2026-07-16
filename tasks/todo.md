@@ -2,6 +2,22 @@
 
 ## Active
 
+### PR #207 cancellation-state review fix (2026-07-15)
+
+- [ ] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`
+      with a failing regression test before production edits.
+- [ ] Keep cancelled/failed batch fingerprints out of committed dedup and consecutive-call state.
+- [ ] Preserve completed-result snapshots, callback suppression, bounded cancellation, timeout
+      poisoning, and successful finalized summaries.
+- [ ] Run focused tests, core and CLI package gates, and `git diff --check`.
+- [ ] Complete task-scoped and whole-branch reviews with no open Critical/Important findings.
+- [ ] Push the PR head, confirm the latest CodeRabbit review succeeds, reply to the remaining false
+      positive with evidence, and resolve it through GitHub GraphQL.
+
+Acceptance: after successful call A and cancelled call B, retrying B with A as the authoritative
+prior context is not a cross-step duplicate and starts a fresh consecutive streak at 1. All PR
+review threads are resolved only after the tested fix is present on GitHub.
+
 ### TUI thinking Markdown and activity motion (2026-07-11)
 
 - [x] Execute `docs/superpowers/plans/2026-07-11-tui-thinking-markdown-and-activity-motion.md`
