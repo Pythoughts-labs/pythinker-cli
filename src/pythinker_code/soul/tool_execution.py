@@ -399,6 +399,15 @@ class ToolExecutionEngine:
             self._step_closed = True
         return list(self._current_step_calls)
 
+    def abort_step(self) -> None:
+        """Discard uncommitted state for the current execution step."""
+        if self._step_closed:
+            return
+        self._current_step_calls = []
+        self._current_step_tasks = {}
+        self._dedup_triggered = False
+        self._step_closed = True
+
     def _advance_consecutive_streak(self, calls: Sequence[ToolCallKey]) -> None:
         for call_key in calls:
             if call_key == self._consecutive_key:
@@ -840,12 +849,13 @@ class _ExecutionBatch:
                     future = handled
                 self._source_futures.append(future)
 
-            self._engine.end_step()
-            self._summary = self._engine.summary
             self._watcher_tasks = [
                 asyncio.create_task(self._watch(future)) for future in self._source_futures
             ]
-            return list(await asyncio.gather(*self._watcher_tasks))
+            results = list(await asyncio.gather(*self._watcher_tasks))
+            self._engine.end_step()
+            self._summary = self._engine.summary
+            return results
         except BaseException:
             self._callbacks_active = False
             for index, future in enumerate(self._source_futures):
@@ -858,9 +868,7 @@ class _ExecutionBatch:
                 future.cancel()
             await asyncio.gather(*self._watcher_tasks, return_exceptions=True)
             await asyncio.gather(*self._source_futures, return_exceptions=True)
-            if not self._summary.finalized:
-                self._engine.end_step()
-                self._summary = self._engine.summary
+            self._engine.abort_step()
             raise
 
     async def results(self) -> list[ToolResult]:

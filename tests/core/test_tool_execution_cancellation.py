@@ -133,6 +133,48 @@ async def test_zero_timeout_accepts_already_completed_batch() -> None:
     assert toolset._execution.poisoned is False  # pyright: ignore[reportPrivateUsage]
 
 
+async def test_cancelled_batch_does_not_commit_cross_step_dedup_state() -> None:
+    stubborn = CancellationIgnoringTool()
+    immediate = ImmediateTool()
+    toolset = PythinkerToolset()
+    toolset.add(stubborn)
+    toolset.add(immediate)
+
+    first = toolset.handle_batch(
+        [_call("first", "Immediate")],
+        ToolBatchContext(turn_id="turn", step_no=1),
+    )
+    await first.results()
+    prior = first.summary.current_call_fingerprints
+
+    cancelled = toolset.handle_batch(
+        [_call("cancelled", "Stubborn")],
+        ToolBatchContext(
+            turn_id="turn",
+            step_no=2,
+            prior_call_fingerprints=prior,
+        ),
+    )
+    await stubborn.started.wait()
+    settlement = asyncio.create_task(cancelled.cancel_and_settle())
+    await stubborn.cancel_seen.wait()
+    stubborn.release.set()
+    await settlement
+
+    retry = toolset.handle_batch(
+        [_call("retry", "Stubborn")],
+        ToolBatchContext(
+            turn_id="turn",
+            step_no=2,
+            prior_call_fingerprints=prior,
+        ),
+    )
+    assert [result.tool_call_id for result in await retry.results()] == ["retry"]
+    assert retry.summary.dedup_triggered is False
+    assert retry.summary.consecutive_identical_call_count == 1
+    assert stubborn.invocations == 2
+
+
 async def test_timeout_poisons_new_batches_until_late_task_is_drained() -> None:
     stubborn = CancellationIgnoringTool()
     immediate = ImmediateTool()
