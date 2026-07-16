@@ -1068,10 +1068,10 @@ class PythinkerToolset:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._mcp_loading_task
 
-        execution_error: ToolCancellationTimeoutError | None = None
+        execution_error: asyncio.CancelledError | ToolCancellationTimeoutError | None = None
         try:
             await self._execution.cleanup()
-        except ToolCancellationTimeoutError as error:
+        except (asyncio.CancelledError, ToolCancellationTimeoutError) as error:
             execution_error = error
 
         # Close every MCP client concurrently with a per-server timeout, so one

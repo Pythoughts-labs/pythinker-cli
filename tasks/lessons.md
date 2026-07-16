@@ -128,6 +128,10 @@ Format: trigger → rule.
 
 ## Verification gates
 
+- **When teardown awaits supervised internal work before closing external resources**, preserve a
+  caller `CancelledError` but do not let it skip the remaining resource closures; capture the
+  cancellation, complete the teardown sequence, then re-raise it.
+
 - **When adding an internal method that a sibling class must call under strict Pyright**, do not
   assume a leading underscore is harmless merely because both classes share a module. Use a
   documented method on the non-exported internal type and preserve `reportPrivateUsage`; never add

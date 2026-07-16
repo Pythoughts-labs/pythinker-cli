@@ -316,6 +316,38 @@ async def test_toolset_cleanup_closes_mcp_before_reporting_engine_timeout(
         await _wait_until_recovered(toolset)
 
 
+async def test_toolset_cleanup_closes_mcp_before_preserving_caller_cancellation() -> None:
+    stubborn = CancellationIgnoringTool()
+    client = RecordingClient()
+    toolset = PythinkerToolset()
+    toolset.add(stubborn)
+    toolset._mcp_servers["recording"] = MCPServerInfo(  # pyright: ignore[reportPrivateUsage]
+        status="connected",
+        client=cast(Any, client),
+        tools=[],
+        resources=[],
+        prompts=[],
+    )
+    batch = toolset.handle_batch([_call("stubborn", "Stubborn")], ToolBatchContext())
+    await stubborn.started.wait()
+    with pytest.raises(ToolCancellationTimeoutError):
+        await batch.cancel_and_settle(timeout=0.01)
+
+    cleanup_task = asyncio.create_task(toolset.cleanup())
+    try:
+        await asyncio.sleep(0)
+        assert not cleanup_task.done()
+
+        cleanup_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cleanup_task
+        assert client.closed.is_set()
+    finally:
+        stubborn.release.set()
+        await asyncio.wait_for(stubborn.finished.wait(), timeout=1)
+        await _wait_until_recovered(toolset)
+
+
 async def test_completion_racing_cancellation_remains_in_snapshot() -> None:
     tool = CompleteAndCancelCallerTool()
     toolset = PythinkerToolset()

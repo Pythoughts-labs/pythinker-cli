@@ -223,6 +223,8 @@ its drain observer.
       tasks and explicit timeout validation/reporting.
 - [x] Wire engine cleanup into `PythinkerToolset.cleanup()` while guaranteeing MCP close attempts
       still run before any retained engine error propagates.
+- [x] Preserve caller cancellation raised by engine cleanup until after MCP session/client teardown,
+      then re-raise the original `CancelledError`.
 
 ### Task 5: Documentation, Full Gates, and Re-review
 

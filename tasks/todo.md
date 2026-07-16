@@ -13,6 +13,7 @@
 - [x] Bound cancellation-resistant async result callbacks under the StepResult ownership deadline.
 - [x] Persist completed results and explicit completion-unknown markers when cancellation times out.
 - [x] Connect engine late-drain ownership to bounded toolset/runtime cleanup.
+- [x] Preserve caller cancellation until after MCP teardown completes.
 - [x] Update the public architecture flow from per-call Soul dispatch to the batch engine path.
 - [x] Complete task-scoped and whole-branch reviews with no open Critical/Important findings.
 - [ ] Push the PR head, confirm the latest CodeRabbit review succeeds, reply to the remaining false
@@ -38,9 +39,9 @@ review threads are resolved only after the tested fix is present on GitHub.
   passed Ruff, formatting, and Pyright with 0 errors; its repository-configured non-blocking `ty`
   step retained 62 existing provider/third-party diagnostics outside the changed files.
   `make check-pythinker-code` passed Ruff, formatting, Pyright with 0 errors, and blocking `ty`.
-  The main CLI suite reported 7,072 passed, 9 skipped, and 1 expected xfail; separate `tests_e2e`
-  reported 65 passed and 4 skipped. The VitePress documentation build and `git diff --check` also
-  passed.
+  The final cancellation/MCP set reported 57 passed. The main CLI suite reported 7,073 passed, 9
+  skipped, and 1 expected xfail; separate `tests_e2e` reported 65 passed and 4 skipped. The
+  VitePress documentation build and `git diff --check` also passed.
 - Review: the task-scoped review approved the transactional rollback and the follow-up Pyright
   correction. A leading-underscore sibling call initially triggered strict `reportPrivateUsage`;
   the final `abort_step()` seam is documented and remains internal through the non-exported engine,
@@ -48,9 +49,11 @@ review threads are resolved only after the tested fix is present on GitHub.
   Important cancellation-lifecycle gaps: callback settlement was unbounded, cancellation timeout
   skipped context lineage repair, and engine late-drain work was absent from runtime cleanup. The
   implementation now bounds all owned cancellation under one deadline, preserves truthful timeout
-  lineage, joins retained engine work during cleanup, and documents the batch path. Fresh local
-  task-scoped and whole-branch reviews found no remaining Critical/Important issue; GitHub closeout
-  remains pending.
+  lineage, joins retained engine work during cleanup, and documents the batch path. The latest-head
+  CodeRabbit review then found that caller cancellation during engine cleanup could skip MCP
+  teardown. A real cancellation regression reproduced the leak before the fix and now proves MCP
+  closure precedes re-raising `CancelledError`. Fresh local re-review has no remaining
+  Critical/Important issue; final GitHub re-review and closeout remain pending.
 
 ### TUI thinking Markdown and activity motion (2026-07-11)
 
