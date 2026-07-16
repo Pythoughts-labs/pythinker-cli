@@ -435,6 +435,7 @@ class AgentTool(CallableTool2[Params]):
     async def _prepare_review_target(
         self, params: Params, requested_type: str
     ) -> ResolvedReviewTarget | ToolError | None:
+        """Resolve fresh reviewer scope before allocating an agent instance."""
         if params.resume is not None:
             if params.review_target is not None:
                 return ToolError(
@@ -604,6 +605,7 @@ class AgentTool(CallableTool2[Params]):
         *,
         resolved_review_target: ResolvedReviewTarget | None,
     ) -> ToolReturnValue:
+        """Launch a background agent while preserving its resolved review target."""
         assert self._runtime.subagent_store is not None
         try:
             tool_call = get_current_tool_call_or_none()

@@ -4,12 +4,13 @@ import asyncio
 import contextlib
 import signal
 import time
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from pythinker_core.message import Message
 from pythinker_core.tooling.empty import EmptyToolset
 
+from pythinker_code.agentspec import DEFAULT_AGENT_FILE
 from pythinker_code.approval_runtime import (
     ApprovalRequestRecord,
     ApprovalRuntimeEvent,
@@ -22,7 +23,6 @@ from pythinker_code.notifications import NotificationDelivery, NotificationEvent
 from pythinker_code.soul.agent import Agent as SoulAgent
 from pythinker_code.soul.context import Context
 from pythinker_code.subagents import AgentLaunchSpec, AgentTypeDefinition, ToolPolicy
-from pythinker_code.subagents.core import SubagentRunSpec
 from pythinker_code.subagents.review_target import (
     ResolvedReviewTarget,
     ReviewTargetErrorCode,
@@ -236,7 +236,7 @@ async def test_create_agent_task_persists_timeout_s_on_spec(runtime, monkeypatch
     task = manager._live_agent_tasks.pop(view.spec.id)
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await task
+        _ = await task
 
 
 @pytest.mark.asyncio
@@ -399,7 +399,7 @@ async def test_background_runner_transports_original_prompt_and_target(
         AgentTypeDefinition(
             name="code-reviewer",
             description="Test code reviewer.",
-            agent_file=runtime.subagent_store.root / "code-reviewer.yaml",
+            agent_file=DEFAULT_AGENT_FILE.parent / "code_reviewer.yaml",
             tool_policy=ToolPolicy(mode="inherit"),
         )
     )
@@ -414,59 +414,41 @@ async def test_background_runner_transports_original_prompt_and_target(
         ),
     )
     target = ResolvedReviewTarget(
-        requested_kind="base",
-        requested_ref="main",
-        kind="base",
+        requested_kind="commit",
+        requested_ref="HEAD",
+        kind="commit",
         head_sha="b" * 40,
-        base_ref="main",
-        base_sha="c" * 40,
-        merge_base_sha="a" * 40,
-        attempted_base_refs=("main",),
-        worktree_changes=WorktreeChanges(
-            staged=False,
-            unstaged=False,
-            untracked=False,
-        ),
-        worktree_state="live",
+        target_sha="b" * 40,
+        commit_title="review target",
+        worktree_state="excluded",
         prompt="<review-target>runtime scope</review-target>",
-        hint="base main",
+        hint="commit bbbbbbbbbbbb: review target",
     )
-    captured: list[SubagentRunSpec] = []
 
-    class _CapturedSpec(Exception):
-        pass
-
-    async def capture_prepare_soul(spec, runtime, builder, store, on_stage=None):
-        captured.append(spec)
-        raise _CapturedSpec
+    async def echo_composed_prompt(soul, prompt, ui_loop_fn, wire_path, **kwargs):
+        return prompt, None
 
     monkeypatch.setattr(
-        "pythinker_code.background.agent_runner.prepare_soul",
-        capture_prepare_soul,
+        "pythinker_code.background.agent_runner.run_with_summary_continuation",
+        echo_composed_prompt,
     )
-    monkeypatch.setattr(runtime.background_tasks, "_mark_task_running", Mock())
-    runner = BackgroundAgentRunner(
-        runtime=runtime,
-        manager=runtime.background_tasks,
-        task_id="agent-review-target",
+    view = runtime.background_tasks.create_agent_task(
         agent_id="areviewbg",
         subagent_type="code-reviewer",
         prompt="original caller task",
+        description="review target transport",
+        tool_call_id="tool-review-target",
         model_override=None,
         resolved_review_target=target,
     )
-    monkeypatch.setattr(
-        runner,
-        "_prepare_isolation_worktree",
-        AsyncMock(return_value=None),
-    )
 
-    with pytest.raises(_CapturedSpec):
-        await runner._run_core(Mock())
+    completed = await runtime.background_tasks.wait(view.spec.id, timeout_s=5)
+    output = runtime.background_tasks.tail_output(view.spec.id)
 
-    assert len(captured) == 1
-    assert captured[0].prompt == "original caller task"
-    assert captured[0].resolved_review_target == target
+    assert completed.runtime.status == "completed"
+    assert "<review-task>\noriginal caller task\n</review-task>" in output
+    assert target.prompt in output
+    assert output.index("original caller task") < output.index(target.prompt)
 
 
 @pytest.mark.asyncio

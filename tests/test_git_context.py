@@ -161,6 +161,11 @@ class TestRunGit:
         # Either way, it should not raise
         assert result is None or isinstance(result, str)
 
+    @pytest.mark.asyncio
+    async def test_rejects_nonpositive_output_limit(self) -> None:
+        with pytest.raises(ValueError, match="max_output_bytes must be positive"):
+            await run_git(["status"], "/repo", max_output_bytes=0)
+
 
 @pytest.mark.asyncio
 async def test_run_git_preserves_nonzero_exit_for_callers(tmp_path: Path) -> None:
@@ -277,6 +282,16 @@ class TestCollectGitContext:
             assert result == ""
 
     @pytest.mark.asyncio
+    async def test_repository_without_displayable_metadata_returns_empty(
+        self, tmp_path: Path
+    ) -> None:
+        run = AsyncMock(side_effect=["true", None, None, None, None, None])
+        with patch("pythinker_code.subagents.git_context._run_git", run):
+            result = await collect_git_context(_host_path(tmp_path), include_merge_base=False)
+
+        assert result == ""
+
+    @pytest.mark.asyncio
     async def test_remote_url_with_project_name(self, tmp_path: Path) -> None:
         """Test that remote origin and project name are extracted."""
         proc = await asyncio.create_subprocess_exec(
@@ -306,8 +321,8 @@ class TestCollectGitContext:
         assert "Project: testorg/testrepo" in result
 
     @pytest.mark.asyncio
-    async def test_self_hosted_remote_hides_url(self, tmp_path: Path) -> None:
-        """Self-hosted remote: Remote line hidden, but Project still extracted."""
+    async def test_self_hosted_remote_hides_url_and_project(self, tmp_path: Path) -> None:
+        """Self-hosted remote metadata is excluded from the prompt."""
         proc = await asyncio.create_subprocess_exec(
             "git",
             "init",
@@ -332,7 +347,7 @@ class TestCollectGitContext:
 
         result = await collect_git_context(_host_path(tmp_path))
         assert "Remote:" not in result
-        assert "Project: testorg/testrepo" in result
+        assert "Project:" not in result
 
     @pytest.mark.asyncio
     async def test_dirty_files_capped(self, tmp_path: Path) -> None:
@@ -580,7 +595,7 @@ async def test_run_git_cancellation_kills_and_reaps(monkeypatch) -> None:
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert proc.kill_calls == 1
     assert proc.wait_calls == 1
@@ -630,7 +645,7 @@ async def test_run_git_cancellation_is_bounded_when_kill_fails_before_terminatio
     try:
         assert task in done
         with pytest.raises(asyncio.CancelledError):
-            await task
+            _ = await task
     finally:
         if not task.done():
             proc.release()
@@ -638,6 +653,31 @@ async def test_run_git_cancellation_is_bounded_when_kill_fails_before_terminatio
 
     assert proc.kill_calls == 1
     assert not proc.reaped
+
+
+class _CleanupControlFlow(BaseException):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_run_git_cleanup_does_not_swallow_process_control_exceptions(monkeypatch) -> None:
+    control_flow = _CleanupControlFlow("stop cleanup")
+    proc = _FakeProcess(
+        stdout=[],
+        stderr=[],
+        returncode=0,
+        blocked=True,
+        kill_error=control_flow,
+    )
+    monkeypatch.setattr(
+        "pythinker_code.subagents.git_context.pythinker_host.exec",
+        AsyncMock(return_value=proc),
+    )
+
+    with pytest.raises(_CleanupControlFlow) as exc_info:
+        await run_git(["status"], "/repo", timeout=0.001)
+
+    assert exc_info.value is control_flow
 
 
 class TestMergeBaseContext:

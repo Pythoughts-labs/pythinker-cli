@@ -2431,21 +2431,15 @@ async def test_reviewer_without_target_resolves_auto_before_instance_creation(
         prompt="<review-target>HEAD</review-target>",
         hint="auto -> commit HEAD",
     )
-    events: list[str] = []
 
-    async def resolve_before_allocation(target, work_dir):
+    async def resolve_before_allocation(target, work_dir) -> ResolvedReviewTarget:
         assert target == ReviewTarget()
         assert work_dir == runtime.work_dir
         assert runtime.subagent_store.list_instances() == []
-        events.append("resolve")
         return resolved
-
-    async def journal_after_resolution(params, requested_type):
-        events.append("journal")
 
     resolve = AsyncMock(side_effect=resolve_before_allocation)
     monkeypatch.setattr("pythinker_code.tools.agent.resolve_review_target", resolve)
-    monkeypatch.setattr(agent_tool, "_journal_foreground_agent_start", journal_after_resolution)
     run = AsyncMock(return_value=ToolOk(output="status: completed"))
     monkeypatch.setattr(
         "pythinker_code.subagents.runner.ForegroundSubagentRunner.run",
@@ -2461,7 +2455,7 @@ async def test_reviewer_without_target_resolves_auto_before_instance_creation(
     )
 
     assert not result.is_error
-    assert events == ["resolve", "journal"]
+    resolve.assert_awaited_once_with(ReviewTarget(), runtime.work_dir)
     assert run.await_args is not None
     request = run.await_args.args[0]
     assert request.resolved_review_target == resolved

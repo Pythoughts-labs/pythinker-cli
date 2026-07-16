@@ -56,6 +56,7 @@ class WorktreeChanges(BaseModel):
 
     @property
     def any(self) -> bool:
+        """Return whether the index or worktree contains any reviewable change."""
         return self.staged or self.unstaged or self.untracked
 
 
@@ -95,12 +96,14 @@ class ReviewTargetErrorCode(StrEnum):
 
 class ReviewTargetResolutionError(RuntimeError):
     def __init__(self, code: ReviewTargetErrorCode, brief: str, message: str) -> None:
+        """Create a categorized resolution failure with safe user-facing text."""
         self.code = code
         self.brief = brief
         super().__init__(message)
 
 
 def validate_review_target(target: ReviewTarget) -> None:
+    """Reject unsupported modes, fields, and unsafe or malformed refs."""
     if target.model_extra:
         raise ReviewTargetResolutionError(
             ReviewTargetErrorCode.invalid_target,
@@ -142,6 +145,7 @@ def validate_review_target(target: ReviewTarget) -> None:
 
 
 async def _run_resolver_git(args: list[str], cwd: str) -> GitCommandResult:
+    """Run Git and map host failures to review-target error categories."""
     try:
         return await run_git(args, cwd)
     except GitCommandError as exc:
@@ -159,6 +163,7 @@ async def _run_resolver_git(args: list[str], cwd: str) -> GitCommandResult:
 
 
 def _require_oid(result: GitCommandResult, *, message: str) -> str:
+    """Return a normalized full object ID or fail closed on malformed output."""
     value = result.stdout
     if value.endswith("\n"):
         value = value[:-1]
@@ -181,6 +186,7 @@ def _require_oid(result: GitCommandResult, *, message: str) -> str:
 
 
 def _quiet_verification_is_missing(result: GitCommandResult) -> bool:
+    """Recognize Git's exact quiet-verification response for a missing ref."""
     return (
         result.returncode == 1
         and not result.stdout
@@ -191,6 +197,7 @@ def _quiet_verification_is_missing(result: GitCommandResult) -> bool:
 
 
 def _raise_commit_verification_failed() -> None:
+    """Raise the sanitized failure shared by fatal commit verification paths."""
     raise ReviewTargetResolutionError(
         ReviewTargetErrorCode.git_failed,
         "Review target unavailable",
@@ -199,6 +206,7 @@ def _raise_commit_verification_failed() -> None:
 
 
 async def _try_resolve_commit(cwd: str, ref: str) -> str | None:
+    """Resolve a commit ref, returning ``None`` only for an exact quiet miss."""
     result = await _run_resolver_git(
         ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"],
         cwd,
@@ -211,6 +219,7 @@ async def _try_resolve_commit(cwd: str, ref: str) -> str | None:
 
 
 async def _resolve_commit(cwd: str, ref: str) -> str:
+    """Resolve a required commit ref or raise a typed safe failure."""
     result = await _run_resolver_git(
         ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"], cwd
     )
@@ -226,6 +235,7 @@ async def _resolve_commit(cwd: str, ref: str) -> str:
 
 
 async def _resolve_head(cwd: str) -> str:
+    """Validate the worktree and return its full HEAD commit ID."""
     repository = await _run_resolver_git(
         ["rev-parse", "--is-inside-work-tree"],
         cwd,
@@ -253,6 +263,7 @@ async def _resolve_head(cwd: str) -> str:
 
 
 async def _quiet_diff_changed(cwd: str, args: list[str]) -> bool:
+    """Interpret Git's quiet-diff exit contract without accepting other failures."""
     result = await _run_resolver_git(args, cwd)
     if result.returncode in {0, 1}:
         return result.returncode == 1
@@ -264,6 +275,7 @@ async def _quiet_diff_changed(cwd: str, args: list[str]) -> bool:
 
 
 async def _worktree_changes(cwd: str) -> WorktreeChanges:
+    """Collect staged, unstaged, and untracked change presence."""
     staged = await _quiet_diff_changed(
         cwd,
         ["diff", "--quiet", "--cached", "--no-ext-diff", "--no-textconv", "--exit-code", "--"],
@@ -289,6 +301,7 @@ async def _worktree_changes(cwd: str) -> WorktreeChanges:
 
 
 async def _merge_base(cwd: str, head_sha: str, base_sha: str) -> str | None:
+    """Resolve the merge base, distinguishing unrelated histories from Git failures."""
     result = await _run_resolver_git(["merge-base", head_sha, base_sha], cwd)
     if result.returncode == 1:
         return None
@@ -302,6 +315,7 @@ async def _merge_base(cwd: str, head_sha: str, base_sha: str) -> str | None:
 
 
 async def _base_has_tracked_changes(cwd: str, merge_base_sha: str) -> bool:
+    """Return whether tracked content differs from the selected merge base."""
     return await _quiet_diff_changed(
         cwd,
         [
@@ -317,6 +331,7 @@ async def _base_has_tracked_changes(cwd: str, merge_base_sha: str) -> bool:
 
 
 async def _commit_details(cwd: str, target_sha: str) -> tuple[tuple[str, ...], str]:
+    """Return validated parent IDs and an escaped title for a resolved commit."""
     parents_result = await _run_resolver_git(
         ["rev-list", "--parents", "-n", "1", target_sha, "--"],
         cwd,
@@ -361,6 +376,7 @@ async def _commit_details(cwd: str, target_sha: str) -> tuple[tuple[str, ...], s
 
 
 def _review_target_block(lines: list[str]) -> str:
+    """Wrap resolved target facts in the authoritative prompt boundary."""
     body = "\n".join(lines)
     return (
         "<review-target>\n"
@@ -376,6 +392,7 @@ def _review_target_block(lines: list[str]) -> str:
 
 
 def _requested_lines(target: ReviewTarget) -> list[str]:
+    """Render the caller's validated requested mode and optional ref."""
     lines = [f"requested_mode: {target.kind}"]
     if target.ref is not None:
         lines.append(f"requested_ref: {escape_prompt_data(target.ref, max_chars=1024)}")
@@ -383,6 +400,7 @@ def _requested_lines(target: ReviewTarget) -> list[str]:
 
 
 def _attempted_line(attempted: tuple[str, ...]) -> str | None:
+    """Render attempted default bases as escaped untrusted metadata."""
     if not attempted:
         return None
     rendered = ", ".join(escape_prompt_data(ref, max_chars=1024) for ref in attempted)
@@ -401,6 +419,7 @@ def _resolved_live_target(
     merge_base_sha: str | None = None,
     auto_note: str | None = None,
 ) -> ResolvedReviewTarget:
+    """Build a live worktree or base target anchored to the current HEAD."""
     anchor = head_sha if kind == "uncommitted" else merge_base_sha
     assert anchor is not None
     lines = [
@@ -431,11 +450,11 @@ def _resolved_live_target(
     lines.extend(
         [
             "scope: inspect tracked changes from the anchor through the live index/worktree, "
-            "then inspect every relevant untracked path reported by status.",
+            + "then inspect every relevant untracked path reported by status.",
             f"command: git diff --no-ext-diff --no-textconv {anchor} --",
             "command: git status --short --untracked-files=all --",
             "Live warning: concurrent index/worktree edits can change the inspected patch; this "
-            "target does not claim a frozen snapshot.",
+            + "target does not claim a frozen snapshot.",
         ]
     )
     safe_base = escape_prompt_data(base_ref, max_chars=1024) if base_ref is not None else None
@@ -471,6 +490,7 @@ async def _resolved_commit_target(
     attempted: tuple[str, ...] = (),
     auto_note: str | None = None,
 ) -> ResolvedReviewTarget:
+    """Build an immutable commit target with validated parent metadata."""
     parent_shas, title = await _commit_details(cwd, target_sha)
     lines = [
         *_requested_lines(requested),
@@ -538,6 +558,7 @@ async def resolve_review_target(
     target: ReviewTarget,
     work_dir: HostPath,
 ) -> ResolvedReviewTarget:
+    """Resolve one validated request to a deterministic, executable Git scope."""
     validate_review_target(target)
     cwd = str(work_dir)
     head_sha = await _resolve_head(cwd)
@@ -682,6 +703,7 @@ async def revalidate_review_target_head(
     target: ResolvedReviewTarget,
     work_dir: HostPath,
 ) -> None:
+    """Reject a live target when HEAD moved after initial resolution."""
     if target.worktree_state != "live":
         return
     current_head = await _resolve_head(str(work_dir))

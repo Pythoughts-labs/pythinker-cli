@@ -37,12 +37,14 @@ class GitCommandResult:
 
 class GitCommandError(RuntimeError):
     def __init__(self, category: Literal["spawn", "timeout"], command: str) -> None:
+        """Create a safe Git failure that omits arguments and raw process output."""
         self.category = category
         self.command = command
         super().__init__(f"git {command} {category} failure")
 
 
 async def _read_bounded(stream: AsyncReadable, limit: int) -> tuple[bytes, bool]:
+    """Drain a stream to EOF while retaining at most ``limit`` bytes."""
     kept = bytearray()
     truncated = False
     while chunk := await stream.read(65536):
@@ -55,6 +57,7 @@ async def _read_bounded(stream: AsyncReadable, limit: int) -> tuple[bytes, bool]
 async def _collect_process(
     proc: HostProcess, limit: int
 ) -> tuple[int, tuple[bytes, bool], tuple[bytes, bool]]:
+    """Wait for a process while draining both bounded output streams concurrently."""
     async with asyncio.TaskGroup() as tasks:
         wait_task = tasks.create_task(proc.wait())
         stdout_task = tasks.create_task(_read_bounded(proc.stdout, limit))
@@ -63,9 +66,10 @@ async def _collect_process(
 
 
 async def _await_cleanup_step(awaitable: Awaitable[object]) -> bool:
+    """Run one bounded cleanup step without replacing the primary failure."""
     try:
         await asyncio.wait_for(awaitable, timeout=_CLEANUP_STEP_TIMEOUT)
-    except BaseException:
+    except (Exception, asyncio.CancelledError):
         return False
     return True
 
@@ -75,7 +79,7 @@ async def _cleanup_process(
     completion: asyncio.Task[tuple[int, tuple[bytes, bool], tuple[bytes, bool]]] | None,
 ) -> None:
     """Terminate, drain, and reap without replacing the primary failure."""
-    with suppress(BaseException):
+    with suppress(Exception, asyncio.CancelledError):
         if proc.returncode is None:
             await _await_cleanup_step(proc.kill())
 
@@ -85,7 +89,7 @@ async def _cleanup_process(
     if completion_succeeded:
         return
 
-    with suppress(BaseException):
+    with suppress(Exception, asyncio.CancelledError):
         await _await_cleanup_step(
             asyncio.gather(
                 _read_bounded(proc.stdout, 0),
@@ -93,7 +97,7 @@ async def _cleanup_process(
                 return_exceptions=True,
             )
         )
-    with suppress(BaseException):
+    with suppress(Exception, asyncio.CancelledError):
         await _await_cleanup_step(proc.wait())
 
 
@@ -104,6 +108,7 @@ async def run_git(
     timeout: float = _TIMEOUT,
     max_output_bytes: int = _MAX_GIT_OUTPUT_BYTES,
 ) -> GitCommandResult:
+    """Run Git with bounded output and typed spawn or timeout failures."""
     if max_output_bytes < 1:
         raise ValueError("max_output_bytes must be positive")
     proc: HostProcess | None = None
@@ -171,9 +176,9 @@ async def collect_git_context(work_dir: HostPath, *, include_merge_base: bool = 
         safe_url = _sanitize_remote_url(remote_url)
         if safe_url:
             sections.append(f"Remote: {escape_prompt_data(safe_url, max_chars=1024)}")
-        project = _parse_project_name(remote_url)
-        if project:
-            sections.append(f"Project: {escape_prompt_data(project, max_chars=512)}")
+            project = _parse_project_name(safe_url)
+            if project:
+                sections.append(f"Project: {escape_prompt_data(project, max_chars=512)}")
     if branch:
         sections.append(f"Branch: {escape_prompt_data(branch, max_chars=512)}")
     if include_merge_base:

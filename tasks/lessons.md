@@ -53,6 +53,11 @@ Format: trigger → rule.
 
 ## Review orchestration
 
+- **When asked to apply all PR review feedback**, wait for the review bot's status on the current
+  head to become terminal, fetch unresolved thread-level state, and verify each recommendation
+  against runtime contracts before editing; after the push, re-check the new head rather than
+  treating the prior bot success as transferable.
+
 - **When running review/security subagents**, use the project-scoped agents in
   `.claude/agents/` (global `~/.claude/agents/security-reviewer.md` and
   `planner.md` describe the *other* Pythinker project — FastAPI/Vue/Mongo —

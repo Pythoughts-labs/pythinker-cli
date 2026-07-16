@@ -2,6 +2,38 @@
 
 ## Active
 
+### PR #208 review remediation (2026-07-15)
+
+- [x] Fetch current CI, CodeRabbit, Code Quality, Codecov, and unresolved thread state.
+- [x] Classify all 11 inline findings and advisory pre-merge notices against repository standards.
+- [x] Add failing regressions for approved behavioral findings before production edits.
+- [x] Fix remote metadata authorization, cleanup exception handling, and review-target rendering.
+- [x] Rewrite over-mocked tests through public APIs and clear static test-quality findings.
+- [x] Run focused coverage, `make check-pythinker-code`, and `make test-pythinker-code`.
+- [x] Perform final diff review and prepare the verified commit without tool trailers.
+
+Acceptance: unapproved remotes cannot leak project metadata; cleanup preserves cancellation semantics
+without swallowing process-control exceptions; tests assert supported public behavior; every inline
+finding has a verified disposition; and the pushed head has fresh local gate evidence.
+
+#### Review: PR #208 review remediation
+
+- **Outcome:** all 11 fetched inline findings were addressed: unapproved remote metadata no longer
+  exposes a project identity; cleanup preserves cancellation while allowing process-control
+  exceptions to propagate; review tests use supported public boundaries; and static style findings
+  are cleared.
+- **TDD evidence:** the remote-metadata and process-control regressions initially failed together
+  (`2 failed, 52 passed`) and passed after the production fixes (`54 passed`).
+- **Focused verification:** the full changed-feature set passed `304 passed, 1 warning`; focused
+  coverage reported zero missing statements in `git_context.py` and `review_target.py`.
+- **Static verification:** `make check-pythinker-code` passed with Ruff clean, `1262 files already
+  formatted`, Pyright `0 errors, 0 warnings, 0 informations`, and ty clean.
+- **Repository test gate:** `make test-pythinker-code` passed with `7147 passed, 9 skipped, 1
+  xfailed, 5 warnings` plus `65 passed, 4 skipped, 1 warning` in `tests_e2e`.
+- **Review verdict:** independent final review found no Critical, Important, or Minor findings;
+  `git diff --check` was silent. Ready to push to the existing PR branch.
+- **Blockers:** none.
+
 ### Deterministic reviewer target resolution (2026-07-15)
 
 - [x] Reconcile the adoption ledger with current code and Git history.
