@@ -8,6 +8,7 @@ implemented once.
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -125,7 +126,8 @@ def _prepend_output_language_instruction(prompt: str) -> str:
 
 def _compose_review_prompt(caller_prompt: str, target: ResolvedReviewTarget) -> str:
     """Keep caller instructions subordinate to the authoritative resolved target."""
-    return f"<review-task>\n{caller_prompt}\n</review-task>\n\n{target.prompt}"
+    safe_caller_prompt = html.escape(caller_prompt, quote=False)
+    return f"<review-task>\n{safe_caller_prompt}\n</review-task>\n\n{target.prompt}"
 
 
 async def prepare_soul(

@@ -387,7 +387,7 @@ async def test_create_agent_task_persists_review_target(runtime, monkeypatch) ->
     task = runtime.background_tasks._live_agent_tasks.pop(view.spec.id)
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await task
+        _ = await task
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,9 @@ Format: trigger → rule.
   head to become terminal, fetch unresolved thread-level state, and verify each recommendation
   against runtime contracts before editing; after the push, re-check the new head rather than
   treating the prior bot success as transferable.
+- **When lower-authority text is framed beside an authoritative structured prompt block**, escape
+  markup before interpolation and assert there is exactly one authoritative boundary block and that
+  it remains last; ordering alone does not prevent a forged earlier block.
 
 - **When running review/security subagents**, use the project-scoped agents in
   `.claude/agents/` (global `~/.claude/agents/security-reviewer.md` and
