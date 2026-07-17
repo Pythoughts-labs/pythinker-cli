@@ -50,13 +50,13 @@ It speaks the [**Agent Client Protocol (ACP)**](https://github.com/agentclientpr
 
 ---
 
-## 🆕 What's New in 0.58.0
+## 🆕 What's New in 0.59.0
 
-- **Agent core deepened with an observable request-assembly path.** Provider handoff, prompt ordering, and context persistence now run through explicit compatibility contracts, conversation history updates are transactional (atomic replacement with cancellation and rollback), and agent/skill definitions resolve through one source-aware catalogue instead of scattered lookups.
-- **Agent-spec loading is more defensive and truthful.** Subagent `path`, `extend`, and `system_prompt_path` references that resolve outside their spec's directory are now rejected instead of loaded, and malformed frontmatter parsing errors are no longer misreported as harmless skips.
-- **Thinking and subagent activity render cleanly in the terminal.** Live reasoning previews render complete Markdown without exposing stray HTML comments, and activity-tree rows stay visually stable during long-running turns.
+- **Explicit Z.AI compatibility routes.** Independent Z.AI Coding Plan and API login routes now use separate credentials, endpoints, model identities, catalog refresh, logout, and usage/rate-limit state, with immutable compatibility profiles keeping request-format quirks behind the chat-provider boundary.
+- **Streamed tool calls are correlated safely.** Interleaved argument chunks stay attached to their indexed calls, malformed or truncated call streams stop before tool execution, and failed attempts are not retried after output has already been shown.
+- **Deterministic reviewer scopes and supervised tool batches.** Reviewer subagents receive fully resolved Git commit anchors with invalid or empty scopes rejected explicitly, and tool execution runs through a supervised batch engine with ordered results, bounded cancellation, and fail-closed new batches until cleanup drains.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.58.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.59.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 
 ---
@@ -162,7 +162,7 @@ matches your OS — no Python, Node, or `uv` prerequisite.
 
 | Platform | Recommended install | Artifact source |
 |---|---|---|
-| **🪟 Windows** | `irm https://pythinker.com/install.ps1 \| iex` | `PythinkerSetup-0.58.0.exe` from [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
+| **🪟 Windows** | `irm https://pythinker.com/install.ps1 \| iex` | `PythinkerSetup-0.59.0.exe` from [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
 | **<img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"> / <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">** | `curl -fsSL https://pythinker.com/install.sh \| bash` | native tarball from [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
 | **<img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"> — Homebrew** | `brew install Pythoughts-labs/pythinker/pythinker-code` | auto-published Homebrew tap |
 | **🐳 Docker** | `docker run --rm -it ghcr.io/pythoughts-labs/pythinker-code` | GHCR multi-arch image |
@@ -190,7 +190,7 @@ pythinker                      # start the interactive TUI
 
 ### 🪟 Windows — native installer
 
-`PythinkerSetup-0.58.0.exe` is an Inno Setup wizard. Release builds are signed
+`PythinkerSetup-0.59.0.exe` is an Inno Setup wizard. Release builds are signed
 when Authenticode secrets are configured in CI; otherwise the installer ships
 unsigned. Installs per-user into `%LOCALAPPDATA%\Programs\Pythinker`, registers
 `pythinker` on your user PATH (`HKCU\Environment`), broadcasts
@@ -202,13 +202,13 @@ irm https://pythinker.com/install.ps1 | iex
 
 # Or manually download the installer + checksum from the Releases page,
 # verify with Get-FileHash, then run:
-.\PythinkerSetup-0.58.0.exe
+.\PythinkerSetup-0.59.0.exe
 
 # Open a fresh PowerShell
 pythinker --version
 ```
 
-**Per-machine install** (IT-managed boxes): `.\PythinkerSetup-0.58.0.exe /ALLUSERS`
+**Per-machine install** (IT-managed boxes): `.\PythinkerSetup-0.59.0.exe /ALLUSERS`
 installs to `%ProgramFiles%\Pythinker` and writes PATH to HKLM (requires admin).
 
 **Upgrade:** `pythinker update` from inside the running app — it downloads
@@ -266,26 +266,26 @@ attached to every GitHub Release.
 
 ```sh
 # Debian / Ubuntu (x86_64)
-sudo dpkg -i pythinker-code_0.58.0_amd64.deb
+sudo dpkg -i pythinker-code_0.59.0_amd64.deb
 sudo apt-get install -f       # only if dpkg reports missing deps
 
 # Debian / Ubuntu (ARM64)
-sudo dpkg -i pythinker-code_0.58.0_arm64.deb
+sudo dpkg -i pythinker-code_0.59.0_arm64.deb
 
 # Fedora / RHEL / openSUSE (x86_64)
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.58.0/pythinker-code-0.58.0.x86_64.rpm
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.58.0/pythinker-code-0.58.0.x86_64.rpm.sha256
-sha256sum -c pythinker-code-0.58.0.x86_64.rpm.sha256
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.x86_64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.x86_64.rpm.sha256
+sha256sum -c pythinker-code-0.59.0.x86_64.rpm.sha256
 # Fedora / RHEL:
-sudo dnf install ./pythinker-code-0.58.0.x86_64.rpm
+sudo dnf install ./pythinker-code-0.59.0.x86_64.rpm
 # openSUSE:
-sudo zypper install ./pythinker-code-0.58.0.x86_64.rpm
+sudo zypper install ./pythinker-code-0.59.0.x86_64.rpm
 
 # Fedora / RHEL (aarch64)
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.58.0/pythinker-code-0.58.0.aarch64.rpm
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.58.0/pythinker-code-0.58.0.aarch64.rpm.sha256
-sha256sum -c pythinker-code-0.58.0.aarch64.rpm.sha256
-sudo dnf install ./pythinker-code-0.58.0.aarch64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.aarch64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.aarch64.rpm.sha256
+sha256sum -c pythinker-code-0.59.0.aarch64.rpm.sha256
+sudo dnf install ./pythinker-code-0.59.0.aarch64.rpm
 ```
 
 Both packages drop a small `/usr/bin/pythinker` launcher that execs the real
@@ -294,8 +294,8 @@ binary under `/usr/lib/pythinker/`, so your `$PATH` stays tidy.
 **Verify before install:**
 
 ```sh
-sha256sum -c pythinker-code_0.58.0_amd64.deb.sha256        # Debian/Ubuntu
-sha256sum -c pythinker-code-0.58.0.x86_64.rpm.sha256       # Fedora/RHEL
+sha256sum -c pythinker-code_0.59.0_amd64.deb.sha256        # Debian/Ubuntu
+sha256sum -c pythinker-code-0.59.0.x86_64.rpm.sha256       # Fedora/RHEL
 ```
 
 **Upgrade:** download the new `.deb`/`.rpm` from Releases and `dpkg -i` /
