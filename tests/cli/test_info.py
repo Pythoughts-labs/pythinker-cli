@@ -26,20 +26,20 @@ def _info(**overrides: object) -> InfoData:
 
 
 def test_auto_update_line_enabled() -> None:
-    line = _auto_update_line(_info(auto_update=True, auto_update_config=True))
-    assert line == "auto-update: enabled (config auto_update=true)"
+    line = _auto_update_line(_info(auto_update=True, auto_update_config="download"))
+    assert line == "auto-update: enabled (config auto_update=download)"
 
 
 def test_auto_update_line_disabled_with_override() -> None:
     line = _auto_update_line(
         _info(
             auto_update=False,
-            auto_update_config=True,
+            auto_update_config="download",
             auto_update_override="disabled for source checkouts",
         )
     )
     assert line == (
-        "auto-update: disabled (config auto_update=true; disabled for source checkouts)"
+        "auto-update: disabled (config auto_update=download; disabled for source checkouts)"
     )
 
 

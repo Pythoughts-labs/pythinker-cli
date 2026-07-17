@@ -14,12 +14,12 @@ class InfoData(TypedDict):
     wire_protocol_version: str
     python_version: str
     auto_update: bool | None
-    auto_update_config: bool | None
+    auto_update_config: str | None
     auto_update_override: str | None
 
 
-def _auto_update_info() -> tuple[bool | None, bool | None, str | None]:
-    """Return ``(effective_enabled, config_value, override_reason)``.
+def _auto_update_info() -> tuple[bool | None, str | None, str | None]:
+    """Return ``(effective_enabled, config_mode, override_reason)``.
 
     Every element is ``None`` when the status cannot be resolved. The whole
     block is guarded so an unreadable config or any other failure never turns
@@ -38,7 +38,7 @@ def _auto_update_info() -> tuple[bool | None, bool | None, str | None]:
         # has no config file yet rather than creating one as a side effect.
         config_exists = get_config_file(create=False).expanduser().exists()
         config = load_config() if config_exists else Config()
-        return auto_update_enabled(config), config.auto_update, override
+        return auto_update_enabled(config), config.auto_update.value, override
     except (OSError, ValueError, ImportError) as exc:
         # Read-only diagnostic: never abort `info`, but log the degraded path
         # instead of silently masking a real config/policy failure. ConfigError
@@ -73,7 +73,7 @@ def _auto_update_line(info: InfoData) -> str:
     if effective is None:
         return "auto-update: unknown"
     state = "enabled" if effective else "disabled"
-    detail = f"config auto_update={'true' if info['auto_update_config'] else 'false'}"
+    detail = f"config auto_update={info['auto_update_config'] or 'unknown'}"
     override = info["auto_update_override"]
     if override:
         detail += f"; {override}"

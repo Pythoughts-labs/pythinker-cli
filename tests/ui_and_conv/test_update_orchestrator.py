@@ -26,9 +26,11 @@ def _isolate_update_files(monkeypatch, tmp_path) -> None:
 async def test_update_job_records_status_and_log(monkeypatch, tmp_path):
     _isolate_update_files(monkeypatch, tmp_path)
 
-    async def fake_do_update(*, print_output: bool, check_only: bool, output_callback=None):
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
         assert print_output is False
-        assert check_only is True
+        assert intent is update.UpdateIntent.CHECK
         assert output_callback is not None
         output_callback("checked release channel")
         return update.UpdateResult.UP_TO_DATE
@@ -36,7 +38,9 @@ async def test_update_job_records_status_and_log(monkeypatch, tmp_path):
     monkeypatch.setattr(update, "do_update", fake_do_update)
     monkeypatch.setattr(orchestrator, "_read_target_version", lambda: "1.2.3")
 
-    result = await orchestrator.run_update_job(print_output=False, check_only=True, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.CHECK, source="test"
+    )
 
     assert result is update.UpdateResult.UP_TO_DATE
     assert not orchestrator.UPDATE_LOCK_FILE.exists()
@@ -76,7 +80,9 @@ async def test_update_job_blocks_when_another_process_holds_lock(monkeypatch, tm
         )
     )
 
-    result = await orchestrator.run_update_job(print_output=False, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
 
     assert result is update.UpdateResult.FAILED
     status = orchestrator.read_update_status()
@@ -96,7 +102,9 @@ async def test_update_job_blocks_on_fresh_malformed_lock(monkeypatch, tmp_path):
 
     monkeypatch.setattr(update, "do_update", fail_do_update)
 
-    result = await orchestrator.run_update_job(print_output=False, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
 
     assert result is update.UpdateResult.FAILED
     assert orchestrator.UPDATE_LOCK_FILE.exists()
@@ -111,12 +119,16 @@ async def test_update_job_replaces_old_malformed_lock(monkeypatch, tmp_path):
     old_time = time.time() - orchestrator._LOCK_MALFORMED_GRACE_SECONDS - 1
     os.utime(orchestrator.UPDATE_LOCK_FILE, (old_time, old_time))
 
-    async def fake_do_update(*, print_output: bool, check_only: bool, output_callback=None):
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
         return update.UpdateResult.UP_TO_DATE
 
     monkeypatch.setattr(update, "do_update", fake_do_update)
 
-    result = await orchestrator.run_update_job(print_output=False, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
 
     assert result is update.UpdateResult.UP_TO_DATE
     assert not orchestrator.UPDATE_LOCK_FILE.exists()
@@ -131,12 +143,16 @@ async def test_update_job_replaces_stale_lock(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(orchestrator, "_pid_exists", lambda _pid: False)
 
-    async def fake_do_update(*, print_output: bool, check_only: bool, output_callback=None):
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
         return update.UpdateResult.UP_TO_DATE
 
     monkeypatch.setattr(update, "do_update", fake_do_update)
 
-    result = await orchestrator.run_update_job(print_output=False, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
 
     assert result is update.UpdateResult.UP_TO_DATE
     assert not orchestrator.UPDATE_LOCK_FILE.exists()
@@ -151,7 +167,9 @@ async def test_update_job_skips_success_marker_when_post_install_smoke_check_fai
 ):
     _isolate_update_files(monkeypatch, tmp_path)
 
-    async def fake_do_update(*, print_output: bool, check_only: bool, output_callback=None):
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
         return update.UpdateResult.UPDATED
 
     monkeypatch.setattr(update, "do_update", fake_do_update)
@@ -161,7 +179,9 @@ async def test_update_job_skips_success_marker_when_post_install_smoke_check_fai
         lambda: (False, "Smoke check failed: broken"),
     )
 
-    result = await orchestrator.run_update_job(print_output=False, source="test")
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
 
     assert result is update.UpdateResult.UPDATED
     status = orchestrator.read_update_status()
@@ -174,14 +194,14 @@ async def test_update_job_skips_success_marker_when_post_install_smoke_check_fai
 
 @pytest.mark.asyncio
 async def test_run_update_prompt_routes_check_through_runner(monkeypatch):
-    calls: list[bool] = []
+    calls: list[update.UpdateIntent] = []
 
     async def fail_do_update(**_kwargs):
         raise AssertionError("orchestrated /update check must not call do_update directly")
 
-    async def fake_runner(*, print_output: bool, check_only: bool):
+    async def fake_runner(*, print_output: bool, intent: update.UpdateIntent):
         assert print_output is True
-        calls.append(check_only)
+        calls.append(intent)
         return update.UpdateResult.UP_TO_DATE
 
     monkeypatch.setattr(update, "do_update", fail_do_update)
@@ -189,7 +209,7 @@ async def test_run_update_prompt_routes_check_through_runner(monkeypatch):
     result = await update.run_update_prompt(update_runner=fake_runner)
 
     assert result is update.UpdateResult.UP_TO_DATE
-    assert calls == [True]
+    assert calls == [update.UpdateIntent.CHECK]
 
 
 def test_update_log_tail_returns_recent_lines(monkeypatch, tmp_path):
@@ -298,7 +318,9 @@ async def test_do_update_mirrors_messages_to_output_callback(monkeypatch, tmp_pa
     async def fake_unavailable(session, latest_version: str, upgrade_command: list[str]):
         return None
 
-    async def fake_native_update(latest_version: str) -> update.UpdateResult:
+    async def fake_native_update(
+        latest_version: str, *, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         return update.UpdateResult.UPDATED
 
     monkeypatch.setattr(update, "LATEST_VERSION_FILE", tmp_path / "latest.txt")

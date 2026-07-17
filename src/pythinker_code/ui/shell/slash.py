@@ -11,7 +11,7 @@ from rich.markup import escape
 
 from pythinker_code.auth.platforms import get_platform_name_for_provider, refresh_managed_models
 from pythinker_code.cli import Reload, SwitchToDashboard, SwitchToWeb
-from pythinker_code.config import StatusLineConfig, load_config, save_config
+from pythinker_code.config import AutoUpdateMode, StatusLineConfig, load_config, save_config
 from pythinker_code.exception import ConfigError
 from pythinker_code.session import Session
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -2224,7 +2224,7 @@ async def show_memory(app: Shell, args: str):
 @registry.command(name="update", aliases=["upgrade"])
 async def update_command(app: Shell, args: str):
     """Check for updates, or `auto [on|off]` to toggle silent startup auto-updates."""
-    from pythinker_code.ui.shell.update import UpdateResult, run_update_prompt
+    from pythinker_code.ui.shell.update import UpdateIntent, UpdateResult, run_update_prompt
     from pythinker_code.ui.shell.update_orchestrator import run_update_job
 
     parts = args.strip().split()
@@ -2243,13 +2243,14 @@ async def update_command(app: Shell, args: str):
         if action != "check":
             return
 
-    async def _runner(*, print_output: bool, check_only: bool) -> UpdateResult:
-        return await run_update_job(
-            print_output=print_output, check_only=check_only, source="slash"
-        )
+    async def _runner(*, print_output: bool, intent: UpdateIntent) -> UpdateResult:
+        return await run_update_job(print_output=print_output, intent=intent, source="slash")
 
     result = await run_update_prompt(update_runner=_runner)
     if result is UpdateResult.UPDATED:
+        # A stage created via /update must honor the apply_on_exit policy just
+        # like the silent startup stage does.
+        app._maybe_arm_windows_apply_on_exit()  # pyright: ignore[reportPrivateUsage]
         console.print("Updated — restart Pythinker to use the new version.")
 
 
@@ -2263,12 +2264,12 @@ async def _prompt_update_action(app: Shell) -> str | None:
     """
     from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 
-    from pythinker_code.update_policy import auto_update_enabled
+    from pythinker_code.update_policy import resolve_auto_update_mode
 
     auto_label = "Auto-update on startup"
     if isinstance(app.soul, PythinkerSoul):
-        state = "on" if auto_update_enabled(app.soul.runtime.config) else "off"
-        auto_label = f"{auto_label}: {state}"
+        mode = resolve_auto_update_mode(app.soul.runtime.config)
+        auto_label = f"{auto_label}: {mode.value}"
 
     try:
         selection = await ChoiceInput(
@@ -2286,15 +2287,20 @@ async def _prompt_update_action(app: Shell) -> str | None:
 
 
 async def _auto_update_toggle(app: Shell, args: list[str]) -> None:
-    """Show or set the silent startup auto-update preference.
+    """Show or set the startup auto-update policy.
 
-    `/update auto on|off` sets it directly; `/update auto` with no value opens an
-    interactive On/Off picker (or, when an external override has made the setting
-    read-only, reports the effective state instead of popping a no-op picker).
+    `/update auto <mode>` sets it directly (modes: off, notify, download,
+    apply_on_exit). Legacy `on` maps to download; `off` selects the fully-off
+    policy — use `notify` for the old "no install, keep notices" behavior.
+    `/update auto`
+    with no value opens an interactive picker (or, when an external override
+    has made the setting read-only, reports the effective state instead of
+    popping a no-op picker).
     """
+    from pythinker_code.config import coerce_auto_update_mode
     from pythinker_code.telemetry import track
     from pythinker_code.ui.theme import get_tui_tokens as _get_tok
-    from pythinker_code.update_policy import auto_update_enabled, auto_update_override_reason
+    from pythinker_code.update_policy import auto_update_override_reason, resolve_auto_update_mode
 
     _t = _get_tok()
     soul = ensure_pythinker_soul(app)
@@ -2308,28 +2314,44 @@ async def _auto_update_toggle(app: Shell, args: list[str]) -> None:
             console.print(f"[{_t.muted}]Note: {override}; this overrides the setting.[/]")
 
     if args:
-        value = args[0].lower()
-        if len(args) > 1 or value not in {"on", "off"}:
-            console.print(f"[{_t.warning}]Usage: /update auto [on|off][/]")
+        raw = args[0].lower()
+        usage = f"[{_t.warning}]Usage: /update auto [on|off|notify|download|apply_on_exit][/]"
+        if len(args) > 1:
+            console.print(usage)
             return
-        enabled = value == "on"
+        if raw == "on":
+            # `on` keeps its historical meaning: background auto-update, which
+            # now downloads and stages instead of installing mid-session.
+            selected_mode = AutoUpdateMode.DOWNLOAD
+        elif raw == "off":
+            # `off` now means the fully-off policy; the old "no silent install
+            # but keep notices" behavior is the explicit `notify` mode.
+            selected_mode = AutoUpdateMode.OFF
+        else:
+            coerced = coerce_auto_update_mode(raw)
+            try:
+                selected_mode = (
+                    coerced if isinstance(coerced, AutoUpdateMode) else AutoUpdateMode(coerced)
+                )
+            except ValueError:
+                console.print(usage)
+                return
     elif override is not None:
         # An override makes the stored setting read-only: changing it would not
         # change behavior, so report the effective state instead of a no-op picker.
-        effective = "on" if auto_update_enabled(config) else "off"
-        stored = "on" if config.auto_update else "off"
+        effective = resolve_auto_update_mode(config).value
+        stored = config.auto_update.value
         console.print(f"[{_t.info}]Auto-update: {effective}[/] (config auto_update={stored})")
         _print_override()
         return
     else:
-        selected = await _prompt_auto_update_selection(current=config.auto_update)
-        if selected is None:
+        picked = await _prompt_auto_update_selection(current=config.auto_update)
+        if picked is None:
             return
-        enabled = selected
+        selected_mode = picked
 
-    value = "on" if enabled else "off"
-    if config.auto_update == enabled:
-        console.print(f"[{_t.warning}]Auto-update already {value}.[/]")
+    if config.auto_update == selected_mode:
+        console.print(f"[{_t.warning}]Auto-update already {selected_mode.value}.[/]")
         _print_override()
         return
 
@@ -2342,7 +2364,7 @@ async def _auto_update_toggle(app: Shell, args: list[str]) -> None:
         return
     try:
         config_for_save = load_config(config_file)
-        config_for_save.auto_update = enabled
+        config_for_save.auto_update = selected_mode
         save_config(config_for_save, config_file)
     except (ConfigError, OSError) as exc:
         console.print(f"[{_t.error}]Failed to save config: {_rich_escape(exc)}[/]")
@@ -2350,34 +2372,42 @@ async def _auto_update_toggle(app: Shell, args: list[str]) -> None:
     # auto_update is only consulted at startup, so nothing live depends on it:
     # mirror the saved value into the running config instead of forcing a reload
     # (a reload would re-trigger the startup auto-update task we just toggled).
-    config.auto_update = enabled
+    config.auto_update = selected_mode
 
     track("settings_update", changed="auto_update", count=1)
-    console.print(f"[{_t.success}]Auto-update {value}. Takes effect at next startup.[/]")
+    console.print(
+        f"[{_t.success}]Auto-update {selected_mode.value}. Takes effect at next startup.[/]"
+    )
     _print_override()
 
 
-async def _prompt_auto_update_selection(*, current: bool) -> bool | None:
-    """Interactive On/Off picker for silent startup auto-update.
+async def _prompt_auto_update_selection(*, current: AutoUpdateMode) -> AutoUpdateMode | None:
+    """Interactive mode picker for startup auto-update.
 
-    Returns ``True``/``False`` for the chosen state, or ``None`` when the user
-    cancels (selects Cancel, or aborts with Esc/Ctrl-C). The cursor defaults to
-    the current setting so leaving it unchanged is the zero-effort choice.
+    Returns the chosen mode, or ``None`` when the user cancels (selects Cancel,
+    or aborts with Esc/Ctrl-C). The cursor defaults to the current setting so
+    leaving it unchanged is the zero-effort choice.
     """
     from prompt_toolkit.shortcuts.choice_input import ChoiceInput
 
+    options = [
+        (AutoUpdateMode.DOWNLOAD.value, "Download in background, apply on restart"),
+        (AutoUpdateMode.NOTIFY.value, "Notify only"),
+        (AutoUpdateMode.APPLY_ON_EXIT.value, "Download and apply when Pythinker exits"),
+        (AutoUpdateMode.OFF.value, "Off"),
+        ("cancel", "Cancel"),
+    ]
+    default = current.value
     try:
         selection = await ChoiceInput(
             message="Auto-update on startup",
-            options=[("on", "On"), ("off", "Off"), ("cancel", "Cancel")],
-            default="on" if current else "off",
+            options=options,
+            default=default,
         ).prompt_async()
     except (EOFError, KeyboardInterrupt):
         return None
-    if selection == "on":
-        return True
-    if selection == "off":
-        return False
+    if selection in {mode.value for mode in AutoUpdateMode}:
+        return AutoUpdateMode(selection)
     return None
 
 

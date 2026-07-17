@@ -15,6 +15,16 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Updates never interrupt a running session.** On Windows, the background
+  auto-updater previously launched the installer mid-session, force-closing the
+  active Pythinker session. Updates are now downloaded and staged with a verified
+  manifest, surfaced as a "restart to apply" notice, and applied before the next
+  session starts (or at clean exit with the new `apply_on_exit` policy). The
+  `auto_update` config becomes a policy enum — `off`, `notify`, `download`
+  (default), `apply_on_exit` — with legacy booleans still accepted
+  (`true` → `download`, `false` → `notify`); `pythinker info` now reports the
+  mode string, and `/update auto` accepts the new mode names.
+
 ## 0.59.0 (2026-07-17)
 
 - **Reviewer subagents now receive deterministic Git scopes.** Structured automatic,

@@ -1,4 +1,4 @@
-"""Tests for the `/update auto [on|off]` toggle."""
+"""Tests for the `/update auto [on|off|notify|download|apply_on_exit]` toggle."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 from pythinker_core.tooling.empty import EmptyToolset
 
 from pythinker_code import update_policy
-from pythinker_code.config import get_default_config, load_config, save_config
+from pythinker_code.config import AutoUpdateMode, get_default_config, load_config, save_config
 from pythinker_code.soul.agent import Agent, Runtime
 from pythinker_code.soul.context import Context
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -69,7 +69,7 @@ def _no_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_policy, "auto_update_override_reason", lambda: None)
 
 
-def _seed_config_file(path: Path, *, auto_update: bool) -> None:
+def _seed_config_file(path: Path, *, auto_update: AutoUpdateMode) -> None:
     config = get_default_config()
     config.auto_update = auto_update
     save_config(config, path)
@@ -81,18 +81,18 @@ async def test_update_auto_on_persists_and_mirrors_live(
 ) -> None:
     monkeypatch.delenv("PYTHINKER_AUTO_UPDATE", raising=False)
     config_path = (tmp_path / "config.toml").resolve()
-    _seed_config_file(config_path, auto_update=False)
+    _seed_config_file(config_path, auto_update=AutoUpdateMode.NOTIFY)
     runtime.config.source_file = config_path
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     monkeypatch.setattr(shell_slash.console, "print", Mock())
 
     await _run_update(app, "auto on")
 
     # Behavior-level: the value is actually persisted to disk...
-    assert load_config(config_path).auto_update is True
+    assert load_config(config_path).auto_update is AutoUpdateMode.DOWNLOAD
     # ...and mirrored into the live config (no reload).
-    assert runtime.config.auto_update is True
+    assert runtime.config.auto_update is AutoUpdateMode.DOWNLOAD
 
 
 @pytest.mark.asyncio
@@ -101,23 +101,23 @@ async def test_update_auto_off_persists(
 ) -> None:
     monkeypatch.delenv("PYTHINKER_AUTO_UPDATE", raising=False)
     config_path = (tmp_path / "config.toml").resolve()
-    _seed_config_file(config_path, auto_update=True)
+    _seed_config_file(config_path, auto_update=AutoUpdateMode.DOWNLOAD)
     runtime.config.source_file = config_path
-    runtime.config.auto_update = True
+    runtime.config.auto_update = AutoUpdateMode.DOWNLOAD
     app = _make_shell_app(runtime, tmp_path)
     monkeypatch.setattr(shell_slash.console, "print", Mock())
 
     await _run_update(app, "auto off")
 
-    assert load_config(config_path).auto_update is False
-    assert runtime.config.auto_update is False
+    assert load_config(config_path).auto_update is AutoUpdateMode.OFF
+    assert runtime.config.auto_update is AutoUpdateMode.OFF
 
 
 @pytest.mark.asyncio
 async def test_update_auto_noop_when_already_set(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime.config.auto_update = True
+    runtime.config.auto_update = AutoUpdateMode.DOWNLOAD
     app = _make_shell_app(runtime, tmp_path)
     print_mock = Mock()
     save_mock = Mock()
@@ -127,7 +127,7 @@ async def test_update_auto_noop_when_already_set(
     await _run_update(app, "auto on")
 
     save_mock.assert_not_called()
-    assert "already on" in str(print_mock.call_args.args[0])
+    assert "already download" in str(print_mock.call_args.args[0])
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_update_auto_requires_config_file(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime.config.source_file = None
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     print_mock = Mock()
     save_mock = Mock()
@@ -168,7 +168,7 @@ async def test_update_auto_requires_config_file(
 async def test_bare_update_menu_check_runs_update_flow(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime.config.auto_update = True
+    runtime.config.auto_update = AutoUpdateMode.DOWNLOAD
     app = _make_shell_app(runtime, tmp_path)
     monkeypatch.setattr(shell_slash.console, "print", Mock())
     # Stub only the public update-flow boundary; the real menu still runs.
@@ -180,7 +180,7 @@ async def test_bare_update_menu_check_runs_update_flow(
 
     # Picking "check" runs the update flow and leaves the auto setting untouched.
     run_prompt.assert_awaited_once()
-    assert runtime.config.auto_update is True
+    assert runtime.config.auto_update is AutoUpdateMode.DOWNLOAD
     assert recorded["Update"]["default"] == "check"
 
 
@@ -190,31 +190,31 @@ async def test_bare_update_menu_auto_persists_chosen_state(
 ) -> None:
     monkeypatch.delenv("PYTHINKER_AUTO_UPDATE", raising=False)
     config_path = (tmp_path / "config.toml").resolve()
-    _seed_config_file(config_path, auto_update=False)
+    _seed_config_file(config_path, auto_update=AutoUpdateMode.NOTIFY)
     runtime.config.source_file = config_path
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     monkeypatch.setattr(shell_slash.console, "print", Mock())
     run_prompt = AsyncMock(return_value=update_module.UpdateResult.UP_TO_DATE)
     monkeypatch.setattr(update_module, "run_update_prompt", run_prompt)
     # Drive the whole menu -> toggle -> picker chain via the input boundary.
-    recorded = _fake_choices(monkeypatch, {"Update": "auto", "Auto-update on startup": "on"})
+    recorded = _fake_choices(monkeypatch, {"Update": "auto", "Auto-update on startup": "download"})
 
     await _run_update(app, "")
 
     # The chosen state is persisted and mirrored live; the update flow is skipped.
-    assert load_config(config_path).auto_update is True
-    assert runtime.config.auto_update is True
+    assert load_config(config_path).auto_update is AutoUpdateMode.DOWNLOAD
+    assert runtime.config.auto_update is AutoUpdateMode.DOWNLOAD
     run_prompt.assert_not_called()
     # The picker's cursor defaults to the current (off) state.
-    assert recorded["Auto-update on startup"]["default"] == "off"
+    assert recorded["Auto-update on startup"]["default"] == "notify"
 
 
 @pytest.mark.asyncio
 async def test_bare_update_menu_cancel_is_noop(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     save_mock = Mock()
     monkeypatch.setattr(shell_slash, "save_config", save_mock)
@@ -227,7 +227,7 @@ async def test_bare_update_menu_cancel_is_noop(
 
     run_prompt.assert_not_called()
     save_mock.assert_not_called()
-    assert runtime.config.auto_update is False
+    assert runtime.config.auto_update is AutoUpdateMode.NOTIFY
 
 
 @pytest.mark.asyncio
@@ -236,27 +236,27 @@ async def test_update_auto_no_args_opens_picker_and_persists(
 ) -> None:
     monkeypatch.delenv("PYTHINKER_AUTO_UPDATE", raising=False)
     config_path = (tmp_path / "config.toml").resolve()
-    _seed_config_file(config_path, auto_update=False)
+    _seed_config_file(config_path, auto_update=AutoUpdateMode.NOTIFY)
     runtime.config.source_file = config_path
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     monkeypatch.setattr(shell_slash.console, "print", Mock())
-    recorded = _fake_choices(monkeypatch, {"Auto-update on startup": "on"})
+    recorded = _fake_choices(monkeypatch, {"Auto-update on startup": "download"})
 
     await _run_update(app, "auto")
 
     # The picker's cursor defaults to the current value...
-    assert recorded["Auto-update on startup"]["default"] == "off"
+    assert recorded["Auto-update on startup"]["default"] == "notify"
     # ...and the chosen state is persisted and mirrored live.
-    assert load_config(config_path).auto_update is True
-    assert runtime.config.auto_update is True
+    assert load_config(config_path).auto_update is AutoUpdateMode.DOWNLOAD
+    assert runtime.config.auto_update is AutoUpdateMode.DOWNLOAD
 
 
 @pytest.mark.asyncio
 async def test_update_auto_no_args_cancel_is_noop(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime.config.auto_update = False
+    runtime.config.auto_update = AutoUpdateMode.NOTIFY
     app = _make_shell_app(runtime, tmp_path)
     save_mock = Mock()
     monkeypatch.setattr(shell_slash, "save_config", save_mock)
@@ -266,14 +266,14 @@ async def test_update_auto_no_args_cancel_is_noop(
     await _run_update(app, "auto")
 
     save_mock.assert_not_called()
-    assert runtime.config.auto_update is False
+    assert runtime.config.auto_update is AutoUpdateMode.NOTIFY
 
 
 @pytest.mark.asyncio
 async def test_update_auto_status_surfaces_override(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime.config.auto_update = True
+    runtime.config.auto_update = AutoUpdateMode.DOWNLOAD
     app = _make_shell_app(runtime, tmp_path)
     print_mock = Mock()
     monkeypatch.setattr(
@@ -281,7 +281,7 @@ async def test_update_auto_status_surfaces_override(
         "auto_update_override_reason",
         lambda: "disabled by PYTHINKER_CLI_NO_AUTO_UPDATE",
     )
-    monkeypatch.setattr(update_policy, "auto_update_enabled", lambda cfg: False)
+    monkeypatch.setattr(update_policy, "resolve_auto_update_mode", lambda cfg: AutoUpdateMode.OFF)
     monkeypatch.setattr(shell_slash.console, "print", print_mock)
 
     await _run_update(app, "auto")

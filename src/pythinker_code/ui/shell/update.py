@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import json
 import os
 import platform
 import re
@@ -13,6 +14,7 @@ import tarfile
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from shutil import which
@@ -81,6 +83,25 @@ _skipped_version_this_session: str | None = None
 
 NATIVE_INSTALLER_MARKER = "__pythinker_native_installer__"
 MANAGED_CHANNEL_MARKER = "__pythinker_managed_channel__"
+
+
+class UpdateIntent(Enum):
+    """What an update invocation is allowed to do to the running process.
+
+    ``CHECK`` only refreshes the latest-version cache. ``STAGE_FOR_RESTART`` is
+    the only intent background tasks may use: it downloads and stages the new
+    release but must never spawn an installer, run a package-manager upgrade,
+    or exit the process. ``INSTALL`` is for foreground in-shell updates: inline
+    package-manager upgrades are allowed, but Windows still stages for restart
+    because replacing the running exe would kill the session. ``INSTALL_AND_EXIT``
+    is reserved for the standalone ``pythinker update`` CLI (and the blocking
+    pre-start prompt), where exiting to hand off to the installer is expected.
+    """
+
+    CHECK = auto()
+    STAGE_FOR_RESTART = auto()
+    INSTALL = auto()
+    INSTALL_AND_EXIT = auto()
 
 
 class UpdateResult(Enum):
@@ -306,9 +327,9 @@ async def prompt_pre_start_update(update_runner: UpdateRunner | None = None) -> 
         return
 
     if update_runner is None:
-        result = await do_update(print_output=True)
+        result = await do_update(print_output=True, intent=UpdateIntent.INSTALL_AND_EXIT)
     else:
-        result = await update_runner(print_output=True, check_only=False)
+        result = await update_runner(print_output=True, intent=UpdateIntent.INSTALL_AND_EXIT)
     if result is UpdateResult.UPDATED:
         # do_update() already printed "Updated successfully!" + the relaunch
         # hint. Wait for the user to acknowledge before exiting so the message
@@ -468,7 +489,7 @@ async def _refresh_update_cache(*, force: bool) -> UpdateResult | None:
     if not force and not _should_auto_check_for_updates():
         return None
     try:
-        result = await do_update(print_output=False, check_only=True)
+        result = await do_update(print_output=False, intent=UpdateIntent.CHECK)
     except Exception:
         logger.exception("Update cache refresh failed:")
         return None
@@ -535,15 +556,16 @@ async def run_update_prompt(update_runner: UpdateRunner | None = None) -> Update
 
     In-shell safe — unlike ``prompt_pre_start_update`` it does not block on raw
     ``input`` or raise ``typer.Exit``; it returns the result so the caller can
-    message the user. On Windows the native-installer path still exits the
-    process to release the executable's file lock (the required behavior there).
+    message the user. On Windows the native installer is staged for restart
+    (never launched mid-session); the next launch applies it before the
+    session starts.
     """
     from pythinker_code.constant import VERSION as current_version
 
     if update_runner is None:
-        refresh_result = await do_update(print_output=True, check_only=True)
+        refresh_result = await do_update(print_output=True, intent=UpdateIntent.CHECK)
     else:
-        refresh_result = await update_runner(print_output=True, check_only=True)
+        refresh_result = await update_runner(print_output=True, intent=UpdateIntent.CHECK)
     if refresh_result is UpdateResult.UP_TO_DATE:
         return UpdateResult.UP_TO_DATE
     if refresh_result is UpdateResult.FAILED:
@@ -565,8 +587,8 @@ async def run_update_prompt(update_runner: UpdateRunner | None = None) -> Update
         _skip_version_this_session(latest_version)
         return None
     if update_runner is None:
-        return await do_update(print_output=True)
-    return await update_runner(print_output=True, check_only=False)
+        return await do_update(print_output=True, intent=UpdateIntent.INSTALL)
+    return await update_runner(print_output=True, intent=UpdateIntent.INSTALL)
 
 
 async def _prompt_update_selection(
@@ -1168,15 +1190,210 @@ def _windows_update_staging_parent() -> Path:
     return get_share_dir() / "windows-update-staging"
 
 
+def _windows_staged_manifest_path() -> Path:
+    return _windows_update_staging_parent() / "staged-update.json"
+
+
+@dataclass(slots=True)
+class StagedWindowsUpdate:
+    """A verified, ready-to-apply Windows installer staged for the next restart."""
+
+    version: str
+    installer_path: Path
+    sha256: str
+    created_at: float
+
+
+def _write_windows_staged_manifest(update: StagedWindowsUpdate) -> bool:
+    """Atomically record a staged Windows update (write temp + os.replace).
+
+    An interrupted write can never produce a ready-to-apply state: readers only
+    ever see the previous manifest or the complete new one.
+    """
+    manifest = _windows_staged_manifest_path()
+    payload = {
+        "version": update.version,
+        "installer_path": str(update.installer_path),
+        "sha256": update.sha256,
+        "created_at": update.created_at,
+        "state": "ready",
+    }
+    tmp = manifest.with_name(f".{manifest.name}.{os.getpid()}.tmp")
+    try:
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, manifest)
+    except OSError:
+        logger.exception("Failed to write staged Windows update manifest:")
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        return False
+    return True
+
+
+def read_windows_staged_update() -> StagedWindowsUpdate | None:
+    """Parse and shape-validate the staged-update manifest, or None.
+
+    Content validation (digest, version supersession) happens at apply time in
+    :func:`apply_windows_staged_update_now`; a malformed manifest is discarded
+    here so it cannot linger and be retried forever.
+    """
+    manifest = _windows_staged_manifest_path()
+    try:
+        raw = manifest.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.exception("Failed to read staged Windows update manifest:")
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        discard_windows_staged_update("manifest is not valid JSON")
+        return None
+    if not isinstance(payload, dict):
+        discard_windows_staged_update("manifest has an unexpected shape")
+        return None
+    data = cast(dict[str, object], payload)
+    version = data.get("version")
+    installer_path = data.get("installer_path")
+    sha256 = data.get("sha256")
+    created_at = data.get("created_at")
+    state = data.get("state")
+    if (
+        not isinstance(version, str)
+        or not isinstance(installer_path, str)
+        or not isinstance(sha256, str)
+        or len(sha256) != 64
+        or not isinstance(created_at, int | float)
+        or state != "ready"
+    ):
+        discard_windows_staged_update("manifest fields are missing or malformed")
+        return None
+    return StagedWindowsUpdate(
+        version=version,
+        installer_path=Path(installer_path),
+        sha256=sha256,
+        created_at=float(created_at),
+    )
+
+
+def discard_windows_staged_update(reason: str) -> None:
+    """Drop the staged manifest and its installer directory. Fail closed: a stage
+    that cannot be trusted is removed rather than retried."""
+    logger.warning("Discarding staged Windows update: {reason}", reason=reason)
+    manifest = _windows_staged_manifest_path()
+    payload: dict[str, object] | None = None
+    try:
+        parsed: object = json.loads(manifest.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            payload = cast(dict[str, object], parsed)
+    except (OSError, json.JSONDecodeError):
+        payload = None
+    with contextlib.suppress(OSError):
+        manifest.unlink(missing_ok=True)
+    installer_path = payload.get("installer_path") if payload else None
+    if isinstance(installer_path, str):
+        installer_dir = Path(installer_path).parent
+        if installer_dir.parent == _windows_update_staging_parent():
+            shutil.rmtree(installer_dir, ignore_errors=True)
+
+
+def apply_windows_staged_update_now() -> bool:
+    """Launch the staged installer after re-validating it. True when spawned.
+
+    Callers must exit promptly after a True return: the installer's ``/PID``
+    handshake waits for this process to release the executable lock. Any
+    validation failure discards the stage and returns False (fail closed) —
+    startup then continues on the current version.
+    """
+    from pythinker_code.constant import VERSION as current_version
+
+    staged = read_windows_staged_update()
+    if staged is None:
+        return False
+    if semver_tuple(staged.version) <= semver_tuple(current_version):
+        discard_windows_staged_update(
+            f"staged version {staged.version} is not newer than {current_version}"
+        )
+        return False
+    if not staged.installer_path.is_file():
+        discard_windows_staged_update("staged installer file is missing")
+        return False
+    if not _verify_sha256(staged.installer_path, staged.sha256):
+        discard_windows_staged_update("staged installer failed digest verification")
+        return False
+    if not _spawn_detached_windows_installer(staged.installer_path):
+        discard_windows_staged_update("staged installer could not be launched")
+        return False
+    # The installer owns the staging directory from here; drop the manifest so
+    # a crash before its Restart Manager scan cannot re-apply. Guarded against
+    # supersession: another process may have staged a newer version between our
+    # read and the spawn — never delete a manifest that no longer describes the
+    # installer we just launched (the newer stage applies on its own restart).
+    current = read_windows_staged_update()
+    if current is not None and current.version == staged.version:
+        with contextlib.suppress(OSError):
+            _windows_staged_manifest_path().unlink(missing_ok=True)
+    logger.info(
+        "Launched staged Windows installer for {version}; exiting to release file locks.",
+        version=staged.version,
+    )
+    return True
+
+
+def apply_staged_update_before_start() -> bool:
+    """Pre-session bootstrap: apply a verified staged Windows update, if any.
+
+    Runs before any session/runtime construction. Returns True when the
+    installer was spawned and the caller must exit immediately; False continues
+    normal startup (including after a discarded invalid stage — fail closed,
+    never fail the launch).
+    """
+    if not _is_windows():
+        return False
+    if _auto_update_disabled() or _is_running_from_source_checkout():
+        return False
+    if read_windows_staged_update() is None:
+        return False
+    if not apply_windows_staged_update_now():
+        return False
+    console.print("Applying staged Pythinker update — relaunch once the installer finishes.")
+    return True
+
+
+_windows_apply_on_exit_armed = False
+
+
+def register_windows_staged_apply_on_exit() -> None:
+    """Arrange for the staged Windows installer to launch at clean process exit.
+
+    Only used by the ``apply_on_exit`` policy. Registration is idempotent, and
+    the handler re-validates the stage at fire time, so arming is safe even if
+    the stage is later superseded or discarded.
+    """
+    global _windows_apply_on_exit_armed
+    if _windows_apply_on_exit_armed:
+        return
+    _windows_apply_on_exit_armed = True
+    atexit.register(apply_windows_staged_update_now)
+
+
 def _cleanup_stale_windows_update_staging(now: float | None = None) -> None:
     if not _is_windows():
         return
     parent = _windows_update_staging_parent()
     if not parent.exists():
         return
+    # Never prune the directory the current staged manifest points at — the
+    # staged installer must survive until it is applied or superseded.
+    staged = read_windows_staged_update()
+    referenced = staged.installer_path.parent if staged is not None else None
     cutoff = (time.time() if now is None else now) - WINDOWS_UPDATE_STAGING_MAX_AGE_SECONDS
     for child in parent.glob("pythinker-update-*"):
         try:
+            if child == referenced:
+                continue
             if child.is_dir() and child.stat().st_mtime < cutoff:
                 shutil.rmtree(child, ignore_errors=True)
         except OSError:
@@ -1197,9 +1414,17 @@ def _make_native_update_tmpdir() -> Path:
     return Path(tempfile.mkdtemp(prefix="pythinker-update-"))
 
 
-async def _maybe_run_native_update(latest_version: str, channel: str = "latest") -> UpdateResult:
-    """Native-build update path for an explicit user-requested update."""
+async def _maybe_run_native_update(
+    latest_version: str, channel: str = "latest", *, intent: UpdateIntent = UpdateIntent.INSTALL
+) -> UpdateResult:
+    """Native-build update path: download, verify, then stage or install per intent."""
     linux_package_kind = _installed_linux_package_kind()
+    if linux_package_kind is not None and intent is UpdateIntent.STAGE_FOR_RESTART:
+        # System-package installs need an inline (often sudo) package-manager
+        # run; that is never allowed from a background task. Surface the
+        # update as available instead.
+        logger.info("Background update deferred: Linux package installs are foreground-only")
+        return UpdateResult.UPDATE_AVAILABLE
     if _is_windows():
         asset_name = native_installer_asset_name(latest_version)
     elif linux_package_kind is not None:
@@ -1237,11 +1462,28 @@ async def _maybe_run_native_update(latest_version: str, channel: str = "latest")
                 return UpdateResult.FAILED
 
             if _is_windows():
-                # Flag flip before sys.exit so the finally honors it. The
-                # detached helper now owns the staging directory.
+                if intent is UpdateIntent.INSTALL_AND_EXIT:
+                    # Standalone `pythinker update` / pre-start prompt: hand off
+                    # to the installer and exit. Flag flip before sys.exit so
+                    # the finally honors it — the detached helper now owns the
+                    # staging directory.
+                    cleanup_tmpdir = False
+                    _run_native_installer(asset)
+                    return UpdateResult.UPDATED  # unreachable; sys.exit fires above
+                # In-session (background or /update): stage for restart. The
+                # installer runs from the pre-session bootstrap on the next
+                # launch (or at clean exit under apply_on_exit); the live
+                # session is never interrupted.
+                staged = StagedWindowsUpdate(
+                    version=latest_version,
+                    installer_path=asset,
+                    sha256=expected_sha,
+                    created_at=time.time(),
+                )
+                if not _write_windows_staged_manifest(staged):
+                    return UpdateResult.FAILED
                 cleanup_tmpdir = False
-                _run_native_installer(asset)
-                return UpdateResult.UPDATED  # unreachable; sys.exit fires above
+                return UpdateResult.UPDATED
             if linux_package_kind is not None:
                 return _install_linux_package(asset, linux_package_kind)
             return _install_native_archive(asset)
@@ -1313,13 +1555,13 @@ def _run_upgrade_command(
 async def do_update(
     *,
     print_output: bool = True,
-    check_only: bool = False,
+    intent: UpdateIntent = UpdateIntent.INSTALL,
     output_callback: Callable[[str], None] | None = None,
 ) -> UpdateResult:
     async with _UPDATE_LOCK:
         return await _do_update(
             print_output=print_output,
-            check_only=check_only,
+            intent=intent,
             output_callback=output_callback,
         )
 
@@ -1327,7 +1569,7 @@ async def do_update(
 async def _do_update(
     *,
     print_output: bool,
-    check_only: bool,
+    intent: UpdateIntent,
     output_callback: Callable[[str], None] | None,
 ) -> UpdateResult:
     from pythinker_code.constant import VERSION as current_version
@@ -1394,7 +1636,7 @@ async def _do_update(
     except OSError:
         logger.exception("Failed to cache latest version:")
 
-    if check_only:
+    if intent is UpdateIntent.CHECK:
         logger.info(
             "Update available: current={current_version}, latest={latest_version}",
             current_version=current_version,
@@ -1404,6 +1646,17 @@ async def _do_update(
         return UpdateResult.UPDATE_AVAILABLE
 
     is_native_update = upgrade_command == [NATIVE_INSTALLER_MARKER]
+    if intent is UpdateIntent.STAGE_FOR_RESTART and not is_native_update:
+        # Background tasks must never run package-manager upgrades (pip/uv/
+        # pipx/brew) inline: those subprocesses mutate the live install and,
+        # for pip-on-self, can exit the process. Surface the update instead;
+        # the persistent notice points the user at /update.
+        logger.info(
+            "Background update deferred: {cmd} is foreground-only",
+            cmd=_format_upgrade_command(upgrade_command),
+        )
+        _print(f"[{_t.warning}]Update available: {current_version} → {latest_version}[/]")
+        return UpdateResult.UPDATE_AVAILABLE
     upgrade_command_text = (
         "native installer" if is_native_update else _format_upgrade_command(upgrade_command)
     )
@@ -1419,12 +1672,12 @@ async def _do_update(
 
     if is_native_update:
         _print(f"[{_t.muted}]Downloading native installer from GitHub Releases...[/]")
-        if _is_windows():
+        if _is_windows() and intent is UpdateIntent.INSTALL_AND_EXIT:
             _print(
                 f"[{_t.warning}]Pythinker will exit after staging the installer; "
                 "the signed Windows installer will continue normally.[/]"
             )
-        native_result = await _maybe_run_native_update(latest_version)
+        native_result = await _maybe_run_native_update(latest_version, intent=intent)
         if native_result is UpdateResult.UPDATE_AVAILABLE:
             _print(
                 f"[{_t.warning}]Auto-update disabled. "

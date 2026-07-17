@@ -21,7 +21,11 @@ from pythinker_code.utils.logging import logger
 from pythinker_code.utils.subprocess_env import get_clean_env
 
 if TYPE_CHECKING:
-    from pythinker_code.ui.shell.update import UpdateResult
+    from pythinker_code.ui.shell.update import (
+        StagedWindowsUpdate,
+        UpdateIntent,
+        UpdateResult,
+    )
 
 UPDATE_STATUS_FILE = get_share_dir() / "update_status.json"
 UPDATE_LOG_FILE = get_share_dir() / "update.log"
@@ -339,10 +343,13 @@ def _new_status(
 async def run_update_job(
     *,
     print_output: bool = True,
-    check_only: bool = False,
+    intent: UpdateIntent | None = None,
     source: str = "cli",
 ) -> UpdateResult:
-    from pythinker_code.ui.shell.update import UpdateResult, do_update
+    from pythinker_code.ui.shell.update import UpdateIntent, UpdateResult, do_update
+
+    if intent is None:
+        intent = UpdateIntent.CHECK
 
     lock = acquire_update_lock(source=source)
     if lock is None:
@@ -355,7 +362,7 @@ async def run_update_job(
 
     job_id = uuid.uuid4().hex
     started_at = time.time()
-    state = UpdateJobState.CHECKING if check_only else UpdateJobState.RUNNING
+    state = UpdateJobState.CHECKING if intent is UpdateIntent.CHECK else UpdateJobState.RUNNING
     append_update_log(f"\n=== pythinker update {job_id} started ({source}) ===")
     write_update_status(
         _new_status(job_id=job_id, state=state, source=source, started_at=started_at)
@@ -365,7 +372,7 @@ async def run_update_job(
         try:
             result = await do_update(
                 print_output=print_output,
-                check_only=check_only,
+                intent=intent,
                 output_callback=append_update_log,
             )
         except SystemExit:
@@ -386,17 +393,30 @@ async def run_update_job(
         reported_result = result
         final_state = _result_state(result)
         message = result.name.replace("_", " ").lower()
-        if result is UpdateResult.UPDATED and not check_only:
-            smoke_ok, smoke_message = run_post_install_smoke_check()
-            append_update_log(smoke_message)
-            if smoke_ok:
-                message = smoke_message
+        if result is UpdateResult.UPDATED and intent is not UpdateIntent.CHECK:
+            staged_windows = _pending_windows_staged_update()
+            if staged_windows is not None:
+                # Windows stages an installer, not a swappable binary: running
+                # `--version` here would exercise the OLD executable and falsely
+                # certify the stage. The stage is digest-verified at staging
+                # time and re-verified at apply time, so report exactly that.
+                message = (
+                    f"Update {staged_windows.version} staged (digest verified); "
+                    "applied before the next launch."
+                )
+                append_update_log(message)
                 _write_last_success(job_id=job_id, message=message)
-                _finalize_native_staging(promote=True)
             else:
-                message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
-                # Never promote a staged binary that can't even print --version.
-                _finalize_native_staging(promote=False)
+                smoke_ok, smoke_message = run_post_install_smoke_check()
+                append_update_log(smoke_message)
+                if smoke_ok:
+                    message = smoke_message
+                    _write_last_success(job_id=job_id, message=message)
+                    _finalize_native_staging(promote=True)
+                else:
+                    message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
+                    # Never promote a staged binary that can't even print --version.
+                    _finalize_native_staging(promote=False)
 
         write_update_status(
             _new_status(
@@ -427,6 +447,18 @@ async def run_update_job(
         raise
     finally:
         lock.release()
+
+
+def _pending_windows_staged_update() -> StagedWindowsUpdate | None:
+    """The staged Windows update, or None off-Windows / when nothing is staged."""
+    from pythinker_code.ui.shell.update import (
+        _is_windows,  # pyright: ignore[reportPrivateUsage]
+        read_windows_staged_update,
+    )
+
+    if not _is_windows():
+        return None
+    return read_windows_staged_update()
 
 
 def _write_last_success(*, job_id: str, message: str) -> None:
@@ -519,9 +551,7 @@ def run_post_install_smoke_check() -> tuple[bool, str]:
 async def prompt_pre_start_update_job() -> None:
     from pythinker_code.ui.shell.update import prompt_pre_start_update
 
-    async def _runner(*, print_output: bool, check_only: bool) -> UpdateResult:
-        return await run_update_job(
-            print_output=print_output, check_only=check_only, source="startup"
-        )
+    async def _runner(*, print_output: bool, intent: UpdateIntent) -> UpdateResult:
+        return await run_update_job(print_output=print_output, intent=intent, source="startup")
 
     await prompt_pre_start_update(update_runner=_runner)

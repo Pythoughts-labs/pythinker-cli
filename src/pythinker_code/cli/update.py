@@ -23,10 +23,13 @@ def update(
     if ctx.invoked_subcommand is not None:
         return
 
-    from pythinker_code.ui.shell.update import UpdateResult
+    from pythinker_code.ui.shell.update import UpdateIntent, UpdateResult
     from pythinker_code.ui.shell.update_orchestrator import run_update_job
 
-    result = asyncio.run(run_update_job(print_output=True, check_only=check_only, source="cli"))
+    # The standalone CLI is its own foreground process: exiting to hand off to
+    # the platform installer is expected, unlike in-shell updates which stage.
+    intent = UpdateIntent.CHECK if check_only else UpdateIntent.INSTALL_AND_EXIT
+    result = asyncio.run(run_update_job(print_output=True, intent=intent, source="cli"))
     if result in (UpdateResult.FAILED, UpdateResult.UNSUPPORTED):
         raise typer.Exit(1)
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pythinker_code.config import Config
+    from pythinker_code.config import AutoUpdateMode, Config
 
 
 def auto_update_disabled() -> bool:
@@ -52,25 +52,39 @@ def is_running_from_source_checkout() -> bool:
     return False
 
 
-def auto_update_enabled(config: Config) -> bool:
-    """Whether startup may silently install a newer release.
+def resolve_auto_update_mode(config: Config) -> AutoUpdateMode:
+    """Effective startup auto-update policy after external overrides.
 
     Precedence (highest first):
-    1. ``PYTHINKER_CLI_NO_AUTO_UPDATE`` (the hard kill-switch) → disabled.
-    2. ``config.auto_update is False`` → disabled.
-    3. Source checkout → disabled.
-    4. Otherwise → enabled.
+    1. ``PYTHINKER_CLI_NO_AUTO_UPDATE`` (the hard kill-switch) → ``OFF``.
+    2. Source checkout → ``OFF``.
+    3. Otherwise → ``config.auto_update``.
 
     Managed channels (Docker/Nix/Scoop/WinGet) are *not* special-cased here:
-    they may be "enabled" but ``_do_update`` returns ``UPDATE_AVAILABLE`` and
-    emits a channel hint instead of swapping the binary, so they never get a
-    silent install regardless of this result.
+    they may resolve to a download mode, but ``_do_update`` returns
+    ``UPDATE_AVAILABLE`` and emits a channel hint instead of touching the
+    binary, so they never get a background install regardless of this result.
     """
-    if auto_update_disabled():
-        return False
-    if config.auto_update is False:
-        return False
-    return not is_running_from_source_checkout()
+    from pythinker_code.config import AutoUpdateMode
+
+    if auto_update_disabled() or is_running_from_source_checkout():
+        return AutoUpdateMode.OFF
+    return config.auto_update
+
+
+def auto_update_enabled(config: Config) -> bool:
+    """Whether startup may download-and-stage a newer release in the background.
+
+    True for the ``download`` and ``apply_on_exit`` modes when no external
+    override forces the policy off. No mode installs mid-session; "enabled"
+    means staged-for-restart, not live replacement.
+    """
+    from pythinker_code.config import AutoUpdateMode
+
+    return resolve_auto_update_mode(config) in (
+        AutoUpdateMode.DOWNLOAD,
+        AutoUpdateMode.APPLY_ON_EXIT,
+    )
 
 
 def auto_update_override_reason() -> str | None:

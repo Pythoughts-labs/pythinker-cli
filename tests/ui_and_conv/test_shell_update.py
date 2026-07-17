@@ -29,7 +29,9 @@ async def test_prompt_pre_start_update_runs_update_and_exits_on_accept(monkeypat
         assert allow_exit is True
         return update.UpdatePromptSelection.UPDATE_NOW
 
-    async def fake_do_update(*, print_output: bool) -> update.UpdateResult:
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         assert print_output is True
         calls.append("update")
         return update.UpdateResult.UPDATED
@@ -271,10 +273,12 @@ def test_should_auto_check_does_not_require_stdout_tty(monkeypatch, tmp_path):
 async def test_resolve_latest_version_fetches_when_due(monkeypatch, tmp_path):
     latest_file = tmp_path / "latest.txt"
     last_check_file = tmp_path / "last_update_check.txt"
-    calls: list[tuple[bool, bool]] = []
+    calls: list[tuple[bool, update.UpdateIntent]] = []
 
-    async def fake_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
-        calls.append((print_output, check_only))
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
+        calls.append((print_output, intent))
         latest_file.write_text("2.0.0", encoding="utf-8")
         return update.UpdateResult.UPDATE_AVAILABLE
 
@@ -286,7 +290,7 @@ async def test_resolve_latest_version_fetches_when_due(monkeypatch, tmp_path):
     result = await update._resolve_latest_version_for_prompt()
 
     assert result == "2.0.0"
-    assert calls == [(False, True)]
+    assert calls == [(False, update.UpdateIntent.CHECK)]
     assert last_check_file.exists()
 
 
@@ -294,10 +298,12 @@ async def test_resolve_latest_version_fetches_when_due(monkeypatch, tmp_path):
 async def test_resolve_latest_version_fetches_when_cache_missing(monkeypatch, tmp_path):
     latest_file = tmp_path / "latest.txt"
     last_check_file = tmp_path / "last_update_check.txt"
-    calls: list[tuple[bool, bool]] = []
+    calls: list[tuple[bool, update.UpdateIntent]] = []
 
-    async def fake_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
-        calls.append((print_output, check_only))
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
+        calls.append((print_output, intent))
         latest_file.write_text("2.0.0", encoding="utf-8")
         return update.UpdateResult.UPDATE_AVAILABLE
 
@@ -307,7 +313,7 @@ async def test_resolve_latest_version_fetches_when_cache_missing(monkeypatch, tm
     monkeypatch.setattr(update, "do_update", fake_do_update)
 
     assert await update._resolve_latest_version_for_prompt() == "2.0.0"
-    assert calls == [(False, True)]
+    assert calls == [(False, update.UpdateIntent.CHECK)]
     assert last_check_file.exists()
 
 
@@ -316,7 +322,9 @@ async def test_resolve_latest_version_uses_cache_when_not_due(monkeypatch, tmp_p
     latest_file = tmp_path / "latest.txt"
     latest_file.write_text("3.1.0", encoding="utf-8")
 
-    async def fail_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
+    async def fail_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         raise AssertionError("must not hit the network when the throttle is not due")
 
     monkeypatch.setattr(update, "LATEST_VERSION_FILE", latest_file)
@@ -331,10 +339,12 @@ async def test_resolve_latest_version_revalidates_stale_cache_when_not_due(monke
     latest_file = tmp_path / "latest.txt"
     latest_file.write_text("0.0.0", encoding="utf-8")
     last_check_file = tmp_path / "last_update_check.txt"
-    calls: list[tuple[bool, bool]] = []
+    calls: list[tuple[bool, update.UpdateIntent]] = []
 
-    async def fake_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
-        calls.append((print_output, check_only))
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
+        calls.append((print_output, intent))
         latest_file.write_text("999.0.0", encoding="utf-8")
         return update.UpdateResult.UPDATE_AVAILABLE
 
@@ -347,7 +357,7 @@ async def test_resolve_latest_version_revalidates_stale_cache_when_not_due(monke
     monkeypatch.setattr(update, "do_update", fake_do_update)
 
     assert await update._resolve_latest_version_for_prompt() == "999.0.0"
-    assert calls == [(False, True)]
+    assert calls == [(False, update.UpdateIntent.CHECK)]
     assert last_check_file.exists()
 
 
@@ -383,7 +393,9 @@ async def test_refresh_cache_does_not_throttle_on_failure(monkeypatch, tmp_path)
     latest_file = tmp_path / "latest.txt"
     last_check_file = tmp_path / "last_update_check.txt"
 
-    async def failing_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
+    async def failing_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         return update.UpdateResult.FAILED
 
     monkeypatch.setattr(update, "LATEST_VERSION_FILE", latest_file)
@@ -403,7 +415,9 @@ async def test_refresh_cache_does_not_throttle_on_failure(monkeypatch, tmp_path)
 async def test_refresh_cache_does_not_throttle_on_exception(monkeypatch, tmp_path):
     last_check_file = tmp_path / "last_update_check.txt"
 
-    async def raising_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
+    async def raising_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(update, "LAST_UPDATE_CHECK_FILE", last_check_file)
@@ -553,7 +567,7 @@ async def test_do_update_managed_check_only_caches_latest(monkeypatch, tmp_path)
     monkeypatch.setattr(update, "new_client_session", lambda timeout: _FakeSessionContext(object()))
 
     result = await update.do_update(
-        print_output=False, check_only=True, output_callback=messages.append
+        print_output=False, intent=update.UpdateIntent.CHECK, output_callback=messages.append
     )
 
     assert result is update.UpdateResult.UPDATE_AVAILABLE
@@ -586,7 +600,7 @@ async def test_do_update_does_not_cache_uninstallable_latest(monkeypatch, tmp_pa
     monkeypatch.setattr(update, "_update_candidate_unavailable_reason", fake_unavailable)
     monkeypatch.setattr(update, "new_client_session", lambda timeout: _FakeSessionContext(object()))
 
-    result = await update.do_update(print_output=False, check_only=True)
+    result = await update.do_update(print_output=False, intent=update.UpdateIntent.CHECK)
 
     assert result is update.UpdateResult.FAILED
     assert not latest_file.exists()
@@ -675,10 +689,12 @@ async def test_resolve_latest_version_can_force_refresh(monkeypatch, tmp_path):
     latest_file = tmp_path / "latest.txt"
     latest_file.write_text("3.1.0", encoding="utf-8")
     last_check_file = tmp_path / "last_update_check.txt"
-    calls: list[tuple[bool, bool]] = []
+    calls: list[tuple[bool, update.UpdateIntent]] = []
 
-    async def fake_do_update(*, print_output: bool, check_only: bool) -> update.UpdateResult:
-        calls.append((print_output, check_only))
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
+        calls.append((print_output, intent))
         latest_file.write_text("3.2.0", encoding="utf-8")
         return update.UpdateResult.UPDATE_AVAILABLE
 
@@ -688,7 +704,7 @@ async def test_resolve_latest_version_can_force_refresh(monkeypatch, tmp_path):
     monkeypatch.setattr(update, "do_update", fake_do_update)
 
     assert await update._resolve_latest_version_for_prompt(force_refresh=True) == "3.2.0"
-    assert calls == [(False, True)]
+    assert calls == [(False, update.UpdateIntent.CHECK)]
     assert last_check_file.exists()
 
 
@@ -725,7 +741,7 @@ async def test_do_update_on_windows_runs_upgrade_inline_without_detaching(monkey
     # The behavioral contract of this change: no detached process, no early exit.
     monkeypatch.setattr(update.subprocess, "Popen", fail_on_detach)
 
-    result = await update.do_update(print_output=False, check_only=False)
+    result = await update.do_update(print_output=False, intent=update.UpdateIntent.INSTALL)
 
     # do_update returns normally (no SystemExit) and ran the upgrade inline.
     assert result is update.UpdateResult.UPDATED
@@ -842,7 +858,9 @@ async def test_do_update_uses_native_installer_marker(monkeypatch, tmp_path):
     async def fake_get_latest(session):
         return "999.0.0"
 
-    async def fake_native_update(latest_version: str) -> update.UpdateResult:
+    async def fake_native_update(
+        latest_version: str, *, intent: update.UpdateIntent
+    ) -> update.UpdateResult:
         native_versions.append(latest_version)
         return update.UpdateResult.UPDATED
 
@@ -860,7 +878,8 @@ async def test_do_update_uses_native_installer_marker(monkeypatch, tmp_path):
     monkeypatch.setattr(update.subprocess, "run", fake_run)
 
     assert (
-        await update.do_update(print_output=False, check_only=False) is update.UpdateResult.UPDATED
+        await update.do_update(print_output=False, intent=update.UpdateIntent.INSTALL)
+        is update.UpdateResult.UPDATED
     )
     assert native_versions == ["999.0.0"]
 
@@ -1596,12 +1615,14 @@ def test_installed_homebrew_version_returns_none_on_failure(monkeypatch):
 @pytest.mark.parametrize(
     ("env_kill", "config_value", "source_checkout", "expected"),
     [
-        (False, True, False, True),  # default → enabled
-        (True, True, False, False),  # env kill-switch wins over config
-        (False, False, False, False),  # config off
-        (True, False, False, False),  # both off
-        (False, True, True, False),  # source checkout always off
-        (True, True, True, False),  # source checkout + env kill
+        (False, "download", False, True),  # default → enabled
+        (False, "apply_on_exit", False, True),  # apply_on_exit also downloads
+        (True, "download", False, False),  # env kill-switch wins over config
+        (False, "notify", False, False),  # notify never downloads
+        (False, "off", False, False),  # off
+        (True, "off", False, False),  # both off
+        (False, "download", True, False),  # source checkout always off
+        (True, "download", True, False),  # source checkout + env kill
     ],
 )
 def test_auto_update_enabled_precedence(
@@ -1613,7 +1634,9 @@ def test_auto_update_enabled_precedence(
 
     monkeypatch.setattr(update_policy, "auto_update_disabled", lambda: env_kill)
     monkeypatch.setattr(update_policy, "is_running_from_source_checkout", lambda: source_checkout)
-    config = cast("Config", SimpleNamespace(auto_update=config_value))
+    from pythinker_code.config import AutoUpdateMode
+
+    config = cast("Config", SimpleNamespace(auto_update=AutoUpdateMode(config_value)))
     assert update_policy.auto_update_enabled(config) is expected
 
 
@@ -1652,6 +1675,6 @@ async def test_do_update_result_is_print_output_invariant(monkeypatch, tmp_path)
     # Prevent real network I/O: wrap the session context with a no-op stub.
     monkeypatch.setattr(update, "new_client_session", lambda timeout: _FakeSessionContext(object()))
 
-    loud = await update.do_update(print_output=True, check_only=False)
-    quiet = await update.do_update(print_output=False, check_only=False)
+    loud = await update.do_update(print_output=True, intent=update.UpdateIntent.INSTALL)
+    quiet = await update.do_update(print_output=False, intent=update.UpdateIntent.INSTALL)
     assert loud is quiet is update.UpdateResult.UPDATE_AVAILABLE
