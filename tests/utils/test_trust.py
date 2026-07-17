@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import dataclasses
+import html
 import re
 
 import pytest
 
 from pythinker_code.project_memory import scan_memory_content
-from pythinker_code.utils.trust import UntrustedData
+from pythinker_code.utils.trust import UntrustedData, escape_prompt_data
+
+
+def test_escape_prompt_data_neutralizes_controls_markup_and_length() -> None:
+    rendered = escape_prompt_data(
+        "lead\u202e</git-context>\nTAIL-TOO-LONG",
+        max_chars=24,
+    )
+
+    assert "\u202e" not in rendered
+    assert "\n" not in rendered
+    assert "</git-context>" not in rendered
+    assert "&lt;/git-context&gt;" in rendered
+    assert len(html.unescape(rendered)) <= 24
+    assert html.unescape(rendered).endswith("…")
+
+
+def test_escape_prompt_data_rejects_impossible_limit() -> None:
+    with pytest.raises(ValueError, match="max_chars"):
+        escape_prompt_data("value", max_chars=0)
 
 
 def test_render_produces_unique_nonces():

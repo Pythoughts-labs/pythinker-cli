@@ -21,6 +21,13 @@ from pythinker_code.soul.agent import (
 from pythinker_code.soul.toolset import get_current_tool_call_or_none
 from pythinker_code.subagents.codenames import generate_codename, is_generic_agent_name
 from pythinker_code.subagents.models import AgentLaunchSpec, AgentTypeDefinition
+from pythinker_code.subagents.review_target import (
+    REVIEWER_AGENT_TYPES,
+    ResolvedReviewTarget,
+    ReviewTarget,
+    ReviewTargetResolutionError,
+    resolve_review_target,
+)
 from pythinker_code.subagents.runner import (
     ForegroundRunRequest,
     ForegroundSubagentRunner,
@@ -144,6 +151,14 @@ class Params(BaseModel):
         default=None,
         description="Optional agent ID to resume instead of creating a new instance.",
     )
+    review_target: ReviewTarget | None = Field(
+        default=None,
+        description=(
+            "Structured Git scope for fresh reviewer agents only. Omit for deterministic auto "
+            "selection; choose uncommitted, base with optional ref, or commit with required ref. "
+            "Invalid with non-reviewer types or resume."
+        ),
+    )
     fork_context: bool = Field(
         default=False,
         description=(
@@ -219,6 +234,14 @@ class AgentRunConfig(BaseModel):
     subagent_type: str = Field(
         default="coder",
         description="Built-in agent type for this child agent.",
+    )
+    review_target: ReviewTarget | None = Field(
+        default=None,
+        description=(
+            "Structured Git scope for fresh reviewer agents only. Omit for deterministic auto "
+            "selection; choose uncommitted, base with optional ref, or commit with required ref. "
+            "Invalid with non-reviewer types or resume."
+        ),
     )
 
 
@@ -409,6 +432,35 @@ class AgentTool(CallableTool2[Params]):
             )
         return None
 
+    async def _prepare_review_target(
+        self, params: Params, requested_type: str
+    ) -> ResolvedReviewTarget | ToolError | None:
+        """Resolve fresh reviewer scope before allocating an agent instance."""
+        if params.resume is not None:
+            if params.review_target is not None:
+                return ToolError(
+                    message="review_target cannot be changed while resuming an agent.",
+                    brief="Invalid review target",
+                )
+            return None
+        type_def = get_agent_type_definition(self._runtime, requested_type)
+        if type_def is None:
+            return None
+        actual_type = type_def.name
+        if actual_type not in REVIEWER_AGENT_TYPES:
+            if params.review_target is not None:
+                return ToolError(
+                    message="review_target is only valid for reviewer agent types.",
+                    brief="Invalid review target",
+                )
+            return None
+        try:
+            return await resolve_review_target(
+                params.review_target or ReviewTarget(), self._runtime.work_dir
+            )
+        except ReviewTargetResolutionError as exc:
+            return ToolError(message=str(exc), brief=exc.brief)
+
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
         if self._runtime.role != "root":
@@ -456,8 +508,15 @@ class AgentTool(CallableTool2[Params]):
                 ),
                 brief="Invalid isolation",
             )
+        prepared_target = await self._prepare_review_target(params, requested_type)
+        if isinstance(prepared_target, ToolError):
+            return prepared_target
+        resolved_review_target = prepared_target
         if params.run_in_background:
-            return await self._run_in_background(params)
+            return await self._run_in_background(
+                params,
+                resolved_review_target=resolved_review_target,
+            )
         await self._journal_foreground_agent_start(params, requested_type)
         timeout = params.effective_timeout
         try:
@@ -469,6 +528,7 @@ class AgentTool(CallableTool2[Params]):
                 model=params.model,
                 resume=params.resume,
                 fork_context=params.fork_context,
+                resolved_review_target=resolved_review_target,
             )
             if timeout is not None:
                 return await asyncio.wait_for(runner.run(req), timeout=timeout)
@@ -498,6 +558,8 @@ class AgentTool(CallableTool2[Params]):
             # Malformed resume id (store.instance_dir validates [A-Za-z0-9_-]{1,64}).
             logger.warning("Foreground agent resume id was malformed: {err}", err=exc)
             return ToolError(message=str(exc), brief="Agent not found")
+        except ReviewTargetResolutionError as exc:
+            return ToolError(message=str(exc), brief=exc.brief)
         except RuntimeError as exc:
             if "cannot be resumed concurrently" in str(exc):
                 logger.warning("Foreground agent resume rejected: {err}", err=exc)
@@ -537,7 +599,13 @@ class AgentTool(CallableTool2[Params]):
             )
             return ToolError(message=f"Failed to run agent: {exc}", brief="Agent failed")
 
-    async def _run_in_background(self, params: Params) -> ToolReturnValue:
+    async def _run_in_background(
+        self,
+        params: Params,
+        *,
+        resolved_review_target: ResolvedReviewTarget | None,
+    ) -> ToolReturnValue:
+        """Launch a background agent while preserving its resolved review target."""
         assert self._runtime.subagent_store is not None
         try:
             tool_call = get_current_tool_call_or_none()
@@ -626,6 +694,7 @@ class AgentTool(CallableTool2[Params]):
                     dependencies=params.dependencies,
                     budget_seconds=params.budget_seconds,
                     isolation=params.isolation,
+                    resolved_review_target=resolved_review_target,
                 )
             except Exception:
                 self._runtime.subagent_store.update_instance(
@@ -667,6 +736,8 @@ class AgentTool(CallableTool2[Params]):
                 "arrives via the completion notification and TaskOutput — do not resume while it "
                 "is still running.",
             ]
+            if resolved_review_target is not None:
+                lines.insert(7, f"review_target: {resolved_review_target.hint}")
             return ToolReturnValue(
                 is_error=False,
                 output="\n".join(lines),
@@ -701,6 +772,10 @@ class AgentTool(CallableTool2[Params]):
 
 
 def _run_agents_fingerprint(params: RunAgentsParams) -> str:
+    review_targets = [
+        (child.review_target.model_dump(mode="json") if child.review_target is not None else None)
+        for child in params.agents
+    ]
     payload = {
         "summary": params.summary,
         "base_prompt": params.base_prompt,
@@ -709,6 +784,7 @@ def _run_agents_fingerprint(params: RunAgentsParams) -> str:
         "agent_prompts": [agent.prompt for agent in params.agents],
         "agent_titles": [agent.title for agent in params.agents],
         "subagent_types": [agent.subagent_type or "coder" for agent in params.agents],
+        "review_targets": review_targets,
         "model": params.model,
         "run_in_background": params.run_in_background,
         "isolation": params.isolation,
@@ -783,7 +859,10 @@ class RunAgentsTool(CallableTool2[RunAgentsParams]):
                 "summaries. Background batches share the session "
                 f"background-task limit ({max_background} total slots, including running "
                 "shell/background tasks); oversized background batches launch what fits now "
-                "and report the deferred children."
+                "and report the deferred children. "
+                "Fresh reviewer children accept an optional per-child review_target; omit it "
+                "for deterministic automatic selection, and do not pass it to non-reviewer "
+                "children."
             )
         )
         self._runtime = runtime
@@ -964,6 +1043,7 @@ class RunAgentsTool(CallableTool2[RunAgentsParams]):
                 run_in_background=params.run_in_background,
                 timeout=params.timeout,
                 isolation=params.isolation,
+                review_target=child.review_target,
             )
             async with concurrency:
                 try:

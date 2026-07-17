@@ -8,6 +8,7 @@ implemented once.
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -21,12 +22,18 @@ from pythinker_code.soul.context import Context
 from pythinker_code.soul.message import is_system_reminder_message
 from pythinker_code.soul.pythinkersoul import PythinkerSoul
 from pythinker_code.subagents.builder import SubagentBuilder
+from pythinker_code.subagents.git_context import collect_git_context
 from pythinker_code.subagents.models import AgentLaunchSpec, AgentTypeDefinition
+from pythinker_code.subagents.review_target import (
+    REVIEWER_AGENT_TYPES,
+    ResolvedReviewTarget,
+    revalidate_review_target_head,
+)
 from pythinker_code.subagents.store import SubagentStore
 
 # NOTE: these must match the registered type names in agents/default/agent.yaml
 # (dashed), which _SUBAGENT_PROFILES also keys on — not the yaml file stems.
-GIT_CONTEXT_AGENT_TYPES = frozenset({"explore", "review", "code-reviewer", "security-reviewer"})
+GIT_CONTEXT_AGENT_TYPES = frozenset({"explore"}) | REVIEWER_AGENT_TYPES
 """Read-oriented agent types whose first prompt gets a git-context prefix.
 
 Exploration and review both orient on repo state (branch, dirty files,
@@ -63,6 +70,7 @@ class SubagentRunSpec:
     # Operational work-dir override (e.g. an isolation worktree); flows into
     # the child runtime via copy_for_subagent.
     work_dir_override: HostPath | None = None
+    resolved_review_target: ResolvedReviewTarget | None = None
 
 
 _CHECKPOINT_MARKER_RE = re.compile(r"^CHECKPOINT \d+$")
@@ -116,6 +124,12 @@ def _prepend_output_language_instruction(prompt: str) -> str:
     return f"{SUBAGENT_OUTPUT_LANGUAGE_INSTRUCTION}\n\n{prompt}"
 
 
+def _compose_review_prompt(caller_prompt: str, target: ResolvedReviewTarget) -> str:
+    """Keep caller instructions subordinate to the authoritative resolved target."""
+    safe_caller_prompt = html.escape(caller_prompt, quote=False)
+    return f"<review-task>\n{safe_caller_prompt}\n</review-task>\n\n{target.prompt}"
+
+
 async def prepare_soul(
     spec: SubagentRunSpec,
     runtime: Runtime,
@@ -154,16 +168,30 @@ async def prepare_soul(
     if on_stage:
         on_stage("context_ready")
 
-    # 4. For new (non-resumed) read-oriented agents, prepend git context to the prompt
+    # 4. Compose the authoritative prompt for this run.
     prompt = spec.prompt
-    if spec.type_def.name in GIT_CONTEXT_AGENT_TYPES and not spec.resumed:
-        from pythinker_code.subagents.git_context import collect_git_context
+    git_context_dir = spec.work_dir_override or runtime.builtin_args.PYTHINKER_WORK_DIR
+    is_reviewer = spec.type_def.name in REVIEWER_AGENT_TYPES
+    if spec.resumed and spec.resolved_review_target is not None:
+        raise RuntimeError("A resumed subagent cannot receive a new resolved review target.")
+    if not spec.resumed and is_reviewer and spec.resolved_review_target is None:
+        raise RuntimeError("A fresh reviewer requires a resolved review target.")
+    if not is_reviewer and spec.resolved_review_target is not None:
+        raise RuntimeError("A non-reviewer cannot receive a resolved review target.")
 
-        git_context_dir = spec.work_dir_override or runtime.builtin_args.PYTHINKER_WORK_DIR
-        git_ctx = await collect_git_context(git_context_dir)
-        if git_ctx:
-            prompt = f"{git_ctx}\n\n{prompt}"
+    git_ctx = ""
+    if spec.type_def.name in GIT_CONTEXT_AGENT_TYPES and not spec.resumed:
+        git_ctx = await collect_git_context(
+            git_context_dir,
+            include_merge_base=not is_reviewer,
+        )
+    if spec.resolved_review_target is not None:
+        prompt = _compose_review_prompt(prompt, spec.resolved_review_target)
+    if git_ctx:
+        prompt = f"{git_ctx}\n\n{prompt}"
     prompt = _prepend_output_language_instruction(prompt)
+    if spec.resolved_review_target is not None:
+        await revalidate_review_target_head(spec.resolved_review_target, git_context_dir)
 
     # 5. Write prompt snapshot (debugging aid)
     store.prompt_path(spec.agent_id).write_text(prompt, encoding="utf-8")

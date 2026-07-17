@@ -375,6 +375,10 @@ instance can preserve previous findings and work.
 - Use `model` when you need to override the built-in type's default model or the parent agent's current model.
 - Use `resume` when you want to continue an existing instance instead of starting a new one.
 - If an existing subagent already has relevant context or the task is a continuation of its prior work, prefer `resume` over creating a new instance.
+- Fresh `review`, `code-reviewer`, and `security-reviewer` agents receive a deterministic Git
+  target. Omit `review_target` for automatic branch/worktree/HEAD selection, or pass
+  `{kind: uncommitted}`, `{kind: base, ref: main}`, or `{kind: commit, ref: <sha>}`. Do not pass it
+  to non-reviewer types or resumed agents.
 - Default to foreground execution. Use `run_in_background=true` only when the task can continue independently, you do not need the result immediately, and there is a clear benefit to returning control before it finishes.
 - If your only next step is to wait for and synthesize the results (e.g. parallel reviews feeding one report), run in the foreground — `RunAgents` foreground children still execute concurrently and return results inline, with no polling or notification handling. Reserve background for when you have other work to do while children run.
 - Be explicit about whether the subagent should write code, only research, review, or verify.
@@ -480,6 +484,30 @@ When spawning a fresh agent, brief it like a smart colleague who just walked in 
                     "anyOf": [{"type": "string"}, {"type": "null"}],
                     "default": None,
                     "description": "Optional agent ID to resume instead of creating a new instance.",
+                },
+                "review_target": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": False,
+                            "properties": {
+                                "kind": {
+                                    "default": "auto",
+                                    "description": "Deterministic reviewer Git target mode.",
+                                    "enum": ["auto", "uncommitted", "base", "commit"],
+                                    "type": "string",
+                                },
+                                "ref": {
+                                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                                    "default": None,
+                                    "description": "Optional Git ref for base, required Git ref for commit; maximum 1,024 characters after per-child validation.",
+                                },
+                            },
+                            "type": "object",
+                        },
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Structured Git scope for fresh reviewer agents only. Omit for deterministic auto selection; choose uncommitted, base with optional ref, or commit with required ref. Invalid with non-reviewer types or resume.",
                 },
                 "fork_context": {
                     "default": False,

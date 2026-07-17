@@ -18,6 +18,7 @@ from pythinker_code.soul import RunCancelled
 from pythinker_code.subagents.builder import SubagentBuilder
 from pythinker_code.subagents.core import SubagentRunSpec, prepare_soul
 from pythinker_code.subagents.output import SubagentOutputWriter
+from pythinker_code.subagents.review_target import ResolvedReviewTarget
 from pythinker_code.subagents.runner import (
     _SUMMARY_MIN_LENGTH_BY_TYPE,
     _SUMMARY_MIN_LENGTH_DEFAULT,
@@ -68,6 +69,7 @@ class BackgroundAgentRunner:
         timeout_s: int | None = None,
         resumed: bool = False,
         isolation: str | None = None,
+        resolved_review_target: ResolvedReviewTarget | None = None,
     ) -> None:
         self._runtime = runtime
         self._manager = manager
@@ -79,6 +81,7 @@ class BackgroundAgentRunner:
         self._timeout_s = timeout_s
         self._resumed = resumed
         self._isolation = isolation
+        self._resolved_review_target = resolved_review_target
         self._worktree_path: Path | None = None
         self._builder = SubagentBuilder(runtime)
         self._approval_update_tasks: set[asyncio.Task[None]] = set()
@@ -201,6 +204,7 @@ class BackgroundAgentRunner:
             prompt=self._prompt,
             resumed=self._resumed,
             work_dir_override=work_dir_override,
+            resolved_review_target=self._resolved_review_target,
         )
         soul, prompt = await prepare_soul(
             spec,
