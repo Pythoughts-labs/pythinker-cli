@@ -348,3 +348,27 @@ Done: `mythos-enhancements` PR #118 merged (d51ef649).
 Completed-work logs through 2026-06-11 (agent robustness arc, statusline v2,
 review-safety hardening, telemetry sync, CodeRabbit triage) were trimmed on
 repush of PR #118 — see git history of this file for the full record.
+
+### Windows auto-update lifecycle redesign (2026-07-17)
+
+Branch: `fix/windows-auto-update-lifecycle` (off origin/main @ c5c0bc92)
+
+Root cause (3-lane scout, confirmed): silent startup auto-update on Windows runs the Inno
+installer inline mid-session (`ui/shell/update.py:1239` -> `_run_native_installer` ->
+`/SILENT /CLOSEAPPLICATIONS` + `sys.exit(0)`); shell swallows SystemExit, installer's 15s
+WaitForLauncherExit times out, Restart Manager force-closes the session. No Windows
+stage-and-promote path (macOS/Linux have one via atexit).
+
+Scope (user): FULL redesign. Producer: Codex (GPT-5.6 Sol) via claude-architect MCP pipeline.
+
+- [ ] Delegation A (Python core): phased update engine (check -> download+verify+stage with
+      atomic manifest -> apply at safe boundary only); typed intent replaces check_only bool;
+      config enum policy off|notify|download|apply_on_exit (default download, legacy bool
+      migration); background task never installs/exits mid-session; restart-to-apply notice;
+      pre-start apply hook in app.py before PythinkerCLI.create(); tests + changelog.
+      -> verify: pipeline ruff/pyright/pytest + post-integration full package gate.
+- [ ] Delegation B (after A): packages/windows-installer/installer.iss tuning + multi-session
+      concurrency guard (Session.acquire_ownership is fcntl no-op on Windows, session.py:53).
+- [ ] Full gate + tests_e2e snapshots, then PR.
+
+Out of scope (log): broader Windows session locking beyond updater guard; install.ps1 mirrors.
