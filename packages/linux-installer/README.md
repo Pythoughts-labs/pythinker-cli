@@ -8,19 +8,19 @@ End-user install from the current GitHub Release:
 
 ```sh
 # Debian / Ubuntu
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code_0.59.0_amd64.deb
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code_0.59.0_amd64.deb.sha256
-sha256sum -c pythinker-code_0.59.0_amd64.deb.sha256
-sudo dpkg -i pythinker-code_0.59.0_amd64.deb
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.60.0/pythinker-code_0.60.0_amd64.deb
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.60.0/pythinker-code_0.60.0_amd64.deb.sha256
+sha256sum -c pythinker-code_0.60.0_amd64.deb.sha256
+sudo dpkg -i pythinker-code_0.60.0_amd64.deb
 sudo apt-get install -f       # only needed if dependencies fail to resolve
 
 # Fedora / RHEL / openSUSE
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.x86_64.rpm
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.59.0/pythinker-code-0.59.0.x86_64.rpm.sha256
-sha256sum -c pythinker-code-0.59.0.x86_64.rpm.sha256
-sudo dnf install ./pythinker-code-0.59.0.x86_64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.60.0/pythinker-code-0.60.0.x86_64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.60.0/pythinker-code-0.60.0.x86_64.rpm.sha256
+sha256sum -c pythinker-code-0.60.0.x86_64.rpm.sha256
+sudo dnf install ./pythinker-code-0.60.0.x86_64.rpm
 # or, on openSUSE:
-sudo zypper install ./pythinker-code-0.59.0.x86_64.rpm
+sudo zypper install ./pythinker-code-0.60.0.x86_64.rpm
 ```
 
 The package drops a single executable at `/usr/bin/pythinker` and a license
@@ -36,13 +36,13 @@ file at `/usr/share/doc/pythinker-code/LICENSE`.
 ## Build
 
 ```sh
-bash packages/linux-installer/build.sh 0.59.0
+bash packages/linux-installer/build.sh 0.60.0
 ```
 
 Outputs to `dist/`:
 
-- `pythinker-code_0.59.0_amd64.deb`
-- `pythinker-code-0.59.0.x86_64.rpm`
+- `pythinker-code_0.60.0_amd64.deb`
+- `pythinker-code-0.60.0.x86_64.rpm`
 
 The portable tarball used by `scripts/install-native.sh` is published by
 the existing `release-pythinker-cli.yml` workflow under the cargo-dist
