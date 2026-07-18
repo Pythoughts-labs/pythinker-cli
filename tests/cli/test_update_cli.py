@@ -5,6 +5,7 @@ import os
 from typer.testing import CliRunner
 
 from pythinker_code.cli import cli
+from pythinker_code.ui.shell import update as update_module
 from pythinker_code.ui.shell import update_orchestrator as orchestrator
 
 
@@ -57,3 +58,19 @@ def test_update_log_command_respects_line_count(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert result.output.splitlines() == ["line 2", "line 3"]
+
+
+def test_update_command_exits_nonzero_when_verification_fails(monkeypatch):
+    async def fake_run_update_job(*, print_output, intent, source):
+        assert print_output is True
+        assert intent is update_module.UpdateIntent.INSTALL_AND_EXIT
+        assert source == "cli"
+        return update_module.UpdateResult.VERIFICATION_FAILED
+
+    monkeypatch.setattr(orchestrator, "run_update_job", fake_run_update_job)
+
+    result = CliRunner().invoke(cli, ["update"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1

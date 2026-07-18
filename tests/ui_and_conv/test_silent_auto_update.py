@@ -56,11 +56,11 @@ async def test_silent_update_success_refreshes_persistent_notice_not_toast(
         return UpdateResult.UPDATED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
-    monkeypatch.setattr(
-        shell_module,
-        "read_update_status",
-        lambda: SimpleNamespace(message="updated", target_version="0.43.0"),
-    )
+
+    def forbidden_status_read():
+        raise AssertionError("the current update result must not be inferred from shared status")
+
+    monkeypatch.setattr(shell_module, "read_update_status", forbidden_status_read)
 
     await shell._silent_auto_update()
 
@@ -80,7 +80,7 @@ async def test_silent_update_smoke_fail_toasts_verification_failed(
     monkeypatch.setattr(shell_module, "_detect_upgrade_command", lambda: ["pip"])
 
     async def fake_job(**kw):
-        return UpdateResult.FAILED
+        return UpdateResult.VERIFICATION_FAILED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
     monkeypatch.setattr(
@@ -119,6 +119,7 @@ async def test_silent_update_failed_is_silent(
     ("result", "expected_marks"),
     [
         (UpdateResult.FAILED, 0),
+        (UpdateResult.VERIFICATION_FAILED, 0),
         (UpdateResult.UP_TO_DATE, 1),
         (UpdateResult.UPDATED, 1),
     ],

@@ -85,7 +85,9 @@ from pythinker_code.ui.shell.update import (
     welcome_update_target,
 )
 from pythinker_code.ui.shell.update_orchestrator import (
-    SMOKE_CHECK_FAILED_PREFIX,
+    SMOKE_CHECK_FAILED_PREFIX as SMOKE_CHECK_FAILED_PREFIX,
+)
+from pythinker_code.ui.shell.update_orchestrator import (
     read_update_status,
     run_update_job,
     update_restart_pending,
@@ -2161,13 +2163,16 @@ class Shell:
         # Throttle only after a completed round-trip. Marking before the network
         # call (or after a FAILED one) would suppress updates for the whole
         # interval on a transient startup blip — mirrors _refresh_update_cache.
-        if result is not None and result is not UpdateResult.FAILED:
+        if result is not None and result not in (
+            UpdateResult.FAILED,
+            UpdateResult.VERIFICATION_FAILED,
+        ):
             _mark_auto_update_check_attempt()
         if result is UpdateResult.UPDATED:
             self._maybe_arm_windows_apply_on_exit()
             self._surface_installed_update_notice()
-        elif result is UpdateResult.FAILED and self._installed_update_smoke_check_failed():
-            self._surface_installed_update_notice()
+        elif result is UpdateResult.VERIFICATION_FAILED:
+            self._surface_update_verification_failure()
         elif result is UpdateResult.UPDATE_AVAILABLE:
             self._surface_managed_channel_notice()
         # Other FAILED / UP_TO_DATE / UNSUPPORTED / None results stay in the job log.
@@ -2203,26 +2208,21 @@ class Shell:
             return None
 
     def _surface_installed_update_notice(self) -> None:
-        if self._installed_update_smoke_check_failed():
-            self._update_toast(
-                "Update installed but verification failed; see update.log.",
-                style="fg:ansiyellow",
-            )
-            return
         # The persistent under-input line (_append_update_notice) already renders
         # the restart message; a toast duplicates it on the footer's second row.
         self._refresh_update_notice_line()
+
+    def _surface_update_verification_failure(self) -> None:
+        self._update_toast(
+            "Update installed but verification failed; see update.log.",
+            style="fg:ansiyellow",
+        )
 
     def _refresh_update_notice_line(self) -> None:
         """Drop the update-notice memo and repaint so the footer picks up new text."""
         self._update_notice_cache = (0.0, None)
         if self._prompt_session is not None:
             self._prompt_session.invalidate()
-
-    def _installed_update_smoke_check_failed(self) -> bool:
-        status = read_update_status()
-        message = status.message if status else None
-        return bool(message and message.startswith(SMOKE_CHECK_FAILED_PREFIX))
 
     def _installed_update_restart_notice(self) -> str:
         from pythinker_code.constant import VERSION as current_version

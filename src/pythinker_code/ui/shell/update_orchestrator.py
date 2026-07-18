@@ -415,7 +415,7 @@ async def run_update_job(
                     _finalize_native_staging(promote=True)
                 else:
                     message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
-                    reported_result = UpdateResult.FAILED
+                    reported_result = UpdateResult.VERIFICATION_FAILED
                     final_state = _result_state(reported_result)
                     # Never promote a staged binary that can't even print --version.
                     _finalize_native_staging(promote=False)

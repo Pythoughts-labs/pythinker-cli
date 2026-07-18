@@ -110,6 +110,7 @@ class UpdateResult(Enum):
     UPDATED = auto()
     UP_TO_DATE = auto()
     FAILED = auto()
+    VERIFICATION_FAILED = auto()
     UNSUPPORTED = auto()
 
 

@@ -183,11 +183,11 @@ async def test_update_job_reports_failure_when_post_install_smoke_check_fails(
         print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
     )
 
-    assert result is update.UpdateResult.FAILED
+    assert result is update.UpdateResult.VERIFICATION_FAILED
     status = orchestrator.read_update_status()
     assert status is not None
     assert status.state is orchestrator.UpdateJobState.FAILED
-    assert status.result == "FAILED"
+    assert status.result == "VERIFICATION_FAILED"
     assert "smoke check did not pass" in (status.message or "").lower()
     assert not orchestrator.UPDATE_LAST_SUCCESS_FILE.exists()
 
