@@ -57,10 +57,17 @@ async def test_silent_update_success_refreshes_persistent_notice_not_toast(
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
 
-    def forbidden_status_read():
-        raise AssertionError("the current update result must not be inferred from shared status")
-
-    monkeypatch.setattr(shell_module, "read_update_status", forbidden_status_read)
+    # Conflicting shared status: if the outcome were inferred from the status
+    # file instead of the job's returned result, this smoke-failed record would
+    # flip the flow to the verification-failure toast.
+    monkeypatch.setattr(
+        shell_module,
+        "read_update_status",
+        lambda: SimpleNamespace(
+            message=shell_module.SMOKE_CHECK_FAILED_PREFIX + "boom",
+            target_version="0.43.0",
+        ),
+    )
 
     await shell._silent_auto_update()
 
@@ -83,14 +90,9 @@ async def test_silent_update_smoke_fail_toasts_verification_failed(
         return UpdateResult.VERIFICATION_FAILED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
-    monkeypatch.setattr(
-        shell_module,
-        "read_update_status",
-        lambda: SimpleNamespace(
-            message="Updated, but smoke check did not pass: boom",
-            target_version="0.43.0",
-        ),
-    )
+    # Contradicting shared status (no record at all): the toast must be driven
+    # by the job's VERIFICATION_FAILED result, not inferred from the status file.
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: None)
 
     await shell._silent_auto_update()
 

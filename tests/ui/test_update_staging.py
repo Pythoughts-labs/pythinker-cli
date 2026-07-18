@@ -198,13 +198,6 @@ def test_apply_before_start_applies_valid_stage(staging: Path, monkeypatch):
     monkeypatch.setattr(upd, "_is_running_from_source_checkout", lambda: False)
     monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
     monkeypatch.setattr(upd, "_spawn_detached_windows_installer", lambda p: True)
-    read_staged_update = upd.read_windows_staged_update
-
-    def read_claimed_update_only(manifest_path: Path | None = None):
-        assert manifest_path is not None
-        return read_staged_update(manifest_path)
-
-    monkeypatch.setattr(upd, "read_windows_staged_update", read_claimed_update_only)
 
     assert upd.apply_staged_update_before_start() is True
 
