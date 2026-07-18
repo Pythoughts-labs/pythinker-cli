@@ -120,6 +120,27 @@ def test_load_default_agent_spec():
 
     subagent_specs = {name: load_agent_spec(spec.path) for name, spec in spec.subagents.items()}
 
+    leaf_subagent_names = (
+        "verifier",
+        "judge",
+        "explore",
+        "plan",
+        "planner",
+        "scout",
+        "review",
+        "code-reviewer",
+        "security-reviewer",
+        "debugger",
+    )
+    for name in leaf_subagent_names:
+        assert (
+            subagent_specs[name].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
+        )
+        assert subagent_specs[name].system_prompt_args["EMITS_CODING_ARTIFACT"] == ""
+        role_additional = subagent_specs[name].system_prompt_args["ROLE_ADDITIONAL"]
+        assert role_additional.startswith("## Mission\n")
+        assert not role_additional.startswith("You are now running as a subagent.")
+
     assert subagent_specs["coder"].name == snapshot("")
     assert (
         subagent_specs["coder"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
@@ -276,12 +297,12 @@ Bullet list of anything that stopped completion, or `None.`.
     assert sub_subagents == snapshot({})
 
     assert subagent_specs["explore"].name == snapshot("")
-    assert subagent_specs["explore"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
+    assert (
+        subagent_specs["explore"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
+    )
     assert subagent_specs["explore"].system_prompt_args == snapshot(
         {
             "ROLE_ADDITIONAL": """\
-You are now running as a subagent. All the `user` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
-
 ## Mission
 You are a codebase exploration specialist. Your role is EXCLUSIVELY to search, read, and analyze existing code and resources. You are meant to be fast: complete the search request efficiently and stop once the parent has enough evidence rather than exhaustively reading the whole repository.
 
@@ -412,12 +433,10 @@ Bullet list of missing context/capabilities or `None.`.
     assert sub_subagents == snapshot({})
 
     assert subagent_specs["plan"].name == snapshot("")
-    assert subagent_specs["plan"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
+    assert subagent_specs["plan"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
     assert subagent_specs["plan"].system_prompt_args == snapshot(
         {
             "ROLE_ADDITIONAL": """\
-You are now running as a subagent. All the `user` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
-
 ## Mission
 You are a read-only planning and architecture specialist. Your output is an evidence-backed execution plan — the smallest set of tasks that fully achieves the stated goal, each executable as written — not a guess and not an implementation.
 
@@ -558,12 +577,12 @@ Bullet list of questions that must be answered before execution, or `None.`.
     assert sub_subagents == snapshot({})
 
     assert subagent_specs["planner"].name == snapshot("")
-    assert subagent_specs["planner"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
+    assert (
+        subagent_specs["planner"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
+    )
     assert subagent_specs["planner"].system_prompt_args == snapshot(
         {
             "ROLE_ADDITIONAL": """\
-You are now running as a subagent. All the `user` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
-
 ## Mission
 You are a Reconnaissance Planner. Your single objective is to analyze the request, scout the repository just enough to partition it honestly, and break it down into N distinct, non-overlapping task seeds for parallel workers.
 
