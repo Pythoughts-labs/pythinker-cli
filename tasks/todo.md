@@ -42,7 +42,28 @@ Phases (each = one verified Codex delegation, sequential):
 - [~] P3 — OAuth providers (sub-phased, sequential; each provider touches shared enumeration files):
       - [x] P3a — shared `auth/oauth_flows.py` (device-code + loopback-PKCE) + tests. DONE, green (349
             passed). Codex candidate `cc59239a` + architect fix `79b64d42`.
-      - [ ] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange).
+      - [ ] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange). **Design
+            FINAL (primary-source verified 2026-07-18):** client_id `Iv1.b507a08c87ecfe98` + scope
+            `read:user` (the exchange-proven pair from ericc-ch/copilot-api; NOT opencode's
+            `Ov23li…` which is proven only with the no-exchange direct-token path). Device:
+            POST github.com/login/device/code + poll .../login/oauth/access_token (both need
+            `Accept: application/json` → thread a `headers` param through oauth_flows
+            `_post_form`/`request_device_code`/`poll_device_token`). Exchange:
+            GET api.github.com/copilot_internal/v2/token, hdrs `Authorization: token <gh>`,
+            `Editor-Version: vscode/<ver>`, `Editor-Plugin-Version: copilot-chat/0.26.7`,
+            `User-Agent: GitHubCopilotChat/0.26.7`, `X-GitHub-Api-Version: 2025-04-01`
+            → `{token, expires_at, refresh_in}`. Store OAuthToken(access=bearer,
+            refresh=gh_token, expires_at); `_refresh_token_for_ref` re-runs exchange from gh_token.
+            Provider: type `openai_legacy`, base_url `https://api.githubcopilot.com` (**NO /v1** —
+            SDK appends /chat/completions to root), oauth ref `oauth/github-copilot`,
+            custom_headers = the copilot chat headers (Copilot-Integration-Id: vscode-chat + editor
+            hdrs + Openai-Intent: conversation-panel; **NO Authorization** — bearer flows via
+            resolve_api_key→api_key). Skip-guard `managed:copilot` in refresh_managed_models.
+            **Scope: github.com individual only.** Business/Enterprise (endpoints.api routing,
+            api.business/individual.*) DEFERRED — do not claim exchange fixes Business (opencode
+            #23540) while hardcoding the individual host. **Acceptance:** offline gates green ≠ done;
+            none of client_id/exchange/headers/URL are gate-exercisable → requires live
+            `pythinker login --copilot` + one real chat call before marking done.
       - [ ] P3c — xAI/Grok (browser loopback + device-code).
       - [ ] P3d — DigitalOcean (implicit-flow, stored as `api`).
       - [ ] P3e — Snowflake Cortex (loopback PKCE).
