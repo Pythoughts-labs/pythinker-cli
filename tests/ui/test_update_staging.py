@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -328,19 +329,43 @@ async def test_run_update_job_skips_smoke_check_for_windows_stage(monkeypatch, t
 
 def test_apply_now_concurrent_callers_only_one_wins(staging: Path, monkeypatch):
     """Regression: two processes racing to apply the same stage must not both
-    pass validation and spawn duplicate installers."""
+    pass validation and spawn duplicate installers.
+
+    Uses real threads synchronized on a barrier immediately before the call, so
+    both callers reach the atomic claim (``os.rename``) at as close to the same
+    instant as possible — a genuine OS-level race, not merely two sequential
+    calls, which would pass even against a naive check-then-rename
+    implementation that only breaks under real concurrency.
+    """
     staged = _stage(staging)
     spawned: list[Path] = []
+    spawned_lock = threading.Lock()
     monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
-    monkeypatch.setattr(
-        upd, "_spawn_detached_windows_installer", lambda p: spawned.append(p) or True
-    )
 
-    first = upd.apply_windows_staged_update_now()
-    second = upd.apply_windows_staged_update_now()
+    def fake_spawn(p: Path) -> bool:
+        with spawned_lock:
+            spawned.append(p)
+        return True
 
-    assert first is True
-    assert second is False
+    monkeypatch.setattr(upd, "_spawn_detached_windows_installer", fake_spawn)
+
+    barrier = threading.Barrier(2)
+    results: list[bool] = []
+    results_lock = threading.Lock()
+
+    def racer() -> None:
+        barrier.wait()
+        result = upd.apply_windows_staged_update_now()
+        with results_lock:
+            results.append(result)
+
+    threads = [threading.Thread(target=racer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert sorted(results) == [False, True]
     assert spawned == [staged.installer_path]
 
 
@@ -352,4 +377,41 @@ def test_apply_now_failed_claim_cleans_up_only_claimed_copy(staging: Path, monke
 
     assert upd.apply_windows_staged_update_now() is False
     assert upd.read_windows_staged_update() is None
+    del staged
+
+
+def test_apply_now_stale_claim_failure_preserves_concurrently_staged_newer_manifest(
+    staging: Path, monkeypatch
+):
+    """A validation failure on the claimed (now-stale) manifest must not delete
+    a newer manifest another process publishes to the canonical path during the
+    failure window — the claim already removed the old manifest from that path,
+    so the two can never collide, but this proves it end-to-end via the digest
+    check, the one failure mode that runs after a successful claim+version pass."""
+    staged = _stage(staging, version="9.9.9")
+    monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
+
+    def fake_verify_and_supersede(path: Path, expected: str) -> bool:
+        newer_dir = staging / "pythinker-update-newer"
+        newer_dir.mkdir()
+        installer = newer_dir / "PythinkerSetup-10.0.0.exe"
+        installer.write_bytes(b"newer")
+        import hashlib
+
+        upd._write_windows_staged_manifest(
+            upd.StagedWindowsUpdate(
+                version="10.0.0",
+                installer_path=installer,
+                sha256=hashlib.sha256(b"newer").hexdigest(),
+                created_at=time.time(),
+            )
+        )
+        return False  # the claimed (stale) manifest still fails verification
+
+    monkeypatch.setattr(upd, "_verify_sha256", fake_verify_and_supersede)
+
+    assert upd.apply_windows_staged_update_now() is False
+    survivor = upd.read_windows_staged_update()
+    assert survivor is not None
+    assert survivor.version == "10.0.0"
     del staged
