@@ -29,6 +29,7 @@ from pythinker_code.tools.agent import (
     _implement_judge_fingerprint,
     _parse_judge_verdict,
 )
+from pythinker_code.utils.artifacts import MalformedCodingArtifact, extract_coding_artifact
 from pythinker_code.wire.types import DisplayBlock
 from tests.conftest import tool_call_context
 
@@ -115,6 +116,12 @@ def test_extract_coding_artifact_multiline() -> None:
     assert _extract_coding_artifact(text) == body
 
 
+def test_extract_coding_artifact_malformed_present_returns_raw_body() -> None:
+    body = '{"changes": ["src/x.py"]}'
+    text = f"<coding_artifact>\n{body}\n</coding_artifact>"
+    assert _extract_coding_artifact(text) == body
+
+
 # --- Fingerprint stability -------------------------------------------------
 
 
@@ -195,6 +202,30 @@ def test_judge_prompt_includes_artifact_when_present() -> None:
     assert "revision 1" in prompt
 
 
+def test_judge_prompt_surfaces_malformed_artifact() -> None:
+    params = ImplementAndJudgeParams(brief="do X")
+    body = '{"changes": ["src/x.py"]}'
+    output = f"Implemented.\n<coding_artifact>\n{body}\n</coding_artifact>"
+    artifact = extract_coding_artifact(output)
+    assert isinstance(artifact, MalformedCodingArtifact)
+
+    prompt = _build_judge_prompt(
+        params,
+        implementer_output=output,
+        artifact=artifact,
+        revision_index=0,
+    )
+
+    assert "## Implementer artifact malformed" in prompt
+    assert artifact.reason in prompt
+    assert "missing-equivalent" in prompt
+    assert "REQUIRED FIXES" in prompt
+    assert "strong signal toward BLOCKED" in prompt
+    assert "untrusted data" in prompt
+    assert f"```\n{body}\n```" in prompt
+    assert "```json" not in prompt
+
+
 # --- Constants / params ----------------------------------------------------
 
 
@@ -245,7 +276,15 @@ def test_extract_required_fixes_empty_section_returns_none() -> None:
 
 # --- End-to-end __call__ orchestration --------------------------------------
 
-_ARTIFACT_OUTPUT = 'Implemented.\n<coding_artifact>\n{"changes": ["src/x.py"]}\n</coding_artifact>'
+_ARTIFACT_OUTPUT = (
+    "Implemented.\n<coding_artifact>\n"
+    '{"files_changed": ["src/x.py"], "test_command": "pytest", '
+    '"expected_behavior": "works"}\n'
+    "</coding_artifact>"
+)
+_MALFORMED_ARTIFACT_OUTPUT = (
+    'Implemented.\n<coding_artifact>\n{"changes": ["src/x.py"]}\n</coding_artifact>'
+)
 _JUDGE_PASS = "### SUMMARY\nPASS — change is sound.\n### REQUIRED FIXES\nNone."
 
 
@@ -301,6 +340,28 @@ async def test_chain_single_pass(runtime: Runtime, monkeypatch: pytest.MonkeyPat
     assert result.is_error is False
     assert result.extras is not None and result.extras["verdict"] == "PASS"
     assert [c[0] for c in calls] == ["implementer", "judge"]
+
+
+async def test_chain_malformed_artifact_surfaces_in_prompt_and_result(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    judge_blocked = "### SUMMARY\nBLOCKED — malformed artifact."
+    artifact = extract_coding_artifact(_MALFORMED_ARTIFACT_OUTPUT)
+    assert isinstance(artifact, MalformedCodingArtifact)
+    tool, calls = _make_chain(
+        runtime,
+        monkeypatch,
+        [_ok(_MALFORMED_ARTIFACT_OUTPUT), _ok(judge_blocked)],
+    )
+    with tool_call_context("ImplementAndJudge"):
+        result = await tool(ImplementAndJudgeParams(brief="do x"))
+
+    assert result.is_error is True
+    assert isinstance(result.output, str)
+    expected_artifact_line = f"coding_artifact: (malformed: {artifact.reason} — see judge verdict)"
+    assert expected_artifact_line in result.output.splitlines()
+    assert [c[0] for c in calls] == ["implementer", "judge"]
+    assert "## Implementer artifact malformed" in calls[1][1]
 
 
 async def test_chain_needs_work_then_revision_passes(
