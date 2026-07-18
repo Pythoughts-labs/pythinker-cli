@@ -387,7 +387,7 @@ class ImplementAndJudgeTool(CallableTool2[ImplementAndJudgeParams]):
         revisions: list[dict[str, str]] = []
         last_implementer_output = ""
         last_implementer_error: str | None = None
-        last_verdict = "BLOCKED"
+        last_verdict: str
         last_verdict_raw: str | None = None
         last_required_fixes = ""
         last_artifact: CodingArtifactExtraction = MissingCodingArtifact()
