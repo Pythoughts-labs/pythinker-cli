@@ -2,6 +2,39 @@
 
 ## Active
 
+### Implementer-agent deepening: lighter/smarter/more robust (2026-07-17)
+
+Architecture review found: every implementer spawn carries ~7,300 words of prompt (root
+`system.md` + 71-line ROLE_ADDITIONAL), 35–45 role lines duplicated verbatim across
+coder/verifier/review, and the `<coding_artifact>` contract living as 5 unbound copies
+(prose ×2, regex parser in `tools/agent/__init__.py:1179`, prose consumers in
+verifier/judge YAML) with `utils/artifacts.py::CodingArtifact` unused by the parser.
+Serialized delegation lanes (Codex / GPT-5.6 Sol, max reasoning) via claude-architect:
+
+- [ ] T1 — Typed artifact contract: make `CodingArtifact` the single source of truth —
+      contract prompt block rendered from the dataclass, typed fail-closed extraction
+      (present/missing/malformed) used by the ImplementAndJudge chain; consumer-binding
+      invariant tests. → verify: focused pytest + `make check-pythinker-code`.
+- [ ] T2 — Extract the ImplementAndJudge chain (~lines 1160–1667) from
+      `tools/agent/__init__.py` into `tools/agent/implement_judge.py`; import path
+      `pythinker_code.tools.agent:ImplementAndJudge` and all existing test imports keep
+      working. → verify: `tests/core/test_implement_judge_chain.py` unchanged and green.
+- [ ] T3 — Leaf prompt profile: split `system.md` into Jinja partials (byte-identical
+      root render), add `system_leaf.md` without root-only orchestration/playbook mass,
+      migrate `implementer.yaml` + `coder.yaml` (shared subagent preamble into the leaf
+      template; artifact block from T1 arg via `EMITS_CODING_ARTIFACT` flag). → verify:
+      spec/default-agent tests + root-render byte-diff at review.
+- [ ] T4 — Migrate the remaining 10 role YAMLs to the leaf profile, pruning
+      root-manual restatements from each ROLE_ADDITIONAL. → verify: same gates.
+- [ ] T5 — Convert full-prose spec snapshots to semantic invariants
+      (`test_agent_spec.py`, `test_default_agent.py` roster line), CHANGELOG Unreleased
+      entries, doc touch-ups. → verify: full `make check-pythinker-code && make
+      test-pythinker-code` on the composed tree.
+
+Acceptance: implementer spawn prompt materially smaller; one owning module for the
+artifact contract (deletion test passes); no behavior change to chain verdict semantics
+except explicit malformed-artifact truthfulness; all package gates green on composed tree.
+
 ### PR #207 cancellation-state review fix (2026-07-15)
 
 - [x] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`
