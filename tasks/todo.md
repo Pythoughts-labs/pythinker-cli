@@ -69,7 +69,14 @@ Phases (each = one verified Codex delegation, sequential):
             #23540) while hardcoding the individual host. **Acceptance:** offline gates green ≠ done;
             none of client_id/exchange/headers/URL are gate-exercisable → requires live
             `pythinker login --copilot` + one real chat call before marking done.
-      - [ ] P3c — xAI/Grok (browser loopback + device-code).
+      - [x] P3c — xAI/Grok (browser loopback + device-code). DONE, committed `b586080c`. Codex
+            candidate `1419210a` (runId f12a8003) — verification-failed on strict pyright
+            (`.get()` on an isinstance-narrowed bare `dict` → reportUnknownMemberType/Argument);
+            salvaged via `git checkout <candidate> -- .`, added a cast'd `_error_description`
+            helper, re-ran gates (`All checks passed` + `2741 passed`). Two OAuth methods only
+            (loopback port 56121 + `plan=generic`/OIDC `nonce`; device-code); no API-key method;
+            openai_legacy → api.x.ai/v1; rotating refresh persisted by OAuthManager. **PENDING LIVE
+            VERIFICATION** (login flow untested against real auth.x.ai).
       - [ ] P3d — DigitalOcean (implicit-flow, stored as `api`).
       - [ ] P3e — Snowflake Cortex (loopback PKCE).
 - [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
