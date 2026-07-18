@@ -88,6 +88,9 @@ class BuiltinSystemPromptArgs:
     """The rendered session-scratchpad prompt section (available or unavailable guard)."""
     PYTHINKER_AGENTS_MD_FENCE: str = "`" * 9
     """Code-fence delimiter for the AGENTS.md block, sized to exceed any backtick run in it."""
+    PYTHINKER_WORK_DIR_LS_FENCE: str = "`" * 9
+    """Code-fence delimiter for the work-dir listing, sized to exceed any backtick run in it —
+    a repository-controlled filename must not be able to terminate the fence."""
 
 
 _AGENTS_MD_MAX_BYTES = 32 * 1024  # 32 KiB
@@ -348,7 +351,10 @@ class Runtime:
                         "Cannot list additional directory, skipping listing: {dir}", dir=d
                     )
                     dir_ls = "[directory not readable]"
-                parts.append(f"### `{d}`\n\n```\n{dir_ls}\n```")
+                # Collision-safe fence: a repository-controlled filename must
+                # not be able to terminate the block and inject prompt text.
+                fence = _agents_md_fence(dir_ls)
+                parts.append(f"### `{d}`\n\n{fence}\n{dir_ls}\n{fence}")
             additional_dirs_info = "\n\n".join(parts)
 
         # Merge invocation flags with persisted session state. ``--no-yolo`` is an explicit
@@ -402,6 +408,7 @@ class Runtime:
                 PYTHINKER_NOW=datetime.now().astimezone().isoformat(),
                 PYTHINKER_WORK_DIR=session.work_dir,
                 PYTHINKER_WORK_DIR_LS=ls_output,
+                PYTHINKER_WORK_DIR_LS_FENCE=_agents_md_fence(ls_output),
                 PYTHINKER_AGENTS_MD=agents_md or "",
                 PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
                 PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),
@@ -470,6 +477,7 @@ class Runtime:
                 builtin_args,
                 PYTHINKER_WORK_DIR=work_dir_override,
                 PYTHINKER_WORK_DIR_LS=work_dir_ls or "",
+                PYTHINKER_WORK_DIR_LS_FENCE=_agents_md_fence(work_dir_ls or ""),
                 PYTHINKER_AGENTS_MD=agents_md,
                 PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md),
             )
@@ -779,11 +787,13 @@ def _load_system_prompt(
     )
     try:
         template = env.from_string(system_prompt)
-        render_args = {
-            **asdict(builtin_args),
-            "PYTHINKER_CODING_ARTIFACT_CONTRACT": coding_artifact_contract_block(),
-        }
-        return template.render(render_args, **args)
+        # Merge spec args first, then apply the generated contract last:
+        # keyword args win over the positional mapping in Jinja's render, so
+        # passing **args after the dict would let a spec's system_prompt_args
+        # silently override the reserved PYTHINKER_CODING_ARTIFACT_CONTRACT.
+        render_args = {**asdict(builtin_args), **args}
+        render_args["PYTHINKER_CODING_ARTIFACT_CONTRACT"] = coding_artifact_contract_block()
+        return template.render(render_args)
     except UndefinedError as exc:
         raise SystemPromptTemplateError(f"Missing system prompt arg in {path}: {exc}") from exc
     except TemplateError as exc:
@@ -813,6 +823,7 @@ async def build_builtin_system_prompt_args(
         PYTHINKER_NOW=datetime.now().astimezone().isoformat(),
         PYTHINKER_WORK_DIR=work_dir,
         PYTHINKER_WORK_DIR_LS=ls_output,
+        PYTHINKER_WORK_DIR_LS_FENCE=_agents_md_fence(ls_output),
         PYTHINKER_AGENTS_MD=agents_md or "",
         PYTHINKER_AGENTS_MD_FENCE=_agents_md_fence(agents_md or ""),
         PYTHINKER_SKILLS=format_skill_catalog_policy(skill_catalog),

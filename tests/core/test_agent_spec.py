@@ -143,6 +143,13 @@ def test_load_default_agent_spec():
         role_additional = subagent_spec.system_prompt_args["ROLE_ADDITIONAL"]
         assert "You are now running as a subagent" not in role_additional
         assert "Artifact contract:" not in role_additional
+    # The implementer must stay on the leaf profile with the artifact block
+    # enabled — the implementer-to-judge handoff parses <coding_artifact>.
+    assert (
+        subagent_specs["implementer"].system_prompt_path
+        == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
+    )
+    assert subagent_specs["implementer"].system_prompt_args["EMITS_CODING_ARTIFACT"] == "true"
     assert subagent_specs["coder"].name == snapshot("")
     assert (
         subagent_specs["coder"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"

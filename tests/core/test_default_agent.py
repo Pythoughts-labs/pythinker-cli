@@ -664,5 +664,5 @@ def test_default_system_prompt_prevents_duplicate_report_prose() -> None:
     )
     encoding = "utf-8"
     assert sha256(prompt.encode(encoding)).hexdigest() == (
-        "3dc28352b3e4952267f76b3702384cf3b4c6b770da2a055b4e15a41a1b7ad6a7"
+        "67ddfe5d56b75d00406442a8445027d04eeaf33eae51049102984ed572adfc78"
     )

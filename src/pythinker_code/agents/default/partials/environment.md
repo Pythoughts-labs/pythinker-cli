@@ -12,9 +12,9 @@ This environment is **not sandboxed**: every action takes effect on the user's s
 
 **Working directory.** `${PYTHINKER_WORK_DIR}` — treat it as the project root for project tasks. File-system operations resolve relative to it unless an absolute path is given; where a tool parameter requires an absolute path, you MUST pass an absolute path. Directory listing (two levels; entries marked "... and N more" have additional contents — explore with Glob or Shell):
 
-```
+${PYTHINKER_WORK_DIR_LS_FENCE}
 ${PYTHINKER_WORK_DIR_LS}
-```
+${PYTHINKER_WORK_DIR_LS_FENCE}
 {% if PYTHINKER_ADDITIONAL_DIRS_INFO %}
 
 **Additional directories** added to the workspace — read, write, search, and glob within scope:

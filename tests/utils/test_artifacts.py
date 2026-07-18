@@ -264,34 +264,26 @@ def test_extract_coding_artifact_rejects_incomplete_tags(text: str) -> None:
     assert result.reason == "Expected exactly one complete coding_artifact block"
 
 
-def test_extract_coding_artifact_handles_parser_recursion_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def raise_recursion_error(_raw_body: str, **_kwargs: object) -> object:
-        raise RecursionError
-
-    monkeypatch.setattr("pythinker_code.utils.artifacts.json.loads", raise_recursion_error)
-
-    result = extract_coding_artifact(_tagged_body("{}"))
+def test_extract_coding_artifact_handles_parser_recursion_limit() -> None:
+    # Deep real nesting drives json.loads past its recursion limit — no
+    # monkeypatching of extractor internals.
+    depth = 500_000
+    result = extract_coding_artifact(_tagged_body("[" * depth + "]" * depth))
 
     assert isinstance(result, MalformedCodingArtifact)
     assert result.reason == "Invalid JSON: parser limit exceeded"
 
 
-def test_extract_coding_artifact_bounds_malformed_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    long_message = "x" * 1_000
+def test_extract_coding_artifact_bounds_malformed_reason() -> None:
+    # A real duplicate-key error whose key exceeds the cap exercises the
+    # reason-bounding behavior through observable input, not a patched decoder.
+    long_key = "k" * 1_000
+    body = f'{{"{long_key}": 1, "{long_key}": 2}}'
 
-    def raise_json_decode_error(_raw_body: str, **_kwargs: object) -> object:
-        raise json.JSONDecodeError(long_message, "", 0)
-
-    monkeypatch.setattr("pythinker_code.utils.artifacts.json.loads", raise_json_decode_error)
-
-    result = extract_coding_artifact(_tagged_body("{}"))
+    result = extract_coding_artifact(_tagged_body(body))
 
     assert isinstance(result, MalformedCodingArtifact)
-    assert result.reason == f"Invalid JSON: {long_message}"[:120]
+    assert result.reason == f"Duplicate JSON key: {long_key}"[:120]
     assert len(result.reason) == 120
 
 
