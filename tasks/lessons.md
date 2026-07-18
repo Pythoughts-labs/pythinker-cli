@@ -183,3 +183,21 @@ Format: trigger → rule.
   `kill(); await proc.wait()` deadlocks even though the child is dead
   (Linux pipe dynamics hit this deterministically; macOS rarely). After
   killing a child with stdout=PIPE, drain the stream to EOF before waiting.
+
+## Delegated implementation lanes (claude-architect / Codex)
+
+- **When dispatching a delegatePipeline lane that adds ANY file under `src/`** (py, md,
+  yaml), allowlist `tests/utils/test_pyinstaller_utils.py` — both the hiddenimports and
+  datas snapshots enumerate bundled files, and a forbidden manifest test is the #1 cause
+  of clean-room verification failure.
+- **When a lane's spec touches prompt templates**, remember two test couplings: raw-file
+  assertions (grep tests/ for `read_text` on the template) and inline-snapshot prose
+  pins; authorize the specific test conversions up front instead of discovering them one
+  failed 25-minute run at a time.
+- **When a Codex lane must produce byte-exact file surgery**, instruct full-file writes —
+  its apply_patch tool fails on `\ No newline at end of file` hunks; and always include
+  the no-`rm` hygiene paragraph (sandbox rejects rm and the rejection kills the session's
+  structured output).
+- **When the pipeline's fix stage edits code after clean-room verification**, expect a
+  formatting/import-sort defect in the final tree; run the repo formatter on fixer-touched
+  files after integration and re-run the gate before committing.

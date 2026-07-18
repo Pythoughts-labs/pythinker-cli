@@ -15,6 +15,25 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- **Leaf subagent prompt profile.** All 12 built-in subagent roles (implementer,
+  coder, verifier, judge, explore, plan, planner, scout, review, code-reviewer,
+  security-reviewer, debugger) now render a dedicated `system_leaf.md` prompt
+  composed from shared Jinja partials instead of the full root system prompt,
+  dropping root-only orchestration/playbook prose from every spawn (implementer
+  prompt: ~7,270 → ~4,240 words). The root prompt render is byte-identical to
+  before; the shared sections now live once in `agents/default/partials/`.
+- **Typed coding-artifact contract.** `pythinker_code.utils.artifacts` is the
+  single source of truth for the `<coding_artifact>` handoff: the prompt block
+  is rendered from the `CodingArtifact` schema (injected into writer roles via
+  the leaf template), and extraction is strict and fail-closed — exactly one
+  end-of-message block, duplicate and undeclared JSON keys rejected, typed
+  present/missing/malformed results. The `ImplementAndJudge` chain now surfaces
+  malformed artifacts distinctly to the judge and in its result instead of
+  passing them through as if valid, and the verifier's artifact receipt
+  cross-checks `files_changed` against `git diff`.
+- **ImplementAndJudge chain extracted to its own module.**
+  `tools/agent/implement_judge.py` now owns the chain; the full previous import
+  surface of `pythinker_code.tools.agent` is preserved via re-exports.
 - **Post-update smoke check now verifies the upgraded binary and version.** On
   Homebrew installs the smoke check exercised the still-running old keg via
   `sys.executable`, so it could report "passed" with the pre-upgrade version;

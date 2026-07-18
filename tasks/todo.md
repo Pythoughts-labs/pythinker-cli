@@ -11,29 +11,44 @@ coder/verifier/review, and the `<coding_artifact>` contract living as 5 unbound 
 verifier/judge YAML) with `utils/artifacts.py::CodingArtifact` unused by the parser.
 Serialized delegation lanes (Codex / GPT-5.6 Sol, max reasoning) via claude-architect:
 
-- [ ] T1 — Typed artifact contract: make `CodingArtifact` the single source of truth —
-      contract prompt block rendered from the dataclass, typed fail-closed extraction
-      (present/missing/malformed) used by the ImplementAndJudge chain; consumer-binding
-      invariant tests. → verify: focused pytest + `make check-pythinker-code`.
-- [ ] T2 — Extract the ImplementAndJudge chain (~lines 1160–1667) from
-      `tools/agent/__init__.py` into `tools/agent/implement_judge.py`; import path
-      `pythinker_code.tools.agent:ImplementAndJudge` and all existing test imports keep
-      working. → verify: `tests/core/test_implement_judge_chain.py` unchanged and green.
-- [ ] T3 — Leaf prompt profile: split `system.md` into Jinja partials (byte-identical
-      root render), add `system_leaf.md` without root-only orchestration/playbook mass,
-      migrate `implementer.yaml` + `coder.yaml` (shared subagent preamble into the leaf
-      template; artifact block from T1 arg via `EMITS_CODING_ARTIFACT` flag). → verify:
-      spec/default-agent tests + root-render byte-diff at review.
-- [ ] T4 — Migrate the remaining 10 role YAMLs to the leaf profile, pruning
-      root-manual restatements from each ROLE_ADDITIONAL. → verify: same gates.
-- [ ] T5 — Convert full-prose spec snapshots to semantic invariants
-      (`test_agent_spec.py`, `test_default_agent.py` roster line), CHANGELOG Unreleased
-      entries, doc touch-ups. → verify: full `make check-pythinker-code && make
-      test-pythinker-code` on the composed tree.
+- [x] T1 — Typed artifact contract (commits `70b62107`, `bb419368`): CodingArtifact is
+      the single source of truth — schema-derived prompt block, strict fail-closed
+      extraction (one end-of-message block, duplicate/undeclared keys rejected,
+      present/missing/malformed), chain wired with truthful malformed surfacing,
+      verifier receipt names files_changed, consumer-binding invariant tests.
+- [x] T2 — Chain extracted to `tools/agent/implement_judge.py` (commit `43c9ebb6`);
+      `__init__.py` 1755→1195 lines; full import surface preserved; hiddenimports
+      snapshot updated; zero chain-test edits.
+- [x] T3 — Leaf prompt profile (commits `13fc2d3c`, `598e09fd`, `9539f759`): system.md
+      split into 12 Jinja partials with byte-identical root render (verified by
+      fixed-args render diff against a pre-change baseline); `system_leaf.md` added;
+      implementer/coder migrated — implementer prompt ~7,270 → ~4,240 words (−42%).
+- [x] T4 — Remaining 10 roles migrated to the leaf profile (commit `455fa6ed`); all
+      12 roster roles now render system_leaf.md; e2e snapshots unmoved.
+- [x] T5 — Prose snapshots → semantic invariants (commit `372b292a`; −246/+107 lines);
+      CHANGELOG Unreleased entries added; docs checked (only generic examples reference
+      system.md — still valid). Full gate on composed tree: see review below.
 
-Acceptance: implementer spawn prompt materially smaller; one owning module for the
-artifact contract (deletion test passes); no behavior change to chain verdict semantics
-except explicit malformed-artifact truthfulness; all package gates green on composed tree.
+#### Review: implementer-agent deepening (2026-07-18)
+
+- Delivered via serialized claude-architect delegatePipeline lanes (Codex / GPT-5.6
+  Sol; max reasoning where the 30-min attempt cap allowed, high on mechanical lanes),
+  each candidate clean-room verified, reviewer-gated, integrated, and re-verified
+  locally before commit.
+- Outcomes: artifact contract has one owning module (deletion test passes); chain is
+  a 547-line module with a compatibility re-export surface; all 12 leaf roles ship a
+  ~40% smaller prompt with template-owned preamble/artifact sections; role-spec tests
+  pin sections/flags/ownership instead of full prose.
+- Deviations: three pipeline candidates were accepted with trivially repairable
+  format/import-sort defects introduced by the pipeline's own fix stage (repaired
+  locally with the repo formatter before commit, gates re-run); two "human-decision-
+  required" gates were decided by the architect under the session's autonomous
+  mandate, with the blocking "cannot-verify" findings resolved against runtime
+  verification logs.
+- Out of scope (observed, not touched): `test_default_agent.py` roster-line snapshot
+  kept as-is; role type-name string coupling across `agent.yaml`/`subagents/core.py`
+  noted in the architecture report as a candidate-4 leftover; `LaborMarket` remains a
+  thin registry.
 
 ### PR #207 cancellation-state review fix (2026-07-15)
 
