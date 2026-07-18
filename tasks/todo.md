@@ -89,8 +89,16 @@ Phases (each = one verified Codex delegation, sequential):
             fetch fails; seed none + warn). Verified constants: client_id
             b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82; authorize
             https://cloud.digitalocean.com/v1/oauth/authorize; redirect http://localhost:1456/auth/callback;
-            scope 'genai:read inference:query'. Recon ad3fed51 mapping exact wiring. **PENDING LIVE
-            VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
+            scope 'genai:read inference:query'. Recon ad3fed51 DONE (advisor-confirmed); split into
+            two serialized lanes to fit the 30-min Codex cap:
+              - Lane A (DISPATCHED, task kz00tnywe, Codex gpt-5.6-sol/high): add
+                `run_loopback_implicit_flow` + `ImplicitAuthorization` + content-type writer to
+                oauth_flows.py + tests. Self-contained, no src caller yet.
+              - Lane B (after A integrates): new auth/digitalocean.py (DeepSeek storage template:
+                LLMProvider openai_legacy, api_key=SecretStr(token), NO oauth) + __init__/platforms/
+                shell/cli wiring (mirror xai) + tests. platforms.py skip-guard for managed:digitalocean.
+                Empty-routers guard: still persist key + save_config, seed 0 models, guard default_model.
+            **PENDING LIVE VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
       - [ ] P3e — Snowflake Cortex (loopback PKCE).
 - [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
 - [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
