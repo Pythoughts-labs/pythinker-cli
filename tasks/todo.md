@@ -2,7 +2,10 @@
 
 ## Active
 
-### Adopt opencode auth-providers + dynamic catalog + effort mapping (2026-07-18)
+### Generic auth + API-key login providers, dynamic catalog, effort mapping (2026-07-18)
+
+Branch: `feat/auth-login-providers`. Framing is generic (add auth + API-key login providers);
+`blackbox/opencode/AUTH_PROVIDERS.md` is only the reference source, not user-facing branding.
 
 **Source:** `blackbox/opencode/AUTH_PROVIDERS.md` + opencode source (**MIT**; pythinker is
 Apache-2.0 — compatible; ported logic carries an attribution notice).
@@ -26,7 +29,11 @@ Discriminator = how many providers wanted. 4 OAuth only → additive; full roste
 CLI flags, persisted shape → tests + docs + CI snapshots (config-dump / pyinstaller / wire) each.
 
 Phases (each = one verified Codex delegation, sequential):
-- [ ] P1 — Dynamic models.dev catalog: generalize `auth/opencode_go.py` fetch into a provider-agnostic
+- [x] P1 — Dynamic models.dev catalog (DONE, green: `make check-pythinker-code` + focused tests 342
+      passed): new `auth/models_dev.py` (httpx fetch, 5-min TTL, `fcntl.flock`, atomic write,
+      env override/disable, fail-open), `opencode_go.py` consumes it, tests + changelog added.
+      Codex `gpt-5.6-sol` candidate (commit `ee6d8384`) + architect compat-fix (`e6adfead`).
+      Generalize `auth/opencode_go.py` fetch into a provider-agnostic
       module (`GET https://models.dev/api.json`, env override + disable flag, disk cache, 5-min TTL +
       60-min bg refresh, **stdlib `fcntl.flock`**, atomic temp+rename, **fail-open** cached→static,
       never block startup). Wire one provider through it.
