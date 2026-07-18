@@ -7,6 +7,7 @@ import aiohttp
 from pydantic import BaseModel
 
 from pythinker_code.auth import (
+    GITHUB_COPILOT_PLATFORM_ID,
     LM_STUDIO_PLATFORM_ID,
     OLLAMA_PLATFORM_ID,
     OPENAI_API_PLATFORM_ID,
@@ -95,6 +96,11 @@ PLATFORMS: list[Platform] = [
         id=OPENAI_CHATGPT_PLATFORM_ID,
         name="OpenAI ChatGPT Codex",
         base_url="https://chatgpt.com/backend-api/codex",
+    ),
+    Platform(
+        id=GITHUB_COPILOT_PLATFORM_ID,
+        name="GitHub Copilot",
+        base_url="https://api.githubcopilot.com",
     ),
     Platform(
         id="pythinker_ai-cn",
@@ -274,7 +280,12 @@ async def refresh_managed_models(config: Config) -> bool:
         # the wire-shape suffix (`managed:minimax-anthropic`).
         if (
             provider_key in OPENCODE_GO_PROVIDER_KEYS
-            or provider_key in {MINIMAX_ANTHROPIC_PROVIDER_KEY, KIMI_PROVIDER_KEY}
+            or provider_key
+            in {
+                managed_provider_key(GITHUB_COPILOT_PLATFORM_ID),
+                MINIMAX_ANTHROPIC_PROVIDER_KEY,
+                KIMI_PROVIDER_KEY,
+            }
             or provider_key in z_ai_provider_keys
         ):
             continue

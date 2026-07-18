@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from pythinker_core.message import Message
 from pythinker_host.path import HostPath
 
+from pythinker_code.auth.oauth import OAuthEvent
 from pythinker_code.cli import Reload
 from pythinker_code.config import Config, LLMModel, LLMProvider
 from pythinker_code.session import Session
@@ -28,6 +29,10 @@ async def _invoke_slash_command(command: SlashCommand[ShellSlashCmdFunc], shell:
     ret = command.func(shell, "")
     if isinstance(ret, Awaitable):
         await ret
+
+
+async def _oauth_success_event(*args: Any, **kwargs: Any) -> AsyncIterator[OAuthEvent]:
+    yield OAuthEvent("success", "ok")
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +95,48 @@ def test_shell_slash_aliases_are_registered() -> None:
         command = shell_slash_registry.find_command(alias)
         assert command is not None, alias
         assert command.name == canonical
+
+
+async def test_shell_login_copilot_routes_to_copilot(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    login = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "login_copilot", login)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.login)(app, "copilot")
+
+    assert login.called
+
+
+async def test_shell_logout_copilot_routes_to_copilot(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    logout = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "logout_copilot", logout)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.logout)(app, "copilot")
+
+    assert logout.called
 
 
 async def test_model_switch_starts_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:

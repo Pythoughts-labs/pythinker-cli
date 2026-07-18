@@ -1152,6 +1152,13 @@ class OAuthManager:
                 xlock.release()
 
     async def _refresh_token_for_ref(self, ref: OAuthRef, refresh_token_value: str) -> OAuthToken:
+        from pythinker_code.auth.copilot import (
+            GITHUB_COPILOT_OAUTH_KEY,
+            refresh_copilot_token,
+        )
+
+        if ref.key == GITHUB_COPILOT_OAUTH_KEY:
+            return await refresh_copilot_token(refresh_token_value)
         if ref.key == "oauth/openai-chatgpt":
             from pythinker_code.auth.openai import refresh_openai_chatgpt_token
 

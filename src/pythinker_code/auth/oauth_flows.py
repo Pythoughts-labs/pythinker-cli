@@ -72,12 +72,16 @@ def generate_state() -> str:
 
 
 async def _post_form(
-    endpoint: str, data: Mapping[str, str], *, operation: str
+    endpoint: str,
+    data: Mapping[str, str],
+    *,
+    operation: str,
+    headers: Mapping[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     try:
         async with (
             new_client_session() as session,
-            session.post(endpoint, data=dict(data)) as response,
+            session.post(endpoint, data=dict(data), headers=headers) as response,
         ):
             status = response.status
             payload_any: Any = await response.json(content_type=None)
@@ -95,6 +99,7 @@ async def request_device_code(
     client_id: str,
     scope: str | Sequence[str] | None = None,
     extra_params: Mapping[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> DeviceCode:
     """Request an RFC 8628 device code without beginning token polling."""
     data = dict(extra_params or {})
@@ -106,6 +111,7 @@ async def request_device_code(
         device_authorization_endpoint,
         data,
         operation="Device authorization",
+        headers=headers,
     )
     if not 200 <= status < 300:
         raise OAuthError(f"Device authorization failed (HTTP {status}).")
@@ -139,6 +145,7 @@ async def poll_device_token(
     device_code: DeviceCode,
     extra_params: Mapping[str, str] | None = None,
     deadline: float | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Poll an RFC 8628 token endpoint until authorization succeeds or terminates.
 
@@ -167,7 +174,12 @@ async def poll_device_token(
         if time.monotonic() >= effective_deadline:
             raise OAuthDeviceExpired("Device authorization expired before completion.")
 
-        status, payload = await _post_form(token_endpoint, data, operation="Device token polling")
+        status, payload = await _post_form(
+            token_endpoint,
+            data,
+            operation="Device token polling",
+            headers=headers,
+        )
         if time.monotonic() >= effective_deadline:
             raise OAuthDeviceExpired("Device authorization expired before completion.")
         error = str(payload.get("error") or "")

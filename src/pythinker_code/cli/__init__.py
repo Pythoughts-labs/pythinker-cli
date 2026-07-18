@@ -158,6 +158,18 @@ def logout_openai(*args: Any, **kwargs: Any) -> Any:
     return impl(*args, **kwargs)
 
 
+def login_copilot(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.copilot import login_copilot as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_copilot(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.copilot import logout_copilot as impl
+
+    return impl(*args, **kwargs)
+
+
 def login_opencode_go_api_key(*args: Any, **kwargs: Any) -> Any:
     from pythinker_code.auth.opencode_go import login_opencode_go_api_key as impl
 
@@ -1467,6 +1479,9 @@ def login(
         False, "--headless", help="Use OpenAI ChatGPT device-code login."
     ),
     api_key: bool = typer.Option(False, "--api-key", help="Configure OpenAI with an API key."),
+    copilot: bool = typer.Option(
+        False, "--copilot", help="Login with GitHub Copilot (device code)."
+    ),
     opencode_go: bool = typer.Option(
         False, "--opencode-go", help="Configure OpenCode Go with an API key."
     ),
@@ -1498,7 +1513,7 @@ def login(
         help="Override the default base URL for --lm-studio or --ollama.",
     ),
 ) -> None:
-    """Login with OpenAI, OpenCode Go, MiniMax, DeepSeek, Anthropic, or local providers."""
+    """Login with OpenAI, GitHub Copilot, API-key, or local providers."""
     import asyncio
 
     from rich.console import Console
@@ -1511,6 +1526,7 @@ def login(
                 browser,
                 headless,
                 api_key,
+                copilot,
                 opencode_go,
                 minimax,
                 deepseek,
@@ -1525,7 +1541,7 @@ def login(
         if selected_modes > 1:
             typer.echo(
                 "Choose only one of --browser, --headless, --api-key, "
-                "--opencode-go, --minimax, --deepseek, --z-ai-coding, --z-ai-api, "
+                "--copilot, --opencode-go, --minimax, --deepseek, --z-ai-coding, --z-ai-api, "
                 "--anthropic, --openrouter, --lm-studio, or --ollama.",
                 err=True,
             )
@@ -1570,6 +1586,8 @@ def login(
         elif minimax:
             key = typer.prompt("MiniMax API key", hide_input=True).strip()
             events = login_minimax_api_key(config, key)
+        elif copilot:
+            events = login_copilot(config)
         elif opencode_go:
             key = typer.prompt("OpenCode Go API key", hide_input=True).strip()
             events = login_opencode_go_api_key(config, key)
@@ -1606,7 +1624,7 @@ def login(
             async for event in events:
                 if event.type == "waiting":
                     if status is None:
-                        status = console.status("Waiting for OpenAI authorization.")
+                        status = console.status("Waiting for authorization.")
                         status.start()
                     continue
                 if status is not None:
@@ -1639,6 +1657,7 @@ def logout(
         "--json",
         help="Emit OAuth events as JSON lines.",
     ),
+    copilot: bool = typer.Option(False, "--copilot", help="Logout from GitHub Copilot."),
     opencode_go: bool = typer.Option(False, "--opencode-go", help="Logout from OpenCode Go."),
     minimax: bool = typer.Option(False, "--minimax", help="Logout from MiniMax."),
     deepseek: bool = typer.Option(False, "--deepseek", help="Logout from DeepSeek."),
@@ -1651,7 +1670,7 @@ def logout(
     ),
     ollama: bool = typer.Option(False, "--ollama", help="Logout from Ollama."),
 ) -> None:
-    """Logout from OpenAI, OpenCode Go, MiniMax, DeepSeek, Anthropic, or local providers."""
+    """Logout from OpenAI, GitHub Copilot, API-key, or local providers."""
     import asyncio
 
     from rich.console import Console
@@ -1659,6 +1678,7 @@ def logout(
     async def _run() -> bool:
         ok = True
         selected_modes = (
+            copilot,
             opencode_go,
             minimax,
             deepseek,
@@ -1671,7 +1691,7 @@ def logout(
         )
         if sum(bool(v) for v in selected_modes) > 1:
             typer.echo(
-                "Choose only one of --opencode-go, --minimax, --deepseek, "
+                "Choose only one of --copilot, --opencode-go, --minimax, --deepseek, "
                 "--z-ai-coding, --z-ai-api, --anthropic, --openrouter, "
                 "--lm-studio, or --ollama.",
                 err=True,
@@ -1691,6 +1711,8 @@ def logout(
             events = logout_deepseek(config)
         elif minimax:
             events = logout_minimax(config)
+        elif copilot:
+            events = logout_copilot(config)
         elif opencode_go:
             events = logout_opencode_go(config)
         elif lm_studio:

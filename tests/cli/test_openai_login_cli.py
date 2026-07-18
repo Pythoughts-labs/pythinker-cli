@@ -47,6 +47,21 @@ def test_cli_login_headless_routes_to_openai_headless(monkeypatch):
     assert headless.called
 
 
+def test_cli_login_copilot_routes_to_copilot(monkeypatch):
+    login = Mock(side_effect=_success_event)
+    monkeypatch.setattr("pythinker_code.cli.login_copilot", login, raising=False)
+    monkeypatch.setattr(
+        "pythinker_code.cli.load_config",
+        lambda: Config(is_from_default_location=True),
+        raising=False,
+    )
+
+    result = runner.invoke(cli, ["login", "--copilot"])
+
+    assert result.exit_code == 0
+    assert login.called
+
+
 def test_cli_login_api_key_routes_to_openai_api_key(monkeypatch):
     api_key = Mock(side_effect=_success_event)
     monkeypatch.setattr("pythinker_code.cli.login_openai_api_key", api_key, raising=False)
@@ -72,6 +87,21 @@ def test_cli_logout_routes_to_openai_logout(monkeypatch):
     )
 
     result = runner.invoke(cli, ["logout"])
+
+    assert result.exit_code == 0
+    assert logout.called
+
+
+def test_cli_logout_copilot_routes_to_copilot(monkeypatch):
+    logout = Mock(side_effect=_success_event)
+    monkeypatch.setattr("pythinker_code.cli.logout_copilot", logout, raising=False)
+    monkeypatch.setattr(
+        "pythinker_code.cli.load_config",
+        lambda: Config(is_from_default_location=True),
+        raising=False,
+    )
+
+    result = runner.invoke(cli, ["logout", "--copilot"])
 
     assert result.exit_code == 0
     assert logout.called

@@ -4,7 +4,7 @@ import asyncio
 import base64
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -42,7 +42,7 @@ class _FakeSession:
     def __init__(
         self,
         responses: list[_FakeResponse],
-        calls: list[tuple[str, dict[str, str]]],
+        calls: list[tuple[str, dict[str, str], Mapping[str, str] | None]],
     ) -> None:
         self.responses = responses
         self.calls = calls
@@ -53,17 +53,23 @@ class _FakeSession:
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
         return None
 
-    def post(self, endpoint: str, *, data: dict[str, str]) -> _FakeResponse:
-        self.calls.append((endpoint, data))
+    def post(
+        self,
+        endpoint: str,
+        *,
+        data: dict[str, str],
+        headers: Mapping[str, str] | None = None,
+    ) -> _FakeResponse:
+        self.calls.append((endpoint, data, headers))
         return self.responses.pop(0)
 
 
 def _mock_http(
     monkeypatch: pytest.MonkeyPatch,
     *responses: tuple[int, dict[str, Any]],
-) -> list[tuple[str, dict[str, str]]]:
+) -> list[tuple[str, dict[str, str], Mapping[str, str] | None]]:
     queued = [_FakeResponse(status, payload) for status, payload in responses]
-    calls: list[tuple[str, dict[str, str]]] = []
+    calls: list[tuple[str, dict[str, str], Mapping[str, str] | None]] = []
     monkeypatch.setattr(
         "pythinker_code.auth.oauth_flows.new_client_session",
         lambda: _FakeSession(queued, calls),
@@ -111,6 +117,7 @@ async def test_request_device_code_parses_response(monkeypatch: pytest.MonkeyPat
         client_id="client-id",
         scope=["openid", "profile"],
         extra_params={"audience": "example-api"},
+        headers={"Accept": "application/json"},
     )
 
     assert authorization == DeviceCode(
@@ -129,6 +136,7 @@ async def test_request_device_code_parses_response(monkeypatch: pytest.MonkeyPat
                 "client_id": "client-id",
                 "scope": "openid profile",
             },
+            {"Accept": "application/json"},
         )
     ]
 
@@ -154,6 +162,7 @@ async def test_poll_device_token_handles_pending_slow_down_then_success(
         token_endpoint="https://login.example/oauth/token",
         client_id="client-id",
         device_code=_device_code(interval=2),
+        headers={"Accept": "application/json"},
     )
 
     assert payload == {"access_token": "access-secret", "token_type": "Bearer"}
@@ -164,6 +173,7 @@ async def test_poll_device_token_handles_pending_slow_down_then_success(
         "device_code": "device-secret",
         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
     }
+    assert all(call[2] == {"Accept": "application/json"} for call in calls)
 
 
 @pytest.mark.asyncio
