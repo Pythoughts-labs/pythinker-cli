@@ -42,7 +42,12 @@ Phases (each = one verified Codex delegation, sequential):
 - [~] P3 — OAuth providers (sub-phased, sequential; each provider touches shared enumeration files):
       - [x] P3a — shared `auth/oauth_flows.py` (device-code + loopback-PKCE) + tests. DONE, green (349
             passed). Codex candidate `cc59239a` + architect fix `79b64d42`.
-      - [ ] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange). **Design
+      - [x] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange). DONE,
+            committed `5bd283e4`. Codex candidate `9ab0a577` (runId 9fe426d4), correctness-approved
+            after the token-preservation fix (F-001/F-002); clean-room green: `All checks passed`
+            (ruff+format+pyright+ty) + `458 passed`. Two-refresh regression test present. **PENDING
+            LIVE VERIFICATION**: no offline gate exercises client_id/exchange/headers/URL — needs a
+            real `pythinker login --copilot` + one chat call before "truly done". **Design
             FINAL (primary-source verified 2026-07-18):** client_id `Iv1.b507a08c87ecfe98` + scope
             `read:user` (the exchange-proven pair from ericc-ch/copilot-api; NOT opencode's
             `Ov23li…` which is proven only with the no-exchange direct-token path). Device:
