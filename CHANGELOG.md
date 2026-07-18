@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.60.0 (2026-07-18)
+
 - **Leaf subagent prompt profile.** All 12 built-in subagent roles (implementer,
   coder, verifier, judge, explore, plan, planner, scout, review, code-reviewer,
   security-reviewer, debugger) now render a dedicated `system_leaf.md` prompt
@@ -51,6 +53,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
   (default), `apply_on_exit` — with legacy booleans still accepted
   (`true` → `download`, `false` → `notify`); `pythinker info` now reports the
   mode string, and `/update auto` accepts the new mode names.
+
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.60.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
 ## 0.59.0 (2026-07-17)
 
