@@ -55,7 +55,7 @@ class LoopbackAuthorization(NamedTuple):
 
 
 def _base64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode(encoding="ascii", errors="replace").rstrip("=")
+    return base64.urlsafe_b64encode(data).decode(encoding="utf-8", errors="replace").rstrip("=")
 
 
 def generate_pkce() -> PkceCodes:
@@ -315,9 +315,12 @@ def _server_port(server: asyncio.Server) -> int:
     if not sockets:
         raise OAuthError("OAuth callback server did not expose a listening socket.")
     address = sockets[0].getsockname()
-    if not isinstance(address, tuple) or len(address) < 2 or not isinstance(address[1], int):
+    if not isinstance(address, tuple):
         raise OAuthError("OAuth callback server returned an invalid address.")
-    return address[1]
+    parts = cast("tuple[object, ...]", address)
+    if len(parts) < 2 or not isinstance(parts[1], int):
+        raise OAuthError("OAuth callback server returned an invalid address.")
+    return parts[1]
 
 
 async def run_loopback_pkce_flow(
