@@ -16,8 +16,10 @@ import httpx
 from pythinker_code.share import get_share_dir
 from pythinker_code.utils.logging import logger
 
-# Catalog design derived from opencode's models-dev.ts (MIT License,
-# Copyright (c) 2025 opencode).
+# Provider-agnostic model catalog backed by the public models.dev API. It
+# supplies dynamic per-model metadata (display name, context window, reasoning
+# and modality flags) for any provider, with on-disk caching and fail-open
+# behavior so a slow or unreachable endpoint never blocks startup.
 
 MODELS_DEV_BASE_URL = "https://models.dev"
 MODELS_DEV_CACHE_TTL_SECONDS = 5 * 60

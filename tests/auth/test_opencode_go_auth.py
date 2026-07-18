@@ -230,25 +230,21 @@ async def test_login_opencode_go_falls_back_on_non_auth_response_error(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_fetch_models_dev_metadata_uses_short_best_effort_timeout(monkeypatch):
-    """The best-effort enrichment fetch must use a tight timeout so a slow
-    models.dev cannot block login for up to the 120s default."""
+async def test_fetch_models_dev_metadata_degrades_when_catalog_unavailable(monkeypatch):
+    """Best-effort enrichment degrades to empty metadata (the curated catalog)
+    when the shared models.dev catalog is unavailable, so login never blocks on
+    it. The fetch timeout and fail-open behavior now live in and are tested by
+    ``auth/models_dev.py``; this layer only delegates to it."""
     from pythinker_code.auth import opencode_go
 
-    captured: dict[str, aiohttp.ClientTimeout | None] = {}
+    async def empty_catalog():
+        return {}
 
-    def fake_session(*, timeout=None):
-        captured["timeout"] = timeout
-        raise aiohttp.ClientError("unreachable")
-
-    monkeypatch.setattr(opencode_go, "new_client_session", fake_session)
+    monkeypatch.setattr(opencode_go, "get_models_dev_catalog", empty_catalog)
 
     result = await opencode_go._fetch_models_dev_metadata()
 
     assert result == {}  # degrades gracefully to the curated catalog
-    assert captured["timeout"] is opencode_go.MODELS_DEV_TIMEOUT
-    assert opencode_go.MODELS_DEV_TIMEOUT.total is not None
-    assert opencode_go.MODELS_DEV_TIMEOUT.total <= 15
 
 
 @pytest.mark.parametrize(
