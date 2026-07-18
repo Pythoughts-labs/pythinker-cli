@@ -21,6 +21,7 @@ from pythinker_code.auth import (
     OPENAI_CHATGPT_PLATFORM_ID,
     OPENCODE_GO_PLATFORM_ID,
     OPENROUTER_PLATFORM_ID,
+    XAI_PLATFORM_ID,
     ZAI_API_PLATFORM_ID,
     ZAI_CODING_PLATFORM_ID,
 )
@@ -88,6 +89,12 @@ from pythinker_code.auth.openrouter import (
     logout_openrouter,
 )
 from pythinker_code.auth.platforms import managed_provider_key
+from pythinker_code.auth.xai import (
+    XAI_PROVIDER_KEY,
+    login_xai_browser,
+    login_xai_headless,
+    logout_xai,
+)
 from pythinker_code.auth.z_ai import (
     ZAI_API_ROUTE,
     ZAI_CODING_ROUTE,
@@ -166,6 +173,8 @@ _SELECTOR_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="browser", name="OpenAI ChatGPT (browser)", auth_type="oauth"),
     OAuthProviderEntry(id="headless", name="OpenAI ChatGPT (device code)", auth_type="oauth"),
     OAuthProviderEntry(id="copilot", name="GitHub Copilot", auth_type="oauth"),
+    OAuthProviderEntry(id="xai", name="xAI Grok (browser)", auth_type="oauth"),
+    OAuthProviderEntry(id="xai-device", name="xAI Grok (device code)", auth_type="oauth"),
     OAuthProviderEntry(id="api-key", name="OpenAI API key", auth_type="api_key"),
     OAuthProviderEntry(id="opencode-go", name="OpenCode Go", auth_type="api_key"),
     OAuthProviderEntry(id="minimax", name="MiniMax", auth_type="api_key"),
@@ -195,6 +204,8 @@ _PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
         managed_provider_key(OPENAI_CHATGPT_PLATFORM_ID),
     ),
     "copilot": (GITHUB_COPILOT_PROVIDER_KEY,),
+    "xai": (XAI_PROVIDER_KEY,),
+    "xai-device": (XAI_PROVIDER_KEY,),
     "opencode-go": (OPENCODE_GO_OPENAI_PROVIDER_KEY, OPENCODE_GO_ANTHROPIC_PROVIDER_KEY),
     "minimax": (MINIMAX_ANTHROPIC_PROVIDER_KEY,),
     "deepseek": (DEEPSEEK_PROVIDER_KEY,),
@@ -214,6 +225,7 @@ _PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
 _LOGOUT_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="openai", name="OpenAI", auth_type="oauth"),
     OAuthProviderEntry(id="copilot", name="GitHub Copilot", auth_type="oauth"),
+    OAuthProviderEntry(id="xai", name="xAI Grok", auth_type="oauth"),
     OAuthProviderEntry(id="opencode-go", name="OpenCode Go", auth_type="api_key"),
     OAuthProviderEntry(id="minimax", name="MiniMax", auth_type="api_key"),
     OAuthProviderEntry(id="deepseek", name="DeepSeek", auth_type="api_key"),
@@ -248,7 +260,7 @@ def current_model_key(soul: PythinkerSoul) -> str | None:
 
 @registry.command(aliases=["setup"])
 async def login(app: Shell, args: str) -> None:
-    """Login with OpenAI, GitHub Copilot, API-key, or local providers."""
+    """Login with OpenAI, GitHub Copilot, xAI Grok, API-key, or local providers."""
     soul = ensure_pythinker_soul(app)
     if soul is None:
         return
@@ -274,6 +286,12 @@ async def login(app: Shell, args: str) -> None:
     elif mode in ("copilot", "github-copilot"):
         ok = await _render_oauth_events(login_copilot(soul.runtime.config))
         provider = GITHUB_COPILOT_PLATFORM_ID
+    elif mode == "xai":
+        ok = await _render_oauth_events(login_xai_browser(soul.runtime.config))
+        provider = XAI_PLATFORM_ID
+    elif mode in ("xai-device", "xai-headless"):
+        ok = await _render_oauth_events(login_xai_headless(soul.runtime.config))
+        provider = XAI_PLATFORM_ID
     elif mode in ("api-key", "apikey", "api"):
         api_key = await _prompt_api_key("OpenAI")
         if not api_key:
@@ -368,8 +386,8 @@ async def login(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /login "
-            "[browser|headless|copilot|api-key|opencode-go|minimax|deepseek|z-ai-coding|z-ai-api|"
-            "moonshot|kimi|alibaba|anthropic|openrouter|lm-studio|ollama][/]"
+            "[browser|headless|copilot|xai|xai-device|api-key|opencode-go|minimax|deepseek|"
+            "z-ai-coding|z-ai-api|moonshot|kimi|alibaba|anthropic|openrouter|lm-studio|ollama][/]"
         )
         return
     if not ok:
@@ -384,7 +402,7 @@ async def login(app: Shell, args: str) -> None:
 
 @registry.command
 async def logout(app: Shell, args: str) -> None:
-    """Logout from OpenAI, GitHub Copilot, API-key, or local providers."""
+    """Logout from OpenAI, GitHub Copilot, xAI Grok, API-key, or local providers."""
     soul = ensure_pythinker_soul(app)
     if soul is None:
         return
@@ -419,6 +437,8 @@ async def logout(app: Shell, args: str) -> None:
         ok = await _render_oauth_events(logout_openai(config))
     elif mode in ("copilot", "github-copilot"):
         ok = await _render_oauth_events(logout_copilot(config))
+    elif mode == "xai":
+        ok = await _render_oauth_events(logout_xai(config))
     elif mode == "openrouter":
         ok = await _render_oauth_events(logout_openrouter(config))
     elif mode == "anthropic":
@@ -452,8 +472,8 @@ async def logout(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /logout "
-            "[openai|copilot|opencode-go|minimax|deepseek|z-ai-coding|z-ai-api|moonshot|kimi|"
-            "alibaba|anthropic|openrouter|lm-studio|ollama|github-feedback][/]"
+            "[openai|copilot|xai|opencode-go|minimax|deepseek|z-ai-coding|z-ai-api|moonshot|"
+            "kimi|alibaba|anthropic|openrouter|lm-studio|ollama|github-feedback][/]"
         )
         return
     if not ok:

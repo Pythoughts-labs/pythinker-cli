@@ -1163,6 +1163,10 @@ class OAuthManager:
             from pythinker_code.auth.openai import refresh_openai_chatgpt_token
 
             return await refresh_openai_chatgpt_token(refresh_token_value)
+        if ref.key == "oauth/xai":
+            from pythinker_code.auth.xai import refresh_xai_token
+
+            return await refresh_xai_token(refresh_token_value)
         return await refresh_token(refresh_token_value)
 
     def _apply_access_token(

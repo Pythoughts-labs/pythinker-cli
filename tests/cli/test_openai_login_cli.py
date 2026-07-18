@@ -62,6 +62,43 @@ def test_cli_login_copilot_routes_to_copilot(monkeypatch):
     assert login.called
 
 
+def test_cli_login_xai_routes_to_browser(monkeypatch):
+    login = Mock(side_effect=_success_event)
+    monkeypatch.setattr("pythinker_code.cli.login_xai_browser", login, raising=False)
+    monkeypatch.setattr(
+        "pythinker_code.cli.load_config",
+        lambda: Config(is_from_default_location=True),
+        raising=False,
+    )
+
+    result = runner.invoke(cli, ["login", "--xai"])
+
+    assert result.exit_code == 0
+    assert login.called
+
+
+def test_cli_login_xai_device_routes_to_headless(monkeypatch):
+    login = Mock(side_effect=_success_event)
+    monkeypatch.setattr("pythinker_code.cli.login_xai_headless", login, raising=False)
+    monkeypatch.setattr(
+        "pythinker_code.cli.load_config",
+        lambda: Config(is_from_default_location=True),
+        raising=False,
+    )
+
+    result = runner.invoke(cli, ["login", "--xai-device"])
+
+    assert result.exit_code == 0
+    assert login.called
+
+
+def test_cli_login_rejects_multiple_xai_modes(monkeypatch):
+    result = runner.invoke(cli, ["login", "--xai", "--xai-device"])
+
+    assert result.exit_code == 1
+    assert "Choose only one" in result.output
+
+
 def test_cli_login_api_key_routes_to_openai_api_key(monkeypatch):
     api_key = Mock(side_effect=_success_event)
     monkeypatch.setattr("pythinker_code.cli.login_openai_api_key", api_key, raising=False)
@@ -105,6 +142,28 @@ def test_cli_logout_copilot_routes_to_copilot(monkeypatch):
 
     assert result.exit_code == 0
     assert logout.called
+
+
+def test_cli_logout_xai_routes_to_xai(monkeypatch):
+    logout = Mock(side_effect=_success_event)
+    monkeypatch.setattr("pythinker_code.cli.logout_xai", logout, raising=False)
+    monkeypatch.setattr(
+        "pythinker_code.cli.load_config",
+        lambda: Config(is_from_default_location=True),
+        raising=False,
+    )
+
+    result = runner.invoke(cli, ["logout", "--xai"])
+
+    assert result.exit_code == 0
+    assert logout.called
+
+
+def test_cli_logout_rejects_xai_with_other_mode(monkeypatch):
+    result = runner.invoke(cli, ["logout", "--xai", "--copilot"])
+
+    assert result.exit_code == 1
+    assert "Choose only one" in result.output
 
 
 def test_cli_login_opencode_go_routes_to_opencode_go(monkeypatch):

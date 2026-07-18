@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Add xAI Grok OAuth login (browser loopback and device-code).
 - Add GitHub Copilot device-code OAuth login for individual github.com accounts.
 - Add a cached, provider-agnostic models.dev catalog for dynamic model metadata discovery.
 
