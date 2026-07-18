@@ -121,12 +121,12 @@ def test_load_default_agent_spec():
     subagent_specs = {name: load_agent_spec(spec.path) for name, spec in spec.subagents.items()}
 
     assert subagent_specs["coder"].name == snapshot("")
-    assert subagent_specs["coder"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
+    assert (
+        subagent_specs["coder"].system_prompt_path == DEFAULT_AGENT_FILE.parent / "system_leaf.md"
+    )
     assert subagent_specs["coder"].system_prompt_args == snapshot(
         {
             "ROLE_ADDITIONAL": """\
-You are now running as a subagent. All the `user` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
-
 ## Mission
 You are the general engineering subagent: you take a scoped brief from the parent and deliver clean, well-structured, production-ready code — verified, idiomatic to the project's language and conventions, and complete. You read, edit, and run code. You never expand into adjacent cleanup, refactors, or improvements the brief did not ask for.
 
@@ -188,29 +188,13 @@ Bullet list of remaining risks or `None observed.`.
 ### BLOCKERS
 Bullet list of anything that stopped completion, or `None.`.
 
-Artifact contract: Before finishing, you MUST emit your result as a structured artifact.
-Wrap it in <coding_artifact> tags on its own line at the very end of your final message:
-
-<coding_artifact>
-{
-  "files_changed": ["path/to/file.py"],
-  "test_command": "make test",
-  "expected_behavior": "...",
-  "edge_cases_claimed": ["..."]
-}
-</coding_artifact>
-
-Do not include reasoning, logs, or intermediate output inside the tags — only the JSON fields above.
-`test_command` is the exact verification command you actually ran, verbatim — never an aspirational one.
-The `edge_cases_claimed` key is optional; omit it if you have no distinct edge cases to claim.
-
 ## Escalation
 - Never claim success without evidence; if verification could not run, name the blocker explicitly instead of asserting success.
 - Surface discovered out-of-scope work under RISKS — do not do it.
 - If the brief is ambiguous, state the interpretation you took and the alternative readings under RISKS; if the ambiguity blocks correct work, stop and report BLOCKERS instead of guessing.
 - Report partial completion as partial: list exactly what was and was not done.
 """,  # noqa: E501
-            "EMITS_CODING_ARTIFACT": "",
+            "EMITS_CODING_ARTIFACT": "true",
         }
     )
     assert subagent_specs["coder"].when_to_use == snapshot(
