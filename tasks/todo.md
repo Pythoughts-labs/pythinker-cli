@@ -77,7 +77,20 @@ Phases (each = one verified Codex delegation, sequential):
             (loopback port 56121 + `plan=generic`/OIDC `nonce`; device-code); no API-key method;
             openai_legacy → api.x.ai/v1; rotating refresh persisted by OAuthManager. **PENDING LIVE
             VERIFICATION** (login flow untested against real auth.x.ai).
-      - [ ] P3d — DigitalOcean (implicit-flow, stored as `api`).
+      - [~] P3d — DigitalOcean. **SCOPE = FULL ROBUST BUILD (user-confirmed 2026-07-18).** OAuth
+            IMPLICIT flow (response_type=token; token in URL fragment) → needs a NEW reusable
+            `run_loopback_implicit_flow` helper in oauth_flows.py that serves an HTML-bootstrap page
+            (inline JS reads location.hash, POSTs {access_token,expires_in,state} to a pinned-port
+            /auth/token) — P3a's authorization-code loopback does NOT cover this. Token stored AS AN
+            API KEY (no refresh, ~30d; re-login on expiry) → NO oauth ref / NO _refresh_token_for_ref
+            branch. Provider openai_legacy → base_url https://inference.do-ai.run/v1, api_key=token.
+            Dynamic model catalog: GET https://api.digitalocean.com/v2/gen-ai/models/routers (Bearer)
+            → model_routers[].name → seed 'router:<name>' models at login (login still succeeds if
+            fetch fails; seed none + warn). Verified constants: client_id
+            b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82; authorize
+            https://cloud.digitalocean.com/v1/oauth/authorize; redirect http://localhost:1456/auth/callback;
+            scope 'genai:read inference:query'. Recon ad3fed51 mapping exact wiring. **PENDING LIVE
+            VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
       - [ ] P3e — Snowflake Cortex (loopback PKCE).
 - [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
 - [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
