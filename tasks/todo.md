@@ -2,6 +2,50 @@
 
 ## Active
 
+### Adopt opencode auth-providers + dynamic catalog + effort mapping (2026-07-18)
+
+**Source:** `blackbox/opencode/AUTH_PROVIDERS.md` + opencode source (**MIT**; pythinker is
+Apache-2.0 — compatible; ported logic carries an attribution notice).
+**Delivery:** plan-first, then **sequential** delegation to Codex `gpt-5.6-sol` (high). NOT parallel —
+every workstream mutates the same core files (`config.py ProviderType`, `llm.py create_llm`,
+`platforms.py PLATFORMS`/`refresh_managed_models`, both UI menus, both CLI dispatchers).
+**Effort ceiling:** `max` (no `ultra`) — pythinker's `ThinkingEffort` union already covers it, so the
+effort workstream needs **no union change / no new-enum snapshot churn**.
+
+Decisions locked (AskUserQuestion): all four workstreams; plan-first; cap at `max`.
+
+**Headline open decision (user's call): registry-first vs additive-first.**
+Recon: adding one provider today touches **8–12 hand-edited enumeration files** (no registry).
+- additive-first = cheapest per phase, lowest risk, but re-pays the 8–12-file tax per provider and
+  that code is throwaway if a registry lands later.
+- registry-first = build the abstraction up front so new providers are cheap/non-throwaway, but it is
+  the highest-churn refactor of working, public-compat code.
+Discriminator = how many providers wanted. 4 OAuth only → additive; full roster → registry-first.
+
+**Size (honest):** multi-thousand-LOC across ~15–25 files; new `ProviderType` values, config keys,
+CLI flags, persisted shape → tests + docs + CI snapshots (config-dump / pyinstaller / wire) each.
+
+Phases (each = one verified Codex delegation, sequential):
+- [ ] P1 — Dynamic models.dev catalog: generalize `auth/opencode_go.py` fetch into a provider-agnostic
+      module (`GET https://models.dev/api.json`, env override + disable flag, disk cache, 5-min TTL +
+      60-min bg refresh, **stdlib `fcntl.flock`**, atomic temp+rename, **fail-open** cached→static,
+      never block startup). Wire one provider through it.
+- [ ] P2 — Effort/family mapping: port opencode `variants()` tier-selection into the effort layer,
+      **capped at max**, with attribution. Extend `openai_gpt_reasoning_levels` → per-family table.
+- [ ] P3 — OAuth providers: shared device-code + loopback-PKCE helper, then GitHub Copilot, xAI/Grok,
+      DigitalOcean (implicit-flow, stored as `api`), Snowflake Cortex. One provider per delegation.
+- [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
+- [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
+
+Non-negotiables per Codex spec: full `make check-pythinker-code && make test-pythinker-code` gate;
+`## Unreleased` changelog line; deliberate snapshot updates; models.dev fail-open + no new dep;
+attribution on ported files; root-cause robust design (no workarounds).
+
+Out of scope (logged): `ultra` effort level (dropped, cap at max); any external endpoint beyond
+models.dev without approval.
+
+Review: _pending first delegation._
+
 ### Implementer-agent deepening: lighter/smarter/more robust (2026-07-17)
 
 Architecture review found: every implementer spawn carries ~7,300 words of prompt (root
