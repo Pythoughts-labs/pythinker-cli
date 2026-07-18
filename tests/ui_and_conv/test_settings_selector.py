@@ -205,16 +205,17 @@ def _item(settings: SettingsListConfig, item_id: str) -> SettingItem | None:
 
 def test_settings_exposes_auto_update_toggle_when_live(monkeypatch):
     from pythinker_code import update_policy
+    from pythinker_code.config import AutoUpdateMode
 
     monkeypatch.setattr(update_policy, "auto_update_override_reason", lambda: None)
     config = Config()
-    config.auto_update = True
+    config.auto_update = AutoUpdateMode.DOWNLOAD
 
     item = _item(_build_settings_config(config), "auto_update")
 
     assert item is not None
-    assert item.values == ("true", "false")  # toggleable
-    assert item.current_value == "true"
+    assert item.values == ("off", "notify", "download", "apply_on_exit")  # selectable
+    assert item.current_value == "download"
 
 
 def test_settings_auto_update_readonly_under_override(monkeypatch):
@@ -225,21 +226,26 @@ def test_settings_auto_update_readonly_under_override(monkeypatch):
         "auto_update_override_reason",
         lambda: "disabled by PYTHINKER_CLI_NO_AUTO_UPDATE",
     )
+    from pythinker_code.config import AutoUpdateMode
+
     config = Config()
-    config.auto_update = True  # stored true, but override forces effective off
+    # Stored download, but the override forces the effective policy off.
+    config.auto_update = AutoUpdateMode.DOWNLOAD
 
     item = _item(_build_settings_config(config), "auto_update")
 
     assert item is not None
     assert item.values is None  # read-only: no no-op toggle
-    assert item.current_value == "false"  # shows the effective state
+    assert item.current_value == "off"  # shows the effective state
     assert "PYTHINKER_CLI_NO_AUTO_UPDATE" in item.description
 
 
 def test_apply_settings_changes_sets_auto_update():
-    config = Config()  # auto_update defaults to True
+    from pythinker_code.config import AutoUpdateMode
 
-    changed = apply_settings_changes(config, {"auto_update": "false"})
+    config = Config()  # auto_update defaults to download
+
+    changed = apply_settings_changes(config, {"auto_update": "notify"})
 
     assert changed == ["auto_update"]
-    assert config.auto_update is False
+    assert config.auto_update is AutoUpdateMode.NOTIFY

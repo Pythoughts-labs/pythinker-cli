@@ -348,3 +348,38 @@ Done: `mythos-enhancements` PR #118 merged (d51ef649).
 Completed-work logs through 2026-06-11 (agent robustness arc, statusline v2,
 review-safety hardening, telemetry sync, CodeRabbit triage) were trimmed on
 repush of PR #118 — see git history of this file for the full record.
+
+### Windows auto-update lifecycle redesign (2026-07-17)
+
+Branch: `fix/windows-auto-update-lifecycle` (off origin/main @ c5c0bc92)
+
+Root cause (3-lane scout, confirmed): silent startup auto-update on Windows runs the Inno
+installer inline mid-session (`ui/shell/update.py:1239` -> `_run_native_installer` ->
+`/SILENT /CLOSEAPPLICATIONS` + `sys.exit(0)`); shell swallows SystemExit, installer's 15s
+WaitForLauncherExit times out, Restart Manager force-closes the session. No Windows
+stage-and-promote path (macOS/Linux have one via atexit).
+
+Scope (user): FULL redesign. Producer: Codex (GPT-5.6 Sol) via claude-architect MCP pipeline.
+
+- [x] Core redesign (implemented by Claude directly — both claude-architect Codex lanes are
+      broken in plugin v0.18.0, see blackbox/scratchpad.md): typed UpdateIntent
+      (CHECK/STAGE_FOR_RESTART/INSTALL/INSTALL_AND_EXIT) through do_update/run_update_job;
+      Windows staged-update manifest (atomic write, digest re-verified at apply, fail-closed
+      discard); pre-session bootstrap apply in cli/__init__.py before config/session creation;
+      config enum policy off|notify|download|apply_on_exit (default download, legacy bool
+      true->download false->notify, env compatible); background task can never spawn an
+      installer/package upgrade or raise SystemExit (contained in _run_silent_update_job);
+      /update stages on Windows; standalone `pythinker update` keeps install-and-exit;
+      apply_on_exit armed from both silent and /update stages; smoke check skipped for the
+      Windows staged path (old exe would falsely certify it).
+      -> verified: make check-pythinker-code green; full make test-pythinker-code green;
+      codex (GPT-5.6 Sol, high) adversarial review — 4 real majors found and fixed
+      (manifest supersession guard, /update apply_on_exit arming, off-mapping docstring,
+      staged-path smoke check), 2 non-issues documented.
+- [ ] Follow-up (Delegation B): packages/windows-installer/installer.iss tuning +
+      multi-session concurrency guard (Session.acquire_ownership is fcntl no-op on Windows,
+      session.py:53); /CLOSEAPPLICATIONS can affect other live Pythinker processes.
+- [x] Full gate, PR opened.
+
+Out of scope (log): broader Windows session locking beyond updater guard; install.ps1 mirrors;
+`pythinker info` JSON `auto_update_config` changed bool->string (documented in changelog).

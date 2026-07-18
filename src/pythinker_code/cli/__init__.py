@@ -859,6 +859,17 @@ def pythinker(
             param_hint="--session",
         )
 
+    # Apply a previously staged Windows update before any session, runtime, or
+    # agent is constructed. Interactive shell launches only: print/ACP/wire
+    # callers are scripted flows where exiting to run an installer would break
+    # the invoker. Fail closed inside: an invalid stage is discarded and normal
+    # startup continues.
+    if ui == "shell" and prompt is None:
+        from pythinker_code.ui.shell.update import apply_staged_update_before_start
+
+        if apply_staged_update_before_start():
+            raise typer.Exit(0)
+
     config: Config | Path | None = None
     if config_string is not None:
         config_string = config_string.strip()

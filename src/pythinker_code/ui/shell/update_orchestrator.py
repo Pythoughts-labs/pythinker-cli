@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,7 +22,11 @@ from pythinker_code.utils.logging import logger
 from pythinker_code.utils.subprocess_env import get_clean_env
 
 if TYPE_CHECKING:
-    from pythinker_code.ui.shell.update import UpdateResult
+    from pythinker_code.ui.shell.update import (
+        StagedWindowsUpdate,
+        UpdateIntent,
+        UpdateResult,
+    )
 
 UPDATE_STATUS_FILE = get_share_dir() / "update_status.json"
 UPDATE_LOG_FILE = get_share_dir() / "update.log"
@@ -339,10 +344,13 @@ def _new_status(
 async def run_update_job(
     *,
     print_output: bool = True,
-    check_only: bool = False,
+    intent: UpdateIntent | None = None,
     source: str = "cli",
 ) -> UpdateResult:
-    from pythinker_code.ui.shell.update import UpdateResult, do_update
+    from pythinker_code.ui.shell.update import UpdateIntent, UpdateResult, do_update
+
+    if intent is None:
+        intent = UpdateIntent.CHECK
 
     lock = acquire_update_lock(source=source)
     if lock is None:
@@ -355,7 +363,7 @@ async def run_update_job(
 
     job_id = uuid.uuid4().hex
     started_at = time.time()
-    state = UpdateJobState.CHECKING if check_only else UpdateJobState.RUNNING
+    state = UpdateJobState.CHECKING if intent is UpdateIntent.CHECK else UpdateJobState.RUNNING
     append_update_log(f"\n=== pythinker update {job_id} started ({source}) ===")
     write_update_status(
         _new_status(job_id=job_id, state=state, source=source, started_at=started_at)
@@ -365,7 +373,7 @@ async def run_update_job(
         try:
             result = await do_update(
                 print_output=print_output,
-                check_only=check_only,
+                intent=intent,
                 output_callback=append_update_log,
             )
         except SystemExit:
@@ -386,17 +394,34 @@ async def run_update_job(
         reported_result = result
         final_state = _result_state(result)
         message = result.name.replace("_", " ").lower()
-        if result is UpdateResult.UPDATED and not check_only:
-            smoke_ok, smoke_message = run_post_install_smoke_check()
-            append_update_log(smoke_message)
-            if smoke_ok:
-                message = smoke_message
+        if result is UpdateResult.UPDATED and intent is not UpdateIntent.CHECK:
+            staged_windows = _pending_windows_staged_update()
+            if staged_windows is not None:
+                # Windows stages an installer, not a swappable binary: running
+                # `--version` here would exercise the OLD executable and falsely
+                # certify the stage. The stage is digest-verified at staging
+                # time and re-verified at apply time, so report exactly that.
+                message = (
+                    f"Update {staged_windows.version} staged (digest verified); "
+                    "applied before the next launch."
+                )
+                append_update_log(message)
                 _write_last_success(job_id=job_id, message=message)
-                _finalize_native_staging(promote=True)
             else:
-                message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
-                # Never promote a staged binary that can't even print --version.
-                _finalize_native_staging(promote=False)
+                smoke_ok, smoke_message = run_post_install_smoke_check(
+                    target_version=_read_target_version()
+                )
+                append_update_log(smoke_message)
+                if smoke_ok:
+                    message = smoke_message
+                    _write_last_success(job_id=job_id, message=message)
+                    _finalize_native_staging(promote=True)
+                else:
+                    message = f"{SMOKE_CHECK_FAILED_PREFIX}{smoke_message}"
+                    reported_result = UpdateResult.VERIFICATION_FAILED
+                    final_state = _result_state(reported_result)
+                    # Never promote a staged binary that can't even print --version.
+                    _finalize_native_staging(promote=False)
 
         write_update_status(
             _new_status(
@@ -429,6 +454,18 @@ async def run_update_job(
         lock.release()
 
 
+def _pending_windows_staged_update() -> StagedWindowsUpdate | None:
+    """The staged Windows update, or None off-Windows / when nothing is staged."""
+    from pythinker_code.ui.shell.update import (
+        _is_windows,  # pyright: ignore[reportPrivateUsage]
+        read_windows_staged_update,
+    )
+
+    if not _is_windows():
+        return None
+    return read_windows_staged_update()
+
+
 def _write_last_success(*, job_id: str, message: str) -> None:
     try:
         _atomic_write_json(
@@ -453,7 +490,28 @@ def _smoke_check_command() -> list[str]:
         staged = staged_native_path()
         exe = str(staged) if staged.is_file() else sys.executable
         return [exe, "--version"]
+    brew_exe = _homebrew_linked_executable()
+    if brew_exe is not None:
+        return [str(brew_exe), "--version"]
     return [sys.executable, "-P", "-m", "pythinker_code", "--version"]
+
+
+def _homebrew_linked_executable() -> Path | None:
+    """The stable brew-linked launcher for a Homebrew install, or None otherwise.
+
+    `brew upgrade` installs the new keg side-by-side and repoints
+    ``<prefix>/opt/pythinker-code``; the running interpreter still lives in the
+    OLD keg, so smoke-checking ``sys.executable`` would certify the pre-upgrade
+    install (and pass with the old version). Returns the opt-linked launcher
+    path even if it does not exist — a missing launcher after an upgrade is a
+    smoke-check failure, not a reason to fall back to the old binary.
+    """
+    exe = sys.executable.replace("\\", "/")
+    marker = "/cellar/pythinker-code/"
+    idx = exe.lower().find(marker)
+    if idx < 0:
+        return None
+    return Path(exe[:idx]) / "opt" / "pythinker-code" / "bin" / "pythinker"
 
 
 def _finalize_native_staging(*, promote: bool) -> None:
@@ -490,7 +548,7 @@ def _smoke_check_env() -> dict[str, str]:
     return env
 
 
-def run_post_install_smoke_check() -> tuple[bool, str]:
+def run_post_install_smoke_check(target_version: str | None = None) -> tuple[bool, str]:
     command = _smoke_check_command()
     try:
         result = subprocess.run(
@@ -513,15 +571,27 @@ def run_post_install_smoke_check() -> tuple[bool, str]:
         return False, f"Smoke check failed: {detail}"
     if not output or not any(ch.isdigit() for ch in output):
         return False, "Smoke check did not report a version."
-    return True, f"Smoke check passed: {output.splitlines()[0]}"
+    first_line = output.splitlines()[0]
+    if target_version is not None:
+        from pythinker_code.ui.shell.update import semver_tuple
+
+        reported = re.search(r"\d+\.\d+\.\d+", first_line)
+        if reported is None:
+            return False, f"Smoke check did not report a parseable version: {first_line}"
+        if semver_tuple(reported.group(0)) != semver_tuple(target_version):
+            # The upgraded binary must identify as the target release; matching
+            # the OLD version means the check exercised the pre-upgrade install
+            # (or the upgrade silently no-oped).
+            return False, (
+                f"Smoke check reported {reported.group(0)}, expected {target_version}: {first_line}"
+            )
+    return True, f"Smoke check passed: {first_line}"
 
 
 async def prompt_pre_start_update_job() -> None:
     from pythinker_code.ui.shell.update import prompt_pre_start_update
 
-    async def _runner(*, print_output: bool, check_only: bool) -> UpdateResult:
-        return await run_update_job(
-            print_output=print_output, check_only=check_only, source="startup"
-        )
+    async def _runner(*, print_output: bool, intent: UpdateIntent) -> UpdateResult:
+        return await run_update_job(print_output=print_output, intent=intent, source="startup")
 
     await prompt_pre_start_update(update_runner=_runner)

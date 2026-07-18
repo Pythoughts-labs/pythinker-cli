@@ -71,6 +71,7 @@ from pythinker_code.ui.shell.slash import SKILL_COMMAND_PREFIX, shell_mode_regis
 from pythinker_code.ui.shell.slash import registry as shell_slash_registry
 from pythinker_code.ui.shell.update import (
     MANAGED_CHANNEL_MARKER,
+    UpdateIntent,
     UpdateResult,
     _detect_upgrade_command,  # pyright: ignore[reportPrivateUsage]
     _mark_auto_update_check_attempt,  # pyright: ignore[reportPrivateUsage]
@@ -78,11 +79,16 @@ from pythinker_code.ui.shell.update import (
     consume_whats_new,
     format_managed_channel_notice,
     pending_update_notice,
+    read_windows_staged_update,
     refresh_update_cache_if_due,
+    register_windows_staged_apply_on_exit,
+    semver_tuple,
     welcome_update_target,
 )
 from pythinker_code.ui.shell.update_orchestrator import (
-    SMOKE_CHECK_FAILED_PREFIX,
+    SMOKE_CHECK_FAILED_PREFIX as SMOKE_CHECK_FAILED_PREFIX,
+)
+from pythinker_code.ui.shell.update_orchestrator import (
     read_update_status,
     run_update_job,
     update_restart_pending,
@@ -94,7 +100,7 @@ from pythinker_code.ui.shell.visualize import (
 from pythinker_code.ui.terminal_capabilities import ascii_glyphs_enabled, motion_disabled
 from pythinker_code.ui.theme import BRAND, BrandToken, tui_rich_style
 from pythinker_code.ui.theme import get_tui_tokens as _get_tui_tokens
-from pythinker_code.update_policy import auto_update_enabled
+from pythinker_code.update_policy import resolve_auto_update_mode
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.utils.envvar import get_env_bool
 from pythinker_code.utils.logging import logger
@@ -2145,7 +2151,12 @@ class Shell:
             self._refresh_update_notice_line()
 
     async def _silent_auto_update(self) -> None:
-        """Install a newer release silently in the background at startup."""
+        """Download and stage a newer release in the background at startup.
+
+        This never installs mid-session: the Windows installer / native binary
+        is staged and applied at the next launch (or at clean exit under the
+        ``apply_on_exit`` policy), which the persistent restart notice reflects.
+        """
         if not _should_auto_check_for_updates():
             return
 
@@ -2153,19 +2164,44 @@ class Shell:
         # Throttle only after a completed round-trip. Marking before the network
         # call (or after a FAILED one) would suppress updates for the whole
         # interval on a transient startup blip — mirrors _refresh_update_cache.
-        if result is not None and result is not UpdateResult.FAILED:
+        if result is not None and result not in (
+            UpdateResult.FAILED,
+            UpdateResult.VERIFICATION_FAILED,
+        ):
             _mark_auto_update_check_attempt()
         if result is UpdateResult.UPDATED:
+            self._maybe_arm_windows_apply_on_exit()
             self._surface_installed_update_notice()
+        elif result is UpdateResult.VERIFICATION_FAILED:
+            self._surface_update_verification_failure()
         elif result is UpdateResult.UPDATE_AVAILABLE:
             self._surface_managed_channel_notice()
-        # FAILED / UP_TO_DATE / UNSUPPORTED / None → silent (recorded in the job log).
+        # Other FAILED / UP_TO_DATE / UNSUPPORTED / None results stay in the job log.
+
+    def _maybe_arm_windows_apply_on_exit(self) -> None:
+        from pythinker_code.config import AutoUpdateMode
+
+        if not isinstance(self.soul, PythinkerSoul):
+            return
+        mode = resolve_auto_update_mode(self.soul.runtime.config)
+        if mode is not AutoUpdateMode.APPLY_ON_EXIT:
+            return
+        if read_windows_staged_update() is None:
+            return
+        register_windows_staged_apply_on_exit()
 
     async def _run_silent_update_job(self) -> UpdateResult | None:
         try:
-            return await run_update_job(print_output=False, check_only=False, source="startup-auto")
+            return await run_update_job(
+                print_output=False, intent=UpdateIntent.STAGE_FOR_RESTART, source="startup-auto"
+            )
         except SystemExit:
-            raise
+            # STAGE_FOR_RESTART must never exit the process; reaching this means
+            # an install path leaked into the background task. Contain it — a
+            # propagated SystemExit would tear down the user's session (the
+            # exact mid-session kill this path is designed to prevent).
+            logger.error("Background update task attempted to exit the process; suppressed.")
+            return None
         except Exception:
             # Boundary-only recovery: update failure must not abort the shell,
             # and run_update_job has already persisted status/log details.
@@ -2173,26 +2209,21 @@ class Shell:
             return None
 
     def _surface_installed_update_notice(self) -> None:
-        if self._installed_update_smoke_check_failed():
-            self._update_toast(
-                "Update installed but verification failed; see update.log.",
-                style="fg:ansiyellow",
-            )
-            return
         # The persistent under-input line (_append_update_notice) already renders
         # the restart message; a toast duplicates it on the footer's second row.
         self._refresh_update_notice_line()
+
+    def _surface_update_verification_failure(self) -> None:
+        self._update_toast(
+            "Update installed but verification failed; see update.log.",
+            style="fg:ansiyellow",
+        )
 
     def _refresh_update_notice_line(self) -> None:
         """Drop the update-notice memo and repaint so the footer picks up new text."""
         self._update_notice_cache = (0.0, None)
         if self._prompt_session is not None:
             self._prompt_session.invalidate()
-
-    def _installed_update_smoke_check_failed(self) -> bool:
-        status = read_update_status()
-        message = status.message if status else None
-        return bool(message and message.startswith(SMOKE_CHECK_FAILED_PREFIX))
 
     def _installed_update_restart_notice(self) -> str:
         from pythinker_code.constant import VERSION as current_version
@@ -2243,16 +2274,26 @@ class Shell:
         return text
 
     def _compute_update_notice(self) -> str | None:
-        target = welcome_update_target()
-        if not target:
-            return None
+        from pythinker_code.constant import VERSION as current_version
+
         # A release already installed this session needs a restart, not /update —
-        # surface that here instead of telling the user to re-run an update that
-        # has already landed.
+        # surface that instead of telling the user to re-run an update that has
+        # already landed. Checked against the recorded job status alone, NOT the
+        # dismissal-filtered update-available cache: dismissing a version's
+        # install prompt must not also hide the restart notice once that version
+        # is actually installed.
         status = read_update_status()
-        if update_restart_pending(status, target):
+        installed_target = status.target_version if status is not None else None
+        if (
+            installed_target
+            and semver_tuple(installed_target) > semver_tuple(current_version)
+            and update_restart_pending(status, installed_target)
+        ):
             text = self._installed_update_restart_notice()
         else:
+            target = welcome_update_target()
+            if not target:
+                return None
             text = f"↑ Update available — v{target} · /update"
         if ascii_glyphs_enabled():
             text = text.translate(_WELCOME_ASCII_FALLBACKS)
@@ -2263,20 +2304,29 @@ class Shell:
 
         - env kill-switch set → nothing (cache filters already suppress the
           notice, matching today's hard-disable behavior).
-        - enabled → silent background install.
-        - config-disabled OR source checkout → refresh the persistent notice
-          only (`_auto_update`); self-suppresses for source checkouts because
-          `pending_update_notice()` returns None in that path.
-        - non-PythinkerSoul → same notice-refresh path (no runtime config to
+        - `off` (or source checkout) → nothing.
+        - `notify` → refresh the persistent notice only (`_auto_update`).
+        - `download` / `apply_on_exit` → background download-and-stage
+          (`_silent_auto_update`); never installs mid-session.
+        - non-PythinkerSoul → the notice-refresh path (no runtime config to
           consult), matching the prior unconditional `_auto_update` behavior.
         """
+        from pythinker_code.config import AutoUpdateMode
+
         if get_env_bool("PYTHINKER_CLI_NO_AUTO_UPDATE"):
             logger.info("Auto-update disabled by PYTHINKER_CLI_NO_AUTO_UPDATE environment variable")
             return
-        if isinstance(self.soul, PythinkerSoul) and auto_update_enabled(self.soul.runtime.config):
-            self._start_background_task(self._silent_auto_update())
-        else:
+        if not isinstance(self.soul, PythinkerSoul):
             self._start_background_task(self._auto_update())
+            return
+        mode = resolve_auto_update_mode(self.soul.runtime.config)
+        if mode is AutoUpdateMode.OFF:
+            logger.info("Startup update task disabled by auto_update policy 'off'")
+            return
+        if mode is AutoUpdateMode.NOTIFY:
+            self._start_background_task(self._auto_update())
+            return
+        self._start_background_task(self._silent_auto_update())
 
     def _start_background_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
@@ -2289,9 +2339,10 @@ class Shell:
             except asyncio.CancelledError:
                 pass
             except SystemExit:
-                # The silent updater's Windows native/pip path raises SystemExit
-                # so the installer can replace the binary; don't crash the shell.
-                logger.info("Background task requested process exit (update installer launched).")
+                # Defense in depth: no background task is allowed to request
+                # process exit (updates stage for restart instead). If one
+                # slips through, contain it here rather than killing the shell.
+                logger.error("Background task raised SystemExit; suppressed to keep the session.")
             except Exception:
                 logger.exception("Background task failed:")
 

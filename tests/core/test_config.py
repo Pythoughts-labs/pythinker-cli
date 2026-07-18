@@ -44,7 +44,7 @@ def test_default_config_dump():
             "theme": "dark",
             "show_thinking_stream": True,
             "prevent_idle_sleep": False,
-            "auto_update": True,
+            "auto_update": "download",
             "models": {},
             "providers": {},
             "loop_control": {
@@ -830,14 +830,35 @@ def test_apply_env_vars_auto_update(monkeypatch):
     assert prov["auto_update"] == "env PYTHINKER_AUTO_UPDATE"
 
 
-def test_auto_update_defaults_true():
+def test_auto_update_defaults_download():
+    from pythinker_code.config import AutoUpdateMode, Config
+
+    assert Config().auto_update is AutoUpdateMode.DOWNLOAD
+
+
+def test_auto_update_legacy_bool_migration():
+    """Legacy booleans keep their old meaning: true was background auto-update
+    (now download-and-stage); false disabled silent installs but kept the
+    passive update notice, which is the explicit notify mode."""
+    from pythinker_code.config import AutoUpdateMode, Config
+
+    assert Config.model_validate({"auto_update": True}).auto_update is AutoUpdateMode.DOWNLOAD
+    assert Config.model_validate({"auto_update": False}).auto_update is AutoUpdateMode.NOTIFY
+    assert Config.model_validate({"auto_update": "true"}).auto_update is AutoUpdateMode.DOWNLOAD
+    assert Config.model_validate({"auto_update": "false"}).auto_update is AutoUpdateMode.NOTIFY
+
+
+def test_auto_update_mode_values_round_trip():
+    from pythinker_code.config import AutoUpdateMode, Config
+
+    for mode in AutoUpdateMode:
+        assert Config.model_validate({"auto_update": mode.value}).auto_update is mode
+
+
+def test_auto_update_rejects_unknown_mode():
+    from pydantic import ValidationError as PydanticValidationError
+
     from pythinker_code.config import Config
 
-    assert Config().auto_update is True
-
-
-def test_auto_update_round_trips_false():
-    from pythinker_code.config import Config
-
-    cfg = Config.model_validate({"auto_update": False})
-    assert cfg.auto_update is False
+    with pytest.raises(PydanticValidationError):
+        Config.model_validate({"auto_update": "sometimes"})

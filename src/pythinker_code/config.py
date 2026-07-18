@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from enum import StrEnum
 from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, Self, Union, cast, get_args, get_origin
@@ -1115,6 +1116,47 @@ class PluginsConfig(BaseModel):
     )
 
 
+class AutoUpdateMode(StrEnum):
+    """Startup auto-update policy.
+
+    ``OFF`` schedules nothing at startup; ``NOTIFY`` only refreshes the passive
+    update notice; ``DOWNLOAD`` downloads and stages the new release in the
+    background so a restart applies it; ``APPLY_ON_EXIT`` additionally launches
+    the staged installer when the process exits cleanly. No mode ever installs
+    or restarts while an interactive session is running.
+    """
+
+    OFF = "off"
+    NOTIFY = "notify"
+    DOWNLOAD = "download"
+    APPLY_ON_EXIT = "apply_on_exit"
+
+
+# Legacy boolean spellings accepted for backward compatibility with the old
+# `auto_update: bool` config field and PYTHINKER_AUTO_UPDATE env values.
+_AUTO_UPDATE_LEGACY_TRUE = frozenset({"true", "1", "yes"})
+_AUTO_UPDATE_LEGACY_FALSE = frozenset({"false", "0", "no"})
+
+
+def coerce_auto_update_mode(value: object) -> object:
+    """Map legacy boolean auto_update values onto the policy enum.
+
+    ``true`` keeps its old meaning of "update automatically in the background"
+    (now download-and-stage); ``false`` maps to ``notify`` because the old
+    disabled state still surfaced the passive update notice.
+    """
+    if isinstance(value, bool):
+        return AutoUpdateMode.DOWNLOAD if value else AutoUpdateMode.NOTIFY
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _AUTO_UPDATE_LEGACY_TRUE:
+            return AutoUpdateMode.DOWNLOAD
+        if normalized in _AUTO_UPDATE_LEGACY_FALSE:
+            return AutoUpdateMode.NOTIFY
+        return normalized
+    return value
+
+
 class Config(BaseModel):
     """Main configuration structure."""
 
@@ -1223,10 +1265,23 @@ class Config(BaseModel):
             "Supported on macOS, Linux, and Windows. Default: false."
         ),
     )
-    auto_update: bool = Field(
-        default=True,
-        description="Automatically install new releases in the background at startup.",
+    auto_update: AutoUpdateMode = Field(
+        default=AutoUpdateMode.DOWNLOAD,
+        description=(
+            "Startup auto-update policy: 'off' (no startup update task), 'notify' "
+            "(show update notices only), 'download' (download and stage new releases "
+            "in the background; a restart applies them), or 'apply_on_exit' (also "
+            "launch the staged installer after the session exits). Updates are never "
+            "applied while a session is running. Legacy booleans are accepted: "
+            "true → download, false → notify."
+        ),
     )
+
+    @field_validator("auto_update", mode="before")
+    @classmethod
+    def _coerce_auto_update(cls, value: object) -> object:
+        return coerce_auto_update_mode(value)
+
     models: dict[str, LLMModel] = Field(default_factory=dict, description="List of LLM models")
     providers: dict[str, LLMProvider] = Field(
         default_factory=dict, description="List of LLM providers"

@@ -52,13 +52,21 @@ async def test_silent_update_success_refreshes_persistent_notice_not_toast(
     async def fake_job(**kw):
         assert not kw["print_output"]
         assert kw["source"] == "startup-auto"
+        assert kw["intent"] is shell_module.UpdateIntent.STAGE_FOR_RESTART
         return UpdateResult.UPDATED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
+
+    # Conflicting shared status: if the outcome were inferred from the status
+    # file instead of the job's returned result, this smoke-failed record would
+    # flip the flow to the verification-failure toast.
     monkeypatch.setattr(
         shell_module,
         "read_update_status",
-        lambda: SimpleNamespace(message="updated", target_version="0.43.0"),
+        lambda: SimpleNamespace(
+            message=shell_module.SMOKE_CHECK_FAILED_PREFIX + "boom",
+            target_version="0.43.0",
+        ),
     )
 
     await shell._silent_auto_update()
@@ -79,17 +87,12 @@ async def test_silent_update_smoke_fail_toasts_verification_failed(
     monkeypatch.setattr(shell_module, "_detect_upgrade_command", lambda: ["pip"])
 
     async def fake_job(**kw):
-        return UpdateResult.UPDATED
+        return UpdateResult.VERIFICATION_FAILED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
-    monkeypatch.setattr(
-        shell_module,
-        "read_update_status",
-        lambda: SimpleNamespace(
-            message="Updated, but smoke check did not pass: boom",
-            target_version="0.43.0",
-        ),
-    )
+    # Contradicting shared status (no record at all): the toast must be driven
+    # by the job's VERIFICATION_FAILED result, not inferred from the status file.
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: None)
 
     await shell._silent_auto_update()
 
@@ -118,6 +121,7 @@ async def test_silent_update_failed_is_silent(
     ("result", "expected_marks"),
     [
         (UpdateResult.FAILED, 0),
+        (UpdateResult.VERIFICATION_FAILED, 0),
         (UpdateResult.UP_TO_DATE, 1),
         (UpdateResult.UPDATED, 1),
     ],
@@ -216,22 +220,52 @@ def _scheduling_shell(runtime, tmp_path, monkeypatch):
     return shell, scheduled
 
 
-def test_dispatch_enabled_schedules_silent(runtime, tmp_path, monkeypatch):
+def test_dispatch_download_mode_schedules_silent(runtime, tmp_path, monkeypatch):
+    from pythinker_code.config import AutoUpdateMode
+
     shell, scheduled = _scheduling_shell(runtime, tmp_path, monkeypatch)
     monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(shell_module, "auto_update_enabled", lambda cfg: True)
+    monkeypatch.setattr(
+        shell_module, "resolve_auto_update_mode", lambda cfg: AutoUpdateMode.DOWNLOAD
+    )
 
     shell._schedule_startup_update_task()
     assert scheduled == ["_silent_auto_update"]
 
 
-def test_dispatch_config_disabled_schedules_toast_only(runtime, tmp_path, monkeypatch):
+def test_dispatch_apply_on_exit_mode_schedules_silent(runtime, tmp_path, monkeypatch):
+    from pythinker_code.config import AutoUpdateMode
+
     shell, scheduled = _scheduling_shell(runtime, tmp_path, monkeypatch)
     monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
-    monkeypatch.setattr(shell_module, "auto_update_enabled", lambda cfg: False)
+    monkeypatch.setattr(
+        shell_module, "resolve_auto_update_mode", lambda cfg: AutoUpdateMode.APPLY_ON_EXIT
+    )
+
+    shell._schedule_startup_update_task()
+    assert scheduled == ["_silent_auto_update"]
+
+
+def test_dispatch_notify_mode_schedules_toast_only(runtime, tmp_path, monkeypatch):
+    from pythinker_code.config import AutoUpdateMode
+
+    shell, scheduled = _scheduling_shell(runtime, tmp_path, monkeypatch)
+    monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
+    monkeypatch.setattr(shell_module, "resolve_auto_update_mode", lambda cfg: AutoUpdateMode.NOTIFY)
 
     shell._schedule_startup_update_task()
     assert scheduled == ["_auto_update"]
+
+
+def test_dispatch_off_mode_schedules_nothing(runtime, tmp_path, monkeypatch):
+    from pythinker_code.config import AutoUpdateMode
+
+    shell, scheduled = _scheduling_shell(runtime, tmp_path, monkeypatch)
+    monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
+    monkeypatch.setattr(shell_module, "resolve_auto_update_mode", lambda cfg: AutoUpdateMode.OFF)
+
+    shell._schedule_startup_update_task()
+    assert scheduled == []
 
 
 def test_dispatch_env_killswitch_schedules_nothing(runtime, tmp_path, monkeypatch):
@@ -252,7 +286,7 @@ def test_background_task_systemexit_does_not_crash(runtime, tmp_path, monkeypatc
     """
     shell = _make_shell(runtime, tmp_path)
     logged: list[str] = []
-    monkeypatch.setattr(shell_module.logger, "info", lambda msg, *a, **k: logged.append(msg))
+    monkeypatch.setattr(shell_module.logger, "error", lambda msg, *a, **k: logged.append(msg))
 
     # A thin stand-in for asyncio.Task that captures the done-callback.
     registered: list = []
@@ -292,7 +326,30 @@ def test_background_task_systemexit_does_not_crash(runtime, tmp_path, monkeypatc
 
     # Cleanup removed the task from the set and logged the process-exit message.
     assert fake_task not in shell._background_tasks
-    assert any("process exit" in m for m in logged)
+    assert any("SystemExit" in m for m in logged)
+
+
+@pytest.mark.asyncio
+async def test_run_silent_update_job_contains_systemexit(runtime, tmp_path, monkeypatch):
+    """A leaked install path raising SystemExit must never tear down the shell.
+
+    This exercises the real coroutine (not just the done-callback): the silent
+    job swallows SystemExit and reports "no result" instead of propagating —
+    on Python 3.14 a propagated SystemExit from an asyncio task kills the loop.
+    """
+    shell = _make_shell(runtime, tmp_path)
+    errors: list[str] = []
+    monkeypatch.setattr(shell_module.logger, "error", lambda msg, *a, **k: errors.append(msg))
+
+    async def exiting_job(**kw):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(shell_module, "run_update_job", exiting_job)
+
+    result = await shell._run_silent_update_job()
+
+    assert result is None
+    assert any("exit" in m.lower() for m in errors)
 
 
 def test_auto_update_override_reason_env_killswitch(monkeypatch):
@@ -373,6 +430,29 @@ def test_update_notice_previous_process_success_falls_back(runtime, tmp_path, mo
 def test_update_notice_none_when_up_to_date(runtime, tmp_path, monkeypatch):
     shell = _make_shell(runtime, tmp_path)
     monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: None)
+    assert shell._compute_update_notice() is None
+
+
+def test_update_notice_restart_survives_dismissed_version(runtime, tmp_path, monkeypatch):
+    """Regression: the restart notice must come from the recorded job status, not
+    the dismissal-filtered cache. Dismissing a version's install prompt (which
+    nulls welcome_update_target) must not hide 'restart to apply' after that
+    version has actually been installed this session."""
+    shell = _make_shell(runtime, tmp_path)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "ascii_glyphs_enabled", lambda: False)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: _updated_status("9.9.9"))
+    text = shell._compute_update_notice()
+    assert text is not None and "Restart" in text and "9.9.9" in text
+
+
+def test_update_notice_ignores_stale_status_for_older_version(runtime, tmp_path, monkeypatch):
+    # A leftover UPDATED status for a version we are already running (or older)
+    # must not claim a restart is pending.
+    shell = _make_shell(runtime, tmp_path)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: _updated_status("0.0.1"))
     assert shell._compute_update_notice() is None
 
 

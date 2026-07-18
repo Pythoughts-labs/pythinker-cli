@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from pythinker_code.config import Config
+from pythinker_code.config import AutoUpdateMode, Config
 from pythinker_code.llm import derive_model_capabilities
 from pythinker_code.thinking import (
     EXTENDED_THINKING_LEVELS,
@@ -23,6 +23,7 @@ from pythinker_code.ui.shell.components.settings_list import (
 )
 
 _BOOL_VALUES = ("true", "false")
+_AUTO_UPDATE_VALUES = tuple(mode.value for mode in AutoUpdateMode)
 _NONE_MODEL_VALUE = "(none)"
 
 
@@ -167,16 +168,16 @@ def _build_settings_config(config: Config) -> SettingsListConfig:
             id="auto_update",
             label="Auto-update",
             description=(
-                "Silently install new releases in the background at startup "
-                "(applied on next restart)."
+                "Startup update policy: off, notify, download (stage in background, "
+                "apply on restart), or apply_on_exit."
                 if _auto_update_override is None
                 else f"Auto-update is {_auto_update_override}; that override outranks this setting."
             ),
             # Show the *effective* state, and make the row read-only when an
             # override (env kill-switch / source checkout) forces it off, so the
             # panel never offers a no-op toggle.
-            current_value=(_bool(config.auto_update) if _auto_update_override is None else "false"),
-            values=_BOOL_VALUES if _auto_update_override is None else None,
+            current_value=(config.auto_update.value if _auto_update_override is None else "off"),
+            values=_AUTO_UPDATE_VALUES if _auto_update_override is None else None,
         ),
         SettingItem(
             id="merge_all_available_skills",
@@ -364,9 +365,9 @@ def apply_settings_changes(config: Config, changes: dict[str, str]) -> list[str]
             case "auto_update":
                 # Only reached for the live (non-override) row; a read-only row
                 # never submits a change.
-                new = value == "true"
-                if config.auto_update != new:
-                    config.auto_update = new
+                new_mode = AutoUpdateMode(value)
+                if config.auto_update != new_mode:
+                    config.auto_update = new_mode
                     mark(setting_id)
             case "merge_all_available_skills":
                 new = value == "true"
