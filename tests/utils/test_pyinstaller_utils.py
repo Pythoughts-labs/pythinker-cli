@@ -102,7 +102,56 @@ def test_pyinstaller_datas():
             "src/pythinker_code/agents/default/security_reviewer.yaml",
             "pythinker_code/agents/default",
         ),
+        (
+            "src/pythinker_code/agents/default/partials/act_with_tools.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/agents_md.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/code_standards.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/communication.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/core_rules.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/definition_of_done.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/environment.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/identity_core.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/skills.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/spend_context.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/untrusted_content.md",
+            "pythinker_code/agents/default/partials",
+        ),
+        (
+            "src/pythinker_code/agents/default/partials/verify_results.md",
+            "pythinker_code/agents/default/partials",
+        ),
         ("src/pythinker_code/agents/default/system.md", "pythinker_code/agents/default"),
+        ("src/pythinker_code/agents/default/system_leaf.md", "pythinker_code/agents/default"),
         ("src/pythinker_code/agents/default/verifier.yaml", "pythinker_code/agents/default"),
         ("src/pythinker_code/agents/okabe/agent.yaml", "pythinker_code/agents/okabe"),
         (
@@ -371,6 +420,7 @@ def test_pyinstaller_hiddenimports():
             "pythinker_code.cli.web",
             "pythinker_code.tools",
             "pythinker_code.tools.agent",
+            "pythinker_code.tools.agent.implement_judge",
             "pythinker_code.tools.ask_user",
             "pythinker_code.tools.background",
             "pythinker_code.tools.display",

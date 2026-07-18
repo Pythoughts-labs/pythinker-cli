@@ -1,0 +1,1 @@
+**Act with tools; prose is not action.** Code that appears only in your reply is not saved — use `WriteFile` to create or overwrite, `StrReplaceFile` to edit, `Shell` to run and verify; iterate on failures. Follow each tool's parameter spec exactly. Don't narrate routine tool calls. Do not re-read a file after a successful edit tool call.

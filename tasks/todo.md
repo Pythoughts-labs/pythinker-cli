@@ -2,6 +2,54 @@
 
 ## Active
 
+### Implementer-agent deepening: lighter/smarter/more robust (2026-07-17)
+
+Architecture review found: every implementer spawn carries ~7,300 words of prompt (root
+`system.md` + 71-line ROLE_ADDITIONAL), 35–45 role lines duplicated verbatim across
+coder/verifier/review, and the `<coding_artifact>` contract living as 5 unbound copies
+(prose ×2, regex parser in `tools/agent/__init__.py:1179`, prose consumers in
+verifier/judge YAML) with `utils/artifacts.py::CodingArtifact` unused by the parser.
+Serialized delegation lanes (Codex / GPT-5.6 Sol, max reasoning) via claude-architect:
+
+- [x] T1 — Typed artifact contract (commits `70b62107`, `bb419368`): CodingArtifact is
+      the single source of truth — schema-derived prompt block, strict fail-closed
+      extraction (one end-of-message block, duplicate/undeclared keys rejected,
+      present/missing/malformed), chain wired with truthful malformed surfacing,
+      verifier receipt names files_changed, consumer-binding invariant tests.
+- [x] T2 — Chain extracted to `tools/agent/implement_judge.py` (commit `43c9ebb6`);
+      `__init__.py` 1755→1195 lines; full import surface preserved; hiddenimports
+      snapshot updated; zero chain-test edits.
+- [x] T3 — Leaf prompt profile (commits `13fc2d3c`, `598e09fd`, `9539f759`): system.md
+      split into 12 Jinja partials with byte-identical root render (verified by
+      fixed-args render diff against a pre-change baseline); `system_leaf.md` added;
+      implementer/coder migrated — implementer prompt ~7,270 → ~4,240 words (−42%).
+- [x] T4 — Remaining 10 roles migrated to the leaf profile (commit `455fa6ed`); all
+      12 roster roles now render system_leaf.md; e2e snapshots unmoved.
+- [x] T5 — Prose snapshots → semantic invariants (commit `372b292a`; −246/+107 lines);
+      CHANGELOG Unreleased entries added; docs checked (only generic examples reference
+      system.md — still valid). Full gate on composed tree: see review below.
+
+#### Review: implementer-agent deepening (2026-07-18)
+
+- Delivered via serialized claude-architect delegatePipeline lanes (Codex / GPT-5.6
+  Sol; max reasoning where the 30-min attempt cap allowed, high on mechanical lanes),
+  each candidate clean-room verified, reviewer-gated, integrated, and re-verified
+  locally before commit.
+- Outcomes: artifact contract has one owning module (deletion test passes); chain is
+  a 547-line module with a compatibility re-export surface; all 12 leaf roles ship a
+  ~40% smaller prompt with template-owned preamble/artifact sections; role-spec tests
+  pin sections/flags/ownership instead of full prose.
+- Deviations: three pipeline candidates were accepted with trivially repairable
+  format/import-sort defects introduced by the pipeline's own fix stage (repaired
+  locally with the repo formatter before commit, gates re-run); two "human-decision-
+  required" gates were decided by the architect under the session's autonomous
+  mandate, with the blocking "cannot-verify" findings resolved against runtime
+  verification logs.
+- Out of scope (observed, not touched): `test_default_agent.py` roster-line snapshot
+  kept as-is; role type-name string coupling across `agent.yaml`/`subagents/core.py`
+  noted in the architecture report as a candidate-4 leftover; `LaborMarket` remains a
+  thin registry.
+
 ### PR #207 cancellation-state review fix (2026-07-15)
 
 - [x] Execute `docs/superpowers/plans/2026-07-15-tool-execution-cancellation-state-rollback.md`

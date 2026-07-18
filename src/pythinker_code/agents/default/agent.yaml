@@ -4,6 +4,7 @@ agent:
   system_prompt_path: ./system.md
   system_prompt_args:
     ROLE_ADDITIONAL: ""
+    EMITS_CODING_ARTIFACT: ""
   tools:
     - "pythinker_code.tools.agent:Agent"
     - "pythinker_code.tools.agent:RunAgents"
