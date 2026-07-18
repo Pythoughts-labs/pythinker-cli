@@ -39,8 +39,13 @@ Phases (each = one verified Codex delegation, sequential):
       never block startup). Wire one provider through it.
 - [ ] P2 — Effort/family mapping: port opencode `variants()` tier-selection into the effort layer,
       **capped at max**, with attribution. Extend `openai_gpt_reasoning_levels` → per-family table.
-- [ ] P3 — OAuth providers: shared device-code + loopback-PKCE helper, then GitHub Copilot, xAI/Grok,
-      DigitalOcean (implicit-flow, stored as `api`), Snowflake Cortex. One provider per delegation.
+- [~] P3 — OAuth providers (sub-phased, sequential; each provider touches shared enumeration files):
+      - [x] P3a — shared `auth/oauth_flows.py` (device-code + loopback-PKCE) + tests. DONE, green (349
+            passed). Codex candidate `cc59239a` + architect fix `79b64d42`.
+      - [ ] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange).
+      - [ ] P3c — xAI/Grok (browser loopback + device-code).
+      - [ ] P3d — DigitalOcean (implicit-flow, stored as `api`).
+      - [ ] P3e — Snowflake Cortex (loopback PKCE).
 - [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
 - [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
 
