@@ -48,6 +48,7 @@ from pythinker_code.subagents.discovery import resolve_agent_roots
 from pythinker_code.subagents.models import AgentTypeDefinition, ToolPolicy
 from pythinker_code.subagents.registry import LaborMarket
 from pythinker_code.subagents.store import SubagentStore
+from pythinker_code.utils.artifacts import coding_artifact_contract_block
 from pythinker_code.utils.environment import Environment
 from pythinker_code.utils.file_read_cache import FileReadCache
 from pythinker_code.utils.logging import logger
@@ -778,7 +779,11 @@ def _load_system_prompt(
     )
     try:
         template = env.from_string(system_prompt)
-        return template.render(asdict(builtin_args), **args)
+        render_args = {
+            **asdict(builtin_args),
+            "PYTHINKER_CODING_ARTIFACT_CONTRACT": coding_artifact_contract_block(),
+        }
+        return template.render(render_args, **args)
     except UndefinedError as exc:
         raise SystemPromptTemplateError(f"Missing system prompt arg in {path}: {exc}") from exc
     except TemplateError as exc:

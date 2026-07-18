@@ -19,7 +19,7 @@ def test_load_default_agent_spec():
 
     assert spec.name == snapshot("")
     assert spec.system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
-    assert spec.system_prompt_args == snapshot({"ROLE_ADDITIONAL": ""})
+    assert spec.system_prompt_args == snapshot({"ROLE_ADDITIONAL": "", "EMITS_CODING_ARTIFACT": ""})
     assert spec.when_to_use == snapshot("")
     assert spec.model == snapshot(None)
     assert spec.mode == snapshot("primary")
@@ -209,7 +209,8 @@ The `edge_cases_claimed` key is optional; omit it if you have no distinct edge c
 - Surface discovered out-of-scope work under RISKS — do not do it.
 - If the brief is ambiguous, state the interpretation you took and the alternative readings under RISKS; if the ambiguity blocks correct work, stop and report BLOCKERS instead of guessing.
 - Report partial completion as partial: list exactly what was and was not done.
-"""  # noqa: E501
+""",  # noqa: E501
+            "EMITS_CODING_ARTIFACT": "",
         }
     )
     assert subagent_specs["coder"].when_to_use == snapshot(
@@ -349,7 +350,8 @@ Bullet list of missing context/capabilities or `None.`.
 ## Escalation
 - If the question cannot be answered from the repository, say so plainly and name what is missing — never fill gaps with plausible guesses presented as findings.
 - If a thorough-level search exhausts the plausible locations without an answer, report the coverage achieved — patterns tried, directories swept — so the parent can judge the confidence of the negative result.
-"""  # noqa: E501
+""",  # noqa: E501
+            "EMITS_CODING_ARTIFACT": "",
         }
     )
     assert subagent_specs["explore"].when_to_use == snapshot(
@@ -492,7 +494,8 @@ Bullet list of questions that must be answered before execution, or `None.`.
 ## Escalation
 - If the goal, constraints, or success criteria are missing and cannot be inferred from the repository, list the exact questions under BLOCKERS instead of planning on assumptions.
 - If only part of the goal can be planned with confidence, deliver that part and list the rest under BLOCKERS — never pad the plan with guessed tasks to look complete.
-"""  # noqa: E501
+""",  # noqa: E501
+            "EMITS_CODING_ARTIFACT": "",
         }
     )
     assert subagent_specs["plan"].when_to_use == snapshot(
@@ -615,7 +618,8 @@ no content before or after the tags:
 </recon_seeds>
 
 The array must be valid JSON. If the task genuinely admits no useful partition — it is inherently sequential, too small, or missing the context needed to split it — return a single-element array whose one seed states the whole task (and, when context is missing, what must be established first); array length 1 is itself the signal to the parent that parallel fan-out will not pay.
-"""
+""",
+            "EMITS_CODING_ARTIFACT": "",
         }
     )
     # Semantic invariants for the recon_seeds protocol contract.
@@ -829,7 +833,7 @@ agent:
         assert spec.name == snapshot("")
         assert spec.system_prompt_path == DEFAULT_AGENT_FILE.parent / "system.md"
         assert spec.system_prompt_args == snapshot(
-            {"ROLE_ADDITIONAL": "", "CUSTOM_ARG": "custom_value"}
+            {"ROLE_ADDITIONAL": "", "EMITS_CODING_ARTIFACT": "", "CUSTOM_ARG": "custom_value"}
         )
         assert spec.tools == snapshot(
             [

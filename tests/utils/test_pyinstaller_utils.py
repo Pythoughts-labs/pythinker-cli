@@ -151,6 +151,7 @@ def test_pyinstaller_datas():
             "pythinker_code/agents/default/partials",
         ),
         ("src/pythinker_code/agents/default/system.md", "pythinker_code/agents/default"),
+        ("src/pythinker_code/agents/default/system_leaf.md", "pythinker_code/agents/default"),
         ("src/pythinker_code/agents/default/verifier.yaml", "pythinker_code/agents/default"),
         ("src/pythinker_code/agents/okabe/agent.yaml", "pythinker_code/agents/okabe"),
         (
