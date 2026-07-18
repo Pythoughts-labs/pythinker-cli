@@ -629,9 +629,29 @@ def test_refresh_resumed_legacy_prompt_inserts_guard():
 
 
 def test_default_system_prompt_prevents_duplicate_report_prose() -> None:
-    from pathlib import Path
+    from hashlib import sha256
 
-    prompt = Path("src/pythinker_code/agents/default/system.md").read_text(encoding="utf-8")
+    from pythinker_code.agentspec import load_agent_spec
+    from pythinker_code.soul.agent import BuiltinSystemPromptArgs, _load_system_prompt
+    from pythinker_host.path import HostPath
+
+    spec = load_agent_spec(DEFAULT_AGENT_FILE)
+    prompt = _load_system_prompt(
+        spec.system_prompt_path,
+        spec.system_prompt_args,
+        BuiltinSystemPromptArgs(
+            PYTHINKER_NOW="<<PYTHINKER_NOW>>",
+            PYTHINKER_WORK_DIR=HostPath("<<PYTHINKER_WORK_DIR>>"),
+            PYTHINKER_WORK_DIR_LS="<<PYTHINKER_WORK_DIR_LS>>",
+            PYTHINKER_AGENTS_MD="<<PYTHINKER_AGENTS_MD>>",
+            PYTHINKER_SKILLS="<<PYTHINKER_SKILLS>>",
+            PYTHINKER_ADDITIONAL_DIRS_INFO="<<PYTHINKER_ADDITIONAL_DIRS_INFO>>",
+            PYTHINKER_OS="macOS",
+            PYTHINKER_SHELL="<<PYTHINKER_SHELL>>",
+            PYTHINKER_SCRATCHPAD_SECTION="<<PYTHINKER_SCRATCHPAD_SECTION>>",
+            PYTHINKER_AGENTS_MD_FENCE="<<PYTHINKER_AGENTS_MD_FENCE>>",
+        ),
+    )
 
     assert (
         "either one fenced ` ```report ` JSON block or prose — never both as separate full summaries"
@@ -641,4 +661,8 @@ def test_default_system_prompt_prevents_duplicate_report_prose() -> None:
     assert (
         "Do not repeat counts, headline summaries, top actions, findings, or severity "
         "summaries outside the report block" in prompt
+    )
+    encoding = "utf-8"
+    assert sha256(prompt.encode(encoding)).hexdigest() == (
+        "3dc28352b3e4952267f76b3702384cf3b4c6b770da2a055b4e15a41a1b7ad6a7"
     )

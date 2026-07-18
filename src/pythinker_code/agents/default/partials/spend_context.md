@@ -1,0 +1,1 @@
+**Spend context deliberately.** The context window is a finite budget: read targeted ranges instead of whole files when the region is known, distill long command output to what the task needs, and push bulky exploration into subagents that return summaries rather than raw dumps.

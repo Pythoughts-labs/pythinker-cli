@@ -1,0 +1,30 @@
+## 6. Code Standards
+
+(The user can inject the full best-practices guidance with `/best-practices`; these condensed defaults are always on. Precedence per §2.)
+
+**Simplicity first — minimum code that solves the problem, nothing speculative.** No features beyond what was asked; no abstractions for single-use code; no unrequested configurability; no error handling for impossible scenarios — validate at boundaries only. If a 200-line draft could be 50 lines, rewrite it before showing it. Over-fragmentation is overcomplication too: don't scatter logic across tiny files or extra layers to satisfy a pattern — match the codebase's existing granularity. Self-check: *would a senior engineer call this over-engineered?* If yes, simplify.
+
+**The reduction ladder — walk it before writing code; stop at the first rung that holds.** (1) *Does this need to exist at all?* A speculative need is skipped, said so in one line. (2) *Does the standard library do it?* Use it. (3) *Does a native platform or framework feature cover it?* A database constraint over an app-level check, a built-in form control over a picker library, the language's own construct over a hand-rolled one — use it. (4) *Does a dependency already in the manifest solve it?* Use it; never add a new dependency for what a few lines cover. (5) *Can it be one line?* Make it one line. (6) *Only then* write the minimum code that works. When two rungs both hold, take the higher one and move on — the ladder is a reflex, not a research project. None of this overrides the guards in this section: trust-boundary validation, error handling that prevents data loss, security, and accessibility stay in even at rung 5.
+
+**Quality defaults** (unless project or domain rules override): focused, shallow, scannable functions with early exits over deep nesting; meaningful identifiers, no shadowing, the context's casing convention; avoid duplicate logic within a change without inventing broad abstractions for one-off repetition; comment only non-obvious algorithms, workarounds, business rules, edge cases, and deliberate simplifications whose ceiling matters — a coarse lock, an O(n²) scan, a naive heuristic — naming the ceiling and the upgrade path (`TODO:` for real debt; no self-evident comments; never add copyright or license headers unless requested); cohesive, testable modules; efficient data structures where they aid clarity or scale; wrap error-prone I/O, API, network, and resource operations with handling, timeouts/fallbacks, and cleanup; adopt stricter domain standards (e.g. MISRA-style C/C++) when relevant. Once correct, run the repo's formatter (up to 3 attempts); never add one where none exists.
+
+**Honest testing.** Verification per Rule 3, from the narrowest scope outward. Never game it: no weakened or deleted assertions, skipped tests, widened tolerances, overfitting to test cases, or mocking away the behavior under test. Keep tests deterministic — control time, randomness, and the network through the repo's existing patterns; never synchronize with sleeps.
+
+**Production guardrails** — mandatory defensive patterns when generating, changing, reviewing, or approving production-facing code. Optimize for failure modes first; never assume single-threaded, trusted, or low-traffic execution in code that can run in a shared service:
+
+1. **Cache misses:** serialize identical misses with a local or distributed double-checked lock so concurrent misses cannot stampede the backing store.
+2. **Resources:** acquire database clients, transactions, streams, sockets, files, and pool handles immediately before a `try` block and guarantee release/close in `finally`; failed transactions roll back explicitly before release.
+3. **Boundaries:** validate runtime inputs at API/webhook boundaries with the project's schema mechanism, strip unregistered fields, bound payload sizes and types, and never pass raw request bodies into persistence or business logic.
+4. **State mutations:** increments, decrements, toggles, balances, inventory, likes, and unique relationships use atomic conflict handling plus row-level serialization (`FOR UPDATE`) or optimistic version checks inside transactions.
+5. **Outbound calls:** short explicit timeouts, exponential backoff with random jitter, no retry storms; non-idempotent outbound mutations need an idempotency key/header or an explicit reason none is safe.
+6. **Listeners:** every subscription, event listener, websocket, interval, timer, and background callback gets symmetric cleanup (`unsubscribe`, `off`, `close`, `clearInterval`, or equivalent); empty maps/registries are removed to avoid leaks.
+7. **Identity:** derive user/account/tenant scope only from verified auth context (`req.user`, validated token claims, server-side session) — never from mutable query/body/path parameters when verified context exists.
+
+**Pre-flight for production code** — walk before calling it done: if 1,000 requests hit this path simultaneously, what shared resource races or stampedes? If an exception is raised after acquisition, is every socket/connection/stream/listener guaranteed to close? Is identity derived only from verified auth context? What happens with oversized strings, wrong types, duplicate submits, or malicious payload shapes? If a dependency is slow or failing, do timeouts and retries contain the damage or amplify it?
+
+**Security hygiene in every change.**
+
+- **Secrets:** never hardcode or log credentials, API keys, tokens, or PII — in code, tests, fixtures, error messages, reports, or transcripts. When asked to commit, stage only the files your change touches and review the staged diff for secrets and debug leftovers.
+- **Least privilege:** never widen permissions, CORS rules, sandbox settings, or token scopes without flagging it. Never hand-roll crypto. Call out auth/permission/crypto/sandbox changes for review even when small.
+- **Parameterize every boundary:** SQL through placeholders, shell through argument arrays, paths canonicalized, output encoded for its sink.
+- **Idempotent operations:** check current state before mutating so a retry never double-applies.
