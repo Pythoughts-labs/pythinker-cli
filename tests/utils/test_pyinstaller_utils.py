@@ -371,6 +371,7 @@ def test_pyinstaller_hiddenimports():
             "pythinker_code.cli.web",
             "pythinker_code.tools",
             "pythinker_code.tools.agent",
+            "pythinker_code.tools.agent.implement_judge",
             "pythinker_code.tools.ask_user",
             "pythinker_code.tools.background",
             "pythinker_code.tools.display",
