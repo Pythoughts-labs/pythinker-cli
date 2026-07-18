@@ -115,11 +115,17 @@ async def test_windows_install_and_exit_launches_installer(staging: Path, monkey
     monkeypatch.setattr(upd, "_fetch_native_release_asset", fake_fetch)
     monkeypatch.setattr(upd, "_download_native_asset", fake_download)
     monkeypatch.setattr(upd, "_verify_sha256", lambda path, expected: True)
-    monkeypatch.setattr(upd, "_run_native_installer", lambda asset: launched.append(asset))
 
-    result = await upd._maybe_run_native_update("9.9.9", intent=upd.UpdateIntent.INSTALL_AND_EXIT)
+    def fake_spawn(asset: Path) -> bool:
+        launched.append(asset)
+        return True
 
-    assert result is upd.UpdateResult.UPDATED
+    monkeypatch.setattr(upd, "_spawn_detached_windows_installer", fake_spawn)
+
+    with pytest.raises(SystemExit) as exc_info:
+        await upd._maybe_run_native_update("9.9.9", intent=upd.UpdateIntent.INSTALL_AND_EXIT)
+
+    assert exc_info.value.code == 0
     assert len(launched) == 1
 
 
@@ -318,3 +324,32 @@ async def test_run_update_job_skips_smoke_check_for_windows_stage(monkeypatch, t
     assert status is not None
     assert "staged" in (status.message or "").lower()
     assert orch.UPDATE_LAST_SUCCESS_FILE.exists()
+
+
+def test_apply_now_concurrent_callers_only_one_wins(staging: Path, monkeypatch):
+    """Regression: two processes racing to apply the same stage must not both
+    pass validation and spawn duplicate installers."""
+    staged = _stage(staging)
+    spawned: list[Path] = []
+    monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
+    monkeypatch.setattr(
+        upd, "_spawn_detached_windows_installer", lambda p: spawned.append(p) or True
+    )
+
+    first = upd.apply_windows_staged_update_now()
+    second = upd.apply_windows_staged_update_now()
+
+    assert first is True
+    assert second is False
+    assert spawned == [staged.installer_path]
+
+
+def test_apply_now_failed_claim_cleans_up_only_claimed_copy(staging: Path, monkeypatch):
+    """A validation failure after claiming must not touch a manifest staged by
+    another process in the meantime."""
+    staged = _stage(staging, version="0.0.1")
+    monkeypatch.setattr("pythinker_code.constant.VERSION", "5.0.0")
+
+    assert upd.apply_windows_staged_update_now() is False
+    assert upd.read_windows_staged_update() is None
+    del staged

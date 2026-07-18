@@ -1231,14 +1231,19 @@ def _write_windows_staged_manifest(update: StagedWindowsUpdate) -> bool:
     return True
 
 
-def read_windows_staged_update() -> StagedWindowsUpdate | None:
+def read_windows_staged_update(manifest_path: Path | None = None) -> StagedWindowsUpdate | None:
     """Parse and shape-validate the staged-update manifest, or None.
+
+    ``manifest_path`` defaults to the canonical manifest path; callers that
+    have exclusively claimed a manifest (see :func:`_claim_windows_staged_manifest`)
+    pass its claimed path so validation and any discard operate on the file
+    they own, not a path a concurrent claimant may have already taken.
 
     Content validation (digest, version supersession) happens at apply time in
     :func:`apply_windows_staged_update_now`; a malformed manifest is discarded
     here so it cannot linger and be retried forever.
     """
-    manifest = _windows_staged_manifest_path()
+    manifest = manifest_path if manifest_path is not None else _windows_staged_manifest_path()
     try:
         raw = manifest.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -1249,10 +1254,10 @@ def read_windows_staged_update() -> StagedWindowsUpdate | None:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        discard_windows_staged_update("manifest is not valid JSON")
+        discard_windows_staged_update("manifest is not valid JSON", manifest_path=manifest)
         return None
     if not isinstance(payload, dict):
-        discard_windows_staged_update("manifest has an unexpected shape")
+        discard_windows_staged_update("manifest has an unexpected shape", manifest_path=manifest)
         return None
     data = cast(dict[str, object], payload)
     version = data.get("version")
@@ -1268,7 +1273,9 @@ def read_windows_staged_update() -> StagedWindowsUpdate | None:
         or not isinstance(created_at, int | float)
         or state != "ready"
     ):
-        discard_windows_staged_update("manifest fields are missing or malformed")
+        discard_windows_staged_update(
+            "manifest fields are missing or malformed", manifest_path=manifest
+        )
         return None
     return StagedWindowsUpdate(
         version=version,
@@ -1278,11 +1285,12 @@ def read_windows_staged_update() -> StagedWindowsUpdate | None:
     )
 
 
-def discard_windows_staged_update(reason: str) -> None:
-    """Drop the staged manifest and its installer directory. Fail closed: a stage
-    that cannot be trusted is removed rather than retried."""
+def discard_windows_staged_update(reason: str, *, manifest_path: Path | None = None) -> None:
+    """Drop the staged manifest at ``manifest_path`` (default: canonical path)
+    and its installer directory. Fail closed: a stage that cannot be trusted is
+    removed rather than retried."""
     logger.warning("Discarding staged Windows update: {reason}", reason=reason)
-    manifest = _windows_staged_manifest_path()
+    manifest = manifest_path if manifest_path is not None else _windows_staged_manifest_path()
     payload: dict[str, object] | None = None
     try:
         parsed: object = json.loads(manifest.read_text(encoding="utf-8"))
@@ -1299,6 +1307,29 @@ def discard_windows_staged_update(reason: str) -> None:
             shutil.rmtree(installer_dir, ignore_errors=True)
 
 
+def _claim_windows_staged_manifest() -> Path | None:
+    """Atomically claim the canonical staged-update manifest so only one
+    process ever applies a given stage.
+
+    Renaming the manifest to a PID-suffixed path is atomic on the same
+    filesystem: if two processes race to apply the same stage, only one
+    ``os.rename`` succeeds — the loser sees ``FileNotFoundError`` and returns
+    None. This closes the two-process race where both could otherwise pass
+    validation and spawn duplicate installers. Returns None when nothing is
+    staged or another process already claimed it.
+    """
+    manifest = _windows_staged_manifest_path()
+    claimed = manifest.with_name(f"{manifest.name}.claimed-{os.getpid()}")
+    try:
+        os.rename(manifest, claimed)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        logger.exception("Failed to claim staged Windows update manifest:")
+        return None
+    return claimed
+
+
 def apply_windows_staged_update_now() -> bool:
     """Launch the staged installer after re-validating it. True when spawned.
 
@@ -1306,35 +1337,48 @@ def apply_windows_staged_update_now() -> bool:
     handshake waits for this process to release the executable lock. Any
     validation failure discards the stage and returns False (fail closed) —
     startup then continues on the current version.
+
+    Exclusively claims the manifest first (see
+    :func:`_claim_windows_staged_manifest`): two Pythinker processes racing to
+    apply the same stage (concurrent shell launches, or concurrent
+    ``apply_on_exit`` sessions) must never both pass validation and spawn
+    duplicate installers. The loser of the claim simply has nothing to apply.
     """
     from pythinker_code.constant import VERSION as current_version
 
-    staged = read_windows_staged_update()
-    if staged is None:
+    claimed_path = _claim_windows_staged_manifest()
+    if claimed_path is None:
         return False
+    staged = read_windows_staged_update(claimed_path)
+    if staged is None:
+        return False  # already discarded against claimed_path
     if semver_tuple(staged.version) <= semver_tuple(current_version):
         discard_windows_staged_update(
-            f"staged version {staged.version} is not newer than {current_version}"
+            f"staged version {staged.version} is not newer than {current_version}",
+            manifest_path=claimed_path,
         )
         return False
     if not staged.installer_path.is_file():
-        discard_windows_staged_update("staged installer file is missing")
+        discard_windows_staged_update(
+            "staged installer file is missing", manifest_path=claimed_path
+        )
         return False
     if not _verify_sha256(staged.installer_path, staged.sha256):
-        discard_windows_staged_update("staged installer failed digest verification")
+        discard_windows_staged_update(
+            "staged installer failed digest verification", manifest_path=claimed_path
+        )
         return False
     if not _spawn_detached_windows_installer(staged.installer_path):
-        discard_windows_staged_update("staged installer could not be launched")
+        discard_windows_staged_update(
+            "staged installer could not be launched", manifest_path=claimed_path
+        )
         return False
-    # The installer owns the staging directory from here; drop the manifest so
-    # a crash before its Restart Manager scan cannot re-apply. Guarded against
-    # supersession: another process may have staged a newer version between our
-    # read and the spawn — never delete a manifest that no longer describes the
-    # installer we just launched (the newer stage applies on its own restart).
-    current = read_windows_staged_update()
-    if current is not None and current.version == staged.version:
-        with contextlib.suppress(OSError):
-            _windows_staged_manifest_path().unlink(missing_ok=True)
+    # The installer owns the staging directory from here. We hold the only
+    # reference to the claimed manifest, so dropping it is unconditionally
+    # safe — no other process can have claimed the same stage, and a newer
+    # concurrently-staged update lives under the canonical path untouched.
+    with contextlib.suppress(OSError):
+        claimed_path.unlink(missing_ok=True)
     logger.info(
         "Launched staged Windows installer for {version}; exiting to release file locks.",
         version=staged.version,

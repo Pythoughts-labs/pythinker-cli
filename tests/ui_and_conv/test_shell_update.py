@@ -33,6 +33,7 @@ async def test_prompt_pre_start_update_runs_update_and_exits_on_accept(monkeypat
         *, print_output: bool, intent: update.UpdateIntent
     ) -> update.UpdateResult:
         assert print_output is True
+        assert intent is update.UpdateIntent.INSTALL_AND_EXIT
         calls.append("update")
         return update.UpdateResult.UPDATED
 
@@ -861,6 +862,7 @@ async def test_do_update_uses_native_installer_marker(monkeypatch, tmp_path):
     async def fake_native_update(
         latest_version: str, *, intent: update.UpdateIntent
     ) -> update.UpdateResult:
+        assert intent is update.UpdateIntent.INSTALL
         native_versions.append(latest_version)
         return update.UpdateResult.UPDATED
 
