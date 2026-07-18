@@ -198,6 +198,13 @@ def test_apply_before_start_applies_valid_stage(staging: Path, monkeypatch):
     monkeypatch.setattr(upd, "_is_running_from_source_checkout", lambda: False)
     monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
     monkeypatch.setattr(upd, "_spawn_detached_windows_installer", lambda p: True)
+    read_staged_update = upd.read_windows_staged_update
+
+    def read_claimed_update_only(manifest_path: Path | None = None):
+        assert manifest_path is not None
+        return read_staged_update(manifest_path)
+
+    monkeypatch.setattr(upd, "read_windows_staged_update", read_claimed_update_only)
 
     assert upd.apply_staged_update_before_start() is True
 
@@ -349,7 +356,7 @@ def test_apply_now_concurrent_callers_only_one_wins(staging: Path, monkeypatch):
 
     monkeypatch.setattr(upd, "_spawn_detached_windows_installer", fake_spawn)
 
-    barrier = threading.Barrier(2)
+    barrier = threading.Barrier(2, timeout=5)
     results: list[bool] = []
     results_lock = threading.Lock()
 
@@ -359,14 +366,42 @@ def test_apply_now_concurrent_callers_only_one_wins(staging: Path, monkeypatch):
         with results_lock:
             results.append(result)
 
-    threads = [threading.Thread(target=racer) for _ in range(2)]
+    threads = [threading.Thread(target=racer, daemon=True) for _ in range(2)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        t.join(timeout=10)
+        assert not t.is_alive(), "update apply worker did not terminate"
 
     assert sorted(results) == [False, True]
     assert spawned == [staged.installer_path]
+
+
+def test_claim_paths_are_unique_per_staged_manifest(staging: Path):
+    _stage(staging)
+    first_claim = upd._claim_windows_staged_manifest()
+    assert first_claim is not None
+
+    second_dir = staging / "pythinker-update-second"
+    second_dir.mkdir()
+    second_installer = second_dir / "PythinkerSetup-10.0.0.exe"
+    second_installer.write_bytes(b"second")
+    import hashlib
+
+    assert upd._write_windows_staged_manifest(
+        upd.StagedWindowsUpdate(
+            version="10.0.0",
+            installer_path=second_installer,
+            sha256=hashlib.sha256(b"second").hexdigest(),
+            created_at=time.time(),
+        )
+    )
+
+    second_claim = upd._claim_windows_staged_manifest()
+    assert second_claim is not None
+    assert first_claim != second_claim
+    assert first_claim.exists()
+    assert second_claim.exists()
 
 
 def test_apply_now_failed_claim_cleans_up_only_claimed_copy(staging: Path, monkeypatch):
@@ -380,18 +415,15 @@ def test_apply_now_failed_claim_cleans_up_only_claimed_copy(staging: Path, monke
     del staged
 
 
-def test_apply_now_stale_claim_failure_preserves_concurrently_staged_newer_manifest(
+def test_apply_now_launch_failure_preserves_concurrently_staged_newer_manifest(
     staging: Path, monkeypatch
 ):
-    """A validation failure on the claimed (now-stale) manifest must not delete
-    a newer manifest another process publishes to the canonical path during the
-    failure window — the claim already removed the old manifest from that path,
-    so the two can never collide, but this proves it end-to-end via the digest
-    check, the one failure mode that runs after a successful claim+version pass."""
+    """A launch failure may discard only the exact manifest it claimed."""
     staged = _stage(staging, version="9.9.9")
     monkeypatch.setattr("pythinker_code.constant.VERSION", "0.1.0")
 
-    def fake_verify_and_supersede(path: Path, expected: str) -> bool:
+    def fake_spawn_and_supersede(path: Path) -> bool:
+        assert path == staged.installer_path
         newer_dir = staging / "pythinker-update-newer"
         newer_dir.mkdir()
         installer = newer_dir / "PythinkerSetup-10.0.0.exe"
@@ -406,12 +438,13 @@ def test_apply_now_stale_claim_failure_preserves_concurrently_staged_newer_manif
                 created_at=time.time(),
             )
         )
-        return False  # the claimed (stale) manifest still fails verification
+        return False
 
-    monkeypatch.setattr(upd, "_verify_sha256", fake_verify_and_supersede)
+    monkeypatch.setattr(upd, "_spawn_detached_windows_installer", fake_spawn_and_supersede)
 
     assert upd.apply_windows_staged_update_now() is False
     survivor = upd.read_windows_staged_update()
     assert survivor is not None
     assert survivor.version == "10.0.0"
-    del staged
+    assert survivor.installer_path.is_file()
+    assert not staged.installer_path.exists()

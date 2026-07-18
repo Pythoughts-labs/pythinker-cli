@@ -13,6 +13,7 @@ import sys
 import tarfile
 import threading
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -1311,7 +1312,7 @@ def _claim_windows_staged_manifest() -> Path | None:
     """Atomically claim the canonical staged-update manifest so only one
     process ever applies a given stage.
 
-    Renaming the manifest to a PID-suffixed path is atomic on the same
+    Renaming the manifest to a per-claim path is atomic on the same
     filesystem: if two processes race to apply the same stage, only one
     ``os.rename`` succeeds — the loser sees ``FileNotFoundError`` and returns
     None. This closes the two-process race where both could otherwise pass
@@ -1319,7 +1320,7 @@ def _claim_windows_staged_manifest() -> Path | None:
     staged or another process already claimed it.
     """
     manifest = _windows_staged_manifest_path()
-    claimed = manifest.with_name(f"{manifest.name}.claimed-{os.getpid()}")
+    claimed = manifest.with_name(f"{manifest.name}.claimed-{os.getpid()}-{uuid.uuid4().hex}")
     try:
         os.rename(manifest, claimed)
     except FileNotFoundError:
@@ -1397,8 +1398,6 @@ def apply_staged_update_before_start() -> bool:
     if not _is_windows():
         return False
     if _auto_update_disabled() or _is_running_from_source_checkout():
-        return False
-    if read_windows_staged_update() is None:
         return False
     if not apply_windows_staged_update_now():
         return False

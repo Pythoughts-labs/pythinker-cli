@@ -2166,9 +2166,11 @@ class Shell:
         if result is UpdateResult.UPDATED:
             self._maybe_arm_windows_apply_on_exit()
             self._surface_installed_update_notice()
+        elif result is UpdateResult.FAILED and self._installed_update_smoke_check_failed():
+            self._surface_installed_update_notice()
         elif result is UpdateResult.UPDATE_AVAILABLE:
             self._surface_managed_channel_notice()
-        # FAILED / UP_TO_DATE / UNSUPPORTED / None → silent (recorded in the job log).
+        # Other FAILED / UP_TO_DATE / UNSUPPORTED / None results stay in the job log.
 
     def _maybe_arm_windows_apply_on_exit(self) -> None:
         from pythinker_code.config import AutoUpdateMode

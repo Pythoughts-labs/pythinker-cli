@@ -162,7 +162,7 @@ async def test_update_job_replaces_stale_lock(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_update_job_skips_success_marker_when_post_install_smoke_check_fails(
+async def test_update_job_reports_failure_when_post_install_smoke_check_fails(
     monkeypatch, tmp_path
 ):
     _isolate_update_files(monkeypatch, tmp_path)
@@ -183,11 +183,11 @@ async def test_update_job_skips_success_marker_when_post_install_smoke_check_fai
         print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
     )
 
-    assert result is update.UpdateResult.UPDATED
+    assert result is update.UpdateResult.FAILED
     status = orchestrator.read_update_status()
     assert status is not None
-    assert status.state is orchestrator.UpdateJobState.UPDATED
-    assert status.result == "UPDATED"
+    assert status.state is orchestrator.UpdateJobState.FAILED
+    assert status.result == "FAILED"
     assert "smoke check did not pass" in (status.message or "").lower()
     assert not orchestrator.UPDATE_LAST_SUCCESS_FILE.exists()
 

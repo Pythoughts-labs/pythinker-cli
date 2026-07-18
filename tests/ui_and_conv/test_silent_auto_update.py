@@ -80,7 +80,7 @@ async def test_silent_update_smoke_fail_toasts_verification_failed(
     monkeypatch.setattr(shell_module, "_detect_upgrade_command", lambda: ["pip"])
 
     async def fake_job(**kw):
-        return UpdateResult.UPDATED
+        return UpdateResult.FAILED
 
     monkeypatch.setattr(shell_module, "run_update_job", fake_job)
     monkeypatch.setattr(
