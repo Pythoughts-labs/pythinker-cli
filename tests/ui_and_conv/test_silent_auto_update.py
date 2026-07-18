@@ -428,6 +428,29 @@ def test_update_notice_previous_process_success_falls_back(runtime, tmp_path, mo
 def test_update_notice_none_when_up_to_date(runtime, tmp_path, monkeypatch):
     shell = _make_shell(runtime, tmp_path)
     monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: None)
+    assert shell._compute_update_notice() is None
+
+
+def test_update_notice_restart_survives_dismissed_version(runtime, tmp_path, monkeypatch):
+    """Regression: the restart notice must come from the recorded job status, not
+    the dismissal-filtered cache. Dismissing a version's install prompt (which
+    nulls welcome_update_target) must not hide 'restart to apply' after that
+    version has actually been installed this session."""
+    shell = _make_shell(runtime, tmp_path)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "ascii_glyphs_enabled", lambda: False)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: _updated_status("9.9.9"))
+    text = shell._compute_update_notice()
+    assert text is not None and "Restart" in text and "9.9.9" in text
+
+
+def test_update_notice_ignores_stale_status_for_older_version(runtime, tmp_path, monkeypatch):
+    # A leftover UPDATED status for a version we are already running (or older)
+    # must not claim a restart is pending.
+    shell = _make_shell(runtime, tmp_path)
+    monkeypatch.setattr(shell_module, "welcome_update_target", lambda: None)
+    monkeypatch.setattr(shell_module, "read_update_status", lambda: _updated_status("0.0.1"))
     assert shell._compute_update_notice() is None
 
 

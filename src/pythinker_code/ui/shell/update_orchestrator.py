@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -407,7 +408,9 @@ async def run_update_job(
                 append_update_log(message)
                 _write_last_success(job_id=job_id, message=message)
             else:
-                smoke_ok, smoke_message = run_post_install_smoke_check()
+                smoke_ok, smoke_message = run_post_install_smoke_check(
+                    target_version=_read_target_version()
+                )
                 append_update_log(smoke_message)
                 if smoke_ok:
                     message = smoke_message
@@ -487,7 +490,28 @@ def _smoke_check_command() -> list[str]:
         staged = staged_native_path()
         exe = str(staged) if staged.is_file() else sys.executable
         return [exe, "--version"]
+    brew_exe = _homebrew_linked_executable()
+    if brew_exe is not None:
+        return [str(brew_exe), "--version"]
     return [sys.executable, "-P", "-m", "pythinker_code", "--version"]
+
+
+def _homebrew_linked_executable() -> Path | None:
+    """The stable brew-linked launcher for a Homebrew install, or None otherwise.
+
+    `brew upgrade` installs the new keg side-by-side and repoints
+    ``<prefix>/opt/pythinker-code``; the running interpreter still lives in the
+    OLD keg, so smoke-checking ``sys.executable`` would certify the pre-upgrade
+    install (and pass with the old version). Returns the opt-linked launcher
+    path even if it does not exist — a missing launcher after an upgrade is a
+    smoke-check failure, not a reason to fall back to the old binary.
+    """
+    exe = sys.executable.replace("\\", "/")
+    marker = "/cellar/pythinker-code/"
+    idx = exe.lower().find(marker)
+    if idx < 0:
+        return None
+    return Path(exe[:idx]) / "opt" / "pythinker-code" / "bin" / "pythinker"
 
 
 def _finalize_native_staging(*, promote: bool) -> None:
@@ -524,7 +548,7 @@ def _smoke_check_env() -> dict[str, str]:
     return env
 
 
-def run_post_install_smoke_check() -> tuple[bool, str]:
+def run_post_install_smoke_check(target_version: str | None = None) -> tuple[bool, str]:
     command = _smoke_check_command()
     try:
         result = subprocess.run(
@@ -547,7 +571,21 @@ def run_post_install_smoke_check() -> tuple[bool, str]:
         return False, f"Smoke check failed: {detail}"
     if not output or not any(ch.isdigit() for ch in output):
         return False, "Smoke check did not report a version."
-    return True, f"Smoke check passed: {output.splitlines()[0]}"
+    first_line = output.splitlines()[0]
+    if target_version is not None:
+        from pythinker_code.ui.shell.update import semver_tuple
+
+        reported = re.search(r"\d+\.\d+\.\d+", first_line)
+        if reported is None:
+            return False, f"Smoke check did not report a parseable version: {first_line}"
+        if semver_tuple(reported.group(0)) != semver_tuple(target_version):
+            # The upgraded binary must identify as the target release; matching
+            # the OLD version means the check exercised the pre-upgrade install
+            # (or the upgrade silently no-oped).
+            return False, (
+                f"Smoke check reported {reported.group(0)}, expected {target_version}: {first_line}"
+            )
+    return True, f"Smoke check passed: {first_line}"
 
 
 async def prompt_pre_start_update_job() -> None:

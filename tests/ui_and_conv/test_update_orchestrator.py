@@ -176,7 +176,7 @@ async def test_update_job_reports_failure_when_post_install_smoke_check_fails(
     monkeypatch.setattr(
         orchestrator,
         "run_post_install_smoke_check",
-        lambda: (False, "Smoke check failed: broken"),
+        lambda **_kw: (False, "Smoke check failed: broken"),
     )
 
     result = await orchestrator.run_update_job(
@@ -368,3 +368,91 @@ def test_smoke_check_reports_failure(monkeypatch):
 
     assert ok is False
     assert "broken" in message
+
+
+def test_brew_smoke_check_targets_opt_linked_launcher(monkeypatch):
+    # Regression: a brew upgrade installs the new keg side-by-side while the
+    # running interpreter stays in the OLD keg. Smoke-checking sys.executable
+    # certified the pre-upgrade install ("Smoke check passed: ... 0.58.0" right
+    # after installing 0.59.0). The check must target the brew opt link, which
+    # the upgrade repoints at the new keg.
+    monkeypatch.setattr(orchestrator, "is_native_build", lambda: False)
+    monkeypatch.setattr(
+        orchestrator.sys,
+        "executable",
+        "/opt/homebrew/Cellar/pythinker-code/0.58.0/libexec/bin/python",
+    )
+
+    assert orchestrator._smoke_check_command() == [
+        "/opt/homebrew/opt/pythinker-code/bin/pythinker",
+        "--version",
+    ]
+
+
+def test_brew_launcher_detection_ignores_non_brew_installs(monkeypatch):
+    monkeypatch.setattr(orchestrator.sys, "executable", "/tmp/venv/bin/python")
+    assert orchestrator._homebrew_linked_executable() is None
+
+
+def _fake_version_run(monkeypatch, output: str) -> None:
+    monkeypatch.setattr(orchestrator, "_smoke_check_command", lambda: ["pythinker", "--version"])
+    monkeypatch.setattr(
+        orchestrator.subprocess,
+        "run",
+        lambda command, **kwargs: SimpleNamespace(returncode=0, stdout=output, stderr=""),
+    )
+
+
+def test_smoke_check_fails_when_reported_version_is_not_target(monkeypatch):
+    _fake_version_run(monkeypatch, "pythinker, version 0.58.0\n")
+
+    ok, message = orchestrator.run_post_install_smoke_check(target_version="0.59.0")
+
+    assert ok is False
+    assert "0.58.0" in message and "0.59.0" in message
+
+
+def test_smoke_check_passes_when_reported_version_matches_target(monkeypatch):
+    _fake_version_run(monkeypatch, "pythinker, version 0.59.0\n")
+
+    ok, message = orchestrator.run_post_install_smoke_check(target_version="0.59.0")
+
+    assert ok is True
+    assert message.startswith("Smoke check passed:")
+
+
+def test_smoke_check_without_target_keeps_lenient_version_probe(monkeypatch):
+    # No recorded target (e.g. missing latest-version cache) keeps the original
+    # "any version string" behavior rather than failing every update.
+    _fake_version_run(monkeypatch, "pythinker, version 1.2.3\n")
+
+    ok, _message = orchestrator.run_post_install_smoke_check()
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_update_job_passes_target_version_to_smoke_check(monkeypatch, tmp_path):
+    _isolate_update_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(orchestrator, "_read_target_version", lambda: "9.9.9")
+
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
+        return update.UpdateResult.UPDATED
+
+    monkeypatch.setattr(update, "do_update", fake_do_update)
+    seen: list[str | None] = []
+
+    def fake_smoke(target_version=None):
+        seen.append(target_version)
+        return True, "Smoke check passed: pythinker, version 9.9.9"
+
+    monkeypatch.setattr(orchestrator, "run_post_install_smoke_check", fake_smoke)
+
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
+
+    assert result is update.UpdateResult.UPDATED
+    assert seen == ["9.9.9"]

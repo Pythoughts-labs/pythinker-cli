@@ -82,6 +82,7 @@ from pythinker_code.ui.shell.update import (
     read_windows_staged_update,
     refresh_update_cache_if_due,
     register_windows_staged_apply_on_exit,
+    semver_tuple,
     welcome_update_target,
 )
 from pythinker_code.ui.shell.update_orchestrator import (
@@ -2273,16 +2274,26 @@ class Shell:
         return text
 
     def _compute_update_notice(self) -> str | None:
-        target = welcome_update_target()
-        if not target:
-            return None
+        from pythinker_code.constant import VERSION as current_version
+
         # A release already installed this session needs a restart, not /update —
-        # surface that here instead of telling the user to re-run an update that
-        # has already landed.
+        # surface that instead of telling the user to re-run an update that has
+        # already landed. Checked against the recorded job status alone, NOT the
+        # dismissal-filtered update-available cache: dismissing a version's
+        # install prompt must not also hide the restart notice once that version
+        # is actually installed.
         status = read_update_status()
-        if update_restart_pending(status, target):
+        installed_target = status.target_version if status is not None else None
+        if (
+            installed_target
+            and semver_tuple(installed_target) > semver_tuple(current_version)
+            and update_restart_pending(status, installed_target)
+        ):
             text = self._installed_update_restart_notice()
         else:
+            target = welcome_update_target()
+            if not target:
+                return None
             text = f"↑ Update available — v{target} · /update"
         if ascii_glyphs_enabled():
             text = text.translate(_WELCOME_ASCII_FALLBACKS)
