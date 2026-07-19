@@ -17,6 +17,12 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Add xAI Grok OAuth login (browser loopback and device-code).
+- Add GitHub Copilot device-code OAuth login for individual github.com accounts.
+- Add DigitalOcean Gradient AI browser OAuth login with a dynamically discovered Inference Routers catalog.
+- Add Snowflake Cortex account-scoped browser OAuth login (`pythinker login --snowflake`).
+- Add a cached, provider-agnostic models.dev catalog for dynamic model metadata discovery.
+
 ## 0.60.0 (2026-07-18)
 
 - **Leaf subagent prompt profile.** All 12 built-in subagent roles (implementer,
