@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, NamedTuple, cast
 
@@ -353,7 +354,10 @@ async def refresh_managed_models(config: Config) -> bool:
         if provider.oauth and oauth_manager is None:
             from pythinker_code.auth.oauth import OAuthManager
 
-            oauth_manager = OAuthManager(working_config)
+            # Construct off the event loop: OAuthManager.__init__ can run
+            # _migrate_oauth_storage(), which takes a synchronous cross-process
+            # file lock (5s timeout) and would otherwise stall async refresh.
+            oauth_manager = await asyncio.to_thread(OAuthManager, working_config)
         provider = working_config.providers.get(provider_key)
         if provider is None:
             continue

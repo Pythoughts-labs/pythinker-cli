@@ -246,8 +246,11 @@ class _PromptLiveView(_LiveView):
         output = getattr(app, "output", None)
         if output is None or not getattr(output, "responds_to_cpr", False):
             return
-        with suppress(Exception):
+        try:
             await app.renderer.wait_for_cpr_responses()
+        except Exception as exc:  # noqa: BLE001 — settling is best-effort, must not break cleanup
+            _handoff_trace(f"CPR_SETTLE_FAIL\t{type(exc).__name__}:{exc}")
+            logger.debug("CPR settle failed after scrollback handoff: {}", exc)
 
     def _defer_scrollback_handoff(self) -> bool:
         """Backpressure: defer permanent scrollback while preamble geometry is unstable."""
