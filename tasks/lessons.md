@@ -208,3 +208,20 @@ Format: trigger → rule.
 - **When the pipeline's fix stage edits code after clean-room verification**, expect a
   formatting/import-sort defect in the final tree; run the repo formatter on fixer-touched
   files after integration and re-run the gate before committing.
+
+## Uncommitted working-tree cruft can be swept into a feature commit
+
+- **Trigger:** starting feature work while the repo has unstaged, unrelated in-progress
+  changes (here: a prompt_toolkit screen-mode refactor across `prompt.py`, a `config.py`
+  docstring, and three prompt tests). A `git add -A` / broad commit silently captured the
+  *test* half of that feature into an auth commit, while the *source* half got reverted —
+  leaving tests ahead of source and 4 failures that looked like an auth regression.
+- **Rule:** before the first commit on a feature branch, run `git status` and, for any file
+  outside the task's scope, diff it against `origin/main`. Commit only scoped paths
+  (`git add <explicit paths>`), never a blind `git add -A`, when the tree isn't clean.
+- **Recovery:** when a test fails on a file the PR should not touch, check
+  `git diff origin/main -- <file>` and `git log origin/main..HEAD -- <file>`. If a
+  non-scope file was captured, restore the whole feature (source *and* tests) to
+  `origin/main` so the PR carries only its intended change.
+- **Verification trap:** `make ... | tail -N` reports `tail`'s exit code (0), not `make`'s.
+  Redirect to a file and check `$?` with `set -o pipefail`, or the real failure hides.
