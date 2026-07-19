@@ -987,9 +987,8 @@ class TUIConfig(BaseModel):
     sticky_input: bool = Field(
         default=True,
         description=(
-            "Keep the prompt composer pinned to the bottom of the terminal while "
-            "an agent turn is running. Disable for terminals that mishandle "
-            "prompt_toolkit fullscreen rendering."
+            "Legacy compatibility setting retained for backward compatibility. "
+            "The running prompt composer stays inline and available during active turns."
         ),
     )
     code_theme: str = Field(

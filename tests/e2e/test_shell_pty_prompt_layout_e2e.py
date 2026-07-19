@@ -2,9 +2,9 @@
 
 Unlike the byte-stream PTY helpers, these feed the raw terminal bytes to a pyte
 virtual screen so assertions run against the *rendered* frame — the only place
-an incomplete-erase "ghost"/duplicate row is visible. They pin Focus TUI
-fossilization behavior and the normal prompt card's visible loading/mid-turn
-contract.
+an incomplete-erase accepted-buffer "ghost"/duplicate row is visible. They pin
+Focus TUI fossilization behavior and the normal prompt card's visible
+loading/mid-turn contract.
 
 This is a manual/local check, not a CI-enforced one — it is skipped on CI (see
 ``pytestmark`` below: scripted_echo + prompt_toolkit hang on GitHub Actions'
@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.shell_pty_helpers import (
+    list_turn_begin_inputs,
     make_home_dir,
     make_work_dir,
     read_until_prompt_ready,
@@ -49,6 +50,7 @@ pyte = pytest.importorskip("pyte")
 
 _COLS, _ROWS = 120, 40
 _PROMPT_TEXT = "this is a prompt to the agent"
+_QUEUED_FOLLOW_UP = "queued follow-up ghost regression 7f3a"
 
 
 def _render(chunks: list[bytes]):
@@ -81,6 +83,30 @@ def _has_fossil_border_above_content(rows: list[str]) -> bool:
     if echo_i is None or content_i is None or content_i <= echo_i:
         return False
     return any(_is_input_card_border(rows[i]) for i in range(echo_i + 1, content_i))
+
+
+def _queued_text_fossilized_as_card(rows: list[str], text: str) -> bool:
+    """True if the queued follow-up rendered as a fossilized accepted-input card.
+
+    The queued-input ghost commits the accepted follow-up into scrollback as a
+    bordered ``● <effort>`` input card, so its text ends up wedged between a card
+    border directly above and committed ``⏺`` turn content directly below. That
+    signature excludes the two healthy renderings: the live queued display (text
+    plus the ``↑ to edit`` hint, with no card border directly above) and the
+    execute-echo once the queued turn drains (committed like any turn input, again
+    with no card border directly above). A/B-verified: fires on the pre-fix code
+    and stays silent on the fixed code across every rendered frame.
+    """
+    for i, row in enumerate(rows):
+        if text not in row:
+            continue
+        border_above = any(_is_input_card_border(rows[j]) for j in range(max(0, i - 2), i))
+        content_below = any(
+            rows[j].strip().startswith("⏺") for j in range(i + 1, min(len(rows), i + 3))
+        )
+        if border_above and content_below:
+            return True
+    return False
 
 
 def test_focus_tui_hides_files_and_never_fossilizes_prompt(tmp_path: Path) -> None:
@@ -190,6 +216,79 @@ def test_input_card_stays_visible_during_initial_loading_and_mid_turn(tmp_path: 
         shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
         assert any(_is_input_card_border(r) for r in _render(shell._raw_chunks)), (
             "idle input-card border did not return after the turn ended"
+        )
+    finally:
+        shell.close()
+
+
+def test_mid_turn_queued_input_renders_once_and_executes_once(tmp_path: Path) -> None:
+    slow = {
+        "id": "queued-slow",
+        "name": "Shell",
+        "arguments": json.dumps({"command": "sleep 3"}),
+    }
+    config_path = write_scripted_config(
+        tmp_path,
+        [
+            f"tool_call: {json.dumps(slow)}",
+            "text: First turn finished.",
+            "text: Queued follow-up executed.",
+        ],
+        capabilities=["thinking"],
+    )
+    work_dir = make_work_dir(tmp_path)
+    home_dir = make_home_dir(tmp_path)
+    shell = start_shell_pty(
+        config_path=config_path,
+        work_dir=work_dir,
+        home_dir=home_dir,
+        yolo=True,
+        columns=_COLS,
+        lines=_ROWS,
+    )
+    try:
+        shell.read_until_contains("think first, then code")
+        read_until_prompt_ready(shell, after=shell.mark())
+        assert any(_is_input_card_border(row) for row in _render(shell._raw_chunks))
+
+        first_turn_mark = shell.mark()
+        shell.send_line(_PROMPT_TEXT)
+        shell.read_until_contains("Bash(sleep 3", after=first_turn_mark, timeout=15.0)
+        shell.send_line(_QUEUED_FOLLOW_UP)
+
+        # The queued follow-up must render as the intentional ``❯ … / ↑ to edit``
+        # row and never fossilize into a bordered accepted-input card (the ghost).
+        # Steady state legitimately shows the text twice — the live queued display
+        # and, after drain, the execute-echo — so the guard is "never a fossilized
+        # accepted-input card", not a raw occurrence count.
+        queued_hint_seen = False
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            shell.read_available(timeout=0.08)
+            rows = _render(shell._raw_chunks)
+            joined = "\n".join(rows)
+
+            assert not _queued_text_fossilized_as_card(rows, _QUEUED_FOLLOW_UP), (
+                "queued follow-up fossilized as a bordered ghost card"
+            )
+            if _QUEUED_FOLLOW_UP in joined and "↑ to edit · ctrl-s to send immediately" in joined:
+                queued_hint_seen = True
+            if "First turn finished." in shell.normalized_text():
+                break
+
+        assert queued_hint_seen, "intentional queued-message row was never rendered"
+        shell.read_until_contains("Queued follow-up executed.", timeout=15.0)
+        shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
+
+        assert not _queued_text_fossilized_as_card(_render(shell._raw_chunks), _QUEUED_FOLLOW_UP), (
+            "queued follow-up fossilized as a bordered ghost card in the settled frame"
+        )
+
+        turn_inputs = list_turn_begin_inputs(home_dir, work_dir)
+        assert turn_inputs == [_PROMPT_TEXT, _QUEUED_FOLLOW_UP]
+        assert turn_inputs.count(_QUEUED_FOLLOW_UP) == 1
+        assert any(_is_input_card_border(row) for row in _render(shell._raw_chunks)), (
+            "idle input-card border did not return after the queued turn ended"
         )
     finally:
         shell.close()
