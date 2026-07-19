@@ -254,6 +254,53 @@ async def test_login_xai_browser_rejects_missing_refresh_token(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "access_token",
+    ["", {"token": "raw-provider-access-secret"}],
+    ids=["empty", "non-string"],
+)
+async def test_login_xai_browser_rejects_invalid_access_token_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    access_token: object,
+) -> None:
+    from pythinker_code.auth import xai
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+
+    async def fake_loopback(**_kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:56121/callback")
+
+    async def fake_exchange(
+        _code: str,
+        _code_verifier: str,
+        _redirect_uri: str,
+    ) -> dict[str, Any]:
+        return {
+            "access_token": access_token,
+            "refresh_token": "raw-provider-refresh-secret",
+            "expires_in": 3600,
+            "provider_diagnostic": "raw-provider-payload-secret",
+        }
+
+    monkeypatch.setattr(xai, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(xai, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
+
+    events = [event async for event in xai.login_xai_browser(config)]
+
+    assert [event.type for event in events] == ["waiting", "error"]
+    rendered_events = "\n".join(event.json for event in events)
+    assert "raw-provider-access-secret" not in rendered_events
+    assert "raw-provider-refresh-secret" not in rendered_events
+    assert "raw-provider-payload-secret" not in rendered_events
+    assert load_tokens(OAuthRef(storage="file", key="oauth/xai")) is None
+    assert "managed:xai" not in config.providers
+    assert config.models == {}
+
+
+@pytest.mark.asyncio
 async def test_login_xai_headless_rejects_missing_refresh_token(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

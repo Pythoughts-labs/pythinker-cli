@@ -15,6 +15,7 @@ wheels/
 .env.local
 AGENTS.local
 /tests_local
+/tasks/
 uv.toml
 .idea/*
 .superpowers/

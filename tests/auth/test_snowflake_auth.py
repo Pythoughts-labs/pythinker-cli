@@ -19,7 +19,15 @@ from pythinker_code.auth.oauth import (
     save_tokens,
 )
 from pythinker_code.auth.oauth_flows import LoopbackAuthorization
-from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
+from pythinker_code.config import (
+    Config,
+    LLMModel,
+    LLMProvider,
+    OAuthRef,
+    get_config_file,
+    load_config,
+    save_config,
+)
 
 
 def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,6 +188,61 @@ async def test_refresh_uses_account_endpoint_basic_auth_and_default_expiry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_expiry", [False, True], ids=("missing", "explicit-none"))
+async def test_refresh_defaults_missing_or_none_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+    include_expiry: bool,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    payload: dict[str, object] = {"access_token": "access", "refresh_token": "refresh"}
+    if include_expiry:
+        payload["expires_in"] = None
+    response = _FormResponse(200, payload)
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, []))
+
+    token = await snowflake.refresh_snowflake_cortex_token("myorg-acct", "old-refresh")
+
+    assert token.expires_in == 600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("expires_in", "expected"), [(0, 0.0), ("", 0.0)])
+async def test_refresh_preserves_explicit_falsy_expiry_for_shared_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    expires_in: object,
+    expected: float,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    response = _FormResponse(
+        200,
+        {"access_token": "access", "refresh_token": "refresh", "expires_in": expires_in},
+    )
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, []))
+
+    token = await snowflake.refresh_snowflake_cortex_token("myorg-acct", "old-refresh")
+
+    assert token.expires_in == expected
+
+
+@pytest.mark.asyncio
+async def test_refresh_rejects_explicit_false_expiry_via_shared_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    response = _FormResponse(
+        200,
+        {"access_token": "access", "refresh_token": "refresh", "expires_in": False},
+    )
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, []))
+
+    with pytest.raises(OAuthError, match="invalid expiration lifetime"):
+        await snowflake.refresh_snowflake_cortex_token("myorg-acct", "old-refresh")
+
+
+@pytest.mark.asyncio
 async def test_refresh_maps_invalid_grant_to_unauthorized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -295,6 +358,69 @@ async def test_login_snowflake_saves_account_scoped_token_provider_and_models(
 
 
 @pytest.mark.asyncio
+async def test_login_snowflake_account_switch_removes_old_account_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    old_ref = OAuthRef(storage="file", key="oauth/snowflake-cortex/old-account")
+    new_ref = OAuthRef(storage="file", key="oauth/snowflake-cortex/new-account")
+    save_tokens(
+        old_ref,
+        OAuthToken.from_response(
+            {
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+                "expires_in": 600,
+            }
+        ),
+    )
+    config = Config(
+        is_from_default_location=True,
+        providers={
+            snowflake.SNOWFLAKE_PROVIDER_KEY: LLMProvider(
+                type="openai_legacy",
+                base_url="https://old-account.snowflakecomputing.com/api/v2/cortex/v1",
+                api_key=SecretStr(""),
+                oauth=old_ref,
+            )
+        },
+    )
+    save_config(config)
+
+    async def fake_loopback(**_kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:49231/")
+
+    async def fake_exchange(
+        _account: str,
+        _code: str,
+        _code_verifier: str,
+        _redirect_uri: str,
+    ) -> dict[str, Any]:
+        return {
+            "access_token": "new-access",
+            "refresh_token": "new-refresh",
+            "expires_in": 600,
+        }
+
+    monkeypatch.setattr(snowflake, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(snowflake, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
+
+    events = [event async for event in snowflake.login_snowflake(config, "new-account")]
+
+    assert [event.type for event in events] == ["waiting", "success"]
+    assert load_tokens(old_ref) is None
+    stored_new = load_tokens(new_ref)
+    assert stored_new is not None
+    assert stored_new.access_token == "new-access"
+    assert config.providers[snowflake.SNOWFLAKE_PROVIDER_KEY].oauth == new_ref
+    assert load_config(get_config_file()) == config
+
+
+@pytest.mark.asyncio
 async def test_snowflake_persistence_errors_hide_internal_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,7 +454,7 @@ async def test_snowflake_persistence_errors_hide_internal_details(
     monkeypatch.setattr(snowflake, "_exchange_code_for_tokens", fake_exchange)
     monkeypatch.setattr(snowflake, "_discover_snowflake_models", fake_models)
     monkeypatch.setattr(snowflake, "persist_login", fail_persistence)
-    monkeypatch.setattr(snowflake, "persist_config_change", fail_persistence)
+    monkeypatch.setattr(snowflake, "persist_logout", fail_persistence)
 
     login_events = [event async for event in snowflake.login_snowflake(config, "myorg-acct")]
     logout_events = [event async for event in snowflake.logout_snowflake(config)]
@@ -369,6 +495,55 @@ async def test_login_snowflake_fails_when_refresh_token_is_missing(
     assert "refresh token" in events[-1].message
     assert "managed:snowflake-cortex" not in config.providers
     assert load_tokens(OAuthRef(storage="file", key="oauth/snowflake-cortex/myorg-acct")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "access_token",
+    ["", {"token": "raw-provider-access-secret"}],
+    ids=["empty", "non-string"],
+)
+async def test_login_snowflake_rejects_invalid_access_token_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    access_token: object,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+
+    async def fake_loopback(**_kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:49231/")
+
+    async def fake_exchange(
+        _account: str,
+        _code: str,
+        _code_verifier: str,
+        _redirect_uri: str,
+    ) -> dict[str, Any]:
+        return {
+            "access_token": access_token,
+            "refresh_token": "raw-provider-refresh-secret",
+            "expires_in": 600,
+            "provider_diagnostic": "raw-provider-payload-secret",
+        }
+
+    monkeypatch.setattr(snowflake, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(snowflake, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
+
+    events = [event async for event in snowflake.login_snowflake(config, "myorg-acct")]
+
+    assert [event.type for event in events] == ["waiting", "error"]
+    rendered_events = "\n".join(event.json for event in events)
+    assert "raw-provider-access-secret" not in rendered_events
+    assert "raw-provider-refresh-secret" not in rendered_events
+    assert "raw-provider-payload-secret" not in rendered_events
+    oauth_ref = OAuthRef(storage="file", key="oauth/snowflake-cortex/myorg-acct")
+    assert load_tokens(oauth_ref) is None
+    assert "managed:snowflake-cortex" not in config.providers
+    assert config.models == {}
 
 
 @pytest.mark.asyncio
@@ -446,6 +621,63 @@ async def test_logout_snowflake_removes_account_token_provider_models_and_repair
     assert SNOWFLAKE_PROVIDER_KEY not in config.providers
     assert all(model.provider != SNOWFLAKE_PROVIDER_KEY for model in config.models.values())
     assert config.default_model == "fallback/model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller_has_stale_provider", [True, False])
+async def test_logout_snowflake_deletes_authoritative_account_from_stale_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caller_has_stale_provider: bool,
+) -> None:
+    from pythinker_code.auth.snowflake import SNOWFLAKE_PROVIDER_KEY, logout_snowflake
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    stale_ref = OAuthRef(storage="file", key="oauth/snowflake-cortex/stale-account")
+    authoritative_ref = OAuthRef(storage="file", key="oauth/snowflake-cortex/authoritative-account")
+    caller = Config(is_from_default_location=True)
+    if caller_has_stale_provider:
+        caller.providers[SNOWFLAKE_PROVIDER_KEY] = LLMProvider(
+            type="openai_legacy",
+            base_url="https://stale-account.snowflakecomputing.com/api/v2/cortex/v1",
+            api_key=SecretStr(""),
+            oauth=stale_ref,
+        )
+    authoritative = Config(
+        is_from_default_location=True,
+        providers={
+            SNOWFLAKE_PROVIDER_KEY: LLMProvider(
+                type="openai_legacy",
+                base_url=("https://authoritative-account.snowflakecomputing.com/api/v2/cortex/v1"),
+                api_key=SecretStr(""),
+                oauth=authoritative_ref,
+            )
+        },
+        models={
+            "snowflake-cortex/model": LLMModel(
+                provider=SNOWFLAKE_PROVIDER_KEY,
+                model="model",
+                max_context_size=128_000,
+            )
+        },
+    )
+    save_config(authoritative)
+    save_tokens(stale_ref, OAuthToken.from_response({"access_token": "stale"}))
+    save_tokens(
+        authoritative_ref,
+        OAuthToken.from_response({"access_token": "authoritative"}),
+    )
+
+    events = [event async for event in logout_snowflake(caller)]
+
+    committed = load_config()
+    assert [event.type for event in events] == ["success"]
+    assert SNOWFLAKE_PROVIDER_KEY not in committed.providers
+    assert not any(model.provider == SNOWFLAKE_PROVIDER_KEY for model in committed.models.values())
+    assert load_tokens(authoritative_ref) is None
+    assert load_tokens(stale_ref) is not None
+    assert SNOWFLAKE_PROVIDER_KEY not in caller.providers
+    assert not any(model.provider == SNOWFLAKE_PROVIDER_KEY for model in caller.models.values())
 
 
 @pytest.mark.asyncio

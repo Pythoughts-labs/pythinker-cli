@@ -1,42 +1,60 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import tempfile
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 
+class FileLockTimeoutError(TimeoutError):
+    """An advisory file lock could not be acquired within its deadline."""
+
+
 @contextlib.contextmanager
-def file_lock(path: Path) -> Generator[None]:
+def file_lock(path: Path, *, timeout: float | None = None) -> Generator[None]:
     """Cross-process exclusive lock for read-modify-write cycles on *path*.
 
     ``atomic_json_write`` prevents torn files but not lost updates: two processes
     that both load before either saves drop each other's changes. Wrap the whole
     load → mutate → save in this lock to serialize concurrent writers. The lock
     file (``<path>.lock``) is kept on disk — unlinking would split the lock across
-    inodes. This call blocks; event-loop callers must run it via ``asyncio.to_thread``.
+    inodes. By default this call blocks indefinitely. Pass ``timeout`` for a
+    bounded wait; event-loop callers must run either form via ``asyncio.to_thread``.
     """
+    if timeout is not None and timeout < 0:
+        raise ValueError("File lock timeout must be non-negative.")
+
     lock_file = path.with_name(path.name + ".lock")
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     fh = lock_file.open("a+b")
     try:
         if os.name == "nt":
             import msvcrt
-            import time
 
             if os.fstat(fh.fileno()).st_size == 0:
                 fh.write(b"\0")
                 fh.flush()
+            deadline = time.monotonic() + timeout if timeout is not None else None
             while True:
                 try:
                     fh.seek(0)
                     msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
                     break
-                except OSError:
-                    time.sleep(0.05)
+                except OSError as exc:
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise FileLockTimeoutError(
+                                "Timed out waiting for an advisory file lock."
+                            ) from exc
+                        time.sleep(min(0.05, remaining))
+                    else:
+                        time.sleep(0.05)
             try:
                 yield
             finally:
@@ -46,7 +64,23 @@ def file_lock(path: Path) -> Generator[None]:
         else:
             import fcntl
 
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            if timeout is None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError as exc:
+                        if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                            raise
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise FileLockTimeoutError(
+                                "Timed out waiting for an advisory file lock."
+                            ) from exc
+                        time.sleep(min(0.05, remaining))
             try:
                 yield
             finally:

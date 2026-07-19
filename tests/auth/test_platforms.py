@@ -358,8 +358,12 @@ async def test_refresh_managed_models_retries_after_oauth_401():
     assert changed is False
     assert list_models_mock.await_count == 2
     assert len(ensure_fresh_mock.await_args_list) == 2
-    assert ensure_fresh_mock.await_args_list[0].kwargs == {}
-    assert ensure_fresh_mock.await_args_list[1].kwargs == {"force": True}
+    oauth_ref = config.providers["managed:pythinker-code"].oauth
+    assert ensure_fresh_mock.await_args_list[0].kwargs == {"oauth_ref": oauth_ref}
+    assert ensure_fresh_mock.await_args_list[1].kwargs == {
+        "force": True,
+        "oauth_ref": oauth_ref,
+    }
 
 
 @pytest.mark.asyncio
@@ -405,8 +409,12 @@ async def test_refresh_managed_models_401_falls_back_to_static_api_key_when_refr
     assert list_models_mock.await_args_list[0].args[1] == "oauth-access-token"
     assert list_models_mock.await_args_list[1].args[1] == "static-api-key"
     assert len(ensure_fresh_mock.await_args_list) == 2
-    assert ensure_fresh_mock.await_args_list[0].kwargs == {}
-    assert ensure_fresh_mock.await_args_list[1].kwargs == {"force": True}
+    oauth_ref = config.providers["managed:pythinker-code"].oauth
+    assert ensure_fresh_mock.await_args_list[0].kwargs == {"oauth_ref": oauth_ref}
+    assert ensure_fresh_mock.await_args_list[1].kwargs == {
+        "force": True,
+        "oauth_ref": oauth_ref,
+    }
 
 
 def test_lm_studio_base_url_default(monkeypatch):
@@ -501,8 +509,12 @@ async def test_refresh_managed_models_401_tries_static_api_key_after_refreshed_o
     assert list_models_mock.await_args_list[1].args[1] == "fresh-oauth-token"
     assert list_models_mock.await_args_list[2].args[1] == "static-api-key"
     assert len(ensure_fresh_mock.await_args_list) == 2
-    assert ensure_fresh_mock.await_args_list[0].kwargs == {}
-    assert ensure_fresh_mock.await_args_list[1].kwargs == {"force": True}
+    oauth_ref = config.providers["managed:pythinker-code"].oauth
+    assert ensure_fresh_mock.await_args_list[0].kwargs == {"oauth_ref": oauth_ref}
+    assert ensure_fresh_mock.await_args_list[1].kwargs == {
+        "force": True,
+        "oauth_ref": oauth_ref,
+    }
 
 
 @pytest.mark.asyncio
@@ -735,7 +747,10 @@ def _make_opencode_go_config() -> Config:
 
 
 @pytest.mark.asyncio
-async def test_refresh_managed_models_refreshes_opencode_go_without_relogin():
+async def test_refresh_managed_models_refreshes_opencode_go_without_relogin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
     """The every-startup refresh must update OpenCode Go's two-provider catalog
     via its own discovery — surfacing new models (qwen3.7-max) and correcting
     Qwen's shape — without a manual re-login and without resetting user prefs."""
@@ -744,8 +759,11 @@ async def test_refresh_managed_models_refreshes_opencode_go_without_relogin():
         OPENCODE_GO_OPENAI_PROVIDER_KEY,
         OpenCodeGoModel,
     )
+    from pythinker_code.config import load_config, save_config
 
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
     config = _make_opencode_go_config()
+    save_config(config)
     discovered = (
         OpenCodeGoModel("kimi-k2.6", "Kimi K2.6", OPENCODE_GO_OPENAI_PROVIDER_KEY, 262_000),
         OpenCodeGoModel(
@@ -755,22 +773,12 @@ async def test_refresh_managed_models_refreshes_opencode_go_without_relogin():
             "qwen3.7-max", "Qwen3.7 Max", OPENCODE_GO_ANTHROPIC_PROVIDER_KEY, 1_000_000
         ),
     )
-    saved: list[Config] = []
-
     with (
         patch(
             "pythinker_code.auth.opencode_go._discover_opencode_go_models",
             new=AsyncMock(return_value=discovered),
         ),
         patch("pythinker_code.auth.platforms.list_models", new=AsyncMock()) as list_models_mock,
-        patch(
-            "pythinker_code.auth.platforms.load_config",
-            return_value=_make_opencode_go_config(),
-        ),
-        patch(
-            "pythinker_code.auth.platforms.save_config",
-            side_effect=lambda cfg, *a, **k: saved.append(cfg),
-        ),
     ):
         changed = await refresh_managed_models(config)
 
@@ -785,12 +793,14 @@ async def test_refresh_managed_models_refreshes_opencode_go_without_relogin():
     assert config.default_model == "opencode-go/kimi-k2.6"
     assert config.default_thinking is True
     # Persisted to disk for subsequent launches.
-    assert len(saved) == 1
-    assert "opencode-go/qwen3.7-max" in saved[0].models
+    assert "opencode-go/qwen3.7-max" in load_config().models
 
 
 @pytest.mark.asyncio
-async def test_refresh_managed_models_isolates_opencode_go_discovery_failure():
+async def test_refresh_managed_models_isolates_opencode_go_discovery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
     """An OpenCode Go discovery failure must not abort other providers' refresh
     or mangle the saved OpenCode Go list."""
     from pythinker_code.auth.opencode_go import OPENCODE_GO_OPENAI_PROVIDER_KEY
@@ -807,7 +817,11 @@ async def test_refresh_managed_models_isolates_opencode_go_discovery_failure():
         )
         return cfg
 
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
     config = _config_with_generic_provider()
+    save_config(config)
     generic_models = [
         ModelInfo(
             id="pythinker-for-coding",
@@ -818,8 +832,6 @@ async def test_refresh_managed_models_isolates_opencode_go_discovery_failure():
             display_name=None,
         )
     ]
-    saved: list[Config] = []
-
     with (
         patch(
             "pythinker_code.auth.opencode_go._discover_opencode_go_models",
@@ -829,21 +841,13 @@ async def test_refresh_managed_models_isolates_opencode_go_discovery_failure():
             "pythinker_code.auth.platforms.list_models",
             new=AsyncMock(return_value=generic_models),
         ),
-        patch(
-            "pythinker_code.auth.platforms.load_config",
-            side_effect=_config_with_generic_provider,
-        ),
-        patch(
-            "pythinker_code.auth.platforms.save_config",
-            side_effect=lambda cfg, *a, **k: saved.append(cfg),
-        ),
     ):
         changed = await refresh_managed_models(config)
 
     # The generic provider's refresh still succeeds and persists.
     assert changed is True
-    assert len(saved) == 1
-    assert saved[0].models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
+    saved = load_config()
+    assert saved.models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
     # OpenCode Go list is left exactly as-is (not wiped, not half-applied).
     assert "opencode-go/qwen3.7-max" not in config.models
     assert config.models["opencode-go/qwen3.5-plus"].provider == OPENCODE_GO_OPENAI_PROVIDER_KEY
@@ -890,7 +894,10 @@ def _make_minimax_config() -> Config:
 
 
 @pytest.mark.asyncio
-async def test_refresh_managed_models_refreshes_minimax_token_plan_without_relogin():
+async def test_refresh_managed_models_refreshes_minimax_token_plan_without_relogin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
     """MiniMax startup refresh must use the authenticated live catalog.
 
     Token Plan availability is key-specific, so stale aliases from an older
@@ -901,25 +908,21 @@ async def test_refresh_managed_models_refreshes_minimax_token_plan_without_relog
         MINIMAX_ANTHROPIC_PROVIDER_KEY,
         MiniMaxModel,
     )
+    from pythinker_code.config import load_config, save_config
 
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
     config = _make_minimax_config()
+    save_config(config)
     discovered = (
         MiniMaxModel("MiniMax-M2.7", "m2.7", "MiniMax M2.7", max_context_size=205_000),
         MiniMaxModel("MiniMax-M3", "m3", "MiniMax M3", max_context_size=512_000),
     )
-    saved: list[Config] = []
-
     with (
         patch(
             "pythinker_code.auth.minimax.refresh_minimax_models",
             new=AsyncMock(return_value=discovered),
         ),
         patch("pythinker_code.auth.platforms.list_models", new=AsyncMock()) as list_models_mock,
-        patch("pythinker_code.auth.platforms.load_config", side_effect=_make_minimax_config),
-        patch(
-            "pythinker_code.auth.platforms.save_config",
-            side_effect=lambda cfg, *a, **k: saved.append(cfg),
-        ),
     ):
         changed = await refresh_managed_models(config)
 
@@ -930,18 +933,23 @@ async def test_refresh_managed_models_refreshes_minimax_token_plan_without_relog
     assert config.models["minimax/m3"].provider == MINIMAX_ANTHROPIC_PROVIDER_KEY
     assert config.default_model == "minimax/m3"
     assert config.default_thinking is True
-    assert len(saved) == 1
-    assert "minimax/m3" in saved[0].models
-    assert "minimax/m2.7-highspeed" not in saved[0].models
+    saved = load_config()
+    assert "minimax/m3" in saved.models
+    assert "minimax/m2.7-highspeed" not in saved.models
 
 
 @pytest.mark.asyncio
-async def test_refresh_managed_models_applies_empty_minimax_catalog():
+async def test_refresh_managed_models_applies_empty_minimax_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
     """An authenticated empty MiniMax catalog is authoritative and prunes stale models."""
     from pythinker_code.auth.minimax import MINIMAX_ANTHROPIC_PROVIDER_KEY
+    from pythinker_code.config import load_config, save_config
 
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
     config = _make_minimax_config()
-    saved: list[Config] = []
+    save_config(config)
 
     with (
         patch(
@@ -949,11 +957,6 @@ async def test_refresh_managed_models_applies_empty_minimax_catalog():
             new=AsyncMock(return_value=()),
         ) as refresh_mock,
         patch("pythinker_code.auth.platforms.list_models", new=AsyncMock()) as list_models_mock,
-        patch("pythinker_code.auth.platforms.load_config", side_effect=_make_minimax_config),
-        patch(
-            "pythinker_code.auth.platforms.save_config",
-            side_effect=lambda cfg, *a, **k: saved.append(cfg),
-        ),
     ):
         changed = await refresh_managed_models(config)
 
@@ -964,14 +967,17 @@ async def test_refresh_managed_models_applies_empty_minimax_catalog():
         model.provider == MINIMAX_ANTHROPIC_PROVIDER_KEY for model in config.models.values()
     )
     assert config.default_model == ""
-    assert len(saved) == 1
+    saved = load_config()
     assert not any(
-        model.provider == MINIMAX_ANTHROPIC_PROVIDER_KEY for model in saved[0].models.values()
+        model.provider == MINIMAX_ANTHROPIC_PROVIDER_KEY for model in saved.models.values()
     )
 
 
 @pytest.mark.asyncio
-async def test_refresh_managed_models_isolates_minimax_discovery_failure():
+async def test_refresh_managed_models_isolates_minimax_discovery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
     """MiniMax refresh failure must not abort other managed-provider refreshes."""
 
     def _config_with_generic_provider() -> Config:
@@ -988,7 +994,11 @@ async def test_refresh_managed_models_isolates_minimax_discovery_failure():
         )
         return cfg
 
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
     config = _config_with_generic_provider()
+    save_config(config)
     generic_models = [
         ModelInfo(
             id="pythinker-for-coding",
@@ -999,8 +1009,6 @@ async def test_refresh_managed_models_isolates_minimax_discovery_failure():
             display_name=None,
         )
     ]
-    saved: list[Config] = []
-
     with (
         patch(
             "pythinker_code.auth.minimax.refresh_minimax_models",
@@ -1010,22 +1018,14 @@ async def test_refresh_managed_models_isolates_minimax_discovery_failure():
             "pythinker_code.auth.platforms.list_models",
             new=AsyncMock(return_value=generic_models),
         ),
-        patch(
-            "pythinker_code.auth.platforms.load_config",
-            side_effect=_config_with_generic_provider,
-        ),
-        patch(
-            "pythinker_code.auth.platforms.save_config",
-            side_effect=lambda cfg, *a, **k: saved.append(cfg),
-        ),
     ):
         changed = await refresh_managed_models(config)
 
     assert changed is True
-    assert len(saved) == 1
-    assert saved[0].models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
-    assert "minimax/m2.7-highspeed" in saved[0].models
-    assert saved[0].models["minimax/m2.7-highspeed"].provider == "managed:minimax-anthropic"
+    saved = load_config()
+    assert saved.models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
+    assert "minimax/m2.7-highspeed" in saved.models
+    assert saved.models["minimax/m2.7-highspeed"].provider == "managed:minimax-anthropic"
     assert "minimax/m2.7-highspeed" in config.models
 
 
@@ -1101,3 +1101,323 @@ async def test_refresh_zai_routes_apply_live_catalog_independently(
         if value.provider == ZAI_API_ROUTE.provider_key
     }
     assert reloaded_api == api_before
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_merges_stale_discovery_into_authoritative_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from pythinker_code.auth import platforms
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    stale = _make_config_with_model(api_key="static-api-key")
+    stale.is_from_default_location = True
+    stale.providers["managed:pythinker-code"].oauth = None
+    authoritative = stale.model_copy(deep=True)
+    authoritative.providers["managed:concurrent-login"] = LLMProvider(
+        type="openai_legacy",
+        base_url="https://concurrent.example/v1",
+        api_key=SecretStr("concurrent-key"),
+    )
+    save_config(authoritative)
+    discovered = [
+        ModelInfo(
+            id="pythinker-for-coding",
+            context_length=200_000,
+            supports_reasoning=False,
+            supports_image_in=False,
+            supports_video_in=False,
+        )
+    ]
+
+    monkeypatch.setattr(platforms, "list_models", AsyncMock(return_value=discovered))
+    # Model the background writer having read before the concurrent login committed.
+    monkeypatch.setattr(
+        platforms,
+        "load_config",
+        lambda: stale.model_copy(deep=True),
+        raising=False,
+    )
+
+    changed = await refresh_managed_models(stale)
+
+    committed = load_config()
+    assert changed is True
+    assert "managed:concurrent-login" in committed.providers
+    assert committed.models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
+    assert "managed:concurrent-login" in stale.providers
+    assert stale.models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_does_not_mutate_caller_during_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from pythinker_code.auth import opencode_go, platforms
+    from pythinker_code.config import save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = _make_config_with_model(api_key="static-api-key")
+    config.is_from_default_location = True
+    config.providers["managed:pythinker-code"].oauth = None
+    before = config.model_copy(deep=True)
+    save_config(config)
+    discovered = [
+        ModelInfo(
+            id="pythinker-for-coding",
+            context_length=200_000,
+            supports_reasoning=False,
+            supports_image_in=False,
+            supports_video_in=False,
+        )
+    ]
+    observations: list[bool] = []
+
+    async def observe_later_discovery(candidate: Config) -> None:
+        observations.append(candidate is not config and config == before)
+        return None
+
+    monkeypatch.setattr(platforms, "list_models", AsyncMock(return_value=discovered))
+    monkeypatch.setattr(opencode_go, "refresh_opencode_go_models", observe_later_discovery)
+
+    changed = await refresh_managed_models(config)
+
+    assert changed is True
+    assert observations == [True]
+    assert config.models["pythinker-code/pythinker-for-coding"].max_context_size == 200_000
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_persists_collected_noop_to_authoritative_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from pythinker_code.auth import platforms
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    caller = _make_config_with_model(api_key="static-api-key")
+    caller.is_from_default_location = True
+    caller.providers["managed:pythinker-code"].oauth = None
+    authoritative = caller.model_copy(deep=True)
+    authoritative.models["pythinker-code/pythinker-for-coding"].max_context_size = 50_000
+    save_config(authoritative)
+    discovered = [
+        ModelInfo(
+            id="pythinker-for-coding",
+            context_length=100_000,
+            supports_reasoning=False,
+            supports_image_in=False,
+            supports_video_in=False,
+        )
+    ]
+    monkeypatch.setattr(platforms, "list_models", AsyncMock(return_value=discovered))
+
+    changed = await refresh_managed_models(caller)
+
+    committed = load_config()
+    assert changed is False
+    assert committed.models["pythinker-code/pythinker-for-coding"].max_context_size == 100_000
+    assert caller.models["pythinker-code/pythinker-for-coding"].max_context_size == 100_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrent_change", ["logout", "replacement"])
+async def test_refresh_managed_models_drops_results_after_provider_identity_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    concurrent_change: str,
+) -> None:
+    from pythinker_code.auth import platforms
+    from pythinker_code.auth.oauth import persist_config_change
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    provider_key = "managed:pythinker-code"
+    old_alias = "pythinker-code/old-model"
+    new_alias = "pythinker-code/new-account-model"
+    config = Config(
+        is_from_default_location=True,
+        default_model=old_alias,
+        providers={
+            provider_key: LLMProvider(
+                type="pythinker",
+                base_url="https://old.example/v1",
+                api_key=SecretStr("old-key"),
+            )
+        },
+        models={
+            old_alias: LLMModel(
+                provider=provider_key,
+                model="old-model",
+                max_context_size=100_000,
+            )
+        },
+    )
+    save_config(config)
+    concurrent_caller = config.model_copy(deep=True)
+
+    async def discover_then_change_provider(*_args: Any, **_kwargs: Any) -> list[ModelInfo]:
+        def change_provider(authoritative: Config) -> None:
+            authoritative.providers.pop(provider_key, None)
+            authoritative.models = {
+                alias: model
+                for alias, model in authoritative.models.items()
+                if model.provider != provider_key
+            }
+            authoritative.default_model = ""
+            if concurrent_change == "replacement":
+                authoritative.providers[provider_key] = LLMProvider(
+                    type="pythinker",
+                    base_url="https://new.example/v1",
+                    api_key=SecretStr("new-key"),
+                )
+                authoritative.models[new_alias] = LLMModel(
+                    provider=provider_key,
+                    model="new-account-model",
+                    max_context_size=300_000,
+                )
+                authoritative.default_model = new_alias
+
+        await persist_config_change(concurrent_caller, change_provider)
+        return [
+            ModelInfo(
+                id="old-model",
+                context_length=200_000,
+                supports_reasoning=False,
+                supports_image_in=False,
+                supports_video_in=False,
+            )
+        ]
+
+    monkeypatch.setattr(platforms, "list_models", discover_then_change_provider)
+
+    changed = await refresh_managed_models(config)
+
+    committed = load_config()
+    assert changed is True
+    if concurrent_change == "logout":
+        assert provider_key not in committed.providers
+        assert not any(model.provider == provider_key for model in committed.models.values())
+    else:
+        assert committed.providers[provider_key].base_url == "https://new.example/v1"
+        assert new_alias in committed.models
+        assert old_alias not in committed.models
+    assert config.providers == committed.providers
+    assert config.models == committed.models
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_ignores_empty_opencode_go_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    from pythinker_code.auth import opencode_go, platforms
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = _make_opencode_go_config()
+    before = config.model_copy(deep=True)
+    save_config(config)
+    monkeypatch.setattr(opencode_go, "refresh_opencode_go_models", AsyncMock(return_value=()))
+    monkeypatch.setattr(platforms, "list_models", AsyncMock())
+
+    changed = await refresh_managed_models(config)
+
+    assert changed is False
+    assert config.models == before.models
+    assert load_config().models == before.models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrent_change", ["logout", "replacement"])
+async def test_refresh_managed_models_drops_opencode_results_after_provider_group_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+    concurrent_change: str,
+) -> None:
+    from pythinker_code.auth import opencode_go, platforms
+    from pythinker_code.auth.oauth import persist_config_change
+    from pythinker_code.auth.opencode_go import (
+        OPENCODE_GO_ANTHROPIC_BASE_URL,
+        OPENCODE_GO_ANTHROPIC_PROVIDER_KEY,
+        OPENCODE_GO_BASE_URL,
+        OPENCODE_GO_OPENAI_PROVIDER_KEY,
+        OpenCodeGoModel,
+    )
+    from pythinker_code.config import load_config, save_config
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = _make_opencode_go_config()
+    save_config(config)
+    concurrent_caller = config.model_copy(deep=True)
+    replacement_alias = "opencode-go/replacement-model"
+
+    async def discover_then_change_provider_group(
+        _working_config: Config,
+    ) -> tuple[OpenCodeGoModel, ...]:
+        def change_provider_group(authoritative: Config) -> None:
+            for provider_key in (
+                OPENCODE_GO_OPENAI_PROVIDER_KEY,
+                OPENCODE_GO_ANTHROPIC_PROVIDER_KEY,
+            ):
+                authoritative.providers.pop(provider_key, None)
+            authoritative.models = {
+                alias: model
+                for alias, model in authoritative.models.items()
+                if model.provider
+                not in {OPENCODE_GO_OPENAI_PROVIDER_KEY, OPENCODE_GO_ANTHROPIC_PROVIDER_KEY}
+            }
+            authoritative.default_model = ""
+            if concurrent_change == "replacement":
+                authoritative.providers[OPENCODE_GO_OPENAI_PROVIDER_KEY] = LLMProvider(
+                    type="openai_legacy",
+                    base_url=OPENCODE_GO_BASE_URL,
+                    api_key=SecretStr("replacement-key"),
+                )
+                authoritative.providers[OPENCODE_GO_ANTHROPIC_PROVIDER_KEY] = LLMProvider(
+                    type="anthropic",
+                    base_url=OPENCODE_GO_ANTHROPIC_BASE_URL,
+                    api_key=SecretStr("replacement-key"),
+                )
+                authoritative.models[replacement_alias] = LLMModel(
+                    provider=OPENCODE_GO_OPENAI_PROVIDER_KEY,
+                    model="replacement-model",
+                    max_context_size=400_000,
+                )
+                authoritative.default_model = replacement_alias
+
+        await persist_config_change(concurrent_caller, change_provider_group)
+        return (
+            OpenCodeGoModel(
+                "stale-discovery-model",
+                "Stale Discovery Model",
+                OPENCODE_GO_OPENAI_PROVIDER_KEY,
+                200_000,
+            ),
+        )
+
+    monkeypatch.setattr(
+        opencode_go, "refresh_opencode_go_models", discover_then_change_provider_group
+    )
+    monkeypatch.setattr(platforms, "list_models", AsyncMock())
+
+    changed = await refresh_managed_models(config)
+
+    committed = load_config()
+    assert changed is True
+    assert "opencode-go/stale-discovery-model" not in committed.models
+    if concurrent_change == "logout":
+        assert OPENCODE_GO_OPENAI_PROVIDER_KEY not in committed.providers
+        assert OPENCODE_GO_ANTHROPIC_PROVIDER_KEY not in committed.providers
+    else:
+        assert replacement_alias in committed.models
+        assert (
+            committed.providers[OPENCODE_GO_OPENAI_PROVIDER_KEY].api_key.get_secret_value()
+            == "replacement-key"
+        )
+    assert config.providers == committed.providers
+    assert config.models == committed.models

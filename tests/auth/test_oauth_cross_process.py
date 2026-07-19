@@ -121,7 +121,7 @@ def test_atomic_save_no_corruption(tmp_path: Path) -> None:
                 token_type="Bearer",
                 expires_in=900.0,
             )
-            _save_to_file("pythinker-code", token)
+            _save_to_file("oauth/pythinker-code", token)
 
         # After all writes, the file must still be valid JSON.
         path = Path({str(tmp_path / "share" / "credentials" / "pythinker-code.json")!r})

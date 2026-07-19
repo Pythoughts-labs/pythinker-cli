@@ -232,6 +232,26 @@ class _PromptLiveView(_LiveView):
         else:
             _handoff_trace(f"RENDERER_RESET\t{reason}")
 
+    async def _settle_cursor_after_handoff(self) -> None:
+        """Await the absolute-cursor CPR that ``run_in_terminal`` re-requests on
+        teardown, so a following live re-expansion diffs against a settled cursor
+        model instead of a provisional one. No-op on outputs without CPR support
+        (piped, legacy Win32); never raises — settling is best-effort and must not
+        break handoff cleanup."""
+        from prompt_toolkit.application import get_app_or_none
+
+        app = get_app_or_none()
+        if app is None:
+            return
+        output = getattr(app, "output", None)
+        if output is None or not getattr(output, "responds_to_cpr", False):
+            return
+        try:
+            await app.renderer.wait_for_cpr_responses()
+        except Exception as exc:  # noqa: BLE001 — settling is best-effort, must not break cleanup
+            _handoff_trace(f"CPR_SETTLE_FAIL\t{type(exc).__name__}:{exc}")
+            logger.debug("CPR settle failed after scrollback handoff: {}", exc)
+
     def _defer_scrollback_handoff(self) -> bool:
         """Backpressure: defer permanent scrollback while preamble geometry is unstable."""
         return self._resize_recovery_remaining > 0
@@ -280,6 +300,15 @@ class _PromptLiveView(_LiveView):
             self._reset_prompt_renderer("handoff-fail")
             raise
         finally:
+            # run_in_terminal re-requests an absolute cursor position (an async
+            # CPR round-trip) on teardown. Let it settle while the multi-row body
+            # is still suppressed (depth > 0) so the body re-expands against a
+            # correct cursor model, not the provisional one — the window that
+            # otherwise strands the old rows as a doubled/ghosted block. Unlike a
+            # renderer reset, this touches no static scrollback, so it cannot
+            # re-fossilize committed content (regression-safe vs the queued-input
+            # ghost fix).
+            await self._settle_cursor_after_handoff()
             self._scrollback_handoff_depth -= 1
             self._safe_prompt_invalidate()
 

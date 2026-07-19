@@ -24,6 +24,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Discover each provider's models from a cached, typed, provider-neutral models.dev catalog with curated fallbacks, so xAI, GitHub Copilot, and Snowflake pick up new models automatically; the catalog is now portable across platforms (no longer Unix-only) and distinguishes fresh, cached, stale, disabled, and unavailable results.
 - Persist provider login and logout atomically so a failed save never leaves orphaned credentials or a half-applied configuration; a re-login whose save fails now restores the previous credential instead of deleting it, and provider persistence failures are logged.
 - Fix queued follow-up input showing a bordered ghost; pressing Enter during an active turn now shows one intentional queued row.
+- Harden provider OAuth credential handling: scope token refresh to the active/selected provider, serialize persistence under a lock with atomic config replacement, roll back replaced credentials when a save fails, fail closed on credential migration, and validate OAuth token and implicit-state responses.
+- Fix an intermittent doubled/"ghost" copy of the running-prompt block (agent tree, spinner, and tip) on long streaming turns: after a scrollback handoff the suppressed live body now waits for the terminal's re-requested absolute cursor position to settle before it re-expands, so it repaints against a correct cursor model instead of the mis-anchored frame left behind by `run_in_terminal`.
 
 ## 0.60.0 (2026-07-18)
 

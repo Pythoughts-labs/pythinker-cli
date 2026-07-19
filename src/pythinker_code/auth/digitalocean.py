@@ -33,6 +33,7 @@ class RouterDiscovery(str, Enum):
     """Outcome of a DigitalOcean inference-router discovery call."""
 
     OK = "ok"  # routers were discovered
+    PARTIAL = "partial"  # valid routers were discovered alongside malformed entries
     EMPTY = "empty"  # the account has no routers (valid, but empty)
     UNAUTHORIZED = "unauthorized"  # the token could not list routers
     UNAVAILABLE = "unavailable"  # timeout / outage / non-2xx response
@@ -92,15 +93,22 @@ def _parse_router_names(payload: object) -> RouterCatalog:
     raw = cast(dict[str, Any], payload).get("model_routers")
     if not isinstance(raw, list):
         return RouterCatalog(RouterDiscovery.MALFORMED, ())
+    if not raw:
+        return RouterCatalog(RouterDiscovery.EMPTY, ())
 
     names: list[str] = []
+    has_malformed_entry = False
     for item in cast(list[Any], raw):
         if isinstance(item, dict):
             name = cast(dict[str, Any], item).get("name")
-            if isinstance(name, str) and name:
+            if isinstance(name, str) and name.strip():
                 names.append(name)
+                continue
+        has_malformed_entry = True
     if not names:
-        return RouterCatalog(RouterDiscovery.EMPTY, ())
+        return RouterCatalog(RouterDiscovery.MALFORMED, ())
+    if has_malformed_entry:
+        return RouterCatalog(RouterDiscovery.PARTIAL, tuple(names))
     return RouterCatalog(RouterDiscovery.OK, tuple(names))
 
 
@@ -141,8 +149,18 @@ async def _fetch_router_catalog(access_token: str) -> RouterCatalog:
 def _router_status_message(status: RouterDiscovery) -> str | None:
     if status is RouterDiscovery.OK:
         return None
+    if status is RouterDiscovery.PARTIAL:
+        return (
+            "DigitalOcean returned some malformed inference-router entries; sign-in saved "
+            "with valid routers configured and malformed entries ignored."
+        )
     if status is RouterDiscovery.EMPTY:
         return "DigitalOcean returned no inference routers; sign-in saved with no models."
+    if status is RouterDiscovery.MALFORMED:
+        return (
+            "DigitalOcean returned entirely malformed inference-router data; sign-in saved "
+            "with no models configured."
+        )
     if status is RouterDiscovery.UNAUTHORIZED:
         return (
             "DigitalOcean did not authorize inference-router discovery; sign-in saved. "
