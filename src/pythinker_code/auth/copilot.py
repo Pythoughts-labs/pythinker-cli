@@ -272,7 +272,7 @@ async def login_copilot(config: Config, *, open_browser: bool = True) -> AsyncIt
         )
     except Exception as exc:
         logger.warning("Failed to persist GitHub Copilot login: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to save GitHub Copilot login: {exc}")
+        yield OAuthEvent("error", "Failed to save GitHub Copilot login.")
         return
     yield OAuthEvent(
         "success",
@@ -300,6 +300,6 @@ async def logout_copilot(config: Config) -> AsyncIterator[OAuthEvent]:
         await persist_logout(config, _copilot_oauth_ref(), _remove)
     except Exception as exc:
         logger.warning("Failed to persist GitHub Copilot logout: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to log out of GitHub Copilot: {exc}")
+        yield OAuthEvent("error", "Failed to log out of GitHub Copilot.")
         return
     yield OAuthEvent("success", "Logged out of GitHub Copilot successfully.")

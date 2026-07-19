@@ -108,6 +108,71 @@ async def test_login_xai_browser_saves_token_provider_and_models(
 
 
 @pytest.mark.asyncio
+async def test_xai_persistence_errors_hide_internal_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import xai
+
+    diagnostic = "permission denied at /private/credentials/xai.json"
+    config = Config(is_from_default_location=True)
+
+    async def fake_loopback(**_kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:56121/callback")
+
+    async def fake_exchange(
+        _code: str,
+        _code_verifier: str,
+        _redirect_uri: str,
+    ) -> dict[str, Any]:
+        return {
+            "access_token": "xai-access",
+            "refresh_token": "xai-refresh",
+            "expires_in": 3600,
+        }
+
+    async def fake_request_device_code(**_kwargs: Any) -> DeviceCode:
+        return DeviceCode(
+            user_code="GROK-CODE",
+            verification_uri="https://auth.x.ai/activate",
+            device_code="device-secret",
+            interval=5,
+            expires_in=900,
+        )
+
+    async def fake_poll_device_token(**_kwargs: Any) -> dict[str, Any]:
+        return {
+            "access_token": "xai-access",
+            "refresh_token": "xai-refresh",
+            "expires_in": 3600,
+        }
+
+    async def fake_models() -> tuple[xai.XAIModel, ...]:
+        return xai.XAI_MODELS
+
+    async def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise OSError(diagnostic)
+
+    monkeypatch.setattr(xai, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(xai, "_exchange_code_for_tokens", fake_exchange)
+    monkeypatch.setattr(xai, "request_device_code", fake_request_device_code)
+    monkeypatch.setattr(xai, "poll_device_token", fake_poll_device_token)
+    monkeypatch.setattr(xai, "_discover_xai_models", fake_models)
+    monkeypatch.setattr(xai, "persist_login", fail_persistence)
+    monkeypatch.setattr(xai, "persist_logout", fail_persistence)
+
+    browser_events = [event async for event in xai.login_xai_browser(config)]
+    headless_events = [event async for event in xai.login_xai_headless(config)]
+    logout_events = [event async for event in xai.logout_xai(config)]
+
+    assert browser_events[-1].message == "Failed to save xAI Grok login."
+    assert headless_events[-1].message == "Failed to save xAI Grok login."
+    assert logout_events[-1].message == "Failed to log out of xAI Grok."
+    assert diagnostic not in browser_events[-1].json
+    assert diagnostic not in headless_events[-1].json
+    assert diagnostic not in logout_events[-1].json
+
+
+@pytest.mark.asyncio
 async def test_login_xai_headless_uses_device_flow(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

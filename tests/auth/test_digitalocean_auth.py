@@ -214,6 +214,38 @@ async def test_login_digitalocean_saves_discovered_routers_without_leaking_token
 
 
 @pytest.mark.asyncio
+async def test_digitalocean_persistence_errors_hide_internal_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import digitalocean as do
+    from pythinker_code.auth.oauth_flows import ImplicitAuthorization
+
+    diagnostic = "permission denied at /private/config.toml"
+    config = Config(is_from_default_location=True)
+
+    async def fake_implicit_flow(**_kwargs: Any) -> ImplicitAuthorization:
+        return ImplicitAuthorization("access-token", None, "state")
+
+    async def fake_catalog(_access_token: str) -> do.RouterCatalog:
+        return do.RouterCatalog(do.RouterDiscovery.OK, ("primary",))
+
+    async def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise OSError(diagnostic)
+
+    monkeypatch.setattr(do, "run_loopback_implicit_flow", fake_implicit_flow)
+    monkeypatch.setattr(do, "_fetch_router_catalog", fake_catalog)
+    monkeypatch.setattr(do, "persist_config_change", fail_persistence)
+
+    login_events = [event async for event in do.login_digitalocean(config)]
+    logout_events = [event async for event in do.logout_digitalocean(config)]
+
+    assert login_events[-1].message == "Failed to save DigitalOcean login."
+    assert logout_events[-1].message == "Failed to log out of DigitalOcean."
+    assert diagnostic not in login_events[-1].json
+    assert diagnostic not in logout_events[-1].json
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
     [

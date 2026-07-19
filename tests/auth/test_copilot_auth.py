@@ -116,6 +116,55 @@ async def test_login_copilot_saves_two_tokens_provider_and_models(
     assert {model.provider for model in config.models.values()} == {"managed:copilot"}
 
 
+@pytest.mark.asyncio
+async def test_copilot_persistence_errors_hide_internal_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import copilot
+
+    diagnostic = "permission denied at /private/credentials/github-copilot.json"
+    config = Config(is_from_default_location=True)
+
+    async def fake_request_device_code(**_kwargs: Any) -> DeviceCode:
+        return DeviceCode(
+            user_code="ABCD-EFGH",
+            verification_uri="https://github.com/login/device",
+            device_code="device-secret",
+            interval=5,
+            expires_in=900,
+        )
+
+    async def fake_poll_device_token(**_kwargs: Any) -> dict[str, Any]:
+        return {"access_token": "github-oauth-token"}
+
+    async def fake_refresh_copilot_token(_github_token: str) -> OAuthToken:
+        return OAuthToken.from_response(
+            {
+                "access_token": "copilot-bearer",
+                "refresh_token": "github-oauth-token",
+                "expires_in": 1500,
+            }
+        )
+
+    async def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise OSError(diagnostic)
+
+    monkeypatch.setattr(copilot, "request_device_code", fake_request_device_code)
+    monkeypatch.setattr(copilot, "poll_device_token", fake_poll_device_token)
+    monkeypatch.setattr(copilot, "refresh_copilot_token", fake_refresh_copilot_token)
+    monkeypatch.setattr(copilot, "persist_login", fail_persistence)
+    monkeypatch.setattr(copilot, "persist_logout", fail_persistence)
+    _mock_unavailable_catalog(monkeypatch)
+
+    login_events = [event async for event in copilot.login_copilot(config, open_browser=False)]
+    logout_events = [event async for event in copilot.logout_copilot(config)]
+
+    assert login_events[-1].message == "Failed to save GitHub Copilot login."
+    assert logout_events[-1].message == "Failed to log out of GitHub Copilot."
+    assert diagnostic not in login_events[-1].json
+    assert diagnostic not in logout_events[-1].json
+
+
 class _ExchangeResponse:
     def __init__(self, status: int, payload: object) -> None:
         self.status = status

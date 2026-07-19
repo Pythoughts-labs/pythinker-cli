@@ -295,6 +295,51 @@ async def test_login_snowflake_saves_account_scoped_token_provider_and_models(
 
 
 @pytest.mark.asyncio
+async def test_snowflake_persistence_errors_hide_internal_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    diagnostic = "permission denied at /private/credentials/snowflake.json"
+    config = Config(is_from_default_location=True)
+
+    async def fake_loopback(**_kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:49231/")
+
+    async def fake_exchange(
+        _account: str,
+        _code: str,
+        _code_verifier: str,
+        _redirect_uri: str,
+    ) -> dict[str, Any]:
+        return {
+            "access_token": "snowflake-access",
+            "refresh_token": "snowflake-refresh",
+            "expires_in": 600,
+        }
+
+    async def fake_models() -> tuple[snowflake.SnowflakeModel, ...]:
+        return snowflake.SNOWFLAKE_MODELS
+
+    async def fail_persistence(*_args: object, **_kwargs: object) -> None:
+        raise OSError(diagnostic)
+
+    monkeypatch.setattr(snowflake, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(snowflake, "_exchange_code_for_tokens", fake_exchange)
+    monkeypatch.setattr(snowflake, "_discover_snowflake_models", fake_models)
+    monkeypatch.setattr(snowflake, "persist_login", fail_persistence)
+    monkeypatch.setattr(snowflake, "persist_config_change", fail_persistence)
+
+    login_events = [event async for event in snowflake.login_snowflake(config, "myorg-acct")]
+    logout_events = [event async for event in snowflake.logout_snowflake(config)]
+
+    assert login_events[-1].message == "Failed to save Snowflake Cortex login."
+    assert logout_events[-1].message == "Failed to log out of Snowflake Cortex."
+    assert diagnostic not in login_events[-1].json
+    assert diagnostic not in logout_events[-1].json
+
+
+@pytest.mark.asyncio
 async def test_login_snowflake_fails_when_refresh_token_is_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

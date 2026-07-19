@@ -250,7 +250,7 @@ async def login_xai_browser(
         )
     except Exception as exc:
         logger.warning("Failed to persist xAI Grok login: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
+        yield OAuthEvent("error", "Failed to save xAI Grok login.")
         return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
 
@@ -310,7 +310,7 @@ async def login_xai_headless(config: Config) -> AsyncIterator[OAuthEvent]:
         )
     except Exception as exc:
         logger.warning("Failed to persist xAI Grok login: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
+        yield OAuthEvent("error", "Failed to save xAI Grok login.")
         return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
 
@@ -335,6 +335,6 @@ async def logout_xai(config: Config) -> AsyncIterator[OAuthEvent]:
         await persist_logout(config, _xai_oauth_ref(), _remove)
     except Exception as exc:
         logger.warning("Failed to persist xAI Grok logout: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to log out of xAI Grok: {exc}")
+        yield OAuthEvent("error", "Failed to log out of xAI Grok.")
         return
     yield OAuthEvent("success", "Logged out of xAI Grok successfully.")

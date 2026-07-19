@@ -189,7 +189,7 @@ async def login_digitalocean(
         )
     except Exception as exc:
         logger.warning("Failed to persist DigitalOcean login: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to save DigitalOcean login: {exc}")
+        yield OAuthEvent("error", "Failed to save DigitalOcean login.")
         return
 
     message = _router_status_message(catalog.status)
@@ -222,6 +222,6 @@ async def logout_digitalocean(config: Config) -> AsyncIterator[OAuthEvent]:
         await persist_config_change(config, _remove)
     except Exception as exc:
         logger.warning("Failed to persist DigitalOcean logout: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to log out of DigitalOcean: {exc}")
+        yield OAuthEvent("error", "Failed to log out of DigitalOcean.")
         return
     yield OAuthEvent("success", "Logged out of DigitalOcean successfully.")

@@ -330,7 +330,7 @@ async def login_snowflake(
         )
     except Exception as exc:
         logger.warning("Failed to persist Snowflake Cortex login: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to save Snowflake Cortex login: {exc}")
+        yield OAuthEvent("error", "Failed to save Snowflake Cortex login.")
         return
 
     yield OAuthEvent(
@@ -367,6 +367,6 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
             await persist_config_change(config, _remove)
     except Exception as exc:
         logger.warning("Failed to persist Snowflake Cortex logout: {exc}", exc=exc)
-        yield OAuthEvent("error", f"Failed to log out of Snowflake Cortex: {exc}")
+        yield OAuthEvent("error", "Failed to log out of Snowflake Cortex.")
         return
     yield OAuthEvent("success", "Logged out of Snowflake Cortex successfully.")
