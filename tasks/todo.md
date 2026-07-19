@@ -77,7 +77,12 @@ Phases (each = one verified Codex delegation, sequential):
             (loopback port 56121 + `plan=generic`/OIDC `nonce`; device-code); no API-key method;
             openai_legacy → api.x.ai/v1; rotating refresh persisted by OAuthManager. **PENDING LIVE
             VERIFICATION** (login flow untested against real auth.x.ai).
-      - [~] P3d — DigitalOcean. **SCOPE = FULL ROBUST BUILD (user-confirmed 2026-07-18).** OAuth
+      - [x] P3d — DigitalOcean. DONE. Lane A `run_loopback_implicit_flow` helper committed `48a1fdbb`
+            (salvaged after base-changed abort); Lane B provider+wiring+tests committed `962ef990`
+            (salvaged after producer verify-fail, fixed reportUnnecessaryIsInstance/Cast +
+            ruff-format nit). Gates green locally: make check-pythinker-code + pytest tests/auth
+            tests/ui_and_conv tests/cli. **PENDING LIVE VERIFY** (implicit + browser-JS + real DO acct).
+      - [~] P3d(orig) — DigitalOcean. **SCOPE = FULL ROBUST BUILD (user-confirmed 2026-07-18).** OAuth
             IMPLICIT flow (response_type=token; token in URL fragment) → needs a NEW reusable
             `run_loopback_implicit_flow` helper in oauth_flows.py that serves an HTML-bootstrap page
             (inline JS reads location.hash, POSTs {access_token,expires_in,state} to a pinned-port
