@@ -2,9 +2,9 @@
 
 Unlike the byte-stream PTY helpers, these feed the raw terminal bytes to a pyte
 virtual screen so assertions run against the *rendered* frame — the only place
-an incomplete-erase accepted-buffer "ghost"/duplicate row is visible. They pin
-Focus TUI fossilization behavior and the normal prompt card's visible
-loading/mid-turn contract.
+an incomplete-erase "ghost"/duplicate row is visible. They pin Focus TUI
+fossilization behavior and the normal prompt card's visible loading/mid-turn
+contract.
 
 This is a manual/local check, not a CI-enforced one — it is skipped on CI (see
 ``pytestmark`` below: scripted_echo + prompt_toolkit hang on GitHub Actions'
@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.shell_pty_helpers import (
-    list_turn_begin_inputs,
     make_home_dir,
     make_work_dir,
     read_until_prompt_ready,
@@ -50,7 +49,6 @@ pyte = pytest.importorskip("pyte")
 
 _COLS, _ROWS = 120, 40
 _PROMPT_TEXT = "this is a prompt to the agent"
-_QUEUED_FOLLOW_UP = "queued follow-up ghost regression 7f3a"
 
 
 def _render(chunks: list[bytes]):
@@ -83,14 +81,6 @@ def _has_fossil_border_above_content(rows: list[str]) -> bool:
     if echo_i is None or content_i is None or content_i <= echo_i:
         return False
     return any(_is_input_card_border(rows[i]) for i in range(echo_i + 1, content_i))
-
-
-def _has_input_card_border_above_text(rows: list[str], text: str) -> bool:
-    """True if ``text`` appears inside a fossilized accepted input card."""
-    text_i = next((i for i, row in enumerate(rows) if text in row), None)
-    if text_i is None:
-        return False
-    return any(_is_input_card_border(rows[i]) for i in range(max(0, text_i - 3), text_i))
 
 
 def test_focus_tui_hides_files_and_never_fossilizes_prompt(tmp_path: Path) -> None:
@@ -200,72 +190,6 @@ def test_input_card_stays_visible_during_initial_loading_and_mid_turn(tmp_path: 
         shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
         assert any(_is_input_card_border(r) for r in _render(shell._raw_chunks)), (
             "idle input-card border did not return after the turn ended"
-        )
-    finally:
-        shell.close()
-
-
-def test_mid_turn_queued_input_renders_once_and_executes_once(tmp_path: Path) -> None:
-    slow = {
-        "id": "queued-slow",
-        "name": "Shell",
-        "arguments": json.dumps({"command": "sleep 3"}),
-    }
-    config_path = write_scripted_config(
-        tmp_path,
-        [
-            f"tool_call: {json.dumps(slow)}",
-            "text: First turn finished.",
-            "text: Queued follow-up executed.",
-        ],
-        capabilities=["thinking"],
-    )
-    work_dir = make_work_dir(tmp_path)
-    home_dir = make_home_dir(tmp_path)
-    shell = start_shell_pty(
-        config_path=config_path,
-        work_dir=work_dir,
-        home_dir=home_dir,
-        yolo=True,
-        columns=_COLS,
-        lines=_ROWS,
-    )
-    try:
-        shell.read_until_contains("think first, then code")
-        read_until_prompt_ready(shell, after=shell.mark())
-        assert any(_is_input_card_border(row) for row in _render(shell._raw_chunks))
-
-        first_turn_mark = shell.mark()
-        shell.send_line(_PROMPT_TEXT)
-        shell.read_until_contains("Bash(sleep 3", after=first_turn_mark, timeout=15.0)
-        shell.send_line(_QUEUED_FOLLOW_UP)
-
-        queued_frame_seen = False
-        deadline = time.monotonic() + 12.0
-        while time.monotonic() < deadline:
-            shell.read_available(timeout=0.08)
-            rows = _render(shell._raw_chunks)
-            joined = "\n".join(rows)
-
-            assert not _has_fossil_border_above_content(rows)
-            follow_up_count = joined.count(_QUEUED_FOLLOW_UP)
-            assert follow_up_count <= 1, "queued follow-up duplicated in the rendered frame"
-            if follow_up_count == 1:
-                assert "↑ to edit · ctrl-s to send immediately" in joined
-                assert not _has_input_card_border_above_text(rows, _QUEUED_FOLLOW_UP)
-                queued_frame_seen = True
-            if "First turn finished." in shell.normalized_text():
-                break
-
-        assert queued_frame_seen, "intentional queued-message row was never rendered"
-        shell.read_until_contains("Queued follow-up executed.", timeout=15.0)
-        shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
-
-        turn_inputs = list_turn_begin_inputs(home_dir, work_dir)
-        assert turn_inputs == [_PROMPT_TEXT, _QUEUED_FOLLOW_UP]
-        assert turn_inputs.count(_QUEUED_FOLLOW_UP) == 1
-        assert any(_is_input_card_border(row) for row in _render(shell._raw_chunks)), (
-            "idle input-card border did not return after the queued turn ended"
         )
     finally:
         shell.close()

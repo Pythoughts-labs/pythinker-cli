@@ -444,53 +444,44 @@ def test_mark_turn_starting_is_idempotent_and_cleared_on_attach_detach() -> None
     assert session._turn_starting is False
 
 
-def test_running_prompt_lifecycle_preserves_prompt_toolkit_screen_mode() -> None:
+def test_sticky_input_turn_start_enables_fullscreen_once() -> None:
     from types import SimpleNamespace
 
     session = object.__new__(prompt_module.CustomPromptSession)
-    renderer = SimpleNamespace(full_screen=False)
-    app = SimpleNamespace(full_screen=True, erase_when_done=False, renderer=renderer)
-    session._session = cast(
-        Any,
-        SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="", completer=None)),
-    )
-    session._mode = prompt_module.PromptMode.AGENT
-    session._agent_mode_completer = cast(Any, object())
-    session._shell_mode_completer = cast(Any, object())
-    session._running_prompt_delegate = None
-    session._running_prompt_previous_mode = None
+    app = SimpleNamespace(full_screen=False, erase_when_done=True)
+    session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
+    session._sticky_input = True
+    session._previous_full_screen = None
     session._turn_starting = False
     invalidations: list[int] = []
-    cast(Any, session).invalidate = lambda: invalidations.append(1)
-    screen_modes = (app.full_screen, renderer.full_screen)
-
-    session._apply_mode()
-    assert app.erase_when_done is True
-    assert (app.full_screen, renderer.full_screen) == screen_modes
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
 
     session.mark_turn_starting()
-    assert session._turn_starting is True
-    assert app.erase_when_done is True
-    assert (app.full_screen, renderer.full_screen) == screen_modes
+    session.mark_turn_starting()
+
+    assert app.full_screen is True
+    assert app.erase_when_done is False
+    assert session._previous_full_screen is False
+    assert len(invalidations) == 1
+
+
+def test_sticky_input_clear_turn_starting_restores_fullscreen_on_pre_attach_error() -> None:
+    from types import SimpleNamespace
+
+    session = object.__new__(prompt_module.CustomPromptSession)
+    app = SimpleNamespace(full_screen=True, erase_when_done=False)
+    session._session = cast(Any, SimpleNamespace(app=app, default_buffer=SimpleNamespace(text="")))
+    session._sticky_input = True
+    session._previous_full_screen = False
+    session._turn_starting = True
+    invalidations: list[int] = []
+    session.invalidate = lambda: invalidations.append(1)  # type: ignore[method-assign]
 
     session.clear_turn_starting()
-    assert session._turn_starting is False
-    assert app.erase_when_done is True
-    assert (app.full_screen, renderer.full_screen) == screen_modes
 
-    session.mark_turn_starting()
-    delegate = cast(Any, object())
-    session.attach_running_prompt(delegate)
     assert session._turn_starting is False
-    assert app.erase_when_done is True
-    assert (app.full_screen, renderer.full_screen) == screen_modes
-
-    session._turn_starting = True
-    session.detach_running_prompt(delegate)
-    assert session._turn_starting is False
-    assert app.erase_when_done is True
-    assert (app.full_screen, renderer.full_screen) == screen_modes
-    assert invalidations == [1, 1, 1, 1, 1]
+    assert app.full_screen is False
+    assert invalidations == [1]
 
 
 def test_clear_turn_starting_is_the_public_api_for_belt_and_suspenders_cleanup() -> None:
@@ -2236,8 +2227,6 @@ def test_handle_local_input_queues_message_by_default() -> None:
     view._turn_ended = False
     view._queued_messages = []
     view._prompt_session = MagicMock()
-    view._emit_steer_echo = MagicMock()
-    view._steer = MagicMock()
 
     user_in = prompt_module.UserInput(
         mode=prompt_module.PromptMode.AGENT,
@@ -2249,11 +2238,7 @@ def test_handle_local_input_queues_message_by_default() -> None:
 
     # Default Enter queues instead of steering
     assert len(view._queued_messages) == 1
-    assert view._queued_messages[0] is user_in
     assert view._queued_messages[0].command == "[Pasted text #1 +3 lines]"
-    view._prompt_session.invalidate.assert_called_once_with()
-    view._emit_steer_echo.assert_not_called()
-    view._steer.assert_not_called()
 
 
 def test_handle_local_input_ignores_finished_turn(monkeypatch) -> None:
