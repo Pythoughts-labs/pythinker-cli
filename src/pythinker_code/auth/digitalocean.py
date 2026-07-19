@@ -15,6 +15,7 @@ from pythinker_code.auth.platforms import managed_model_key, managed_provider_ke
 from pythinker_code.config import Config, LLMModel, LLMProvider
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
+from pythinker_code.utils.logging import logger
 
 DIGITALOCEAN_CLIENT_ID = "b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82"
 DIGITALOCEAN_AUTHORIZE_URL = "https://cloud.digitalocean.com/v1/oauth/authorize"
@@ -187,6 +188,7 @@ async def login_digitalocean(
             ),
         )
     except Exception as exc:
+        logger.warning("Failed to persist DigitalOcean login: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to save DigitalOcean login: {exc}")
         return
 
@@ -215,6 +217,7 @@ async def logout_digitalocean(config: Config) -> AsyncIterator[OAuthEvent]:
     try:
         persist_config_change(config, _remove)
     except Exception as exc:
+        logger.warning("Failed to persist DigitalOcean logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of DigitalOcean: {exc}")
         return
     yield OAuthEvent("success", "Logged out of DigitalOcean successfully.")

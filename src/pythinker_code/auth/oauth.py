@@ -503,18 +503,24 @@ def persist_login(
     """Persist an OAuth login as a unit: credentials and configuration together.
 
     Saves the token, applies the in-memory config mutation, then persists the
-    config. If the mutation or persistence fails, the saved token is deleted and
-    the in-memory config is rolled back, so a failed login never leaves partial
-    state (orphaned credentials or an unsaved config).
+    config. If the mutation or persistence fails, the token store and in-memory
+    config are rolled back to their prior state, so a failed login never leaves
+    partial state (orphaned credentials or an unsaved config). On re-login the
+    previously stored credential is restored rather than deleted, so an unrelated
+    config-save failure never destroys a still-valid existing token.
     """
     snapshot = config.model_copy(deep=True)
+    previous_token = load_tokens(ref)
     save_tokens(ref, token)
     try:
         apply_config(config)
         save_config(config)
     except BaseException:
         with suppress(Exception):
-            delete_tokens(ref)
+            if previous_token is not None:
+                save_tokens(ref, previous_token)
+            else:
+                delete_tokens(ref)
         restore_config_state(config, snapshot)
         raise
 

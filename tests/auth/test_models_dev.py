@@ -152,3 +152,24 @@ def test_build_catalog_models_applies_default_context_and_ordering():
 
     empty = models_dev.build_catalog_models(catalog, "missing", default_context=100_000)
     assert empty == ()
+
+
+def test_build_catalog_models_uses_default_context_when_limit_missing():
+    payload = {
+        "demo": {
+            "name": "Demo",
+            "models": {
+                "chat-nolimit": {
+                    "id": "chat-nolimit",
+                    "name": "Chat No Limit",
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                },
+            },
+        }
+    }
+    catalog = models_dev.parse_models_dev_catalog(payload)
+
+    built = models_dev.build_catalog_models(catalog, "demo", default_context=100_000)
+
+    assert [model.model_id for model in built] == ["chat-nolimit"]
+    assert built[0].max_context_size == 100_000

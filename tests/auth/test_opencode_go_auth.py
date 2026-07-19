@@ -248,6 +248,54 @@ async def test_fetch_models_dev_metadata_degrades_when_catalog_unavailable(monke
     assert result == {}  # degrades gracefully to the curated catalog
 
 
+@pytest.mark.asyncio
+async def test_fetch_models_dev_metadata_uses_authoritative_catalog(monkeypatch):
+    """A successful (authoritative) catalog load yields populated metadata rather
+    than being dropped: the normalized ModelsDevProvider objects flow straight
+    through to _ModelsDevMeta."""
+    from pythinker_code.auth import opencode_go
+    from pythinker_code.auth.models_dev import (
+        CatalogResult,
+        CatalogStatus,
+        parse_models_dev_catalog,
+    )
+
+    catalog = parse_models_dev_catalog(
+        {
+            opencode_go.MODELS_DEV_PROVIDER_ID: {
+                "name": "OpenCode Go",
+                "models": {
+                    "kimi-k2.6": {
+                        "id": "kimi-k2.6",
+                        "name": "Kimi K2.6",
+                        "limit": {"context": 262_144},
+                        "provider": {"npm": "@ai-sdk/moonshot"},
+                    },
+                    "claude-sonnet": {
+                        "id": "claude-sonnet",
+                        "name": "Claude Sonnet",
+                        "limit": {"context": 200_000},
+                        "provider": {"npm": opencode_go.MODELS_DEV_ANTHROPIC_NPM},
+                    },
+                },
+            }
+        }
+    )
+
+    async def ok_catalog():
+        return CatalogResult(catalog, CatalogStatus.OK, "models.dev")
+
+    monkeypatch.setattr(opencode_go, "get_models_dev_catalog", ok_catalog)
+
+    result = await opencode_go._fetch_models_dev_metadata()
+
+    assert set(result) == {"kimi-k2.6", "claude-sonnet"}
+    assert result["kimi-k2.6"].display_name == "Kimi K2.6"
+    assert result["kimi-k2.6"].max_context == 262_144
+    assert result["kimi-k2.6"].is_anthropic is False
+    assert result["claude-sonnet"].is_anthropic is True
+
+
 @pytest.mark.parametrize(
     "payload, expected_ids",
     [

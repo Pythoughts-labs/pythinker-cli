@@ -29,6 +29,7 @@ from pythinker_code.auth.oauth_flows import run_loopback_pkce_flow
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
 from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
 from pythinker_code.utils.aiohttp import new_client_session
+from pythinker_code.utils.logging import logger
 
 SNOWFLAKE_CLIENT_ID = "LOCAL_APPLICATION"
 SNOWFLAKE_REDIRECT_PATH = "/"
@@ -313,6 +314,7 @@ async def login_snowflake(
             lambda cfg: _apply_snowflake_config(cfg, account, models),
         )
     except Exception as exc:
+        logger.warning("Failed to persist Snowflake Cortex login: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to save Snowflake Cortex login: {exc}")
         return
 
@@ -349,6 +351,7 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
         else:
             persist_config_change(config, _remove)
     except Exception as exc:
+        logger.warning("Failed to persist Snowflake Cortex logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of Snowflake Cortex: {exc}")
         return
     yield OAuthEvent("success", "Logged out of Snowflake Cortex successfully.")

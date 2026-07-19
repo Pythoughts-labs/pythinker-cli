@@ -31,6 +31,7 @@ from pythinker_code.auth.platforms import managed_model_key, managed_provider_ke
 from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
+from pythinker_code.utils.logging import logger
 
 XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
 XAI_SCOPE = "openid profile email offline_access grok-cli:access api:access"
@@ -112,6 +113,12 @@ async def _discover_xai_models() -> tuple[XAIModel, ...]:
     """
     result = await get_models_dev_catalog()
     if not result.is_authoritative:
+        logger.debug(
+            "models.dev catalog not authoritative (status={status}, source={source}); "
+            "using curated xAI models.",
+            status=result.status,
+            source=result.source,
+        )
         return XAI_MODELS
     built = build_catalog_models(
         result.catalog, XAI_MODELS_DEV_PROVIDER_ID, default_context=XAI_DEFAULT_CONTEXT
@@ -231,6 +238,7 @@ async def login_xai_browser(
     try:
         persist_login(config, _xai_oauth_ref(), token, lambda cfg: _apply_xai_config(cfg, models))
     except Exception as exc:
+        logger.warning("Failed to persist xAI Grok login: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
         return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
@@ -288,6 +296,7 @@ async def login_xai_headless(config: Config) -> AsyncIterator[OAuthEvent]:
     try:
         persist_login(config, _xai_oauth_ref(), token, lambda cfg: _apply_xai_config(cfg, models))
     except Exception as exc:
+        logger.warning("Failed to persist xAI Grok login: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
         return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
@@ -312,6 +321,7 @@ async def logout_xai(config: Config) -> AsyncIterator[OAuthEvent]:
     try:
         persist_logout(config, _xai_oauth_ref(), _remove)
     except Exception as exc:
+        logger.warning("Failed to persist xAI Grok logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of xAI Grok: {exc}")
         return
     yield OAuthEvent("success", "Logged out of xAI Grok successfully.")

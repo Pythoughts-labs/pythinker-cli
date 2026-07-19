@@ -132,6 +132,12 @@ async def _discover_copilot_models() -> tuple[GitHubCopilotModel, ...]:
     """
     result = await get_models_dev_catalog()
     if not result.is_authoritative:
+        logger.debug(
+            "models.dev catalog not authoritative (status={status}, source={source}); "
+            "using curated GitHub Copilot models.",
+            status=result.status,
+            source=result.source,
+        )
         return GITHUB_COPILOT_MODELS
     built = build_catalog_models(
         result.catalog,
@@ -256,6 +262,7 @@ async def login_copilot(config: Config, *, open_browser: bool = True) -> AsyncIt
             config, _copilot_oauth_ref(), token, lambda cfg: _apply_copilot_config(cfg, models)
         )
     except Exception as exc:
+        logger.warning("Failed to persist GitHub Copilot login: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to save GitHub Copilot login: {exc}")
         return
     yield OAuthEvent(
@@ -283,6 +290,7 @@ async def logout_copilot(config: Config) -> AsyncIterator[OAuthEvent]:
     try:
         persist_logout(config, _copilot_oauth_ref(), _remove)
     except Exception as exc:
+        logger.warning("Failed to persist GitHub Copilot logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of GitHub Copilot: {exc}")
         return
     yield OAuthEvent("success", "Logged out of GitHub Copilot successfully.")
