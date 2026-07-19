@@ -13,6 +13,7 @@ from pythinker_code.auth.oauth import (
     OAuthManager,
     OAuthToken,
     OAuthUnauthorized,
+    _credentials_path,
     load_tokens,
     save_tokens,
 )
@@ -246,7 +247,7 @@ async def test_login_snowflake_saves_account_scoped_token_provider_and_models(
     assert stored.access_token == "snowflake-access-secret"
     assert stored.refresh_token == "snowflake-refresh-secret"
     assert stored.expires_in == 600
-    assert (tmp_path / "credentials" / "MYORG-acct.json").is_file()
+    assert _credentials_path(oauth_ref.key).is_file()
 
     provider = config.providers["managed:snowflake-cortex"]
     assert provider.type == "openai_legacy"
@@ -366,7 +367,7 @@ async def test_logout_snowflake_removes_account_token_provider_models_and_repair
 
     assert [event.type for event in events] == ["success"]
     assert load_tokens(oauth_ref) is None
-    assert not (tmp_path / "credentials" / "myorg-acct.json").exists()
+    assert not _credentials_path(oauth_ref.key).exists()
     assert SNOWFLAKE_PROVIDER_KEY not in config.providers
     assert all(model.provider != SNOWFLAKE_PROVIDER_KEY for model in config.models.values())
     assert config.default_model == "fallback/model"

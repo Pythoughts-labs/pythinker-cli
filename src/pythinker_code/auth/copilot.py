@@ -258,7 +258,7 @@ async def login_copilot(config: Config, *, open_browser: bool = True) -> AsyncIt
     )
     models = await _discover_copilot_models()
     try:
-        persist_login(
+        await persist_login(
             config, _copilot_oauth_ref(), token, lambda cfg: _apply_copilot_config(cfg, models)
         )
     except Exception as exc:
@@ -288,7 +288,7 @@ async def logout_copilot(config: Config) -> AsyncIterator[OAuthEvent]:
             cfg.default_model = next(iter(cfg.models), "")
 
     try:
-        persist_logout(config, _copilot_oauth_ref(), _remove)
+        await persist_logout(config, _copilot_oauth_ref(), _remove)
     except Exception as exc:
         logger.warning("Failed to persist GitHub Copilot logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of GitHub Copilot: {exc}")

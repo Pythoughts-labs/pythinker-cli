@@ -36,12 +36,14 @@ from pythinker_code.config import (
     OAuthRef,
     PythinkerAIFetchConfig,
     PythinkerAISearchConfig,
+    get_config_file,
     save_config,
 )
 from pythinker_code.constant import VERSION
 from pythinker_code.share import get_share_dir
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
+from pythinker_code.utils.io import file_lock
 from pythinker_code.utils.logging import logger
 
 if TYPE_CHECKING:
@@ -73,6 +75,10 @@ class OAuthError(RuntimeError):
 
 class OAuthUnauthorized(OAuthError):
     """OAuth credentials rejected."""
+
+
+class OAuthPersistenceError(OAuthError):
+    """OAuth credentials and configuration could not be persisted consistently."""
 
 
 class _RetryableRefreshError(OAuthError):
@@ -503,73 +509,106 @@ def restore_config_state(config: Config, snapshot: Config) -> None:
         setattr(config, field_name, getattr(snapshot, field_name))
 
 
-def persist_login(
+def _persist_login_sync(
     config: Config,
     ref: OAuthRef,
     token: OAuthToken,
     apply_config: Callable[[Config], None],
 ) -> None:
-    """Persist an OAuth login as a unit: credentials and configuration together.
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        previous_token = load_tokens(ref)
+        save_tokens(ref, token)
+        try:
+            apply_config(config)
+            save_config(config)
+        except BaseException as persistence_error:
+            restore_config_state(config, snapshot)
+            try:
+                if previous_token is not None:
+                    save_tokens(ref, previous_token)
+                else:
+                    delete_tokens(ref)
+            except Exception as rollback_error:
+                logger.error(
+                    "Failed to roll back OAuth login persistence: {error}",
+                    error=rollback_error,
+                )
+                raise OAuthPersistenceError(
+                    "OAuth login persistence failed and credential rollback also failed."
+                ) from persistence_error
+            raise
 
-    Saves the token, applies the in-memory config mutation, then persists the
-    config. If the mutation or persistence fails, the token store and in-memory
-    config are rolled back to their prior state, so a failed login never leaves
-    partial state (orphaned credentials or an unsaved config). On re-login the
-    previously stored credential is restored rather than deleted, so an unrelated
-    config-save failure never destroys a still-valid existing token.
-    """
-    snapshot = config.model_copy(deep=True)
-    previous_token = load_tokens(ref)
-    save_tokens(ref, token)
-    try:
-        apply_config(config)
-        save_config(config)
-    except BaseException:
-        with suppress(Exception):
-            if previous_token is not None:
-                save_tokens(ref, previous_token)
-            else:
-                delete_tokens(ref)
-        restore_config_state(config, snapshot)
-        raise
+
+async def persist_login(
+    config: Config,
+    ref: OAuthRef,
+    token: OAuthToken,
+    apply_config: Callable[[Config], None],
+) -> None:
+    """Persist OAuth credentials and config together outside the event loop."""
+    await asyncio.to_thread(_persist_login_sync, config, ref, token, apply_config)
 
 
-def persist_logout(
+def _persist_logout_sync(
     config: Config,
     ref: OAuthRef,
     remove_config: Callable[[Config], None],
 ) -> None:
-    """Persist an OAuth logout as a unit, config removal first.
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        remove_config(config)
+        try:
+            save_config(config)
+        except BaseException:
+            restore_config_state(config, snapshot)
+            raise
+        try:
+            delete_tokens(ref)
+        except Exception as delete_error:
+            restore_config_state(config, snapshot)
+            try:
+                save_config(config)
+            except Exception as rollback_error:
+                logger.error(
+                    "Failed to restore configuration after OAuth credential deletion failed: "
+                    "{error}",
+                    error=rollback_error,
+                )
+                raise OAuthPersistenceError(
+                    "OAuth logout failed and configuration rollback also failed."
+                ) from delete_error
+            raise OAuthPersistenceError(
+                "OAuth credential deletion failed; logout was rolled back."
+            ) from delete_error
 
-    The configuration removal is persisted before credentials are deleted, so an
-    interruption leaves recoverable credentials rather than orphaned config. If
-    persisting the config removal fails, the in-memory config is rolled back and
-    the credentials are left intact.
-    """
-    snapshot = config.model_copy(deep=True)
-    remove_config(config)
-    try:
-        save_config(config)
-    except BaseException:
-        restore_config_state(config, snapshot)
-        raise
-    with suppress(Exception):
-        delete_tokens(ref)
+
+async def persist_logout(
+    config: Config,
+    ref: OAuthRef,
+    remove_config: Callable[[Config], None],
+) -> None:
+    """Persist OAuth logout outside the event loop, config removal first."""
+    await asyncio.to_thread(_persist_logout_sync, config, ref, remove_config)
 
 
-def persist_config_change(config: Config, apply_config: Callable[[Config], None]) -> None:
-    """Persist a config-only change atomically (no OAuth credentials involved).
+def _persist_config_change_sync(
+    config: Config,
+    apply_config: Callable[[Config], None],
+) -> None:
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        try:
+            apply_config(config)
+            save_config(config)
+        except BaseException:
+            restore_config_state(config, snapshot)
+            raise
 
-    Applies the mutation and saves; on failure the in-memory config is restored
-    so runtime state never diverges from disk.
-    """
-    snapshot = config.model_copy(deep=True)
-    try:
-        apply_config(config)
-        save_config(config)
-    except BaseException:
-        restore_config_state(config, snapshot)
-        raise
+
+async def persist_config_change(config: Config, apply_config: Callable[[Config], None]) -> None:
+    """Persist a config-only change atomically outside the event loop."""
+    await asyncio.to_thread(_persist_config_change_sync, config, apply_config)
 
 
 async def request_device_authorization() -> DeviceAuthorization:

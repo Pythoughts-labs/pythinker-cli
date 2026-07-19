@@ -181,7 +181,7 @@ async def login_digitalocean(
 
     catalog = await _fetch_router_catalog(auth.access_token)
     try:
-        persist_config_change(
+        await persist_config_change(
             config,
             lambda cfg: _apply_digitalocean_config(
                 cfg, SecretStr(auth.access_token), catalog.names
@@ -215,7 +215,7 @@ async def logout_digitalocean(config: Config) -> AsyncIterator[OAuthEvent]:
             cfg.default_model = next(iter(cfg.models), "")
 
     try:
-        persist_config_change(config, _remove)
+        await persist_config_change(config, _remove)
     except Exception as exc:
         logger.warning("Failed to persist DigitalOcean logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of DigitalOcean: {exc}")

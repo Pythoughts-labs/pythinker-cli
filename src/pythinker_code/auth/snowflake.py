@@ -307,7 +307,7 @@ async def login_snowflake(
 
     models = await _discover_snowflake_models()
     try:
-        persist_login(
+        await persist_login(
             config,
             _oauth_ref(account),
             token,
@@ -347,9 +347,9 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
 
     try:
         if ref is not None:
-            persist_logout(config, ref, _remove)
+            await persist_logout(config, ref, _remove)
         else:
-            persist_config_change(config, _remove)
+            await persist_config_change(config, _remove)
     except Exception as exc:
         logger.warning("Failed to persist Snowflake Cortex logout: {exc}", exc=exc)
         yield OAuthEvent("error", f"Failed to log out of Snowflake Cortex: {exc}")
