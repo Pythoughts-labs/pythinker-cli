@@ -104,7 +104,20 @@ Phases (each = one verified Codex delegation, sequential):
                 shell/cli wiring (mirror xai) + tests. platforms.py skip-guard for managed:digitalocean.
                 Empty-routers guard: still persist key + save_config, seed 0 models, guard default_model.
             **PENDING LIVE VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
-      - [ ] P3e — Snowflake Cortex (loopback PKCE).
+      - [~] P3e — Snowflake Cortex. **SCOPE = FULL ROBUST ACCOUNT-SCOPED BUILD (user-confirmed
+            2026-07-18).** Materially the most complex P3 provider (NOT "simpler like xai"):
+            account-scoped OAuth + inference base_url (account + optional role PROMPTED at login),
+            role-dependent scope (`refresh_token session:role:<role>`), HTTP Basic client creds
+            (base64 `LOCAL_APPLICATION:LOCAL_APPLICATION`), loopback-PKCE (reuses P3a
+            run_loopback_pkce_flow, redirect_path "/"). Endpoints:
+            https://<account>.snowflakecomputing.com/oauth/{authorize,token-request}. **Account-aware
+            refresh: encode account into OAuthRef key `oauth/snowflake-cortex/<account>` and parse it
+            in oauth.py refresh dispatch → the ONE shared-oauth.py change.** Provider openai_legacy,
+            base_url per-account = https://<account>.snowflakecomputing.com/api/v2/cortex (VERIFY exact
+            path). KNOWN LIVE-INFERENCE GAP: cortexFetch transforms (max_tokens→max_completion_tokens,
+            400 "conversation complete"→stop, streaming role:""→"assistant") NOT replicated by
+            openai_legacy — does not block login; chat may need follow-up. Recon afd25065 mapping exact
+            wiring + primary-source constant verification. **PENDING LIVE VERIFY** (real Snowflake acct).
 - [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
 - [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
 
