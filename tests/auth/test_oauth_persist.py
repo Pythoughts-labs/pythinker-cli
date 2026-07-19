@@ -94,3 +94,17 @@ def test_persist_login_persists_both_on_success(monkeypatch: pytest.MonkeyPatch,
     stored = oauth.load_tokens(ref)
     assert stored is not None
     assert stored.access_token == "new-access"
+
+
+def test_nested_oauth_ref_has_distinct_credential_and_lock_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+
+    flat_key = "oauth/xai"
+    nested_key = "oauth/snowflake-cortex/xai"
+
+    assert oauth._credentials_path(flat_key).name == "xai.json"
+    assert oauth._credentials_lock_path(flat_key).name == "xai.lock"
+    assert oauth._credentials_path(nested_key) != oauth._credentials_path(flat_key)
+    assert oauth._credentials_lock_path(nested_key) != oauth._credentials_lock_path(flat_key)

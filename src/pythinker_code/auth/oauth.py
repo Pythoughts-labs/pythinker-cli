@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import platform
@@ -297,14 +298,22 @@ def _credentials_dir() -> Path:
     return path
 
 
+def _credential_file_stem(key: str) -> str:
+    relative_key = key.removeprefix("oauth/")
+    if "/" not in relative_key:
+        return relative_key or key
+    encoded = base64.urlsafe_b64encode(relative_key.encode(encoding="utf-8")).decode(
+        encoding="ascii"
+    )
+    return f"v2-{encoded.rstrip('=')}"
+
+
 def _credentials_path(key: str) -> Path:
-    name = key.removeprefix("oauth/").split("/")[-1] or key
-    return _credentials_dir() / f"{name}.json"
+    return _credentials_dir() / f"{_credential_file_stem(key)}.json"
 
 
 def _credentials_lock_path(key: str) -> Path:
-    name = key.removeprefix("oauth/").split("/")[-1] or key
-    return _credentials_dir() / f"{name}.lock"
+    return _credentials_dir() / f"{_credential_file_stem(key)}.lock"
 
 
 class _CrossProcessLock:
