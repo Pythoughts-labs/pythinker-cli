@@ -41,6 +41,11 @@ contract and C01–C15 tripwires below; ship the matching tests and verification
   `uv run ...` or `uv run --directory <package> ...`.
 - **Keep changes surgical.** Do not perform drive-by refactors, formatting churn, dependency
   upgrades, or generated-file rewrites unless the task requires them.
+- **Never propose deferring an applicable issue or fix.** If a problem is real and a fix applies,
+  do the fix now — even when it requires a redesign or significantly more work. "Defer",
+  "follow-up later", "out of scope for now", and equivalents are prohibited recommendations; the
+  only permitted alternative to fixing immediately is stopping to request expanded scope, then
+  fixing.
 - **Do not expose secrets or PII.** Never print, commit, or copy API keys, OAuth tokens, session
   data, user config, or logs that may contain credentials.
 - **Do not add new telemetry, hosted endpoints, external services, or third-party dependencies**
