@@ -214,6 +214,64 @@ async def test_prompt_incremental_scrollback_uses_terminal_handoff(monkeypatch) 
     assert invalidations  # prompt is invalidated around the terminal handoff
 
 
+@pytest.mark.asyncio
+async def test_scrollback_handoff_settles_cursor_before_reexpanding(monkeypatch) -> None:
+    """Regression (doubled/ghosted running-prompt block).
+
+    After a run_in_terminal handoff the suppressed multi-row body must not
+    re-expand until the re-requested absolute-cursor CPR settles; otherwise it
+    diffs against a provisional cursor model and strands the old rows as a ghost.
+    The settle must run while the handoff is still suppressed (depth > 0), and the
+    success path must NOT reset the renderer — a reset re-fossilizes static
+    scrollback (the queued-input ghost regression).
+    """
+    from pythinker_code.ui.shell.visualize._blocks import _ContentBlock
+
+    events: list[str] = []
+    depth_at_settle: list[int] = []
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            return None
+
+    async def _run_in_terminal(func, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        func()
+
+    monkeypatch.setattr(_interactive_mod, "run_in_terminal", _run_in_terminal)
+    monkeypatch.setattr(_live_view_mod.console, "_force_terminal", True)
+    monkeypatch.setattr(
+        _live_view_mod,
+        "emit_scrollback_block",
+        lambda _console, renderable: None,
+    )
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    async def _settle() -> None:
+        events.append("settle")
+        depth_at_settle.append(view._scrollback_handoff_depth)
+
+    monkeypatch.setattr(view, "_settle_cursor_after_handoff", _settle)
+    monkeypatch.setattr(
+        view, "_reset_prompt_renderer", lambda reason: events.append(f"reset:{reason}")
+    )
+    block = _ContentBlock(is_think=False)
+    block.append("First paragraph.\n\nMutable tail")
+    assert block._committed_renderables
+    view._current_content_block = block
+
+    emitted = await view._emit_incremental_content_commits()
+
+    assert emitted is True
+    assert events == ["settle"], "success path settles the cursor and never resets the renderer"
+    assert depth_at_settle == [1], "cursor settles while the handoff is still suppressed"
+    assert view._scrollback_handoff_depth == 0
+
+
 def test_status_loop_has_no_midstream_commit_throttle() -> None:
     """Regression guard: the per-tick mid-stream commit (the source of the
     run_in_terminal "jump") must not come back. Completed prose stays in the
