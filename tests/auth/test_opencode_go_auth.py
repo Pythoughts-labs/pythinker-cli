@@ -236,9 +236,10 @@ async def test_fetch_models_dev_metadata_degrades_when_catalog_unavailable(monke
     it. The fetch timeout and fail-open behavior now live in and are tested by
     ``auth/models_dev.py``; this layer only delegates to it."""
     from pythinker_code.auth import opencode_go
+    from pythinker_code.auth.models_dev import CatalogResult, CatalogStatus
 
     async def empty_catalog():
-        return {}
+        return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
 
     monkeypatch.setattr(opencode_go, "get_models_dev_catalog", empty_catalog)
 

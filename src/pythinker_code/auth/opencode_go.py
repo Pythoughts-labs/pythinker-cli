@@ -271,7 +271,8 @@ def _build_models(
 
 async def _fetch_models_dev_metadata() -> dict[str, _ModelsDevMeta]:
     """Load best-effort OpenCode metadata from the shared models.dev catalog."""
-    return _parse_models_dev_metadata(await get_models_dev_catalog())
+    result = await get_models_dev_catalog()
+    return _parse_models_dev_metadata(result.catalog)
 
 
 async def _discover_opencode_go_models(api_key: str) -> tuple[OpenCodeGoModel, ...]:
