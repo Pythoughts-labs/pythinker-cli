@@ -22,6 +22,7 @@ from pythinker_code.auth import (
     OPENAI_CHATGPT_PLATFORM_ID,
     OPENCODE_GO_PLATFORM_ID,
     OPENROUTER_PLATFORM_ID,
+    SNOWFLAKE_CORTEX_PLATFORM_ID,
     XAI_PLATFORM_ID,
     ZAI_API_PLATFORM_ID,
     ZAI_CODING_PLATFORM_ID,
@@ -95,6 +96,11 @@ from pythinker_code.auth.openrouter import (
     logout_openrouter,
 )
 from pythinker_code.auth.platforms import managed_provider_key
+from pythinker_code.auth.snowflake import (
+    SNOWFLAKE_PROVIDER_KEY,
+    login_snowflake,
+    logout_snowflake,
+)
 from pythinker_code.auth.xai import (
     XAI_PROVIDER_KEY,
     login_xai_browser,
@@ -180,6 +186,7 @@ _SELECTOR_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="headless", name="OpenAI ChatGPT (device code)", auth_type="oauth"),
     OAuthProviderEntry(id="copilot", name="GitHub Copilot", auth_type="oauth"),
     OAuthProviderEntry(id="digitalocean", name="DigitalOcean", auth_type="oauth"),
+    OAuthProviderEntry(id="snowflake", name="Snowflake Cortex", auth_type="oauth"),
     OAuthProviderEntry(id="xai", name="xAI Grok (browser)", auth_type="oauth"),
     OAuthProviderEntry(id="xai-device", name="xAI Grok (device code)", auth_type="oauth"),
     OAuthProviderEntry(id="api-key", name="OpenAI API key", auth_type="api_key"),
@@ -212,6 +219,7 @@ _PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "copilot": (GITHUB_COPILOT_PROVIDER_KEY,),
     "digitalocean": (DIGITALOCEAN_PROVIDER_KEY,),
+    "snowflake": (SNOWFLAKE_PROVIDER_KEY,),
     "xai": (XAI_PROVIDER_KEY,),
     "xai-device": (XAI_PROVIDER_KEY,),
     "opencode-go": (OPENCODE_GO_OPENAI_PROVIDER_KEY, OPENCODE_GO_ANTHROPIC_PROVIDER_KEY),
@@ -234,6 +242,7 @@ _LOGOUT_PROVIDER_ENTRIES: list[OAuthProviderEntry] = [
     OAuthProviderEntry(id="openai", name="OpenAI", auth_type="oauth"),
     OAuthProviderEntry(id="copilot", name="GitHub Copilot", auth_type="oauth"),
     OAuthProviderEntry(id="digitalocean", name="DigitalOcean", auth_type="oauth"),
+    OAuthProviderEntry(id="snowflake", name="Snowflake Cortex", auth_type="oauth"),
     OAuthProviderEntry(id="xai", name="xAI Grok", auth_type="oauth"),
     OAuthProviderEntry(id="opencode-go", name="OpenCode Go", auth_type="api_key"),
     OAuthProviderEntry(id="minimax", name="MiniMax", auth_type="api_key"),
@@ -269,7 +278,7 @@ def current_model_key(soul: PythinkerSoul) -> str | None:
 
 @registry.command(aliases=["setup"])
 async def login(app: Shell, args: str) -> None:
-    """Login with OpenAI, GitHub Copilot, DigitalOcean, xAI Grok, or API-key providers."""
+    """Login with OpenAI, GitHub Copilot, DigitalOcean, Snowflake, xAI, or API keys."""
     soul = ensure_pythinker_soul(app)
     if soul is None:
         return
@@ -298,6 +307,14 @@ async def login(app: Shell, args: str) -> None:
     elif mode == "digitalocean":
         ok = await _render_oauth_events(login_digitalocean(soul.runtime.config))
         provider = DIGITALOCEAN_PLATFORM_ID
+    elif mode == "snowflake":
+        account = await _prompt_text("Snowflake account identifier")
+        if not account:
+            console.print(f"[{_t.error}]Snowflake account identifier is required.[/]")
+            return
+        role = await _prompt_text("Snowflake role (optional)")
+        ok = await _render_oauth_events(login_snowflake(soul.runtime.config, account, role or None))
+        provider = SNOWFLAKE_CORTEX_PLATFORM_ID
     elif mode == "xai":
         ok = await _render_oauth_events(login_xai_browser(soul.runtime.config))
         provider = XAI_PLATFORM_ID
@@ -398,7 +415,8 @@ async def login(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /login "
-            "[browser|headless|copilot|digitalocean|xai|xai-device|api-key|opencode-go|"
+            "[browser|headless|copilot|digitalocean|snowflake|xai|xai-device|api-key|"
+            "opencode-go|"
             "minimax|deepseek|z-ai-coding|z-ai-api|moonshot|kimi|alibaba|anthropic|"
             "openrouter|lm-studio|ollama][/]"
         )
@@ -415,7 +433,7 @@ async def login(app: Shell, args: str) -> None:
 
 @registry.command
 async def logout(app: Shell, args: str) -> None:
-    """Logout from OpenAI, GitHub Copilot, DigitalOcean, xAI Grok, or API-key providers."""
+    """Logout from OpenAI, GitHub Copilot, DigitalOcean, Snowflake, xAI, or API keys."""
     soul = ensure_pythinker_soul(app)
     if soul is None:
         return
@@ -452,6 +470,8 @@ async def logout(app: Shell, args: str) -> None:
         ok = await _render_oauth_events(logout_copilot(config))
     elif mode == "digitalocean":
         ok = await _render_oauth_events(logout_digitalocean(config))
+    elif mode == "snowflake":
+        ok = await _render_oauth_events(logout_snowflake(config))
     elif mode == "xai":
         ok = await _render_oauth_events(logout_xai(config))
     elif mode == "openrouter":
@@ -487,7 +507,8 @@ async def logout(app: Shell, args: str) -> None:
     else:
         console.print(
             f"[{_t.error}]Usage: /logout "
-            "[openai|copilot|digitalocean|xai|opencode-go|minimax|deepseek|z-ai-coding|"
+            "[openai|copilot|digitalocean|snowflake|xai|opencode-go|minimax|deepseek|"
+            "z-ai-coding|"
             "z-ai-api|moonshot|kimi|alibaba|anthropic|openrouter|lm-studio|ollama|"
             "github-feedback][/]"
         )

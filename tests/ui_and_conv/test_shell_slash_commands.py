@@ -235,6 +235,57 @@ async def test_shell_logout_xai_routes_to_xai(monkeypatch: pytest.MonkeyPatch) -
     assert logout.called
 
 
+async def test_shell_login_snowflake_prompts_and_routes_to_snowflake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    login = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+    prompt_values = iter(("myorg-acct", "DATA_ENGINEER"))
+
+    async def fake_prompt_text(_label: str) -> str:
+        return next(prompt_values)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "login_snowflake", login)
+    monkeypatch.setattr(shell_oauth, "_prompt_text", fake_prompt_text)
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.login)(app, "snowflake")
+
+    login.assert_called_once_with(config, "myorg-acct", "DATA_ENGINEER")
+
+
+async def test_shell_logout_snowflake_routes_to_snowflake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    logout = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "logout_snowflake", logout)
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.logout)(app, "snowflake")
+
+    logout.assert_called_once_with(config)
+
+
 async def test_model_switch_starts_fresh_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Changing models should reload into a new session so old context is not reused."""
     from pythinker_code.soul.pythinkersoul import PythinkerSoul

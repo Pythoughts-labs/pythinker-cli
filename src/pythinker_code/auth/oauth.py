@@ -1167,6 +1167,11 @@ class OAuthManager:
             from pythinker_code.auth.xai import refresh_xai_token
 
             return await refresh_xai_token(refresh_token_value)
+        if ref.key.startswith("oauth/snowflake-cortex/"):
+            from pythinker_code.auth.snowflake import refresh_snowflake_cortex_token
+
+            account = ref.key.removeprefix("oauth/snowflake-cortex/")
+            return await refresh_snowflake_cortex_token(account, refresh_token_value)
         return await refresh_token(refresh_token_value)
 
     def _apply_access_token(

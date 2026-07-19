@@ -14,6 +14,7 @@ from pythinker_code.auth import (
     OPENAI_API_PLATFORM_ID,
     OPENAI_CHATGPT_PLATFORM_ID,
     PYTHINKER_CODE_PLATFORM_ID,
+    SNOWFLAKE_CORTEX_PLATFORM_ID,
     XAI_PLATFORM_ID,
 )
 from pythinker_code.config import Config, LLMModel, load_config, save_config
@@ -113,6 +114,12 @@ PLATFORMS: list[Platform] = [
         id=XAI_PLATFORM_ID,
         name="xAI Grok",
         base_url="https://api.x.ai/v1",
+    ),
+    Platform(
+        id=SNOWFLAKE_CORTEX_PLATFORM_ID,
+        name="Snowflake Cortex",
+        # Display-only; inference and OAuth endpoints are account-scoped.
+        base_url="https://app.snowflake.com",
     ),
     Platform(
         id="pythinker_ai-cn",
@@ -296,6 +303,7 @@ async def refresh_managed_models(config: Config) -> bool:
             in {
                 managed_provider_key(DIGITALOCEAN_PLATFORM_ID),
                 managed_provider_key(GITHUB_COPILOT_PLATFORM_ID),
+                managed_provider_key(SNOWFLAKE_CORTEX_PLATFORM_ID),
                 managed_provider_key(XAI_PLATFORM_ID),
                 MINIMAX_ANTHROPIC_PROVIDER_KEY,
                 KIMI_PROVIDER_KEY,
