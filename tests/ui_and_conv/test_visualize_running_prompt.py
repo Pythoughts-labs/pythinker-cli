@@ -326,6 +326,60 @@ async def test_scrollback_handoff_settles_cursor_on_failure(monkeypatch) -> None
     assert view._scrollback_handoff_depth == 0
 
 
+@pytest.mark.asyncio
+async def test_settle_cursor_after_handoff_behavior(monkeypatch) -> None:
+    """Exercise the real `_settle_cursor_after_handoff` against a renderer double
+    (not by mocking the method): it awaits CPR responses when the output supports
+    CPR, is a no-op otherwise, and swallows a failing CPR wait rather than
+    propagating it.
+    """
+    import prompt_toolkit.application as _pt_app
+
+    calls: list[str] = []
+
+    class _OkRenderer:
+        async def wait_for_cpr_responses(self) -> None:
+            calls.append("cpr")
+
+    class _BadRenderer:
+        async def wait_for_cpr_responses(self) -> None:
+            raise RuntimeError("cpr boom")
+
+    class _Output:
+        responds_to_cpr = True
+
+    class _App:
+        def __init__(self, renderer: object) -> None:
+            self.output = _Output()
+            self.renderer = renderer
+
+    class _PromptSession:
+        def invalidate(self) -> None:
+            return None
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    # CPR supported -> awaits the renderer's CPR wait.
+    monkeypatch.setattr(_pt_app, "get_app_or_none", lambda: _App(_OkRenderer()))
+    await view._settle_cursor_after_handoff()
+    assert calls == ["cpr"]
+
+    # Output without CPR support -> no wait.
+    calls.clear()
+    _Output.responds_to_cpr = False
+    await view._settle_cursor_after_handoff()
+    assert calls == []
+
+    # A failing CPR wait is swallowed (logged), not propagated.
+    _Output.responds_to_cpr = True
+    monkeypatch.setattr(_pt_app, "get_app_or_none", lambda: _App(_BadRenderer()))
+    await view._settle_cursor_after_handoff()
+
+
 def test_status_loop_has_no_midstream_commit_throttle() -> None:
     """Regression guard: the per-tick mid-stream commit (the source of the
     run_in_terminal "jump") must not come back. Completed prose stays in the

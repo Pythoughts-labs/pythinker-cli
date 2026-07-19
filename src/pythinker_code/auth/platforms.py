@@ -357,7 +357,22 @@ async def refresh_managed_models(config: Config) -> bool:
             # Construct off the event loop: OAuthManager.__init__ can run
             # _migrate_oauth_storage(), which takes a synchronous cross-process
             # file lock (5s timeout) and would otherwise stall async refresh.
-            oauth_manager = await asyncio.to_thread(OAuthManager, working_config)
+            # The worker thread cannot be cancelled, so on cancellation drain it
+            # to completion before unwinding — otherwise the migration could keep
+            # writing shared OAuth state (and hold its file lock) after the caller
+            # has gone.
+            worker = asyncio.create_task(asyncio.to_thread(OAuthManager, working_config))
+            try:
+                oauth_manager = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                raise
         provider = working_config.providers.get(provider_key)
         if provider is None:
             continue
