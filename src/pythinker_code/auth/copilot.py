@@ -144,7 +144,16 @@ async def _discover_copilot_models() -> tuple[GitHubCopilotModel, ...]:
         GITHUB_COPILOT_MODELS_DEV_PROVIDER_ID,
         default_context=GITHUB_COPILOT_DEFAULT_CONTEXT,
     )
-    return _catalog_models_to_copilot(built) or GITHUB_COPILOT_MODELS
+    converted = _catalog_models_to_copilot(built)
+    if converted:
+        return converted
+    logger.debug(
+        "models.dev catalog contained no usable GitHub Copilot models "
+        "(status={status}, source={source}); using curated models.",
+        status=result.status,
+        source=result.source,
+    )
+    return GITHUB_COPILOT_MODELS
 
 
 async def refresh_copilot_token(github_token: str) -> OAuthToken:

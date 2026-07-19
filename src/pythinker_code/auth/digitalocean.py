@@ -195,7 +195,11 @@ async def login_digitalocean(
     message = _router_status_message(catalog.status)
     if message:
         yield OAuthEvent("info", message)
-    yield OAuthEvent("success", f"DigitalOcean configured with model {config.default_model}.")
+    if catalog.names:
+        success_message = f"DigitalOcean configured with model {config.default_model}."
+    else:
+        success_message = "DigitalOcean credentials saved; no inference routers are configured."
+    yield OAuthEvent("success", success_message)
 
 
 async def logout_digitalocean(config: Config) -> AsyncIterator[OAuthEvent]:

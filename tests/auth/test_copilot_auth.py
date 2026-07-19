@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
@@ -27,6 +28,28 @@ def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
 
     monkeypatch.setattr(copilot, "get_models_dev_catalog", _fake)
+
+
+@pytest.mark.asyncio
+async def test_discover_copilot_models_logs_empty_authoritative_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import copilot
+
+    messages: list[str] = []
+
+    async def empty_catalog() -> CatalogResult:
+        return CatalogResult({}, CatalogStatus.OK, "network")
+
+    monkeypatch.setattr(copilot, "get_models_dev_catalog", empty_catalog)
+    monkeypatch.setattr(
+        copilot,
+        "logger",
+        SimpleNamespace(debug=lambda message, **_kwargs: messages.append(message)),
+    )
+
+    assert await copilot._discover_copilot_models() == copilot.GITHUB_COPILOT_MODELS
+    assert any("no usable" in message for message in messages)
 
 
 @pytest.mark.asyncio

@@ -245,13 +245,28 @@ async def _discover_snowflake_models() -> tuple[SnowflakeModel, ...]:
     """
     result = await get_models_dev_catalog()
     if not result.is_authoritative:
+        logger.debug(
+            "models.dev catalog not authoritative (status={status}, source={source}); "
+            "using curated Snowflake Cortex models.",
+            status=result.status,
+            source=result.source,
+        )
         return SNOWFLAKE_MODELS
     built = build_catalog_models(
         result.catalog,
         SNOWFLAKE_MODELS_DEV_PROVIDER_ID,
         default_context=SNOWFLAKE_DEFAULT_CONTEXT,
     )
-    return _catalog_models_to_snowflake(built) or SNOWFLAKE_MODELS
+    converted = _catalog_models_to_snowflake(built)
+    if converted:
+        return converted
+    logger.debug(
+        "models.dev catalog contained no usable Snowflake Cortex models "
+        "(status={status}, source={source}); using curated models.",
+        status=result.status,
+        source=result.source,
+    )
+    return SNOWFLAKE_MODELS
 
 
 async def login_snowflake(

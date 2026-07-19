@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -28,6 +29,35 @@ def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
         return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
 
     monkeypatch.setattr(snowflake, "get_models_dev_catalog", _fake)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [CatalogStatus.OK, CatalogStatus.UNAVAILABLE])
+async def test_discover_snowflake_models_logs_catalog_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    status: CatalogStatus,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    messages: list[str] = []
+
+    async def empty_catalog() -> CatalogResult:
+        source = "network" if status is CatalogStatus.OK else "none"
+        return CatalogResult({}, status, source)
+
+    monkeypatch.setattr(snowflake, "get_models_dev_catalog", empty_catalog)
+    monkeypatch.setattr(
+        snowflake,
+        "logger",
+        SimpleNamespace(debug=lambda message, **_kwargs: messages.append(message)),
+    )
+
+    assert await snowflake._discover_snowflake_models() == snowflake.SNOWFLAKE_MODELS
+    assert messages
+    if status is CatalogStatus.OK:
+        assert any("no usable" in message for message in messages)
+    else:
+        assert any("not authoritative" in message for message in messages)
 
 
 @pytest.mark.parametrize(

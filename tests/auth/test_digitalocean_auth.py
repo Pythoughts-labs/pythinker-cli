@@ -250,3 +250,7 @@ async def test_login_digitalocean_reports_router_discovery_failures(
         model.provider == do.DIGITALOCEAN_PROVIDER_KEY for model in config.models.values()
     )
     assert access_token not in "\n".join(f"{event!r}\n{event.json}" for event in events)
+    assert "configured with model" not in events[-1].message
+    assert events[-1].message == (
+        "DigitalOcean credentials saved; no inference routers are configured."
+    )

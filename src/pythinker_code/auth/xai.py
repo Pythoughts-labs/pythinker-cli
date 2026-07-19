@@ -123,7 +123,16 @@ async def _discover_xai_models() -> tuple[XAIModel, ...]:
     built = build_catalog_models(
         result.catalog, XAI_MODELS_DEV_PROVIDER_ID, default_context=XAI_DEFAULT_CONTEXT
     )
-    return _catalog_models_to_xai(built) or XAI_MODELS
+    converted = _catalog_models_to_xai(built)
+    if converted:
+        return converted
+    logger.debug(
+        "models.dev catalog contained no usable xAI models "
+        "(status={status}, source={source}); using curated models.",
+        status=result.status,
+        source=result.source,
+    )
+    return XAI_MODELS
 
 
 def _error_description(payload: object) -> str:
