@@ -1576,6 +1576,10 @@ def login(
     from rich.status import Status
 
     async def _run() -> bool:
+        if (account.strip() or role.strip()) and not snowflake:
+            typer.echo("--account and --role require --snowflake.", err=True)
+            return False
+
         selected_modes = sum(
             bool(value)
             for value in (

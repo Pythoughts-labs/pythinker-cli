@@ -21,13 +21,17 @@ from pythinker_code.utils.aiohttp import new_client_session
 _DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _DEFAULT_DEVICE_INTERVAL = 5
 _SLOW_DOWN_INCREMENT = 5
-_DEFAULT_IMPLICIT_EXPIRES_IN = 60 * 60 * 24 * 30
 _IMPLICIT_BOOTSTRAP_HTML = """<!doctype html><html><body>
 <p>Finishing sign-in…</p>
 <script>
 (function () {
   var h = window.location.hash.replace(/^#/, "");
   var p = new URLSearchParams(h);
+  window.history.replaceState(
+    null,
+    "",
+    window.location.pathname + window.location.search
+  );
   fetch("__TOKEN_PATH__", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -76,10 +80,16 @@ class LoopbackAuthorization(NamedTuple):
 
 
 class ImplicitAuthorization(NamedTuple):
-    """Successful OAuth implicit-flow result."""
+    """Successful OAuth implicit-flow result.
+
+    ``expires_in`` is ``None`` when the provider omitted the value or returned a
+    malformed/nonpositive one: implicit tokens carry no refresh token, so a
+    fabricated lifetime would be a lie that could later feed a validity check.
+    Callers must treat ``None`` as "unknown", never as a trusted duration.
+    """
 
     access_token: str
-    expires_in: int
+    expires_in: int | None
     state: str
 
 
@@ -213,6 +223,9 @@ async def poll_device_token(
             raise OAuthDeviceExpired("Device authorization expired before completion.")
         error = str(payload.get("error") or "")
         if 200 <= status < 300 and not error:
+            access_token = payload.get("access_token")
+            if not isinstance(access_token, str) or not access_token:
+                raise OAuthError("Device token polling returned an incomplete response.")
             return payload
         if error == "authorization_pending":
             continue
@@ -421,7 +434,18 @@ async def _handle_implicit_loopback_callback(
             if separator and name.strip().lower() == "content-length":
                 content_length = int(value.strip())
 
-        body = await reader.readexactly(content_length)
+        try:
+            body = await reader.readexactly(content_length)
+        except asyncio.IncompleteReadError:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                result.set_exception(OAuthError("OAuth callback body was truncated."))
+            return
         try:
             payload_any: Any = json.loads(body.decode(encoding="utf-8"))
             if not isinstance(payload_any, dict):
@@ -479,12 +503,14 @@ async def _handle_implicit_loopback_callback(
                 result.set_exception(OAuthError("OAuth callback did not include an access token."))
             return
 
+        raw_expires_in = payload.get("expires_in")
+        expires_in: int | None
         try:
-            expires_in = int(payload.get("expires_in") or _DEFAULT_IMPLICIT_EXPIRES_IN)
+            expires_in = int(raw_expires_in) if raw_expires_in not in (None, "") else None
         except (TypeError, ValueError):
-            expires_in = _DEFAULT_IMPLICIT_EXPIRES_IN
-        if expires_in <= 0:
-            expires_in = _DEFAULT_IMPLICIT_EXPIRES_IN
+            expires_in = None
+        if expires_in is not None and expires_in <= 0:
+            expires_in = None
 
         await _write_http_response(
             writer,
@@ -618,8 +644,10 @@ async def run_loopback_implicit_flow(
         raise ValueError("callback_path must start with '/'.")
     if not token_path.startswith("/"):
         raise ValueError("token_path must start with '/'.")
-    if not 0 <= port <= 65535:
-        raise ValueError("port must be between 0 and 65535.")
+    if redirect_host not in {"localhost", "127.0.0.1"}:
+        raise ValueError("redirect_host must resolve to the loopback interface.")
+    if not 1 <= port <= 65535:
+        raise ValueError("port must be between 1 and 65535.")
     if timeout <= 0:
         raise ValueError("timeout must be positive.")
 

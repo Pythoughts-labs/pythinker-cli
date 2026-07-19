@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix queued follow-up input showing a bordered ghost; pressing Enter during an active turn now shows one intentional queued row.
 - Add xAI Grok OAuth login (browser loopback and device-code).
 - Add GitHub Copilot device-code OAuth login for individual github.com accounts.
 - Add DigitalOcean Gradient AI browser OAuth login with a dynamically discovered Inference Routers catalog.

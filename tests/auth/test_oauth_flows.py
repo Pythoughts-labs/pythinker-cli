@@ -208,6 +208,29 @@ async def test_poll_device_token_raises_typed_terminal_errors(
         )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"token_type": "Bearer"}, {"access_token": ""}])
+async def test_poll_device_token_rejects_success_without_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+) -> None:
+    # A 2xx response carrying no usable access token must fail closed, not be
+    # returned as success.
+    _mock_http(monkeypatch, (200, payload))
+
+    async def fake_sleep(delay: float) -> None:
+        assert delay == 1
+
+    monkeypatch.setattr("pythinker_code.auth.oauth_flows.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(OAuthError):
+        await poll_device_token(
+            token_endpoint="https://login.example/oauth/token",
+            client_id="client-id",
+            device_code=_device_code(interval=1),
+        )
+
+
 def _device_code(*, interval: int) -> DeviceCode:
     return DeviceCode(
         user_code="ABCD-EFGH",
@@ -441,7 +464,7 @@ async def test_implicit_callback_rejects_state_mismatch() -> None:
     )
 
     with pytest.raises(OAuthStateMismatch):
-        await result
+        _ = await result
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
 
 
@@ -450,7 +473,7 @@ async def test_implicit_callback_maps_access_denied_error() -> None:
     result, writer = await _drive_implicit_handler({"error": "access_denied"})
 
     with pytest.raises(OAuthAccessDenied):
-        await result
+        _ = await result
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
 
 
@@ -459,13 +482,13 @@ async def test_implicit_callback_requires_access_token() -> None:
     result, writer = await _drive_implicit_handler({"access_token": "", "state": "expected-state"})
 
     with pytest.raises(OAuthError):
-        await result
+        _ = await result
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expires_in", [None, "not-a-number"])
-async def test_implicit_callback_defaults_invalid_expiry(expires_in: object) -> None:
+@pytest.mark.parametrize("expires_in", [None, "not-a-number", 0, -5])
+async def test_implicit_callback_marks_invalid_expiry_unknown(expires_in: object) -> None:
     payload: dict[str, object] = {
         "access_token": "access-secret",
         "state": "expected-state",
@@ -475,7 +498,33 @@ async def test_implicit_callback_defaults_invalid_expiry(expires_in: object) -> 
 
     result, _writer = await _drive_implicit_handler(payload)
 
-    assert (await result).expires_in == 2_592_000
+    # Malformed/missing/nonpositive expiry is reported as unknown (None), never
+    # fabricated into a trusted lifetime.
+    assert (await result).expires_in is None
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_truncated_body() -> None:
+    # Content-Length promises more bytes than the client actually sends, so
+    # readexactly() raises IncompleteReadError. The handler must fail closed
+    # with a 400 rather than leaving the result pending until timeout.
+    result: asyncio.Future[ImplicitAuthorization] = asyncio.get_running_loop().create_future()
+    writer = _FakeWriter()
+    request = "POST /oauth/token HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4096\r\n\r\n"
+    reader = _request_reader(request, b'{"access_token": "x"}')
+
+    await _handle_implicit_loopback_callback(
+        reader,
+        cast("asyncio.StreamWriter", writer),
+        callback_path="/oauth/callback",
+        token_path="/oauth/token",
+        expected_state="expected-state",
+        result=result,
+    )
+
+    with pytest.raises(OAuthError):
+        _ = await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
 
 
 @pytest.mark.asyncio
@@ -532,3 +581,25 @@ async def test_implicit_flow_uses_pinned_localhost_redirect(
     assert params["prompt"] == ["login"]
     assert server.closed
     assert server.waited_closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("redirect_host", "port"),
+    [("0.0.0.0", 43124), ("example.com", 43124), ("localhost", 0)],
+)
+async def test_implicit_flow_rejects_non_loopback_or_zero_port(
+    redirect_host: str, port: int
+) -> None:
+    # A non-loopback bind would expose the bearer-token callback; port 0 yields
+    # an unreachable ":0" redirect URI. Both must fail closed before binding.
+    with pytest.raises(ValueError):
+        await run_loopback_implicit_flow(
+            authorize_endpoint="https://login.example/oauth/authorize",
+            client_id="client-id",
+            scope="openid",
+            callback_path="/oauth/callback",
+            token_path="/oauth/token",
+            port=port,
+            redirect_host=redirect_host,
+        )
