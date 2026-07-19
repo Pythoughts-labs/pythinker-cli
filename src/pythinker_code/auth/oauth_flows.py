@@ -462,6 +462,18 @@ async def _handle_implicit_loopback_callback(
                 result.set_exception(OAuthError("OAuth callback contained invalid JSON."))
             return
 
+        state = str(payload.get("state") or "")
+        if state != expected_state:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                result.set_exception(OAuthStateMismatch("OAuth callback state did not match."))
+            return
+
         error = str(payload.get("error") or "")
         if error:
             await _write_http_response(
@@ -477,18 +489,6 @@ async def _handle_implicit_loopback_callback(
                 else:
                     exc = OAuthError("OAuth authorization callback reported an error.")
                 result.set_exception(exc)
-            return
-
-        state = str(payload.get("state") or "")
-        if state != expected_state:
-            await _write_http_response(
-                writer,
-                status="400 Bad Request",
-                body=bytes('{"ok": false}', encoding="utf-8"),
-                content_type="application/json",
-            )
-            if not result.done():
-                result.set_exception(OAuthStateMismatch("OAuth callback state did not match."))
             return
 
         access_token = payload.get("access_token")

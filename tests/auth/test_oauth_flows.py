@@ -470,9 +470,22 @@ async def test_implicit_callback_rejects_state_mismatch() -> None:
 
 @pytest.mark.asyncio
 async def test_implicit_callback_maps_access_denied_error() -> None:
-    result, writer = await _drive_implicit_handler({"error": "access_denied"})
+    result, writer = await _drive_implicit_handler(
+        {"error": "access_denied", "state": "expected-state"}
+    )
 
     with pytest.raises(OAuthAccessDenied):
+        _ = await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_wrong_state_before_error() -> None:
+    result, writer = await _drive_implicit_handler(
+        {"error": "access_denied", "state": "wrong-state"}
+    )
+
+    with pytest.raises(OAuthStateMismatch):
         _ = await result
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
 
