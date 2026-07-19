@@ -8,17 +8,22 @@ import aiohttp
 from pydantic import SecretStr
 
 from pythinker_code.auth import GITHUB_COPILOT_PLATFORM_ID
+from pythinker_code.auth.models_dev import (
+    CatalogModel,
+    build_catalog_models,
+    get_models_dev_catalog,
+)
 from pythinker_code.auth.oauth import (
     OAuthError,
     OAuthEvent,
     OAuthToken,
     OAuthUnauthorized,
-    delete_tokens,
-    save_tokens,
+    persist_login,
+    persist_logout,
 )
 from pythinker_code.auth.oauth_flows import poll_device_token, request_device_code
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
-from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef, save_config
+from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
 from pythinker_code.utils.logging import logger
@@ -31,6 +36,8 @@ GITHUB_COPILOT_TOKEN_ENDPOINT = "https://api.github.com/copilot_internal/v2/toke
 GITHUB_COPILOT_OAUTH_KEY = "oauth/github-copilot"
 GITHUB_COPILOT_PROVIDER_KEY = managed_provider_key(GITHUB_COPILOT_PLATFORM_ID)
 COPILOT_BASE_URL = "https://api.githubcopilot.com"
+GITHUB_COPILOT_MODELS_DEV_PROVIDER_ID = "github-copilot"
+GITHUB_COPILOT_DEFAULT_CONTEXT = 128_000
 
 GITHUB_JSON_HEADERS = {"Accept": "application/json"}
 _EDITOR_VERSION = "vscode/1.99.0"
@@ -82,7 +89,9 @@ def _copilot_oauth_ref() -> OAuthRef:
     return OAuthRef(storage="file", key=GITHUB_COPILOT_OAUTH_KEY)
 
 
-def _apply_copilot_config(config: Config) -> None:
+def _apply_copilot_config(
+    config: Config, models: tuple[GitHubCopilotModel, ...] = GITHUB_COPILOT_MODELS
+) -> None:
     oauth_ref = _copilot_oauth_ref()
     config.providers[GITHUB_COPILOT_PROVIDER_KEY] = LLMProvider(
         type="openai_legacy",
@@ -96,7 +105,7 @@ def _apply_copilot_config(config: Config) -> None:
         if model.provider == GITHUB_COPILOT_PROVIDER_KEY:
             del config.models[alias]
 
-    for model in GITHUB_COPILOT_MODELS:
+    for model in models:
         config.models[model.alias] = LLMModel(
             provider=GITHUB_COPILOT_PROVIDER_KEY,
             model=model.model_id,
@@ -104,8 +113,32 @@ def _apply_copilot_config(config: Config) -> None:
             display_name=model.display_name,
         )
 
-    config.default_model = GITHUB_COPILOT_MODELS[0].alias
+    if models:
+        config.default_model = models[0].alias
     apply_login_thinking_defaults(config, thinking=False, effort="off")
+
+
+def _catalog_models_to_copilot(built: tuple[CatalogModel, ...]) -> tuple[GitHubCopilotModel, ...]:
+    return tuple(
+        GitHubCopilotModel(model.model_id, model.display_name, model.max_context_size)
+        for model in built
+    )
+
+
+async def _discover_copilot_models() -> tuple[GitHubCopilotModel, ...]:
+    """Resolve the live Copilot model list from the shared models.dev catalog.
+
+    Falls back to the curated list when the catalog is unavailable or degraded.
+    """
+    result = await get_models_dev_catalog()
+    if not result.is_authoritative:
+        return GITHUB_COPILOT_MODELS
+    built = build_catalog_models(
+        result.catalog,
+        GITHUB_COPILOT_MODELS_DEV_PROVIDER_ID,
+        default_context=GITHUB_COPILOT_DEFAULT_CONTEXT,
+    )
+    return _catalog_models_to_copilot(built) or GITHUB_COPILOT_MODELS
 
 
 async def refresh_copilot_token(github_token: str) -> OAuthToken:
@@ -217,9 +250,14 @@ async def login_copilot(config: Config, *, open_browser: bool = True) -> AsyncIt
         token_type=copilot_token.token_type,
         expires_in=copilot_token.expires_in,
     )
-    save_tokens(_copilot_oauth_ref(), token)
-    _apply_copilot_config(config)
-    save_config(config)
+    models = await _discover_copilot_models()
+    try:
+        persist_login(
+            config, _copilot_oauth_ref(), token, lambda cfg: _apply_copilot_config(cfg, models)
+        )
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to save GitHub Copilot login: {exc}")
+        return
     yield OAuthEvent(
         "success",
         f"GitHub Copilot configured with model {config.default_model}.",
@@ -234,13 +272,17 @@ async def logout_copilot(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    delete_tokens(_copilot_oauth_ref())
-    config.providers.pop(GITHUB_COPILOT_PROVIDER_KEY, None)
-    for alias, model in list(config.models.items()):
-        if model.provider == GITHUB_COPILOT_PROVIDER_KEY:
-            del config.models[alias]
+    def _remove(cfg: Config) -> None:
+        cfg.providers.pop(GITHUB_COPILOT_PROVIDER_KEY, None)
+        for alias, model in list(cfg.models.items()):
+            if model.provider == GITHUB_COPILOT_PROVIDER_KEY:
+                del cfg.models[alias]
+        if cfg.default_model not in cfg.models:
+            cfg.default_model = next(iter(cfg.models), "")
 
-    if config.default_model not in config.models:
-        config.default_model = next(iter(config.models), "")
-    save_config(config)
+    try:
+        persist_logout(config, _copilot_oauth_ref(), _remove)
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to log out of GitHub Copilot: {exc}")
+        return
     yield OAuthEvent("success", "Logged out of GitHub Copilot successfully.")

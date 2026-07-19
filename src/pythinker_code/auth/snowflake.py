@@ -11,18 +11,23 @@ import aiohttp
 from pydantic import SecretStr
 
 from pythinker_code.auth import SNOWFLAKE_CORTEX_PLATFORM_ID
+from pythinker_code.auth.models_dev import (
+    CatalogModel,
+    build_catalog_models,
+    get_models_dev_catalog,
+)
 from pythinker_code.auth.oauth import (
     OAuthError,
     OAuthEvent,
     OAuthToken,
     OAuthUnauthorized,
-    delete_tokens,
-    save_tokens,
+    persist_config_change,
+    persist_login,
+    persist_logout,
 )
 from pythinker_code.auth.oauth_flows import run_loopback_pkce_flow
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
-from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef, save_config
-from pythinker_code.thinking import apply_login_thinking_defaults
+from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
 from pythinker_code.utils.aiohttp import new_client_session
 
 SNOWFLAKE_CLIENT_ID = "LOCAL_APPLICATION"
@@ -30,7 +35,14 @@ SNOWFLAKE_REDIRECT_PATH = "/"
 SNOWFLAKE_PROVIDER_KEY = managed_provider_key(SNOWFLAKE_CORTEX_PLATFORM_ID)
 SNOWFLAKE_OAUTH_KEY_PREFIX = "oauth/snowflake-cortex/"
 SNOWFLAKE_JSON_HEADERS = {"Accept": "application/json"}
+SNOWFLAKE_MODELS_DEV_PROVIDER_ID = "snowflake-cortex"
+SNOWFLAKE_DEFAULT_CONTEXT = 128_000
 _ROLE_SIMPLE = re.compile(r"^[-_A-Za-z0-9]+$")
+# A Snowflake account locator is a plain host label: alphanumerics plus the
+# org-account separators '.', '-', '_'. Anything carrying an authority, path,
+# port, userinfo, query, or fragment delimiter is rejected so it can never
+# redirect the OAuth/token host.
+_ACCOUNT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _DEFAULT_EXPIRES_IN = 600  # Snowflake access tokens are short-lived; PENDING-LIVE
 
 
@@ -39,10 +51,21 @@ def _skip_browser_open(_url: str) -> None:
 
 
 def normalize_account(raw: str) -> str:
+    """Normalize and validate a Snowflake account locator.
+
+    Strips an optional scheme and the ``.snowflakecomputing.com`` suffix, then
+    rejects anything that is not a plain account locator. Raises ``ValueError``
+    for empty or malformed input before any URL is built.
+    """
     account = raw.strip()
-    account = re.sub(r"^https?://", "", account)
-    account = re.sub(r"\.snowflakecomputing\.com/?$", "", account)
-    return account.rstrip("/")
+    account = re.sub(r"^https?://", "", account, flags=re.IGNORECASE)
+    account = re.sub(r"\.snowflakecomputing\.com/?$", "", account, flags=re.IGNORECASE)
+    account = account.rstrip("/")
+    if not account:
+        raise ValueError("Snowflake account identifier is required.")
+    if not _ACCOUNT_RE.match(account):
+        raise ValueError("Snowflake account identifier is invalid.")
+    return account
 
 
 def _authorize_url(account: str) -> str:
@@ -136,7 +159,9 @@ async def _post_token(account: str, data: dict[str, str], *, operation: str) -> 
         operation=operation,
         headers=_headers(),
     )
-    if status in {401, 403}:
+    # A 400 invalid_grant means the refresh token was rejected; surface it as
+    # unauthorized so the refresh path suppresses the token instead of retrying.
+    if status in {401, 403} or str(payload.get("error") or "") == "invalid_grant":
         raise OAuthUnauthorized(f"{operation} was unauthorized.")
     if not 200 <= status < 300:
         raise OAuthError(f"{operation} failed (HTTP {status}).")
@@ -180,6 +205,11 @@ def _apply_snowflake_config(
     account: str,
     models: tuple[SnowflakeModel, ...] = SNOWFLAKE_MODELS,
 ) -> None:
+    # Register the provider and its models, but do NOT make Snowflake the
+    # default model: its Cortex chat adapter (request/response transforms) is
+    # not implemented yet, so a Snowflake model cannot serve chat. Selecting it
+    # as default would claim a capability that does not exist. The existing
+    # default is left untouched.
     config.providers[SNOWFLAKE_PROVIDER_KEY] = LLMProvider(
         type="openai_legacy",
         base_url=_cortex_base_url(account),
@@ -199,8 +229,28 @@ def _apply_snowflake_config(
             display_name=model.display_name,
         )
 
-    config.default_model = models[0].alias
-    apply_login_thinking_defaults(config, thinking=False, effort="off")
+
+def _catalog_models_to_snowflake(built: tuple[CatalogModel, ...]) -> tuple[SnowflakeModel, ...]:
+    return tuple(
+        SnowflakeModel(model.model_id, model.display_name, model.max_context_size)
+        for model in built
+    )
+
+
+async def _discover_snowflake_models() -> tuple[SnowflakeModel, ...]:
+    """Resolve the Snowflake Cortex model list from the shared models.dev catalog.
+
+    Falls back to the curated list when the catalog is unavailable or degraded.
+    """
+    result = await get_models_dev_catalog()
+    if not result.is_authoritative:
+        return SNOWFLAKE_MODELS
+    built = build_catalog_models(
+        result.catalog,
+        SNOWFLAKE_MODELS_DEV_PROVIDER_ID,
+        default_context=SNOWFLAKE_DEFAULT_CONTEXT,
+    )
+    return _catalog_models_to_snowflake(built) or SNOWFLAKE_MODELS
 
 
 async def login_snowflake(
@@ -217,9 +267,10 @@ async def login_snowflake(
         )
         return
 
-    account = normalize_account(account)
-    if not account:
-        yield OAuthEvent("error", "Snowflake account identifier is required.")
+    try:
+        account = normalize_account(account)
+    except ValueError as exc:
+        yield OAuthEvent("error", str(exc))
         return
 
     yield OAuthEvent("waiting", "Waiting for Snowflake browser authorization...")
@@ -244,7 +295,8 @@ async def login_snowflake(
         yield OAuthEvent("error", f"Snowflake Cortex browser login failed: {exc}")
         return
 
-    if not payload.get("refresh_token"):
+    token = OAuthToken.from_response(payload)
+    if not token.refresh_token:
         yield OAuthEvent(
             "error",
             "Snowflake did not return a refresh token; "
@@ -252,10 +304,24 @@ async def login_snowflake(
         )
         return
 
-    save_tokens(_oauth_ref(account), OAuthToken.from_response(payload))
-    _apply_snowflake_config(config, account)
-    save_config(config)
-    yield OAuthEvent("success", f"Snowflake Cortex configured with model {config.default_model}.")
+    models = await _discover_snowflake_models()
+    try:
+        persist_login(
+            config,
+            _oauth_ref(account),
+            token,
+            lambda cfg: _apply_snowflake_config(cfg, account, models),
+        )
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to save Snowflake Cortex login: {exc}")
+        return
+
+    yield OAuthEvent(
+        "success",
+        f"Snowflake Cortex credentials saved for account '{account}' "
+        f"({len(models)} models registered). Chat support is pending the Cortex "
+        "adapter; select a Snowflake model manually once it ships.",
+    )
 
 
 async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
@@ -267,14 +333,22 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
         return
 
     provider = config.providers.get(SNOWFLAKE_PROVIDER_KEY)
-    if provider and provider.oauth:
-        delete_tokens(provider.oauth)
-    config.providers.pop(SNOWFLAKE_PROVIDER_KEY, None)
-    for alias, model in list(config.models.items()):
-        if model.provider == SNOWFLAKE_PROVIDER_KEY:
-            del config.models[alias]
+    ref = provider.oauth if provider is not None and provider.oauth is not None else None
 
-    if config.default_model not in config.models:
-        config.default_model = next(iter(config.models), "")
-    save_config(config)
+    def _remove(cfg: Config) -> None:
+        cfg.providers.pop(SNOWFLAKE_PROVIDER_KEY, None)
+        for alias, model in list(cfg.models.items()):
+            if model.provider == SNOWFLAKE_PROVIDER_KEY:
+                del cfg.models[alias]
+        if cfg.default_model not in cfg.models:
+            cfg.default_model = next(iter(cfg.models), "")
+
+    try:
+        if ref is not None:
+            persist_logout(config, ref, _remove)
+        else:
+            persist_config_change(config, _remove)
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to log out of Snowflake Cortex: {exc}")
+        return
     yield OAuthEvent("success", "Logged out of Snowflake Cortex successfully.")

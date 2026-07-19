@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import SecretStr
 
-from pythinker_code.auth.oauth import OAuthManager, OAuthToken, load_tokens, save_tokens
+from pythinker_code.auth.models_dev import CatalogResult, CatalogStatus
+from pythinker_code.auth.oauth import (
+    OAuthError,
+    OAuthManager,
+    OAuthToken,
+    OAuthUnauthorized,
+    load_tokens,
+    save_tokens,
+)
 from pythinker_code.auth.oauth_flows import LoopbackAuthorization
 from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
+
+
+def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.auth import snowflake
+
+    async def _fake() -> CatalogResult:
+        return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
+
+    monkeypatch.setattr(snowflake, "get_models_dev_catalog", _fake)
 
 
 @pytest.mark.parametrize(
@@ -27,6 +45,31 @@ def test_normalize_account(raw: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "   ",
+        "acct/../evil",
+        "acct/path",
+        "user@acct",
+        "acct:443",
+        "acct?query=1",
+        "acct#fragment",
+        "acct evil",
+        "http://acct.snowflakecomputing.com:8443/",
+        "//evil.example.com",
+    ],
+)
+def test_normalize_account_rejects_hostile_input(raw: str) -> None:
+    from pythinker_code.auth.snowflake import normalize_account
+
+    # Authority/path/port/userinfo/query/fragment payloads must be rejected
+    # before any URL is built, so they can never redirect the OAuth host.
+    with pytest.raises(ValueError):
+        normalize_account(raw)
+
+
+@pytest.mark.parametrize(
     ("role", "expected"),
     [
         (None, "refresh_token"),
@@ -40,32 +83,50 @@ def test_scope(role: str | None, expected: str) -> None:
     assert _scope(role) == expected
 
 
+class _FormResponse:
+    def __init__(self, status: int, payload: object) -> None:
+        self.status = status
+        self.payload = payload
+
+    async def __aenter__(self) -> _FormResponse:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    async def json(self, *, content_type: object = None) -> object:
+        if isinstance(self.payload, ValueError):
+            raise self.payload
+        return self.payload
+
+
+class _FormSession:
+    def __init__(self, response: _FormResponse, calls: list[dict[str, Any]]) -> None:
+        self.response = response
+        self.calls = calls
+
+    async def __aenter__(self) -> _FormSession:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def post(
+        self, endpoint: str, *, data: Mapping[str, str], headers: Mapping[str, str]
+    ) -> _FormResponse:
+        self.calls.append({"endpoint": endpoint, "data": dict(data), "headers": dict(headers)})
+        return self.response
+
+
 @pytest.mark.asyncio
-async def test_post_token_uses_account_endpoint_basic_auth_and_default_expiry(
+async def test_refresh_uses_account_endpoint_basic_auth_and_default_expiry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from pythinker_code.auth import snowflake
 
     calls: list[dict[str, Any]] = []
-
-    async def fake_post_form(
-        endpoint: str,
-        data: dict[str, str],
-        *,
-        operation: str,
-        headers: dict[str, str],
-    ) -> tuple[int, dict[str, Any]]:
-        calls.append(
-            {
-                "endpoint": endpoint,
-                "data": data,
-                "operation": operation,
-                "headers": headers,
-            }
-        )
-        return 200, {"access_token": "access", "refresh_token": "refresh"}
-
-    monkeypatch.setattr(snowflake, "_post_form", fake_post_form)
+    response = _FormResponse(200, {"access_token": "access", "refresh_token": "refresh"})
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, calls))
 
     token = await snowflake.refresh_snowflake_cortex_token("myorg-acct", "old-refresh")
 
@@ -78,7 +139,6 @@ async def test_post_token_uses_account_endpoint_basic_auth_and_default_expiry(
                 "refresh_token": "old-refresh",
                 "client_id": "LOCAL_APPLICATION",
             },
-            "operation": "Snowflake token refresh",
             "headers": {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
@@ -86,6 +146,41 @@ async def test_post_token_uses_account_endpoint_basic_auth_and_default_expiry(
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_refresh_maps_invalid_grant_to_unauthorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    response = _FormResponse(400, {"error": "invalid_grant"})
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, []))
+
+    with pytest.raises(OAuthUnauthorized):
+        await snowflake.refresh_snowflake_cortex_token("myorg-acct", "revoked")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _FormResponse(401, {"error": "unauthorized"}),
+        _FormResponse(500, {"error": "server_error"}),
+        _FormResponse(200, ValueError("bad json")),
+        _FormResponse(200, ["not", "a", "dict"]),
+    ],
+)
+async def test_refresh_rejects_error_and_malformed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    response: _FormResponse,
+) -> None:
+    from pythinker_code.auth import snowflake
+
+    monkeypatch.setattr(snowflake, "new_client_session", lambda: _FormSession(response, []))
+
+    with pytest.raises(OAuthError):
+        await snowflake.refresh_snowflake_cortex_token("myorg-acct", "old-refresh")
 
 
 @pytest.mark.asyncio
@@ -123,6 +218,7 @@ async def test_login_snowflake_saves_account_scoped_token_provider_and_models(
 
     monkeypatch.setattr(snowflake, "run_loopback_pkce_flow", fake_loopback)
     monkeypatch.setattr(snowflake, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
 
     events = [
         event
@@ -158,7 +254,10 @@ async def test_login_snowflake_saves_account_scoped_token_provider_and_models(
     assert provider.api_key.get_secret_value() == ""
     assert provider.oauth == oauth_ref
     assert {model.provider for model in config.models.values()} == {"managed:snowflake-cortex"}
-    assert config.default_model == "snowflake-cortex/claude-sonnet-4-5"
+    # Snowflake registers its models but must NOT become the default: its Cortex
+    # chat adapter is not implemented, so it cannot serve chat yet.
+    assert config.default_model == ""
+    assert not config.default_model.startswith("snowflake-cortex/")
     rendered_events = "\n".join(event.json for event in events)
     assert "snowflake-access-secret" not in rendered_events
     assert "snowflake-refresh-secret" not in rendered_events

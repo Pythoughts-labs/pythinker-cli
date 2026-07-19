@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, cast
 
 import aiohttp
 from pydantic import SecretStr
 
 from pythinker_code.auth import DIGITALOCEAN_PLATFORM_ID
-from pythinker_code.auth.oauth import OAuthError, OAuthEvent
+from pythinker_code.auth.oauth import OAuthError, OAuthEvent, persist_config_change
 from pythinker_code.auth.oauth_flows import run_loopback_implicit_flow
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
-from pythinker_code.config import Config, LLMModel, LLMProvider, save_config
+from pythinker_code.config import Config, LLMModel, LLMProvider
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
 
@@ -23,6 +25,25 @@ DIGITALOCEAN_REDIRECT_PORT = 1456
 DIGITALOCEAN_CALLBACK_PATH = "/auth/callback"
 DIGITALOCEAN_TOKEN_PATH = "/auth/token"
 DIGITALOCEAN_PROVIDER_KEY = managed_provider_key(DIGITALOCEAN_PLATFORM_ID)
+DIGITALOCEAN_DEFAULT_CONTEXT = 128_000
+
+
+class RouterDiscovery(str, Enum):
+    """Outcome of a DigitalOcean inference-router discovery call."""
+
+    OK = "ok"  # routers were discovered
+    EMPTY = "empty"  # the account has no routers (valid, but empty)
+    UNAUTHORIZED = "unauthorized"  # the token could not list routers
+    UNAVAILABLE = "unavailable"  # timeout / outage / non-2xx response
+    MALFORMED = "malformed"  # the response body was not the expected shape
+
+
+@dataclass(frozen=True, slots=True)
+class RouterCatalog:
+    """Discovered routers paired with the outcome that produced them."""
+
+    status: RouterDiscovery
+    names: tuple[str, ...]
 
 
 def _skip_browser_open(_url: str) -> None:
@@ -50,7 +71,7 @@ def _apply_digitalocean_config(
         config.models[alias] = LLMModel(
             provider=DIGITALOCEAN_PROVIDER_KEY,
             model=model_id,
-            max_context_size=128_000,
+            max_context_size=DIGITALOCEAN_DEFAULT_CONTEXT,
             display_name=name,
         )
 
@@ -64,7 +85,32 @@ def _apply_digitalocean_config(
     apply_login_thinking_defaults(config, thinking=False, effort="off")
 
 
-async def _fetch_router_names(access_token: str) -> tuple[str, ...]:
+def _parse_router_names(payload: object) -> RouterCatalog:
+    if not isinstance(payload, dict):
+        return RouterCatalog(RouterDiscovery.MALFORMED, ())
+    raw = cast(dict[str, Any], payload).get("model_routers")
+    if not isinstance(raw, list):
+        return RouterCatalog(RouterDiscovery.MALFORMED, ())
+
+    names: list[str] = []
+    for item in cast(list[Any], raw):
+        if isinstance(item, dict):
+            name = cast(dict[str, Any], item).get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+    if not names:
+        return RouterCatalog(RouterDiscovery.EMPTY, ())
+    return RouterCatalog(RouterDiscovery.OK, tuple(names))
+
+
+async def _fetch_router_catalog(access_token: str) -> RouterCatalog:
+    """Discover the account's inference routers, preserving distinct outcomes.
+
+    Authentication failures, dependency outages, malformed responses, and a
+    valid-but-empty catalog are each reported separately so the login flow can
+    surface an accurate message instead of collapsing everything into "no
+    routers".
+    """
     try:
         async with (
             new_client_session() as session,
@@ -74,27 +120,37 @@ async def _fetch_router_names(access_token: str) -> tuple[str, ...]:
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/json",
                 },
-                raise_for_status=True,
             ) as response,
         ):
-            payload: Any = await response.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError, OSError, ValueError):
-        return ()
+            status = response.status
+            if status in (401, 403):
+                return RouterCatalog(RouterDiscovery.UNAUTHORIZED, ())
+            if not 200 <= status < 300:
+                return RouterCatalog(RouterDiscovery.UNAVAILABLE, ())
+            try:
+                payload: Any = await response.json(content_type=None)
+            except (ValueError, aiohttp.ClientError):
+                return RouterCatalog(RouterDiscovery.MALFORMED, ())
+    except (TimeoutError, aiohttp.ClientError, OSError):
+        return RouterCatalog(RouterDiscovery.UNAVAILABLE, ())
 
-    if not isinstance(payload, dict):
-        return ()
-    payload = cast(dict[str, Any], payload)
-    raw = payload.get("model_routers")
-    if not isinstance(raw, list):
-        return ()
+    return _parse_router_names(payload)
 
-    result: list[str] = []
-    for item in cast(list[Any], raw):
-        if isinstance(item, dict):
-            name = cast(dict[str, Any], item).get("name")
-            if isinstance(name, str) and name:
-                result.append(name)
-    return tuple(result)
+
+def _router_status_message(status: RouterDiscovery) -> str | None:
+    if status is RouterDiscovery.OK:
+        return None
+    if status is RouterDiscovery.EMPTY:
+        return "DigitalOcean returned no inference routers; sign-in saved with no models."
+    if status is RouterDiscovery.UNAUTHORIZED:
+        return (
+            "DigitalOcean did not authorize inference-router discovery; sign-in saved. "
+            "Re-run login once the account has inference access."
+        )
+    return (
+        "DigitalOcean Inference Routers were unavailable; sign-in saved. "
+        "Re-run login to load routers."
+    )
 
 
 async def login_digitalocean(
@@ -122,15 +178,21 @@ async def login_digitalocean(
         yield OAuthEvent("error", f"DigitalOcean browser login failed: {exc}")
         return
 
-    router_names = await _fetch_router_names(auth.access_token)
-    _apply_digitalocean_config(config, SecretStr(auth.access_token), router_names)
-    save_config(config)
-    if not router_names:
-        yield OAuthEvent(
-            "info",
-            "DigitalOcean Inference Routers unavailable; sign-in saved. "
-            "Re-run login to load routers.",
+    catalog = await _fetch_router_catalog(auth.access_token)
+    try:
+        persist_config_change(
+            config,
+            lambda cfg: _apply_digitalocean_config(
+                cfg, SecretStr(auth.access_token), catalog.names
+            ),
         )
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to save DigitalOcean login: {exc}")
+        return
+
+    message = _router_status_message(catalog.status)
+    if message:
+        yield OAuthEvent("info", message)
     yield OAuthEvent("success", f"DigitalOcean configured with model {config.default_model}.")
 
 
@@ -142,13 +204,17 @@ async def logout_digitalocean(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    provider_keys = {DIGITALOCEAN_PROVIDER_KEY}
-    config.providers.pop(DIGITALOCEAN_PROVIDER_KEY, None)
-    for alias, model in list(config.models.items()):
-        if model.provider in provider_keys:
-            del config.models[alias]
+    def _remove(cfg: Config) -> None:
+        cfg.providers.pop(DIGITALOCEAN_PROVIDER_KEY, None)
+        for alias, model in list(cfg.models.items()):
+            if model.provider == DIGITALOCEAN_PROVIDER_KEY:
+                del cfg.models[alias]
+        if cfg.default_model not in cfg.models:
+            cfg.default_model = next(iter(cfg.models), "")
 
-    if config.default_model not in config.models:
-        config.default_model = next(iter(config.models), "")
-    save_config(config)
+    try:
+        persist_config_change(config, _remove)
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to log out of DigitalOcean: {exc}")
+        return
     yield OAuthEvent("success", "Logged out of DigitalOcean successfully.")

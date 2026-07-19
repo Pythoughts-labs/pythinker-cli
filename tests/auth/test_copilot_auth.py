@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import aiohttp
 import pytest
 from pydantic import SecretStr
 
+from pythinker_code.auth.models_dev import CatalogResult, CatalogStatus
 from pythinker_code.auth.oauth import (
+    OAuthError,
     OAuthManager,
     OAuthToken,
     OAuthUnauthorized,
@@ -15,6 +18,15 @@ from pythinker_code.auth.oauth import (
 )
 from pythinker_code.auth.oauth_flows import DeviceCode
 from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
+
+
+def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pythinker_code.auth import copilot
+
+    async def _fake() -> CatalogResult:
+        return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
+
+    monkeypatch.setattr(copilot, "get_models_dev_catalog", _fake)
 
 
 @pytest.mark.asyncio
@@ -57,6 +69,7 @@ async def test_login_copilot_saves_two_tokens_provider_and_models(
     monkeypatch.setattr(copilot, "request_device_code", fake_request_device_code)
     monkeypatch.setattr(copilot, "poll_device_token", fake_poll_device_token)
     monkeypatch.setattr(copilot, "refresh_copilot_token", fake_refresh_copilot_token)
+    _mock_unavailable_catalog(monkeypatch)
 
     events = [event async for event in copilot.login_copilot(config, open_browser=False)]
 
@@ -201,6 +214,56 @@ async def test_refresh_copilot_token_raises_unauthorized(
 
     with pytest.raises(OAuthUnauthorized):
         await copilot.refresh_copilot_token("revoked-github-token")
+
+
+class _RaisingSession:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    async def __aenter__(self) -> _RaisingSession:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def get(self, endpoint: str, *, headers: Mapping[str, str]) -> object:
+        raise self.exc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _ExchangeResponse(200, ["not", "a", "dict"]),  # malformed body
+        _ExchangeResponse(200, {"expires_at": 2_000_000_000, "refresh_in": 1500}),  # no token
+        _ExchangeResponse(200, {"token": "", "expires_at": 2_000_000_000, "refresh_in": 1500}),
+        _ExchangeResponse(500, {"message": "server error"}),  # non-auth HTTP failure
+    ],
+)
+async def test_refresh_copilot_token_rejects_malformed_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    response: _ExchangeResponse,
+) -> None:
+    from pythinker_code.auth import copilot
+
+    monkeypatch.setattr(copilot, "new_client_session", lambda: _ExchangeSession(response, []))
+
+    with pytest.raises(OAuthError):
+        await copilot.refresh_copilot_token("github-oauth-token")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", [aiohttp.ClientError(), TimeoutError(), OSError()])
+async def test_refresh_copilot_token_wraps_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    exc: BaseException,
+) -> None:
+    from pythinker_code.auth import copilot
+
+    monkeypatch.setattr(copilot, "new_client_session", lambda: _RaisingSession(exc))
+
+    with pytest.raises(OAuthError):
+        await copilot.refresh_copilot_token("github-oauth-token")
 
 
 @pytest.mark.asyncio

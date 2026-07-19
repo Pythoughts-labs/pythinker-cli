@@ -7,7 +7,9 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from pythinker_code.auth.models_dev import CatalogResult, CatalogStatus
 from pythinker_code.auth.oauth import (
+    OAuthError,
     OAuthManager,
     OAuthToken,
     OAuthUnauthorized,
@@ -16,6 +18,16 @@ from pythinker_code.auth.oauth import (
 )
 from pythinker_code.auth.oauth_flows import DeviceCode, LoopbackAuthorization
 from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
+
+
+def _mock_unavailable_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force provider logins to fall back to their curated model list."""
+    from pythinker_code.auth import xai
+
+    async def _fake() -> CatalogResult:
+        return CatalogResult({}, CatalogStatus.UNAVAILABLE, "none")
+
+    monkeypatch.setattr(xai, "get_models_dev_catalog", _fake)
 
 
 @pytest.mark.asyncio
@@ -46,6 +58,7 @@ async def test_login_xai_browser_saves_token_provider_and_models(
 
     monkeypatch.setattr(xai, "run_loopback_pkce_flow", fake_loopback)
     monkeypatch.setattr(xai, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
 
     events = [event async for event in xai.login_xai_browser(config)]
 
@@ -103,6 +116,7 @@ async def test_login_xai_headless_uses_device_flow(
 
     monkeypatch.setattr(xai, "request_device_code", fake_request_device_code)
     monkeypatch.setattr(xai, "poll_device_token", fake_poll_device_token)
+    _mock_unavailable_catalog(monkeypatch)
 
     events = [event async for event in xai.login_xai_headless(config)]
 
@@ -114,6 +128,126 @@ async def test_login_xai_headless_uses_device_flow(
     stored = load_tokens(OAuthRef(storage="file", key="oauth/xai"))
     assert stored is not None
     assert stored.refresh_token == "xai-refresh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_token", [None, ""])
+async def test_login_xai_browser_rejects_missing_refresh_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    refresh_token: object,
+) -> None:
+    from pythinker_code.auth import xai
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+
+    async def fake_loopback(**kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:56121/callback")
+
+    async def fake_exchange(code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {"access_token": "xai-access", "expires_in": 3600}
+        if refresh_token is not None:
+            payload["refresh_token"] = refresh_token
+        return payload
+
+    monkeypatch.setattr(xai, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(xai, "_exchange_code_for_tokens", fake_exchange)
+    _mock_unavailable_catalog(monkeypatch)
+
+    events = [event async for event in xai.login_xai_browser(config)]
+
+    # A login without a refresh token must fail closed: no credentials, no
+    # provider, no models persisted.
+    assert events[-1].type == "error"
+    assert load_tokens(OAuthRef(storage="file", key="oauth/xai")) is None
+    assert "managed:xai" not in config.providers
+    assert config.models == {}
+
+
+@pytest.mark.asyncio
+async def test_login_xai_headless_rejects_missing_refresh_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from pythinker_code.auth import xai
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+
+    async def fake_request_device_code(**kwargs: Any) -> DeviceCode:
+        return DeviceCode(
+            user_code="GROK-CODE",
+            verification_uri="https://auth.x.ai/activate",
+            device_code="device-secret",
+            interval=5,
+            expires_in=900,
+        )
+
+    async def fake_poll_device_token(**kwargs: Any) -> dict[str, Any]:
+        return {"access_token": "xai-access", "expires_in": 3600}
+
+    monkeypatch.setattr(xai, "request_device_code", fake_request_device_code)
+    monkeypatch.setattr(xai, "poll_device_token", fake_poll_device_token)
+    _mock_unavailable_catalog(monkeypatch)
+
+    events = [event async for event in xai.login_xai_headless(config)]
+
+    assert events[-1].type == "error"
+    assert load_tokens(OAuthRef(storage="file", key="oauth/xai")) is None
+    assert "managed:xai" not in config.providers
+
+
+@pytest.mark.asyncio
+async def test_login_xai_browser_registers_catalog_models(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from pythinker_code.auth import xai
+    from pythinker_code.auth.models_dev import parse_models_dev_catalog
+
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    config = Config(is_from_default_location=True)
+    catalog = parse_models_dev_catalog(
+        {
+            "xai": {
+                "name": "xAI",
+                "models": {
+                    "grok-9": {
+                        "id": "grok-9",
+                        "name": "Grok 9",
+                        "limit": {"context": 512_000},
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                    },
+                    "grok-imagine-video": {
+                        "id": "grok-imagine-video",
+                        "name": "Grok Imagine Video",
+                        "modalities": {"input": ["text"], "output": ["video"]},
+                    },
+                },
+            }
+        }
+    )
+
+    async def fake_loopback(**kwargs: Any) -> LoopbackAuthorization:
+        return LoopbackAuthorization("auth-code", "verifier", "http://127.0.0.1:56121/callback")
+
+    async def fake_exchange(code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
+        return {"access_token": "xai-access", "refresh_token": "xai-refresh", "expires_in": 3600}
+
+    async def fake_catalog() -> CatalogResult:
+        return CatalogResult(catalog, CatalogStatus.OK, "network")
+
+    monkeypatch.setattr(xai, "run_loopback_pkce_flow", fake_loopback)
+    monkeypatch.setattr(xai, "_exchange_code_for_tokens", fake_exchange)
+    monkeypatch.setattr(xai, "get_models_dev_catalog", fake_catalog)
+
+    events = [event async for event in xai.login_xai_browser(config)]
+
+    assert events[-1].type == "success"
+    # The image/video model is filtered out; only the chat model is registered.
+    assert set(config.models) == {"xai/grok-9"}
+    assert config.models["xai/grok-9"].max_context_size == 512_000
 
 
 class _TokenResponse:
@@ -196,6 +330,34 @@ async def test_refresh_xai_token_raises_unauthorized(
 
     with pytest.raises(OAuthUnauthorized):
         await xai.refresh_xai_token("revoked-refresh")
+
+
+@pytest.mark.asyncio
+async def test_refresh_xai_token_treats_invalid_grant_as_unauthorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import xai
+
+    # A 400 invalid_grant means the refresh token was rejected and must be
+    # surfaced as unauthorized so the token is suppressed, not retried.
+    response = _TokenResponse(400, {"error": "invalid_grant"})
+    monkeypatch.setattr(xai, "new_client_session", lambda: _TokenSession(response, []))
+
+    with pytest.raises(OAuthUnauthorized):
+        await xai.refresh_xai_token("revoked-refresh")
+
+
+@pytest.mark.asyncio
+async def test_refresh_xai_token_raises_error_on_malformed_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.auth import xai
+
+    response = _TokenResponse(200, ["not", "a", "dict"])
+    monkeypatch.setattr(xai, "new_client_session", lambda: _TokenSession(response, []))
+
+    with pytest.raises(OAuthError):
+        await xai.refresh_xai_token("some-refresh")
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -486,6 +486,75 @@ def delete_tokens(ref: OAuthRef) -> None:
     if ref.storage == "keyring":
         _delete_from_keyring(ref.key)
     _delete_from_file(ref.key)
+
+
+def restore_config_state(config: Config, snapshot: Config) -> None:
+    """Restore every field of ``config`` in place from a prior deep-copy snapshot."""
+    for field_name in type(config).model_fields:
+        setattr(config, field_name, getattr(snapshot, field_name))
+
+
+def persist_login(
+    config: Config,
+    ref: OAuthRef,
+    token: OAuthToken,
+    apply_config: Callable[[Config], None],
+) -> None:
+    """Persist an OAuth login as a unit: credentials and configuration together.
+
+    Saves the token, applies the in-memory config mutation, then persists the
+    config. If the mutation or persistence fails, the saved token is deleted and
+    the in-memory config is rolled back, so a failed login never leaves partial
+    state (orphaned credentials or an unsaved config).
+    """
+    snapshot = config.model_copy(deep=True)
+    save_tokens(ref, token)
+    try:
+        apply_config(config)
+        save_config(config)
+    except BaseException:
+        with suppress(Exception):
+            delete_tokens(ref)
+        restore_config_state(config, snapshot)
+        raise
+
+
+def persist_logout(
+    config: Config,
+    ref: OAuthRef,
+    remove_config: Callable[[Config], None],
+) -> None:
+    """Persist an OAuth logout as a unit, config removal first.
+
+    The configuration removal is persisted before credentials are deleted, so an
+    interruption leaves recoverable credentials rather than orphaned config. If
+    persisting the config removal fails, the in-memory config is rolled back and
+    the credentials are left intact.
+    """
+    snapshot = config.model_copy(deep=True)
+    remove_config(config)
+    try:
+        save_config(config)
+    except BaseException:
+        restore_config_state(config, snapshot)
+        raise
+    with suppress(Exception):
+        delete_tokens(ref)
+
+
+def persist_config_change(config: Config, apply_config: Callable[[Config], None]) -> None:
+    """Persist a config-only change atomically (no OAuth credentials involved).
+
+    Applies the mutation and saves; on failure the in-memory config is restored
+    so runtime state never diverges from disk.
+    """
+    snapshot = config.model_copy(deep=True)
+    try:
+        apply_config(config)
+        save_config(config)
+    except BaseException:
+        restore_config_state(config, snapshot)
+        raise
 
 
 async def request_device_authorization() -> DeviceAuthorization:

@@ -8,13 +8,18 @@ import aiohttp
 from pydantic import SecretStr
 
 from pythinker_code.auth import XAI_PLATFORM_ID
+from pythinker_code.auth.models_dev import (
+    CatalogModel,
+    build_catalog_models,
+    get_models_dev_catalog,
+)
 from pythinker_code.auth.oauth import (
     OAuthError,
     OAuthEvent,
     OAuthToken,
     OAuthUnauthorized,
-    delete_tokens,
-    save_tokens,
+    persist_login,
+    persist_logout,
 )
 from pythinker_code.auth.oauth_flows import (
     generate_state,
@@ -23,7 +28,7 @@ from pythinker_code.auth.oauth_flows import (
     run_loopback_pkce_flow,
 )
 from pythinker_code.auth.platforms import managed_model_key, managed_provider_key
-from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef, save_config
+from pythinker_code.config import Config, LLMModel, LLMProvider, OAuthRef
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
 
@@ -38,6 +43,8 @@ XAI_REDIRECT_PATH = "/callback"
 XAI_OAUTH_KEY = "oauth/xai"
 XAI_PROVIDER_KEY = managed_provider_key(XAI_PLATFORM_ID)
 XAI_JSON_HEADERS = {"Accept": "application/json"}
+XAI_MODELS_DEV_PROVIDER_ID = "xai"
+XAI_DEFAULT_CONTEXT = 131_072
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +73,7 @@ def _xai_oauth_ref() -> OAuthRef:
     return OAuthRef(storage="file", key=XAI_OAUTH_KEY)
 
 
-def _apply_xai_config(config: Config) -> None:
+def _apply_xai_config(config: Config, models: tuple[XAIModel, ...] = XAI_MODELS) -> None:
     config.providers[XAI_PROVIDER_KEY] = LLMProvider(
         type="openai_legacy",
         base_url=XAI_BASE_URL,
@@ -78,7 +85,7 @@ def _apply_xai_config(config: Config) -> None:
         if model.provider == XAI_PROVIDER_KEY:
             del config.models[alias]
 
-    for model in XAI_MODELS:
+    for model in models:
         config.models[model.alias] = LLMModel(
             provider=XAI_PROVIDER_KEY,
             model=model.model_id,
@@ -86,14 +93,43 @@ def _apply_xai_config(config: Config) -> None:
             display_name=model.display_name,
         )
 
-    config.default_model = XAI_MODELS[0].alias
+    if models:
+        config.default_model = models[0].alias
     apply_login_thinking_defaults(config, thinking=False, effort="off")
+
+
+def _catalog_models_to_xai(built: tuple[CatalogModel, ...]) -> tuple[XAIModel, ...]:
+    return tuple(
+        XAIModel(model.model_id, model.display_name, model.max_context_size) for model in built
+    )
+
+
+async def _discover_xai_models() -> tuple[XAIModel, ...]:
+    """Resolve the live xAI model list from the shared models.dev catalog.
+
+    Falls back to the curated list when the catalog is unavailable or degraded,
+    so login never depends on a reachable catalog.
+    """
+    result = await get_models_dev_catalog()
+    if not result.is_authoritative:
+        return XAI_MODELS
+    built = build_catalog_models(
+        result.catalog, XAI_MODELS_DEV_PROVIDER_ID, default_context=XAI_DEFAULT_CONTEXT
+    )
+    return _catalog_models_to_xai(built) or XAI_MODELS
 
 
 def _error_description(payload: object) -> str:
     if not isinstance(payload, dict):
         return ""
     value = cast(dict[str, Any], payload).get("error_description")
+    return str(value) if value else ""
+
+
+def _error_code(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    value = cast(dict[str, Any], payload).get("error")
     return str(value) if value else ""
 
 
@@ -111,7 +147,10 @@ async def _post_token(data: dict[str, str], *, operation: str) -> dict[str, Any]
     except (aiohttp.ClientError, TimeoutError, OSError) as exc:
         raise OAuthError(f"{operation} request failed.") from exc
 
-    if status in {401, 403}:
+    # A 400 invalid_grant means the refresh/authorization token was rejected;
+    # surface it as unauthorized so the refresh path can suppress the token
+    # instead of retrying a doomed grant.
+    if status in {401, 403} or _error_code(payload_any) == "invalid_grant":
         raise OAuthUnauthorized(_error_description(payload_any) or f"{operation} was unauthorized.")
     if status != 200:
         raise OAuthError(_error_description(payload_any) or f"{operation} failed (HTTP {status}).")
@@ -180,9 +219,20 @@ async def login_xai_browser(
         yield OAuthEvent("error", f"xAI Grok browser login failed: {exc}")
         return
 
-    save_tokens(_xai_oauth_ref(), OAuthToken.from_response(payload))
-    _apply_xai_config(config)
-    save_config(config)
+    token = OAuthToken.from_response(payload)
+    if not token.refresh_token:
+        yield OAuthEvent(
+            "error",
+            "xAI Grok did not return a refresh token; the login was not saved.",
+        )
+        return
+
+    models = await _discover_xai_models()
+    try:
+        persist_login(config, _xai_oauth_ref(), token, lambda cfg: _apply_xai_config(cfg, models))
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
+        return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
 
 
@@ -227,9 +277,19 @@ async def login_xai_headless(config: Config) -> AsyncIterator[OAuthEvent]:
         yield OAuthEvent("error", f"xAI Grok device login failed: {exc}")
         return
 
-    save_tokens(_xai_oauth_ref(), token)
-    _apply_xai_config(config)
-    save_config(config)
+    if not token.refresh_token:
+        yield OAuthEvent(
+            "error",
+            "xAI Grok did not return a refresh token; the login was not saved.",
+        )
+        return
+
+    models = await _discover_xai_models()
+    try:
+        persist_login(config, _xai_oauth_ref(), token, lambda cfg: _apply_xai_config(cfg, models))
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to save xAI Grok login: {exc}")
+        return
     yield OAuthEvent("success", f"xAI Grok configured with model {config.default_model}.")
 
 
@@ -241,13 +301,17 @@ async def logout_xai(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    delete_tokens(_xai_oauth_ref())
-    config.providers.pop(XAI_PROVIDER_KEY, None)
-    for alias, model in list(config.models.items()):
-        if model.provider == XAI_PROVIDER_KEY:
-            del config.models[alias]
+    def _remove(cfg: Config) -> None:
+        cfg.providers.pop(XAI_PROVIDER_KEY, None)
+        for alias, model in list(cfg.models.items()):
+            if model.provider == XAI_PROVIDER_KEY:
+                del cfg.models[alias]
+        if cfg.default_model not in cfg.models:
+            cfg.default_model = next(iter(cfg.models), "")
 
-    if config.default_model not in config.models:
-        config.default_model = next(iter(config.models), "")
-    save_config(config)
+    try:
+        persist_logout(config, _xai_oauth_ref(), _remove)
+    except Exception as exc:
+        yield OAuthEvent("error", f"Failed to log out of xAI Grok: {exc}")
+        return
     yield OAuthEvent("success", "Logged out of xAI Grok successfully.")
