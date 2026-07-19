@@ -1541,7 +1541,7 @@ def save_config(config: Config, config_file: Path | None = None):
     target = config_file.resolve(strict=False) if config_file.is_symlink() else config_file
     target.parent.mkdir(parents=True, exist_ok=True)
     config_data = config.model_dump(mode="json", exclude_none=True)
-    if target.suffix.lower() == ".json":
+    if config_file.suffix.lower() == ".json":
         serialized = json.dumps(config_data, ensure_ascii=False, indent=2)
     else:
         serialized = tomlkit.dumps(config_data)  # type: ignore[reportUnknownMemberType]
