@@ -145,7 +145,7 @@ class _DummyRunningPrompt:
     def render_running_prompt_body(self, columns: int) -> str:
         return f"live view ({columns})"
 
-    def running_prompt_placeholder(self) -> None:
+    def running_prompt_placeholder(self) -> str | None:
         return None
 
     def running_prompt_allows_text_input(self) -> bool:

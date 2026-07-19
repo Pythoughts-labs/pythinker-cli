@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Freeze the public shell prompt compatibility contract with constructor and rendering coverage.
 - Add xAI Grok OAuth login (browser loopback and device-code).
 - Add GitHub Copilot device-code OAuth login for individual github.com accounts.
 - Add DigitalOcean Gradient AI browser OAuth login with dynamically discovered Inference Routers; router-discovery failures (unauthorized, outage, malformed, empty) are now reported distinctly instead of silently yielding no models.
