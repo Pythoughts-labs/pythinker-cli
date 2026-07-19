@@ -139,6 +139,52 @@ async def test_shell_logout_copilot_routes_to_copilot(monkeypatch: pytest.Monkey
     assert logout.called
 
 
+async def test_shell_login_digitalocean_routes_to_digitalocean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    login = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "login_digitalocean", login)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.login)(app, "digitalocean")
+
+    assert login.called
+
+
+async def test_shell_logout_digitalocean_routes_to_digitalocean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pythinker_code.ui.shell import oauth as shell_oauth
+
+    logout = Mock(side_effect=_oauth_success_event)
+    config = Config(is_from_default_location=True)
+    app = SimpleNamespace(soul=SimpleNamespace(runtime=SimpleNamespace(config=config)))
+    monkeypatch.setattr(shell_oauth, "ensure_pythinker_soul", lambda _app: _app.soul)
+    monkeypatch.setattr(shell_oauth, "logout_digitalocean", logout)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(shell_oauth.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(shell_oauth.console, "clear", Mock())
+
+    with pytest.raises(Reload):
+        await cast(Any, shell_oauth.logout)(app, "digitalocean")
+
+    assert logout.called
+
+
 @pytest.mark.parametrize(
     ("mode", "function_name"),
     [("xai", "login_xai_browser"), ("xai-device", "login_xai_headless")],

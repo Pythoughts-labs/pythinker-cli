@@ -7,6 +7,7 @@ import aiohttp
 from pydantic import BaseModel
 
 from pythinker_code.auth import (
+    DIGITALOCEAN_PLATFORM_ID,
     GITHUB_COPILOT_PLATFORM_ID,
     LM_STUDIO_PLATFORM_ID,
     OLLAMA_PLATFORM_ID,
@@ -102,6 +103,11 @@ PLATFORMS: list[Platform] = [
         id=GITHUB_COPILOT_PLATFORM_ID,
         name="GitHub Copilot",
         base_url="https://api.githubcopilot.com",
+    ),
+    Platform(
+        id=DIGITALOCEAN_PLATFORM_ID,
+        name="DigitalOcean",
+        base_url="https://inference.do-ai.run/v1",
     ),
     Platform(
         id=XAI_PLATFORM_ID,
@@ -288,6 +294,7 @@ async def refresh_managed_models(config: Config) -> bool:
             provider_key in OPENCODE_GO_PROVIDER_KEYS
             or provider_key
             in {
+                managed_provider_key(DIGITALOCEAN_PLATFORM_ID),
                 managed_provider_key(GITHUB_COPILOT_PLATFORM_ID),
                 managed_provider_key(XAI_PLATFORM_ID),
                 MINIMAX_ANTHROPIC_PROVIDER_KEY,
