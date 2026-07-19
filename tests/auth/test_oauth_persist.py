@@ -511,6 +511,49 @@ async def test_replacement_with_same_credential_key_keeps_new_token(
     assert caller == committed
 
 
+def test_credential_transaction_locks_are_reentrant_same_thread(tmp_path, monkeypatch) -> None:
+    """A thread already holding a credential key's lock can re-enter it without
+    deadlocking — fcntl.flock / msvcrt.locking deny a second same-file
+    acquisition within one process, so reentrancy is tracked in Python. Guards
+    the keyring-migration self-deadlock (load_tokens inside a persist transaction).
+    """
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    key = "oauth/reentrant-provider"
+    counts = oauth._held_credential_key_counts()
+    assert counts.get(key, 0) == 0
+    with oauth._credential_transaction_locks([key]):
+        assert counts.get(key, 0) == 1
+        with oauth._credential_transaction_locks([key]):
+            # Reentrant no-op acquisition; must not block on the same file lock.
+            assert counts.get(key, 0) == 2
+        # Inner exit decrements but the outer hold (and OS lock) remains.
+        assert counts.get(key, 0) == 1
+    assert counts.get(key, 0) == 0
+
+
+def test_load_tokens_keyring_migration_reentrant_under_held_lock(tmp_path, monkeypatch) -> None:
+    """The keyring read-copy-delete migration in load_tokens() is serialized under
+    the credential lock (so it cannot race persist), and re-enters safely when the
+    caller already holds that key's lock (the persist_login -> load_tokens path).
+    Pre-fix this path self-deadlocked on the non-reentrant cross-process lock.
+    """
+    monkeypatch.setenv("PYTHINKER_SHARE_DIR", str(tmp_path))
+    key = "oauth/keyring-migrate"
+    migrated_token = _token("keyring-access", "keyring-refresh")
+    monkeypatch.setattr(oauth, "_load_from_keyring", lambda _k: migrated_token)
+    deleted: list[str] = []
+    monkeypatch.setattr(oauth, "_delete_from_keyring", deleted.append)
+    ref = OAuthRef(storage="keyring", key=key)
+
+    with oauth._credential_transaction_locks([key]):
+        result = oauth.load_tokens(ref)  # would self-deadlock without reentrancy
+
+    assert result == migrated_token
+    assert deleted == [key]  # keyring entry removed as part of the migration
+    # Token now lives on the authoritative file copy.
+    assert oauth.load_tokens(OAuthRef(storage="file", key=key)) == migrated_token
+
+
 @pytest.mark.asyncio
 async def test_old_token_rollback_failure_preserves_committed_new_pair(
     monkeypatch: pytest.MonkeyPatch, tmp_path

@@ -641,7 +641,13 @@ def _migrate_keyring_token(ref: OAuthRef) -> OAuthToken | None:
 
 def load_tokens(ref: OAuthRef) -> OAuthToken | None:
     if ref.storage == "keyring":
-        return _migrate_keyring_token(ref)
+        # Serialize the read-copy-delete keyring migration with credential writes
+        # so it cannot race persist_login/persist_logout and overwrite a newer
+        # file token with the older keyring value. The lock is reentrant per
+        # thread, so callers already inside a credential transaction (e.g.
+        # persist_login loading the previous token) do not deadlock.
+        with _credential_transaction_locks([ref.key]):
+            return _migrate_keyring_token(ref)
     return _load_from_file(ref.key)
 
 
@@ -719,11 +725,36 @@ def _config_transaction_lock() -> Generator[None]:
         ) from exc
 
 
+# Per-thread reentrancy guard for the credential lock. fcntl.flock (Unix) and
+# msvcrt.locking (Windows) deny a second acquisition of the same lock file within
+# one process, so a thread that already holds a key's lock must reference that
+# hold instead of re-acquiring it — otherwise nested acquisitions (e.g.
+# load_tokens() migrating a keyring credential while inside a persist transaction)
+# would self-deadlock.
+_HELD_CREDENTIAL_KEYS = threading.local()
+
+
+def _held_credential_key_counts() -> dict[str, int]:
+    counts: dict[str, int] | None = getattr(_HELD_CREDENTIAL_KEYS, "counts", None)
+    if counts is None:
+        counts = {}
+        _HELD_CREDENTIAL_KEYS.counts = counts
+    return counts
+
+
 @contextmanager
 def _credential_transaction_locks(keys: list[str]) -> Generator[None]:
+    held = _held_credential_key_counts()
+    bumped: list[str] = []
     locks: list[_CrossProcessLock] = []
     try:
         for key in sorted(set(keys)):
+            if held.get(key, 0) > 0:
+                # Reentrant: this thread already holds `key`'s cross-process lock;
+                # re-acquiring the same file lock would be denied by the OS.
+                held[key] += 1
+                bumped.append(key)
+                continue
             try:
                 lock = _CrossProcessLock(key)
                 acquired = lock.acquire_with_retry_sync()
@@ -736,8 +767,18 @@ def _credential_transaction_locks(keys: list[str]) -> Generator[None]:
                     "Could not acquire the OAuth credential lock; no changes were made."
                 )
             locks.append(lock)
+            held[key] = 1
+            bumped.append(key)
         yield
     finally:
+        # Decrement only what this invocation bumped (correct even on a partial
+        # acquisition), and release only the OS locks it actually acquired.
+        for key in bumped:
+            count = held.get(key, 0)
+            if count <= 1:
+                held.pop(key, None)
+            else:
+                held[key] = count - 1
         for lock in reversed(locks):
             lock.release()
 
