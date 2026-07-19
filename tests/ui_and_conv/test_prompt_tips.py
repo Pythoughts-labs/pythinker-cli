@@ -1546,7 +1546,7 @@ def test_apply_mode_syncs_erase_when_done_with_current_mode() -> None:
     prompt_session._session = cast(
         Any,
         SimpleNamespace(
-            app=SimpleNamespace(erase_when_done=False),
+            app=SimpleNamespace(erase_when_done=False, full_screen=True),
             default_buffer=SimpleNamespace(completer=None),
         ),
     )
@@ -1558,12 +1558,14 @@ def test_apply_mode_syncs_erase_when_done_with_current_mode() -> None:
 
     assert prompt_session._session.default_buffer.completer is prompt_session._agent_mode_completer
     assert prompt_session._session.app.erase_when_done is True
+    assert prompt_session._session.app.full_screen is True
 
     prompt_session._mode = PromptMode.SHELL
     prompt_session._apply_mode()
 
     assert prompt_session._session.default_buffer.completer is prompt_session._shell_mode_completer
     assert prompt_session._session.app.erase_when_done is False
+    assert prompt_session._session.app.full_screen is True
 
 
 def test_attach_running_prompt_enables_erase_when_done_and_detach_restores_state() -> None:
@@ -1571,45 +1573,32 @@ def test_attach_running_prompt_enables_erase_when_done_and_detach_restores_state
     prompt_session._mode = PromptMode.SHELL
     prompt_session._running_prompt_delegate = None
     prompt_session._running_prompt_previous_mode = None
-    prompt_session._sticky_input = False
-    prompt_session._session = cast(Any, SimpleNamespace(app=SimpleNamespace(erase_when_done=False)))
+    prompt_session._turn_starting = False
+    app = SimpleNamespace(
+        erase_when_done=False,
+        full_screen=True,
+        renderer=SimpleNamespace(full_screen=False),
+    )
+    prompt_session._session = cast(
+        Any,
+        SimpleNamespace(app=app, default_buffer=SimpleNamespace(completer=None)),
+    )
+    prompt_session._agent_mode_completer = cast(Any, object())
+    prompt_session._shell_mode_completer = cast(Any, object())
 
     delegate = _DummyRunningPrompt()
-    trace: list[tuple[str, object, object, object]] = []
-
-    def fake_apply_mode(event=None) -> None:
-        prompt_session._session.app.erase_when_done = prompt_session._mode == PromptMode.AGENT
-        trace.append(
-            (
-                "apply",
-                prompt_session._mode,
-                prompt_session._session.app.erase_when_done,
-                prompt_session._running_prompt_delegate,
-            )
-        )
+    invalidations: list[tuple[PromptMode, bool, object | None]] = []
+    initial_screen_modes = (app.full_screen, app.renderer.full_screen)
 
     def fake_invalidate() -> None:
-        trace.append(
+        invalidations.append(
             (
-                "invalidate",
                 prompt_session._mode,
                 prompt_session._session.app.erase_when_done,
                 prompt_session._running_prompt_delegate,
             )
         )
 
-    async def fake_prompt_once(*, append_history: bool) -> UserInput:
-        trace.append(
-            (
-                "prompt",
-                append_history,
-                prompt_session._session.app.erase_when_done,
-                prompt_session._running_prompt_delegate,
-            )
-        )
-        return UserInput(mode=PromptMode.AGENT, command="hi", resolved_command="hi", content=[])
-
-    prompt_session._apply_mode = fake_apply_mode
     prompt_session.invalidate = fake_invalidate
 
     prompt_session.attach_running_prompt(delegate)
@@ -1617,13 +1606,18 @@ def test_attach_running_prompt_enables_erase_when_done_and_detach_restores_state
     assert prompt_session._mode == PromptMode.AGENT
     assert prompt_session._running_prompt_delegate is delegate
     assert prompt_session._session.app.erase_when_done is True
+    assert (app.full_screen, app.renderer.full_screen) == initial_screen_modes
 
     prompt_session.detach_running_prompt(delegate)
 
     assert prompt_session._mode == PromptMode.SHELL
     assert prompt_session._running_prompt_delegate is None
     assert prompt_session._session.app.erase_when_done is False
-    assert [entry[0] for entry in trace] == ["apply", "invalidate", "apply", "invalidate"]
+    assert (app.full_screen, app.renderer.full_screen) == initial_screen_modes
+    assert invalidations == [
+        (PromptMode.AGENT, True, delegate),
+        (PromptMode.SHELL, False, None),
+    ]
 
 
 # ── Prompt async contract ─────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix queued follow-up input showing a bordered ghost; pressing Enter during an active turn now shows one intentional queued row.
+
 ## 0.60.0 (2026-07-18)
 
 - **Leaf subagent prompt profile.** All 12 built-in subagent roles (implementer,
