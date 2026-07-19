@@ -877,7 +877,8 @@ async def generate_session_title(
 
             if provider_config:
                 oauth = OAuthManager(config)
-                await oauth.ensure_fresh()
+                if provider_config.oauth is not None:
+                    await oauth.ensure_fresh(oauth_ref=provider_config.oauth)
                 llm = create_llm(provider_config, model_config, oauth=oauth)
 
                 if llm:

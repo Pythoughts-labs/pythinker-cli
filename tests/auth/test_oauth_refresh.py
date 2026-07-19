@@ -12,8 +12,10 @@ from pythinker_code.auth.oauth import (
     _REJECTED_REFRESH_TOKENS,
     OAuthError,
     OAuthManager,
+    OAuthPersistenceError,
     OAuthToken,
     OAuthUnauthorized,
+    _credentials_path,
     _refresh_threshold,
     _save_to_file,
     refresh_token,
@@ -259,6 +261,64 @@ async def test_refresh_token_does_not_retry_on_400():
 
 
 @pytest.mark.asyncio
+async def test_ensure_fresh_scopes_to_active_runtime_provider():
+    xai_ref = OAuthRef(storage="file", key="oauth/xai")
+    copilot_ref = OAuthRef(storage="file", key="oauth/github-copilot")
+    xai_token = _make_token(access="stale-xai", refresh="xai-refresh", expires_in=0)
+    copilot_token = _make_token(access="stale-copilot", refresh="copilot-refresh", expires_in=0)
+    refreshed_copilot = _make_token(
+        access="fresh-copilot", refresh="copilot-refresh", expires_in=900
+    )
+    config = Config(
+        default_model="github-copilot/test-model",
+        providers={
+            "managed:xai": LLMProvider(
+                type="openai_legacy",
+                base_url="https://api.x.ai/v1",
+                api_key=SecretStr(""),
+                oauth=xai_ref,
+            ),
+            "managed:github-copilot": LLMProvider(
+                type="openai_legacy",
+                base_url="https://api.githubcopilot.com",
+                api_key=SecretStr(""),
+                oauth=copilot_ref,
+            ),
+        },
+        models={
+            "github-copilot/test-model": LLMModel(
+                provider="managed:github-copilot",
+                model="test-model",
+                max_context_size=100_000,
+            )
+        },
+        services=Services(),
+    )
+    tokens = {xai_ref.key: xai_token, copilot_ref.key: copilot_token}
+    runtime = MagicMock()
+    runtime.config = config
+    runtime.llm.model_config = config.models["github-copilot/test-model"]
+    runtime.llm.chat_provider.client.api_key = "stale-copilot"
+
+    with patch(
+        "pythinker_code.auth.oauth.load_tokens",
+        side_effect=lambda ref: tokens.get(ref.key),
+    ):
+        manager = OAuthManager(config)
+
+    refresh = AsyncMock(return_value=refreshed_copilot)
+    with (
+        patch("pythinker_code.auth.oauth.load_tokens", side_effect=lambda ref: tokens.get(ref.key)),
+        patch.object(manager, "_refresh_token_for_ref", refresh),
+        patch("pythinker_code.auth.oauth.save_tokens"),
+    ):
+        await manager.ensure_fresh(runtime)
+
+    refresh.assert_awaited_once_with(copilot_ref, "copilot-refresh")
+    assert runtime.llm.chat_provider.client.api_key == "fresh-copilot"
+
+
+@pytest.mark.asyncio
 async def test_ensure_fresh_force_bypasses_threshold():
     """force=True should refresh even when token has plenty of time left."""
     token = _make_token(expires_in=800)  # 13+ minutes remaining
@@ -330,12 +390,12 @@ def test_save_to_file_is_atomic(tmp_path):
     with patch("pythinker_code.auth.oauth._credentials_dir", return_value=tmp_path):
         token = _make_token()
         _save_to_file(key, token)
-        path = tmp_path / f"{key}.json"
+        path = _credentials_path(key)
         assert path.exists()
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["access_token"] == "access-123"
         # No leftover .tmp files
-        tmp_files = list(tmp_path.glob("*.tmp"))
+        tmp_files = list(tmp_path.rglob("*.tmp"))
         assert tmp_files == []
 
 
@@ -345,7 +405,7 @@ def test_save_to_file_expires_in_roundtrip(tmp_path):
     with patch("pythinker_code.auth.oauth._credentials_dir", return_value=tmp_path):
         token = _make_token(expires_in=7200)
         _save_to_file(key, token)
-        path = tmp_path / f"{key}.json"
+        path = _credentials_path(key)
         data = json.loads(path.read_text(encoding="utf-8"))
         restored = OAuthToken.from_dict(data)
         assert restored.expires_in == 7200
@@ -365,6 +425,148 @@ def test_oauth_token_from_dict_defaults_expires_in():
     }
     token = OAuthToken.from_dict(payload)
     assert token.expires_in == 0.0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"refresh_token": "refresh-secret", "expires_in": 60},
+        {"access_token": None, "refresh_token": "refresh-secret", "expires_in": 60},
+        {"access_token": 123, "refresh_token": "refresh-secret", "expires_in": 60},
+        {"access_token": "", "refresh_token": "refresh-secret", "expires_in": 60},
+        {"access_token": " \t", "refresh_token": "refresh-secret", "expires_in": 60},
+    ],
+    ids=["missing", "none", "non-string", "empty", "blank"],
+)
+def test_oauth_token_from_response_rejects_invalid_access_token(
+    payload: dict[str, object],
+) -> None:
+    payload["provider_diagnostic"] = "raw-provider-payload-secret"
+
+    with pytest.raises(OAuthError) as raised:
+        OAuthToken.from_response(payload)
+
+    rendered = str(raised.value)
+    assert "raw-provider-payload-secret" not in rendered
+    assert "refresh-secret" not in rendered
+    assert str(payload) not in rendered
+
+
+@pytest.mark.parametrize(
+    "refresh_token",
+    [None, False, 123, ["raw-refresh-secret"], {"token": "raw-refresh-secret"}],
+    ids=["none", "bool", "integer", "list", "mapping"],
+)
+def test_oauth_token_from_response_rejects_supplied_non_string_refresh_token(
+    refresh_token: object,
+) -> None:
+    payload: dict[str, object] = {
+        "access_token": "access-secret",
+        "refresh_token": refresh_token,
+        "expires_in": 60,
+        "provider_diagnostic": "raw-provider-payload-secret",
+    }
+
+    with pytest.raises(OAuthError) as raised:
+        OAuthToken.from_response(payload)
+
+    rendered = str(raised.value)
+    assert "access-secret" not in rendered
+    assert "raw-refresh-secret" not in rendered
+    assert "raw-provider-payload-secret" not in rendered
+    assert str(payload) not in rendered
+
+
+@pytest.mark.parametrize(
+    "expires_in",
+    [
+        True,
+        -1,
+        -0.5,
+        "-1",
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "NaN",
+        "Infinity",
+        "not-a-lifetime-secret",
+        [],
+        {},
+    ],
+    ids=[
+        "bool",
+        "negative-int",
+        "negative-float",
+        "negative-string",
+        "nan",
+        "positive-inf",
+        "negative-inf",
+        "nan-string",
+        "inf-string",
+        "malformed-string",
+        "list",
+        "mapping",
+    ],
+)
+def test_oauth_token_from_response_rejects_invalid_expires_in(expires_in: object) -> None:
+    payload: dict[str, object] = {
+        "access_token": "access-secret",
+        "refresh_token": "refresh-secret",
+        "expires_in": expires_in,
+        "provider_diagnostic": "raw-provider-payload-secret",
+    }
+
+    with pytest.raises(OAuthError) as raised:
+        OAuthToken.from_response(payload)
+
+    rendered = str(raised.value)
+    assert "access-secret" not in rendered
+    assert "refresh-secret" not in rendered
+    assert "raw-provider-payload-secret" not in rendered
+    assert "not-a-lifetime-secret" not in rendered
+    assert str(payload) not in rendered
+
+
+@pytest.mark.parametrize(
+    ("include_expires_in", "expires_in", "expected"),
+    [
+        (False, None, 0.0),
+        (True, None, 0.0),
+        (True, "", 0.0),
+        (True, 0, 0.0),
+        (True, 60, 60.0),
+        (True, 60.5, 60.5),
+        (True, "60", 60.0),
+        (True, "60.5", 60.5),
+    ],
+    ids=[
+        "missing",
+        "none",
+        "empty",
+        "zero",
+        "integer",
+        "float",
+        "integer-string",
+        "float-string",
+    ],
+)
+def test_oauth_token_from_response_accepts_valid_expires_in(
+    include_expires_in: bool,
+    expires_in: object,
+    expected: float,
+) -> None:
+    payload: dict[str, object] = {
+        "access_token": "access-token",
+        "refresh_token": "",
+    }
+    if include_expires_in:
+        payload["expires_in"] = expires_in
+
+    token = OAuthToken.from_response(payload)
+
+    assert token.access_token == "access-token"
+    assert token.refresh_token == ""
+    assert token.expires_in == expected
 
 
 # ── force refresh failure propagation ─────────────────────────
@@ -556,6 +758,36 @@ async def test_ensure_fresh_non_force_swallows_errors():
     ):
         # Should NOT raise — errors are swallowed in background mode
         await manager.ensure_fresh()
+
+
+@pytest.mark.asyncio
+async def test_refresh_lock_acquisition_failure_never_refreshes_or_writes_unlocked():
+    token = _make_token(expires_in=100)
+    manager = _make_manager(token)
+    refresh = AsyncMock(return_value=_make_token(access="unlocked-access"))
+    save = MagicMock()
+
+    class UnavailableLock:
+        def __init__(self, _key: str) -> None:
+            pass
+
+        async def acquire_with_retry(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            pass
+
+    with (
+        patch("pythinker_code.auth.oauth.load_tokens", return_value=token),
+        patch("pythinker_code.auth.oauth._CrossProcessLock", UnavailableLock),
+        patch.object(manager, "_refresh_token_for_ref", refresh),
+        patch("pythinker_code.auth.oauth.save_tokens", save),
+        pytest.raises(OAuthPersistenceError, match="credential lock"),
+    ):
+        await manager.ensure_fresh(force=True)
+
+    refresh.assert_not_awaited()
+    save.assert_not_called()
 
 
 # ── _refresh_threshold helper ─────────────────────────────────

@@ -21,6 +21,7 @@ from pythinker_code.utils.aiohttp import new_client_session
 _DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _DEFAULT_DEVICE_INTERVAL = 5
 _SLOW_DOWN_INCREMENT = 5
+_MAX_IMPLICIT_CALLBACK_BODY_BYTES = 64 * 1024
 _IMPLICIT_BOOTSTRAP_HTML = """<!doctype html><html><body>
 <p>Finishing sign-in…</p>
 <script>
@@ -432,7 +433,38 @@ async def _handle_implicit_loopback_callback(
             header_text = header.decode(encoding="utf-8", errors="replace")
             name, separator, value = header_text.partition(":")
             if separator and name.strip().lower() == "content-length":
-                content_length = int(value.strip())
+                raw_content_length = value.strip()
+                if not raw_content_length.isascii() or not raw_content_length.isdecimal():
+                    await _write_http_response(
+                        writer,
+                        status="400 Bad Request",
+                        body=bytes('{"ok": false}', encoding="utf-8"),
+                        content_type="application/json",
+                    )
+                    if not result.done():
+                        result.set_exception(
+                            OAuthError("OAuth callback Content-Length was invalid.")
+                        )
+                    return
+
+                normalized_content_length = raw_content_length.lstrip("0") or "0"
+                maximum_content_length = str(_MAX_IMPLICIT_CALLBACK_BODY_BYTES)
+                if len(normalized_content_length) > len(maximum_content_length) or (
+                    len(normalized_content_length) == len(maximum_content_length)
+                    and normalized_content_length > maximum_content_length
+                ):
+                    await _write_http_response(
+                        writer,
+                        status="413 Payload Too Large",
+                        body=bytes('{"ok": false}', encoding="utf-8"),
+                        content_type="application/json",
+                    )
+                    if not result.done():
+                        result.set_exception(
+                            OAuthError("OAuth callback body exceeded the size limit.")
+                        )
+                    return
+                content_length = int(normalized_content_length)
 
         try:
             body = await reader.readexactly(content_length)
@@ -492,7 +524,7 @@ async def _handle_implicit_loopback_callback(
             return
 
         access_token = payload.get("access_token")
-        if not isinstance(access_token, str) or not access_token:
+        if not isinstance(access_token, str) or not access_token.strip():
             await _write_http_response(
                 writer,
                 status="400 Bad Request",

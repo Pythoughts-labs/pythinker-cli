@@ -17,7 +17,7 @@ from pythinker_code.auth import (
     SNOWFLAKE_CORTEX_PLATFORM_ID,
     XAI_PLATFORM_ID,
 )
-from pythinker_code.config import Config, LLMModel, load_config, save_config
+from pythinker_code.config import Config, LLMModel, LLMProvider
 from pythinker_code.llm import ModelCapability
 from pythinker_code.utils.aiohttp import new_client_session
 from pythinker_code.utils.logging import logger
@@ -256,6 +256,8 @@ async def refresh_managed_models(config: Config) -> bool:
     if not config.is_from_default_location:
         return False
 
+    working_config = config.model_copy(deep=True)
+
     from pythinker_code.auth.kimi import (
         KIMI_PROVIDER_KEY,
         KimiModel,
@@ -282,14 +284,35 @@ async def refresh_managed_models(config: Config) -> bool:
         refresh_z_ai_models,
     )
 
+    def provider_snapshot(*provider_keys: str) -> dict[str, LLMProvider | None]:
+        return {
+            provider_key: (
+                provider.model_copy(deep=True)
+                if (provider := working_config.providers.get(provider_key)) is not None
+                else None
+            )
+            for provider_key in provider_keys
+        }
+
+    def providers_match(
+        committed: Config,
+        expected: dict[str, LLMProvider | None],
+    ) -> bool:
+        return all(
+            committed.providers.get(provider_key) == provider
+            for provider_key, provider in expected.items()
+        )
+
     managed_providers = {
-        key: provider for key, provider in config.providers.items() if is_managed_provider_key(key)
+        key: provider
+        for key, provider in working_config.providers.items()
+        if is_managed_provider_key(key)
     }
     if not managed_providers:
         return False
 
     changed = False
-    updates: list[tuple[str, str, list[ModelInfo]]] = []
+    updates: list[tuple[str, str, list[ModelInfo], dict[str, LLMProvider | None]]] = []
     z_ai_provider_keys = {route.provider_key for route in ZAI_ROUTES}
     oauth_manager = None
     for provider_key, provider in managed_providers.items():
@@ -327,15 +350,19 @@ async def refresh_managed_models(config: Config) -> bool:
             logger.warning("Managed platform not found: {platform}", platform=platform_id)
             continue
 
+        if provider.oauth and oauth_manager is None:
+            from pythinker_code.auth.oauth import OAuthManager
+
+            oauth_manager = OAuthManager(working_config)
+        provider = working_config.providers.get(provider_key)
+        if provider is None:
+            continue
         fallback_api_key = provider.api_key.get_secret_value()
         api_key = fallback_api_key
         if provider.oauth:
-            if oauth_manager is None:
-                from pythinker_code.auth.oauth import OAuthManager
-
-                oauth_manager = OAuthManager(config)
+            assert oauth_manager is not None
             try:
-                await oauth_manager.ensure_fresh()
+                await oauth_manager.ensure_fresh(oauth_ref=provider.oauth)
             except Exception as exc:
                 from pythinker_code.telemetry.errors import report_handled_error
 
@@ -360,6 +387,7 @@ async def refresh_managed_models(config: Config) -> bool:
             and oauth_manager is not None
             else None
         )
+        query_snapshot = provider_snapshot(provider_key)
         try:
             models = await _list_models_for_managed_platform(
                 platform_id=platform_id,
@@ -373,8 +401,8 @@ async def refresh_managed_models(config: Config) -> bool:
                 if fallback_models is None:
                     continue
                 models = fallback_models
-                updates.append((provider_key, platform_id, models))
-                if _apply_models(config, provider_key, platform_id, models):
+                updates.append((provider_key, platform_id, models, query_snapshot))
+                if _apply_models(working_config, provider_key, platform_id, models):
                     changed = True
                 continue
             logger.warning(
@@ -383,7 +411,7 @@ async def refresh_managed_models(config: Config) -> bool:
             )
             refresh_exc: Exception | None = None
             try:
-                await oauth_manager.ensure_fresh(force=True)
+                await oauth_manager.ensure_fresh(force=True, oauth_ref=provider.oauth)
             except Exception as exc2:
                 from pythinker_code.telemetry.errors import report_handled_error
 
@@ -409,8 +437,8 @@ async def refresh_managed_models(config: Config) -> bool:
                 )
                 if fallback_models is not None:
                     models = fallback_models
-                    updates.append((provider_key, platform_id, models))
-                    if _apply_models(config, provider_key, platform_id, models):
+                    updates.append((provider_key, platform_id, models, query_snapshot))
+                    if _apply_models(working_config, provider_key, platform_id, models):
                         changed = True
                 continue
             retry_exc: Exception | None = None
@@ -432,8 +460,8 @@ async def refresh_managed_models(config: Config) -> bool:
                 )
                 if fallback_models is not None:
                     models = fallback_models
-                    updates.append((provider_key, platform_id, models))
-                    if _apply_models(config, provider_key, platform_id, models):
+                    updates.append((provider_key, platform_id, models, query_snapshot))
+                    if _apply_models(working_config, provider_key, platform_id, models):
                         changed = True
                 continue
         except Exception as exc:
@@ -445,30 +473,34 @@ async def refresh_managed_models(config: Config) -> bool:
                 continue
             models = fallback_models
 
-        updates.append((provider_key, platform_id, models))
-        if _apply_models(config, provider_key, platform_id, models):
+        updates.append((provider_key, platform_id, models, query_snapshot))
+        if _apply_models(working_config, provider_key, platform_id, models):
             changed = True
 
     opencode_go_models: tuple[OpenCodeGoModel, ...] | None = None
+    opencode_go_snapshot = provider_snapshot(*OPENCODE_GO_PROVIDER_KEYS)
     try:
-        opencode_go_models = await refresh_opencode_go_models(config)
+        opencode_go_models = await refresh_opencode_go_models(working_config)
     except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
         logger.warning("Failed to refresh OpenCode Go models: {error}", error=exc)
-    if opencode_go_models and apply_opencode_go_models(config, opencode_go_models):
+    if opencode_go_models and apply_opencode_go_models(working_config, opencode_go_models):
         changed = True
 
     minimax_models: tuple[MiniMaxModel, ...] | None = None
+    minimax_snapshot = provider_snapshot(MINIMAX_ANTHROPIC_PROVIDER_KEY)
     try:
-        minimax_models = await refresh_minimax_models(config)
+        minimax_models = await refresh_minimax_models(working_config)
     except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
         logger.warning("Failed to refresh MiniMax models: {error}", error=exc)
-    if minimax_models is not None and apply_minimax_models(config, minimax_models):
+    if minimax_models is not None and apply_minimax_models(working_config, minimax_models):
         changed = True
 
     z_ai_results: dict[ZaiRoute, ZaiCatalogResult] = {}
+    z_ai_snapshots: dict[ZaiRoute, dict[str, LLMProvider | None]] = {}
     for route in ZAI_ROUTES:
+        route_snapshot = provider_snapshot(route.provider_key)
         try:
-            result = await refresh_z_ai_models(config, route)
+            result = await refresh_z_ai_models(working_config, route)
         except Exception as exc:
             logger.warning(
                 "Unexpected Z.AI catalog refresh failure for {route}: {error_type}",
@@ -477,9 +509,10 @@ async def refresh_managed_models(config: Config) -> bool:
             )
             continue
         z_ai_results[route] = result
+        z_ai_snapshots[route] = route_snapshot
         if result.status == "live":
             assert result.models is not None
-            if apply_z_ai_models(config, route, result.models):
+            if apply_z_ai_models(working_config, route, result.models):
                 changed = True
         elif result.status != "unconfigured":
             logger.warning(
@@ -490,33 +523,44 @@ async def refresh_managed_models(config: Config) -> bool:
             )
 
     kimi_models: tuple[KimiModel, ...] | None = None
+    kimi_snapshot = provider_snapshot(KIMI_PROVIDER_KEY)
     try:
-        kimi_models = await refresh_kimi_models(config)
+        kimi_models = await refresh_kimi_models(working_config)
     except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
         logger.warning("Failed to refresh Kimi models: {error}", error=exc)
-    if kimi_models is not None and apply_kimi_models(config, kimi_models):
+    if kimi_models is not None and apply_kimi_models(working_config, kimi_models):
         changed = True
 
-    if changed:
-        config_for_save = load_config()
-        save_changed = False
-        for provider_key, platform_id, models in updates:
-            if _apply_models(config_for_save, provider_key, platform_id, models):
-                save_changed = True
-        if opencode_go_models and apply_opencode_go_models(config_for_save, opencode_go_models):
-            save_changed = True
-        if minimax_models is not None and apply_minimax_models(config_for_save, minimax_models):
-            save_changed = True
-        for route, result in z_ai_results.items():
-            if result.status != "live":
-                continue
-            assert result.models is not None
-            if apply_z_ai_models(config_for_save, route, result.models):
-                save_changed = True
-        if kimi_models is not None and apply_kimi_models(config_for_save, kimi_models):
-            save_changed = True
-        if save_changed:
-            save_config(config_for_save)
+    has_collected_updates = (
+        bool(updates)
+        or bool(opencode_go_models)
+        or minimax_models is not None
+        or any(result.status == "live" for result in z_ai_results.values())
+        or kimi_models is not None
+    )
+    if has_collected_updates:
+        from pythinker_code.auth.oauth import persist_config_change
+
+        def apply_updates(committed: Config) -> None:
+            for provider_key, platform_id, models, expected_providers in updates:
+                if not providers_match(committed, expected_providers):
+                    continue
+                _apply_models(committed, provider_key, platform_id, models)
+            if opencode_go_models and providers_match(committed, opencode_go_snapshot):
+                apply_opencode_go_models(committed, opencode_go_models)
+            if minimax_models is not None and providers_match(committed, minimax_snapshot):
+                apply_minimax_models(committed, minimax_models)
+            for route, result in z_ai_results.items():
+                if result.status != "live":
+                    continue
+                if not providers_match(committed, z_ai_snapshots[route]):
+                    continue
+                assert result.models is not None
+                apply_z_ai_models(committed, route, result.models)
+            if kimi_models is not None and providers_match(committed, kimi_snapshot):
+                apply_kimi_models(committed, kimi_models)
+
+        await persist_config_change(config, apply_updates)
     return changed
 
 

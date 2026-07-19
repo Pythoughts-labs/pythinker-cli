@@ -323,6 +323,34 @@ async def _drive_implicit_handler(
     return result, writer
 
 
+async def _drive_implicit_content_length(
+    content_length: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[asyncio.Future[ImplicitAuthorization], _FakeWriter, list[int]]:
+    result: asyncio.Future[ImplicitAuthorization] = asyncio.get_running_loop().create_future()
+    writer = _FakeWriter()
+    request = (
+        f"POST /oauth/token HTTP/1.1\r\nHost: localhost\r\nContent-Length: {content_length}\r\n\r\n"
+    )
+    reader = _request_reader(request)
+    read_sizes: list[int] = []
+
+    async def track_readexactly(size: int) -> bytes:
+        read_sizes.append(size)
+        return b"{}"
+
+    monkeypatch.setattr(reader, "readexactly", track_readexactly)
+    await _handle_implicit_loopback_callback(
+        reader,
+        cast("asyncio.StreamWriter", writer),
+        callback_path="/oauth/callback",
+        token_path="/oauth/token",
+        expected_state="expected-state",
+        result=result,
+    )
+    return result, writer, read_sizes
+
+
 def _mock_loopback_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[
@@ -491,8 +519,11 @@ async def test_implicit_callback_rejects_wrong_state_before_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_implicit_callback_requires_access_token() -> None:
-    result, writer = await _drive_implicit_handler({"access_token": "", "state": "expected-state"})
+@pytest.mark.parametrize("access_token", ["", "   ", "\t\r\n"])
+async def test_implicit_callback_requires_nonblank_access_token(access_token: str) -> None:
+    result, writer = await _drive_implicit_handler(
+        {"access_token": access_token, "state": "expected-state"}
+    )
 
     with pytest.raises(OAuthError):
         _ = await result
@@ -538,6 +569,42 @@ async def test_implicit_callback_rejects_truncated_body() -> None:
     with pytest.raises(OAuthError):
         _ = await result
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_oversized_body_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, writer, read_sizes = await _drive_implicit_content_length("65537", monkeypatch)
+
+    with pytest.raises(OAuthError, match="^OAuth callback body exceeded the size limit\\.$"):
+        _ = await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 413 Payload Too Large")
+    assert read_sizes == []
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_negative_content_length_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, writer, read_sizes = await _drive_implicit_content_length("-1", monkeypatch)
+
+    with pytest.raises(OAuthError, match="^OAuth callback Content-Length was invalid\\.$"):
+        _ = await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+    assert read_sizes == []
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_malformed_content_length_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, writer, read_sizes = await _drive_implicit_content_length("1_0", monkeypatch)
+
+    with pytest.raises(OAuthError, match="^OAuth callback Content-Length was invalid\\.$"):
+        _ = await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+    assert read_sizes == []
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,6 @@ from pythinker_code.auth.oauth import (
     OAuthEvent,
     OAuthToken,
     OAuthUnauthorized,
-    persist_config_change,
     persist_login,
     persist_logout,
 )
@@ -108,7 +107,7 @@ def _headers() -> dict[str, str]:
 
 
 def _inject_default_expiry(payload: dict[str, Any]) -> dict[str, Any]:
-    if not payload.get("expires_in"):
+    if payload.get("expires_in") is None:
         payload["expires_in"] = _DEFAULT_EXPIRES_IN
     return payload
 
@@ -307,11 +306,11 @@ async def login_snowflake(
             auth.code_verifier,
             auth.redirect_uri,
         )
+        token = OAuthToken.from_response(payload)
     except OAuthError as exc:
         yield OAuthEvent("error", f"Snowflake Cortex browser login failed: {exc}")
         return
 
-    token = OAuthToken.from_response(payload)
     if not token.refresh_token:
         yield OAuthEvent(
             "error",
@@ -327,6 +326,7 @@ async def login_snowflake(
             _oauth_ref(account),
             token,
             lambda cfg: _apply_snowflake_config(cfg, account, models),
+            replace_provider_key=SNOWFLAKE_PROVIDER_KEY,
         )
     except Exception as exc:
         logger.warning("Failed to persist Snowflake Cortex login: {exc}", exc=exc)
@@ -349,9 +349,6 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    provider = config.providers.get(SNOWFLAKE_PROVIDER_KEY)
-    ref = provider.oauth if provider is not None and provider.oauth is not None else None
-
     def _remove(cfg: Config) -> None:
         cfg.providers.pop(SNOWFLAKE_PROVIDER_KEY, None)
         for alias, model in list(cfg.models.items()):
@@ -361,10 +358,12 @@ async def logout_snowflake(config: Config) -> AsyncIterator[OAuthEvent]:
             cfg.default_model = next(iter(cfg.models), "")
 
     try:
-        if ref is not None:
-            await persist_logout(config, ref, _remove)
-        else:
-            await persist_config_change(config, _remove)
+        await persist_logout(
+            config,
+            None,
+            _remove,
+            provider_key=SNOWFLAKE_PROVIDER_KEY,
+        )
     except Exception as exc:
         logger.warning("Failed to persist Snowflake Cortex logout: {exc}", exc=exc)
         yield OAuthEvent("error", "Failed to log out of Snowflake Cortex.")

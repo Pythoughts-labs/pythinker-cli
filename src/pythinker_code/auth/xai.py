@@ -231,11 +231,11 @@ async def login_xai_browser(
             auth.code_verifier,
             auth.redirect_uri,
         )
+        token = OAuthToken.from_response(payload)
     except OAuthError as exc:
         yield OAuthEvent("error", f"xAI Grok browser login failed: {exc}")
         return
 
-    token = OAuthToken.from_response(payload)
     if not token.refresh_token:
         yield OAuthEvent(
             "error",

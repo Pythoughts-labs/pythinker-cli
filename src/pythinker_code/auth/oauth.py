@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
+import math
 import os
 import platform
 import random
+import re
 import socket
 import sys
 import tempfile
+import threading
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -37,13 +39,14 @@ from pythinker_code.config import (
     PythinkerAIFetchConfig,
     PythinkerAISearchConfig,
     get_config_file,
+    load_config,
     save_config,
 )
 from pythinker_code.constant import VERSION
 from pythinker_code.share import get_share_dir
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
-from pythinker_code.utils.io import file_lock
+from pythinker_code.utils.io import FileLockTimeoutError, file_lock
 from pythinker_code.utils.logging import logger
 
 if TYPE_CHECKING:
@@ -59,7 +62,17 @@ MIN_REFRESH_THRESHOLD_SECONDS = 300
 REFRESH_THRESHOLD_RATIO = 0.5
 UNAUTHORIZED_REFRESH_RETRY_COOLDOWN_SECONDS = 300
 _CROSS_PROCESS_LOCK_RETRIES = 5
+_PERSISTENCE_LOCK_TIMEOUT_SECONDS = 5.0
 _RETRYABLE_REFRESH_STATUSES = {429, 500, 502, 503, 504}
+_SAFE_CREDENTIAL_KEY_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_WINDOWS_RESERVED_CREDENTIAL_BASENAMES = {
+    "AUX",
+    "CON",
+    "NUL",
+    "PRN",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def _refresh_threshold(expires_in: float) -> float:
@@ -79,6 +92,14 @@ class OAuthUnauthorized(OAuthError):
 
 class OAuthPersistenceError(OAuthError):
     """OAuth credentials and configuration could not be persisted consistently."""
+
+
+class _KeyringCredentialPresentError(OAuthPersistenceError):
+    """Keyring deletion failed and the credential is confirmed to remain."""
+
+
+class _KeyringDeleteOutcomeUnknownError(OAuthPersistenceError):
+    """Keyring deletion failed and the credential state could not be verified."""
 
 
 class _RetryableRefreshError(OAuthError):
@@ -121,10 +142,34 @@ class OAuthToken:
 
     @classmethod
     def from_response(cls, payload: dict[str, Any]) -> OAuthToken:
-        expires_in = float(payload.get("expires_in") or 0)
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise OAuthError("OAuth token response contained an invalid access token.")
+
+        refresh_token = payload.get("refresh_token", "")
+        if not isinstance(refresh_token, str):
+            raise OAuthError("OAuth token response contained an invalid refresh token.")
+
+        expires_in_value = payload.get("expires_in")
+        if expires_in_value is None or expires_in_value == "":
+            expires_in = 0.0
+        else:
+            if isinstance(expires_in_value, bool) or not isinstance(
+                expires_in_value, (int, float, str)
+            ):
+                raise OAuthError("OAuth token response contained an invalid expiration lifetime.")
+            try:
+                expires_in = float(expires_in_value)
+            except (OverflowError, ValueError):
+                raise OAuthError(
+                    "OAuth token response contained an invalid expiration lifetime."
+                ) from None
+            if not math.isfinite(expires_in) or expires_in < 0:
+                raise OAuthError("OAuth token response contained an invalid expiration lifetime.")
+
         return cls(
-            access_token=str(payload["access_token"]),
-            refresh_token=str(payload.get("refresh_token") or ""),
+            access_token=access_token,
+            refresh_token=refresh_token,
             expires_at=time.time() + expires_in,
             scope=str(payload.get("scope") or ""),
             token_type=str(payload.get("token_type") or ""),
@@ -304,22 +349,35 @@ def _credentials_dir() -> Path:
     return path
 
 
-def _credential_file_stem(key: str) -> str:
+def _is_safe_legacy_credential_key(key: str) -> bool:
+    if not _SAFE_CREDENTIAL_KEY_SEGMENT.fullmatch(key) or key.endswith("."):
+        return False
+    return key.split(".", maxsplit=1)[0].upper() not in _WINDOWS_RESERVED_CREDENTIAL_BASENAMES
+
+
+def _credential_relative_path(key: str) -> Path:
     relative_key = key.removeprefix("oauth/")
-    if "/" not in relative_key:
-        return relative_key or key
-    encoded = base64.urlsafe_b64encode(relative_key.encode(encoding="utf-8")).decode(
-        encoding="utf-8"
-    )
-    return f"v2-{encoded.rstrip('=')}"
+    if (
+        key.startswith("oauth/")
+        and relative_key == relative_key.lower()
+        and _is_safe_legacy_credential_key(relative_key)
+    ):
+        return Path(relative_key)
+    encoded = key.encode(encoding="utf-8").hex()
+    return Path("v2") / (encoded.rstrip("=") or "~")
+
+
+def _credential_path(key: str, suffix: str) -> Path:
+    relative_path = _credential_relative_path(key)
+    return _credentials_dir() / relative_path.parent / f"{relative_path.name}{suffix}"
 
 
 def _credentials_path(key: str) -> Path:
-    return _credentials_dir() / f"{_credential_file_stem(key)}.json"
+    return _credential_path(key, ".json")
 
 
 def _credentials_lock_path(key: str) -> Path:
-    return _credentials_dir() / f"{_credential_file_stem(key)}.lock"
+    return _credential_path(key, ".lock")
 
 
 class _CrossProcessLock:
@@ -338,6 +396,7 @@ class _CrossProcessLock:
         Returns ``True`` if locked, ``False`` on contention.
         Raises ``OSError`` if the lock file cannot be opened (permanent failure).
         """
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._fd = os.open(str(self._path), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             if sys.platform == "win32":
@@ -379,10 +438,24 @@ class _CrossProcessLock:
                     return True
             except OSError:
                 # Cannot open/create the lock file (permissions, read-only FS, etc.).
-                # Permanent failure — skip backoff and fall back to unlocked refresh.
+                # Permanent failure — skip backoff and fail closed.
                 return False
             await asyncio.sleep(1 + random.random())
             # After waiting, re-check if the token was refreshed by the holder.
+        try:
+            return self._acquire()
+        except OSError:
+            return False
+
+    def acquire_with_retry_sync(self) -> bool:
+        """Synchronous counterpart for persistence workers already off the event loop."""
+        for _attempt in range(_CROSS_PROCESS_LOCK_RETRIES):
+            try:
+                if self._acquire():
+                    return True
+            except OSError:
+                return False
+            time.sleep(1 + random.random())
         try:
             return self._acquire()
         except OSError:
@@ -395,32 +468,71 @@ class _CrossProcessLock:
         self.release()
 
 
-def _load_from_keyring(key: str) -> OAuthToken | None:
+def _read_keyring_value(key: str) -> str | None:
     try:
-        raw = keyring.get_password(KEYRING_SERVICE, key)
+        return keyring.get_password(KEYRING_SERVICE, key)
     except Exception as exc:
         from pythinker_code.telemetry.errors import report_handled_error
 
         report_handled_error(exc, site="auth.keyring.read")
-        logger.warning("Failed to read token from keyring: {error}", error=exc)
-        return None
+        logger.warning(
+            "Failed to read OAuth credentials from the system keyring ({error_type}).",
+            error_type=type(exc).__name__,
+        )
+        raise OAuthPersistenceError(
+            "Could not read OAuth credentials from the system keyring."
+        ) from exc
+
+
+def _load_from_keyring(key: str) -> OAuthToken | None:
+    raw = _read_keyring_value(key)
     if not raw:
         return None
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        raise OAuthPersistenceError("OAuth credentials in the system keyring are invalid.") from exc
     if not isinstance(payload, dict):
-        return None
+        raise OAuthPersistenceError("OAuth credentials in the system keyring are invalid.")
     payload = cast(dict[str, Any], payload)
-    return OAuthToken.from_dict(payload)
+    try:
+        return OAuthToken.from_dict(payload)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise OAuthPersistenceError("OAuth credentials in the system keyring are invalid.") from exc
+
+
+def _report_keyring_delete_error(exc: Exception) -> None:
+    from pythinker_code.telemetry.errors import report_handled_error
+
+    report_handled_error(exc, site="auth.keyring.delete")
+    logger.warning(
+        "Failed to remove OAuth credentials from the system keyring ({error_type}).",
+        error_type=type(exc).__name__,
+    )
 
 
 def _delete_from_keyring(key: str) -> None:
+    if _read_keyring_value(key) is None:
+        return
     try:
         keyring.delete_password(KEYRING_SERVICE, key)
-    except Exception:
-        return
+    except Exception as delete_error:
+        _report_keyring_delete_error(delete_error)
+        try:
+            remaining = _read_keyring_value(key)
+        except OAuthPersistenceError as verification_error:
+            failures = ExceptionGroup(
+                "Keyring deletion and verification both failed.",
+                [delete_error, verification_error],
+            )
+            raise _KeyringDeleteOutcomeUnknownError(
+                "Could not verify whether OAuth credentials were removed from the system keyring."
+            ) from failures
+        if remaining is None:
+            return
+        raise _KeyringCredentialPresentError(
+            "Could not remove OAuth credentials from the system keyring."
+        ) from delete_error
 
 
 def _load_from_file(key: str) -> OAuthToken | None:
@@ -437,11 +549,11 @@ def _load_from_file(key: str) -> OAuthToken | None:
     return OAuthToken.from_dict(payload)
 
 
-def _save_to_file(key: str, token: OAuthToken) -> None:
+def _write_credential_file(key: str, data: bytes) -> None:
     path = _credentials_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
-        data = json.dumps(token.to_dict(), ensure_ascii=False).encode("utf-8")
         written = os.write(fd, data)
         if written != len(data):
             raise OSError(f"Short write: {written}/{len(data)} bytes")
@@ -464,29 +576,73 @@ def _save_to_file(key: str, token: OAuthToken) -> None:
         raise
 
 
+def _save_to_file(key: str, token: OAuthToken) -> None:
+    data = json.dumps(token.to_dict(), ensure_ascii=False).encode("utf-8")
+    _write_credential_file(key, data)
+
+
 def _delete_from_file(key: str) -> None:
     path = _credentials_path(key)
     if path.exists():
         path.unlink()
 
 
-def load_tokens(ref: OAuthRef) -> OAuthToken | None:
-    file_token = _load_from_file(ref.key)
-    if file_token is not None:
-        return file_token
-    if ref.storage != "keyring":
+def _credential_file_snapshot(key: str) -> bytes | None:
+    try:
+        return _credentials_path(key).read_bytes()
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise OAuthPersistenceError("Could not snapshot the OAuth credential file.") from exc
+
+
+def _restore_credential_file_snapshot(key: str, snapshot: bytes | None) -> None:
+    if snapshot is None:
+        _delete_from_file(key)
+    else:
+        _write_credential_file(key, snapshot)
+
+
+def _migrate_keyring_token(ref: OAuthRef) -> OAuthToken | None:
+    file_snapshot = _credential_file_snapshot(ref.key)
     token = _load_from_keyring(ref.key)
     if token is None:
-        return None
+        return _load_from_file(ref.key)
+
     try:
         _save_to_file(ref.key, token)
     except OSError as exc:
-        logger.warning("Failed to migrate token from keyring to file: {error}", error=exc)
-    else:
-        with suppress(Exception):
-            _delete_from_keyring(ref.key)
+        raise OAuthPersistenceError(
+            "Could not copy OAuth credentials out of the system keyring."
+        ) from exc
+    try:
+        _delete_from_keyring(ref.key)
+    except _KeyringDeleteOutcomeUnknownError as cleanup_error:
+        raise OAuthPersistenceError(
+            "OAuth keyring migration cleanup could not be verified; the authoritative file copy "
+            "was retained."
+        ) from cleanup_error
+    except _KeyringCredentialPresentError as cleanup_error:
+        try:
+            _restore_credential_file_snapshot(ref.key, file_snapshot)
+        except OSError as rollback_error:
+            failures = ExceptionGroup(
+                "Keyring cleanup and credential file rollback both failed.",
+                [cleanup_error, rollback_error],
+            )
+            raise OAuthPersistenceError(
+                "OAuth keyring migration cleanup failed and file rollback also failed."
+            ) from failures
+        raise OAuthPersistenceError(
+            "OAuth keyring migration cleanup failed; the file copy was rolled back."
+        ) from cleanup_error
     return token
+
+
+def load_tokens(ref: OAuthRef) -> OAuthToken | None:
+    if ref.storage == "keyring":
+        return _migrate_keyring_token(ref)
+    return _load_from_file(ref.key)
 
 
 def save_tokens(ref: OAuthRef, token: OAuthToken) -> OAuthRef:
@@ -509,35 +665,205 @@ def restore_config_state(config: Config, snapshot: Config) -> None:
         setattr(config, field_name, getattr(snapshot, field_name))
 
 
+def _load_transaction_config(config: Config) -> Config:
+    config_file = get_config_file()
+    if config_file.exists():
+        return load_config(config_file)
+    return config.model_copy(deep=True)
+
+
+def _restore_token_snapshot(ref: OAuthRef, token: OAuthToken | None) -> None:
+    if token is not None:
+        save_tokens(ref, token)
+    else:
+        delete_tokens(ref)
+
+
+def _load_token_snapshot(ref: OAuthRef) -> OAuthToken | None:
+    if ref.storage == "keyring":
+        token = _load_from_keyring(ref.key)
+        if token is not None:
+            return token
+    return _load_from_file(ref.key)
+
+
+class _PersistenceMutationPhase:
+    """Atomic cancellation handshake between the event loop and persistence worker."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancel_requested = False
+        self._mutation_started = False
+
+    def begin_mutation(self) -> bool:
+        with self._lock:
+            if self._cancel_requested:
+                return False
+            self._mutation_started = True
+            return True
+
+    def request_cancel(self) -> bool:
+        with self._lock:
+            self._cancel_requested = True
+            return self._mutation_started
+
+
+@contextmanager
+def _config_transaction_lock() -> Generator[None]:
+    try:
+        with file_lock(get_config_file(), timeout=_PERSISTENCE_LOCK_TIMEOUT_SECONDS):
+            yield
+    except FileLockTimeoutError as exc:
+        raise OAuthPersistenceError(
+            "OAuth persistence is busy; wait for the other operation and try again."
+        ) from exc
+
+
+@contextmanager
+def _credential_transaction_locks(keys: list[str]) -> Generator[None]:
+    locks: list[_CrossProcessLock] = []
+    try:
+        for key in sorted(set(keys)):
+            try:
+                lock = _CrossProcessLock(key)
+                acquired = lock.acquire_with_retry_sync()
+            except OSError as exc:
+                raise OAuthPersistenceError(
+                    "Could not acquire the OAuth credential lock; no changes were made."
+                ) from exc
+            if not acquired:
+                raise OAuthPersistenceError(
+                    "Could not acquire the OAuth credential lock; no changes were made."
+                )
+            locks.append(lock)
+        yield
+    finally:
+        for lock in reversed(locks):
+            lock.release()
+
+
+async def _run_persistence_operation(
+    operation: Callable[[_PersistenceMutationPhase], None],
+) -> None:
+    phase = _PersistenceMutationPhase()
+    worker = asyncio.create_task(asyncio.to_thread(operation, phase))
+    try:
+        await asyncio.shield(worker)
+    except asyncio.CancelledError as cancellation:
+        phase.request_cancel()
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        worker_error = None if worker.cancelled() else worker.exception()
+        if worker_error is not None:
+            logger.warning(
+                "OAuth persistence transaction failed while caller cancellation was pending."
+            )
+            failures = BaseExceptionGroup(
+                "OAuth persistence failed while cancellation was pending.",
+                [cancellation, worker_error],
+            )
+            raise OAuthPersistenceError(
+                "OAuth persistence failed while cancellation was pending."
+            ) from failures
+        raise cancellation
+
+
 def _persist_login_sync(
     config: Config,
     ref: OAuthRef,
     token: OAuthToken,
     apply_config: Callable[[Config], None],
+    phase: _PersistenceMutationPhase,
+    *,
+    replace_provider_key: str | None = None,
 ) -> None:
-    with file_lock(get_config_file()):
-        snapshot = config.model_copy(deep=True)
-        previous_token = load_tokens(ref)
-        save_tokens(ref, token)
-        try:
-            apply_config(config)
-            save_config(config)
-        except BaseException as persistence_error:
-            restore_config_state(config, snapshot)
+    with _config_transaction_lock():
+        committed = _load_transaction_config(config)
+        config_snapshot = committed.model_copy(deep=True)
+        replaced_ref: OAuthRef | None = None
+        if replace_provider_key is not None:
+            provider = committed.providers.get(replace_provider_key)
+            if (
+                provider is not None
+                and provider.oauth is not None
+                and provider.oauth.key != ref.key
+            ):
+                replaced_ref = provider.oauth
+
+        credential_keys = [ref.key]
+        if replaced_ref is not None:
+            credential_keys.append(replaced_ref.key)
+        with _credential_transaction_locks(credential_keys):
+            if not phase.begin_mutation():
+                return
+            previous_token = load_tokens(ref)
+            replaced_token = load_tokens(replaced_ref) if replaced_ref is not None else None
+            save_tokens(ref, token)
             try:
-                if previous_token is not None:
-                    save_tokens(ref, previous_token)
-                else:
-                    delete_tokens(ref)
-            except Exception as rollback_error:
-                logger.error(
-                    "Failed to roll back OAuth login persistence: {error}",
-                    error=rollback_error,
-                )
-                raise OAuthPersistenceError(
-                    "OAuth login persistence failed and credential rollback also failed."
-                ) from persistence_error
-            raise
+                apply_config(committed)
+                save_config(committed)
+            except BaseException as persistence_error:
+                try:
+                    _restore_token_snapshot(ref, previous_token)
+                except Exception as rollback_error:
+                    logger.error(
+                        "Failed to roll back OAuth login persistence: {error}",
+                        error=rollback_error,
+                    )
+                    raise OAuthPersistenceError(
+                        "OAuth login persistence failed and credential rollback also failed."
+                    ) from persistence_error
+                raise
+
+            if replaced_ref is not None:
+                try:
+                    delete_tokens(replaced_ref)
+                except Exception as cleanup_error:
+                    try:
+                        _restore_token_snapshot(replaced_ref, replaced_token)
+                    except Exception as rollback_error:
+                        logger.error(
+                            "Failed to restore replaced OAuth credential after cleanup failure: "
+                            "{error}",
+                            error=rollback_error,
+                        )
+                        raise OAuthPersistenceError(
+                            "OAuth login credential cleanup failed and replaced credential "
+                            "rollback also failed."
+                        ) from cleanup_error
+                    try:
+                        save_config(config_snapshot)
+                    except Exception as rollback_error:
+                        logger.error(
+                            "Failed to restore configuration after OAuth credential cleanup "
+                            "failure: {error}",
+                            error=rollback_error,
+                        )
+                        raise OAuthPersistenceError(
+                            "OAuth login credential cleanup failed and configuration rollback "
+                            "also failed."
+                        ) from cleanup_error
+                    try:
+                        _restore_token_snapshot(ref, previous_token)
+                    except Exception as rollback_error:
+                        logger.error(
+                            "Failed to restore new OAuth credential after cleanup rollback: "
+                            "{error}",
+                            error=rollback_error,
+                        )
+                        raise OAuthPersistenceError(
+                            "OAuth login credential cleanup failed and new credential rollback "
+                            "also failed."
+                        ) from cleanup_error
+                    raise OAuthPersistenceError(
+                        "OAuth login credential cleanup failed; login was rolled back."
+                    ) from cleanup_error
+            restore_config_state(config, committed)
 
 
 async def persist_login(
@@ -545,70 +871,134 @@ async def persist_login(
     ref: OAuthRef,
     token: OAuthToken,
     apply_config: Callable[[Config], None],
+    *,
+    replace_provider_key: str | None = None,
 ) -> None:
     """Persist OAuth credentials and config together outside the event loop."""
-    await asyncio.to_thread(_persist_login_sync, config, ref, token, apply_config)
+
+    def operation(phase: _PersistenceMutationPhase) -> None:
+        _persist_login_sync(
+            config,
+            ref,
+            token,
+            apply_config,
+            phase,
+            replace_provider_key=replace_provider_key,
+        )
+
+    await _run_persistence_operation(operation)
 
 
 def _persist_logout_sync(
     config: Config,
-    ref: OAuthRef,
+    ref: OAuthRef | None,
     remove_config: Callable[[Config], None],
+    phase: _PersistenceMutationPhase,
+    *,
+    provider_key: str | None = None,
 ) -> None:
-    with file_lock(get_config_file()):
-        snapshot = config.model_copy(deep=True)
-        remove_config(config)
-        try:
-            save_config(config)
-        except BaseException:
-            restore_config_state(config, snapshot)
-            raise
-        try:
-            delete_tokens(ref)
-        except Exception as delete_error:
-            restore_config_state(config, snapshot)
+    with _config_transaction_lock():
+        committed = _load_transaction_config(config)
+        snapshot = committed.model_copy(deep=True)
+        credential_ref = ref
+        if provider_key is not None:
+            provider = committed.providers.get(provider_key)
+            credential_ref = provider.oauth if provider is not None else None
+        credential_keys = [credential_ref.key] if credential_ref is not None else []
+        with _credential_transaction_locks(credential_keys):
+            previous_token = (
+                _load_token_snapshot(credential_ref) if credential_ref is not None else None
+            )
+            if not phase.begin_mutation():
+                return
+            remove_config(committed)
+            save_config(committed)
             try:
-                save_config(config)
-            except Exception as rollback_error:
-                logger.error(
-                    "Failed to restore configuration after OAuth credential deletion failed: "
-                    "{error}",
-                    error=rollback_error,
-                )
+                if credential_ref is not None:
+                    delete_tokens(credential_ref)
+            except Exception as delete_error:
+                try:
+                    if credential_ref is not None and previous_token is not None:
+                        _restore_token_snapshot(credential_ref, previous_token)
+                except Exception as credential_rollback_error:
+                    restore_config_state(config, committed)
+                    logger.error(
+                        "Failed to restore OAuth credential after logout deletion failed "
+                        "({error_type}).",
+                        error_type=type(credential_rollback_error).__name__,
+                    )
+                    failures = ExceptionGroup(
+                        "OAuth credential deletion and restoration both failed.",
+                        [delete_error, credential_rollback_error],
+                    )
+                    raise OAuthPersistenceError(
+                        "OAuth logout partially completed: configuration was removed, but "
+                        "credential restoration failed."
+                    ) from failures
+                try:
+                    save_config(snapshot)
+                except Exception as rollback_error:
+                    logger.error(
+                        "Failed to restore configuration after OAuth credential deletion failed: "
+                        "{error_type}",
+                        error_type=type(rollback_error).__name__,
+                    )
+                    raise OAuthPersistenceError(
+                        "OAuth logout failed and configuration rollback also failed."
+                    ) from delete_error
                 raise OAuthPersistenceError(
-                    "OAuth logout failed and configuration rollback also failed."
+                    "OAuth credential deletion failed; logout was rolled back."
                 ) from delete_error
-            raise OAuthPersistenceError(
-                "OAuth credential deletion failed; logout was rolled back."
-            ) from delete_error
+            restore_config_state(config, committed)
 
 
 async def persist_logout(
     config: Config,
-    ref: OAuthRef,
+    ref: OAuthRef | None,
     remove_config: Callable[[Config], None],
+    *,
+    provider_key: str | None = None,
 ) -> None:
     """Persist OAuth logout outside the event loop, config removal first."""
-    await asyncio.to_thread(_persist_logout_sync, config, ref, remove_config)
+
+    def operation(phase: _PersistenceMutationPhase) -> None:
+        _persist_logout_sync(
+            config,
+            ref,
+            remove_config,
+            phase,
+            provider_key=provider_key,
+        )
+
+    await _run_persistence_operation(operation)
 
 
 def _persist_config_change_sync(
     config: Config,
     apply_config: Callable[[Config], None],
+    phase: _PersistenceMutationPhase,
+    *,
+    should_apply: Callable[[Config], bool] | None = None,
 ) -> None:
-    with file_lock(get_config_file()):
-        snapshot = config.model_copy(deep=True)
-        try:
-            apply_config(config)
-            save_config(config)
-        except BaseException:
-            restore_config_state(config, snapshot)
-            raise
+    with _config_transaction_lock():
+        committed = _load_transaction_config(config)
+        if should_apply is not None and not should_apply(committed):
+            restore_config_state(config, committed)
+            return
+        if not phase.begin_mutation():
+            return
+        apply_config(committed)
+        save_config(committed)
+        restore_config_state(config, committed)
 
 
 async def persist_config_change(config: Config, apply_config: Callable[[Config], None]) -> None:
     """Persist a config-only change atomically outside the event loop."""
-    await asyncio.to_thread(_persist_config_change_sync, config, apply_config)
+
+    def operation(phase: _PersistenceMutationPhase) -> None:
+        _persist_config_change_sync(config, apply_config, phase)
+
+    await _run_persistence_operation(operation)
 
 
 async def request_device_authorization() -> DeviceAuthorization:
@@ -946,32 +1336,66 @@ class OAuthManager:
         return refs
 
     def _migrate_oauth_storage(self) -> None:
-        migrated_keys: set[str] = set()
-        changed = False
+        def has_keyring_refs(config: Config) -> bool:
+            if any(
+                provider.oauth and provider.oauth.storage == "keyring"
+                for provider in config.providers.values()
+            ):
+                return True
+            return any(
+                service and service.oauth and service.oauth.storage == "keyring"
+                for service in (
+                    config.services.pythinker_ai_search,
+                    config.services.pythinker_ai_fetch,
+                )
+            )
 
-        def _migrate_ref(ref: OAuthRef) -> OAuthRef:
-            nonlocal changed
-            if ref.storage != "keyring":
-                return ref
-            if ref.key not in migrated_keys:
-                load_tokens(ref)
-                migrated_keys.add(ref.key)
-            changed = True
-            return OAuthRef(storage="file", key=ref.key)
+        def migrate_config(config: Config) -> None:
+            migration_results: dict[str, bool] = {}
 
-        for provider in self._config.providers.values():
-            if provider.oauth:
-                provider.oauth = _migrate_ref(provider.oauth)
+            def migrate_ref(ref: OAuthRef) -> OAuthRef:
+                if ref.storage != "keyring":
+                    return ref
+                if ref.key not in migration_results:
+                    migration_results[ref.key] = load_tokens(ref) is not None
+                if not migration_results[ref.key]:
+                    return ref
+                return OAuthRef(storage="file", key=ref.key)
 
-        for service in (
-            self._config.services.pythinker_ai_search,
-            self._config.services.pythinker_ai_fetch,
-        ):
-            if service and service.oauth:
-                service.oauth = _migrate_ref(service.oauth)
+            refs = [
+                provider.oauth
+                for provider in config.providers.values()
+                if provider.oauth and provider.oauth.storage == "keyring"
+            ]
+            refs.extend(
+                service.oauth
+                for service in (
+                    config.services.pythinker_ai_search,
+                    config.services.pythinker_ai_fetch,
+                )
+                if service and service.oauth and service.oauth.storage == "keyring"
+            )
+            with _credential_transaction_locks([ref.key for ref in refs]):
+                for provider in config.providers.values():
+                    if provider.oauth:
+                        provider.oauth = migrate_ref(provider.oauth)
 
-        if changed and self._config.is_from_default_location:
-            save_config(self._config)
+                for service in (
+                    config.services.pythinker_ai_search,
+                    config.services.pythinker_ai_fetch,
+                ):
+                    if service and service.oauth:
+                        service.oauth = migrate_ref(service.oauth)
+
+        if self._config.is_from_default_location:
+            _persist_config_change_sync(
+                self._config,
+                migrate_config,
+                _PersistenceMutationPhase(),
+                should_apply=has_keyring_refs,
+            )
+        elif has_keyring_refs(self._config):
+            migrate_config(self._config)
 
     def _load_initial_tokens(self) -> None:
         for ref in self._iter_oauth_refs():
@@ -1065,7 +1489,13 @@ class OAuthManager:
                 return service.oauth
         return None
 
-    async def ensure_fresh(self, runtime: Runtime | None = None, *, force: bool = False) -> None:
+    async def ensure_fresh(
+        self,
+        runtime: Runtime | None = None,
+        *,
+        force: bool = False,
+        oauth_ref: OAuthRef | None = None,
+    ) -> None:
         """Load persisted tokens, cache them, and refresh if close to expiry.
 
         Args:
@@ -1074,8 +1504,16 @@ class OAuthManager:
                 generation) that only need the internal cache to be current.
             force: When True, skip the expiry-threshold check and always
                 attempt a refresh.  Used after receiving a 401 from the server.
+            oauth_ref: When provided, refresh only this OAuth credential.
         """
-        for ref in self._iter_oauth_refs():
+        refs = [oauth_ref] if oauth_ref is not None else self._iter_oauth_refs()
+        if oauth_ref is None and runtime is not None:
+            llm = runtime.llm
+            if llm is not None and llm.model_config is not None:
+                provider = runtime.config.providers.get(llm.model_config.provider)
+                refs = [provider.oauth] if provider is not None and provider.oauth else []
+
+        for ref in refs:
             token = load_tokens(ref)
             if token is None:
                 continue
@@ -1185,27 +1623,31 @@ class OAuthManager:
             # pythinker-code instances (terminal, VS Code, web).
             xlock = _CrossProcessLock(ref.key)
             acquired = await xlock.acquire_with_retry()
+            if not acquired:
+                logger.warning("Could not acquire cross-process lock for token refresh")
+                if force:
+                    raise OAuthPersistenceError(
+                        "Could not acquire the OAuth credential lock for token refresh."
+                    )
+                return
             try:
-                if acquired:
-                    # Triple-check after acquiring the lock — another process
-                    # may have refreshed while we waited.
-                    locked_token = load_tokens(ref)
-                    if locked_token and locked_token.refresh_token != refresh_token_value:
+                # Triple-check after acquiring the lock — another process
+                # may have refreshed while we waited.
+                locked_token = load_tokens(ref)
+                if locked_token and locked_token.refresh_token != refresh_token_value:
+                    self._clear_rejected_refresh_token(ref)
+                    self._cache_access_token(ref, locked_token)
+                    self._apply_access_token(runtime, ref, locked_token.access_token)
+                    return
+                if not force and locked_token:
+                    remaining = locked_token.expires_at - time.time()
+                    if locked_token.expires_at and remaining >= _refresh_threshold(
+                        locked_token.expires_in
+                    ):
                         self._clear_rejected_refresh_token(ref)
                         self._cache_access_token(ref, locked_token)
                         self._apply_access_token(runtime, ref, locked_token.access_token)
                         return
-                    if not force and locked_token:
-                        remaining = locked_token.expires_at - time.time()
-                        if locked_token.expires_at and remaining >= _refresh_threshold(
-                            locked_token.expires_in
-                        ):
-                            self._clear_rejected_refresh_token(ref)
-                            self._cache_access_token(ref, locked_token)
-                            self._apply_access_token(runtime, ref, locked_token.access_token)
-                            return
-                else:
-                    logger.warning("Could not acquire cross-process lock for token refresh")
 
                 try:
                     refreshed = await self._refresh_token_for_ref(ref, refresh_token_value)
