@@ -104,7 +104,13 @@ Phases (each = one verified Codex delegation, sequential):
                 shell/cli wiring (mirror xai) + tests. platforms.py skip-guard for managed:digitalocean.
                 Empty-routers guard: still persist key + save_config, seed 0 models, guard default_model.
             **PENDING LIVE VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
-      - [~] P3e — Snowflake Cortex. **SCOPE = FULL ROBUST ACCOUNT-SCOPED BUILD (user-confirmed
+      - [x] P3e — Snowflake Cortex. DONE, committed `1847ab9d` (salvaged after producer verify-fail:
+            fixed reportPrivateUsage on oauth_flows._post_form → local _post_form; ruff-format nit).
+            Gates green: make check-pythinker-code + pytest tests/auth tests/ui_and_conv tests/cli
+            (497 passed). One shared-oauth.py change = the account-parsing refresh branch.
+            **PENDING LIVE VERIFY** (real Snowflake acct + browser). Known live-inference gap: cortexFetch
+            transforms not replicated by openai_legacy — follow-up, does not block login.
+      - [~] P3e(orig) — Snowflake Cortex. **SCOPE = FULL ROBUST ACCOUNT-SCOPED BUILD (user-confirmed
             2026-07-18).** Materially the most complex P3 provider (NOT "simpler like xai"):
             account-scoped OAuth + inference base_url (account + optional role PROMPTED at login),
             role-dependent scope (`refresh_token session:role:<role>`), HTTP Basic client creds
