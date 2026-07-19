@@ -158,6 +158,60 @@ def logout_openai(*args: Any, **kwargs: Any) -> Any:
     return impl(*args, **kwargs)
 
 
+def login_copilot(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.copilot import login_copilot as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_copilot(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.copilot import logout_copilot as impl
+
+    return impl(*args, **kwargs)
+
+
+def login_digitalocean(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.digitalocean import login_digitalocean as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_digitalocean(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.digitalocean import logout_digitalocean as impl
+
+    return impl(*args, **kwargs)
+
+
+def login_snowflake(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.snowflake import login_snowflake as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_snowflake(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.snowflake import logout_snowflake as impl
+
+    return impl(*args, **kwargs)
+
+
+def login_xai_browser(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.xai import login_xai_browser as impl
+
+    return impl(*args, **kwargs)
+
+
+def login_xai_headless(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.xai import login_xai_headless as impl
+
+    return impl(*args, **kwargs)
+
+
+def logout_xai(*args: Any, **kwargs: Any) -> Any:
+    from pythinker_code.auth.xai import logout_xai as impl
+
+    return impl(*args, **kwargs)
+
+
 def login_opencode_go_api_key(*args: Any, **kwargs: Any) -> Any:
     from pythinker_code.auth.opencode_go import login_opencode_go_api_key as impl
 
@@ -1467,6 +1521,23 @@ def login(
         False, "--headless", help="Use OpenAI ChatGPT device-code login."
     ),
     api_key: bool = typer.Option(False, "--api-key", help="Configure OpenAI with an API key."),
+    copilot: bool = typer.Option(
+        False, "--copilot", help="Login with GitHub Copilot (device code)."
+    ),
+    digitalocean: bool = typer.Option(
+        False, "--digitalocean", help="Login with DigitalOcean (browser)."
+    ),
+    snowflake: bool = typer.Option(
+        False, "--snowflake", help="Login with Snowflake Cortex (browser)."
+    ),
+    account: str = typer.Option(
+        "", "--account", help="Snowflake account identifier (for --snowflake)."
+    ),
+    role: str = typer.Option("", "--role", help="Snowflake role (optional, for --snowflake)."),
+    xai: bool = typer.Option(False, "--xai", help="Login with xAI Grok (browser)."),
+    xai_device: bool = typer.Option(
+        False, "--xai-device", help="Login with xAI Grok (device code)."
+    ),
     opencode_go: bool = typer.Option(
         False, "--opencode-go", help="Configure OpenCode Go with an API key."
     ),
@@ -1498,19 +1569,28 @@ def login(
         help="Override the default base URL for --lm-studio or --ollama.",
     ),
 ) -> None:
-    """Login with OpenAI, OpenCode Go, MiniMax, DeepSeek, Anthropic, or local providers."""
+    """Login with OpenAI, GitHub Copilot, DigitalOcean, Snowflake, xAI, or API keys."""
     import asyncio
 
     from rich.console import Console
     from rich.status import Status
 
     async def _run() -> bool:
+        if (account.strip() or role.strip()) and not snowflake:
+            typer.echo("--account and --role require --snowflake.", err=True)
+            return False
+
         selected_modes = sum(
             bool(value)
             for value in (
                 browser,
                 headless,
                 api_key,
+                copilot,
+                digitalocean,
+                snowflake,
+                xai,
+                xai_device,
                 opencode_go,
                 minimax,
                 deepseek,
@@ -1525,8 +1605,9 @@ def login(
         if selected_modes > 1:
             typer.echo(
                 "Choose only one of --browser, --headless, --api-key, "
-                "--opencode-go, --minimax, --deepseek, --z-ai-coding, --z-ai-api, "
-                "--anthropic, --openrouter, --lm-studio, or --ollama.",
+                "--copilot, --digitalocean, --snowflake, --xai, --xai-device, --opencode-go, "
+                "--minimax, --deepseek, --z-ai-coding, --z-ai-api, --anthropic, --openrouter, "
+                "--lm-studio, or --ollama.",
                 err=True,
             )
             return False
@@ -1570,6 +1651,24 @@ def login(
         elif minimax:
             key = typer.prompt("MiniMax API key", hide_input=True).strip()
             events = login_minimax_api_key(config, key)
+        elif digitalocean:
+            events = login_digitalocean(config)
+        elif snowflake:
+            account_value = account.strip()
+            if not account_value:
+                account_value = typer.prompt("Snowflake account identifier").strip()
+            role_value = role.strip()
+            if not role_value:
+                role_value = typer.prompt(
+                    "Snowflake role (optional)", default="", show_default=False
+                ).strip()
+            events = login_snowflake(config, account_value, role_value or None)
+        elif xai_device:
+            events = login_xai_headless(config)
+        elif xai:
+            events = login_xai_browser(config)
+        elif copilot:
+            events = login_copilot(config)
         elif opencode_go:
             key = typer.prompt("OpenCode Go API key", hide_input=True).strip()
             events = login_opencode_go_api_key(config, key)
@@ -1606,7 +1705,7 @@ def login(
             async for event in events:
                 if event.type == "waiting":
                     if status is None:
-                        status = console.status("Waiting for OpenAI authorization.")
+                        status = console.status("Waiting for authorization.")
                         status.start()
                     continue
                 if status is not None:
@@ -1639,6 +1738,10 @@ def logout(
         "--json",
         help="Emit OAuth events as JSON lines.",
     ),
+    copilot: bool = typer.Option(False, "--copilot", help="Logout from GitHub Copilot."),
+    digitalocean: bool = typer.Option(False, "--digitalocean", help="Logout from DigitalOcean."),
+    snowflake: bool = typer.Option(False, "--snowflake", help="Logout from Snowflake Cortex."),
+    xai: bool = typer.Option(False, "--xai", help="Logout from xAI Grok."),
     opencode_go: bool = typer.Option(False, "--opencode-go", help="Logout from OpenCode Go."),
     minimax: bool = typer.Option(False, "--minimax", help="Logout from MiniMax."),
     deepseek: bool = typer.Option(False, "--deepseek", help="Logout from DeepSeek."),
@@ -1651,7 +1754,7 @@ def logout(
     ),
     ollama: bool = typer.Option(False, "--ollama", help="Logout from Ollama."),
 ) -> None:
-    """Logout from OpenAI, OpenCode Go, MiniMax, DeepSeek, Anthropic, or local providers."""
+    """Logout from OpenAI, GitHub Copilot, DigitalOcean, Snowflake, xAI, or API keys."""
     import asyncio
 
     from rich.console import Console
@@ -1659,6 +1762,10 @@ def logout(
     async def _run() -> bool:
         ok = True
         selected_modes = (
+            copilot,
+            digitalocean,
+            snowflake,
+            xai,
             opencode_go,
             minimax,
             deepseek,
@@ -1671,8 +1778,8 @@ def logout(
         )
         if sum(bool(v) for v in selected_modes) > 1:
             typer.echo(
-                "Choose only one of --opencode-go, --minimax, --deepseek, "
-                "--z-ai-coding, --z-ai-api, --anthropic, --openrouter, "
+                "Choose only one of --copilot, --digitalocean, --snowflake, --xai, --opencode-go, "
+                "--minimax, --deepseek, --z-ai-coding, --z-ai-api, --anthropic, --openrouter, "
                 "--lm-studio, or --ollama.",
                 err=True,
             )
@@ -1691,6 +1798,14 @@ def logout(
             events = logout_deepseek(config)
         elif minimax:
             events = logout_minimax(config)
+        elif digitalocean:
+            events = logout_digitalocean(config)
+        elif snowflake:
+            events = logout_snowflake(config)
+        elif xai:
+            events = logout_xai(config)
+        elif copilot:
+            events = logout_copilot(config)
         elif opencode_go:
             events = logout_opencode_go(config)
         elif lm_studio:

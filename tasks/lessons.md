@@ -3,6 +3,13 @@
 Repo-specific rules accumulated from corrections and post-session reviews.
 Format: trigger → rule.
 
+## User-directed execution
+
+- **When the user explicitly requests direct implementation and says not to create plans**, skip
+  optional spec and planning checkpoints for a bounded edit; inspect enough to preserve safety,
+  then implement and verify immediately. This never waives mandatory approval for destructive
+  actions, dependencies, telemetry, production changes, or other tracked safety gates.
+
 ## Subagent orchestration
 
 - **When testing that subagent preparation failed before a prompt snapshot was written**, assert

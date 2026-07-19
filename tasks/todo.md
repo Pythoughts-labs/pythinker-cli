@@ -2,6 +2,140 @@
 
 ## Active
 
+### Generic auth + API-key login providers, dynamic catalog, effort mapping (2026-07-18)
+
+Branch: `feat/auth-login-providers`. Framing is generic (add auth + API-key login providers);
+`blackbox/opencode/AUTH_PROVIDERS.md` is only the reference source, not user-facing branding.
+
+**Source:** `blackbox/opencode/AUTH_PROVIDERS.md` + opencode source (**MIT**; pythinker is
+Apache-2.0 — compatible; ported logic carries an attribution notice).
+**Delivery:** plan-first, then **sequential** delegation to Codex `gpt-5.6-sol` (high). NOT parallel —
+every workstream mutates the same core files (`config.py ProviderType`, `llm.py create_llm`,
+`platforms.py PLATFORMS`/`refresh_managed_models`, both UI menus, both CLI dispatchers).
+**Effort ceiling:** `max` (no `ultra`) — pythinker's `ThinkingEffort` union already covers it, so the
+effort workstream needs **no union change / no new-enum snapshot churn**.
+
+Decisions locked (AskUserQuestion): all four workstreams; plan-first; cap at `max`.
+
+**Headline open decision (user's call): registry-first vs additive-first.**
+Recon: adding one provider today touches **8–12 hand-edited enumeration files** (no registry).
+- additive-first = cheapest per phase, lowest risk, but re-pays the 8–12-file tax per provider and
+  that code is throwaway if a registry lands later.
+- registry-first = build the abstraction up front so new providers are cheap/non-throwaway, but it is
+  the highest-churn refactor of working, public-compat code.
+Discriminator = how many providers wanted. 4 OAuth only → additive; full roster → registry-first.
+
+**Size (honest):** multi-thousand-LOC across ~15–25 files; new `ProviderType` values, config keys,
+CLI flags, persisted shape → tests + docs + CI snapshots (config-dump / pyinstaller / wire) each.
+
+Phases (each = one verified Codex delegation, sequential):
+- [x] P1 — Dynamic models.dev catalog (DONE, green: `make check-pythinker-code` + focused tests 342
+      passed): new `auth/models_dev.py` (httpx fetch, 5-min TTL, `fcntl.flock`, atomic write,
+      env override/disable, fail-open), `opencode_go.py` consumes it, tests + changelog added.
+      Codex `gpt-5.6-sol` candidate (commit `ee6d8384`) + architect compat-fix (`e6adfead`).
+      Generalize `auth/opencode_go.py` fetch into a provider-agnostic
+      module (`GET https://models.dev/api.json`, env override + disable flag, disk cache, 5-min TTL +
+      60-min bg refresh, **stdlib `fcntl.flock`**, atomic temp+rename, **fail-open** cached→static,
+      never block startup). Wire one provider through it.
+- [ ] P2 — Effort/family mapping: port opencode `variants()` tier-selection into the effort layer,
+      **capped at max**, with attribution. Extend `openai_gpt_reasoning_levels` → per-family table.
+- [~] P3 — OAuth providers (sub-phased, sequential; each provider touches shared enumeration files):
+      - [x] P3a — shared `auth/oauth_flows.py` (device-code + loopback-PKCE) + tests. DONE, green (349
+            passed). Codex candidate `cc59239a` + architect fix `79b64d42`.
+      - [x] P3b — GitHub Copilot (device-code; github token → copilot bearer exchange). DONE,
+            committed `5bd283e4`. Codex candidate `9ab0a577` (runId 9fe426d4), correctness-approved
+            after the token-preservation fix (F-001/F-002); clean-room green: `All checks passed`
+            (ruff+format+pyright+ty) + `458 passed`. Two-refresh regression test present. **PENDING
+            LIVE VERIFICATION**: no offline gate exercises client_id/exchange/headers/URL — needs a
+            real `pythinker login --copilot` + one chat call before "truly done". **Design
+            FINAL (primary-source verified 2026-07-18):** client_id `Iv1.b507a08c87ecfe98` + scope
+            `read:user` (the exchange-proven pair from ericc-ch/copilot-api; NOT opencode's
+            `Ov23li…` which is proven only with the no-exchange direct-token path). Device:
+            POST github.com/login/device/code + poll .../login/oauth/access_token (both need
+            `Accept: application/json` → thread a `headers` param through oauth_flows
+            `_post_form`/`request_device_code`/`poll_device_token`). Exchange:
+            GET api.github.com/copilot_internal/v2/token, hdrs `Authorization: token <gh>`,
+            `Editor-Version: vscode/<ver>`, `Editor-Plugin-Version: copilot-chat/0.26.7`,
+            `User-Agent: GitHubCopilotChat/0.26.7`, `X-GitHub-Api-Version: 2025-04-01`
+            → `{token, expires_at, refresh_in}`. Store OAuthToken(access=bearer,
+            refresh=gh_token, expires_at); `_refresh_token_for_ref` re-runs exchange from gh_token.
+            Provider: type `openai_legacy`, base_url `https://api.githubcopilot.com` (**NO /v1** —
+            SDK appends /chat/completions to root), oauth ref `oauth/github-copilot`,
+            custom_headers = the copilot chat headers (Copilot-Integration-Id: vscode-chat + editor
+            hdrs + Openai-Intent: conversation-panel; **NO Authorization** — bearer flows via
+            resolve_api_key→api_key). Skip-guard `managed:copilot` in refresh_managed_models.
+            **Scope: github.com individual only.** Business/Enterprise (endpoints.api routing,
+            api.business/individual.*) DEFERRED — do not claim exchange fixes Business (opencode
+            #23540) while hardcoding the individual host. **Acceptance:** offline gates green ≠ done;
+            none of client_id/exchange/headers/URL are gate-exercisable → requires live
+            `pythinker login --copilot` + one real chat call before marking done.
+      - [x] P3c — xAI/Grok (browser loopback + device-code). DONE, committed `b586080c`. Codex
+            candidate `1419210a` (runId f12a8003) — verification-failed on strict pyright
+            (`.get()` on an isinstance-narrowed bare `dict` → reportUnknownMemberType/Argument);
+            salvaged via `git checkout <candidate> -- .`, added a cast'd `_error_description`
+            helper, re-ran gates (`All checks passed` + `2741 passed`). Two OAuth methods only
+            (loopback port 56121 + `plan=generic`/OIDC `nonce`; device-code); no API-key method;
+            openai_legacy → api.x.ai/v1; rotating refresh persisted by OAuthManager. **PENDING LIVE
+            VERIFICATION** (login flow untested against real auth.x.ai).
+      - [x] P3d — DigitalOcean. DONE. Lane A `run_loopback_implicit_flow` helper committed `48a1fdbb`
+            (salvaged after base-changed abort); Lane B provider+wiring+tests committed `962ef990`
+            (salvaged after producer verify-fail, fixed reportUnnecessaryIsInstance/Cast +
+            ruff-format nit). Gates green locally: make check-pythinker-code + pytest tests/auth
+            tests/ui_and_conv tests/cli. **PENDING LIVE VERIFY** (implicit + browser-JS + real DO acct).
+      - [~] P3d(orig) — DigitalOcean. **SCOPE = FULL ROBUST BUILD (user-confirmed 2026-07-18).** OAuth
+            IMPLICIT flow (response_type=token; token in URL fragment) → needs a NEW reusable
+            `run_loopback_implicit_flow` helper in oauth_flows.py that serves an HTML-bootstrap page
+            (inline JS reads location.hash, POSTs {access_token,expires_in,state} to a pinned-port
+            /auth/token) — P3a's authorization-code loopback does NOT cover this. Token stored AS AN
+            API KEY (no refresh, ~30d; re-login on expiry) → NO oauth ref / NO _refresh_token_for_ref
+            branch. Provider openai_legacy → base_url https://inference.do-ai.run/v1, api_key=token.
+            Dynamic model catalog: GET https://api.digitalocean.com/v2/gen-ai/models/routers (Bearer)
+            → model_routers[].name → seed 'router:<name>' models at login (login still succeeds if
+            fetch fails; seed none + warn). Verified constants: client_id
+            b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82; authorize
+            https://cloud.digitalocean.com/v1/oauth/authorize; redirect http://localhost:1456/auth/callback;
+            scope 'genai:read inference:query'. Recon ad3fed51 DONE (advisor-confirmed); split into
+            two serialized lanes to fit the 30-min Codex cap:
+              - Lane A (DISPATCHED, task kz00tnywe, Codex gpt-5.6-sol/high): add
+                `run_loopback_implicit_flow` + `ImplicitAuthorization` + content-type writer to
+                oauth_flows.py + tests. Self-contained, no src caller yet.
+              - Lane B (after A integrates): new auth/digitalocean.py (DeepSeek storage template:
+                LLMProvider openai_legacy, api_key=SecretStr(token), NO oauth) + __init__/platforms/
+                shell/cli wiring (mirror xai) + tests. platforms.py skip-guard for managed:digitalocean.
+                Empty-routers guard: still persist key + save_config, seed 0 models, guard default_model.
+            **PENDING LIVE VERIFY** (implicit + browser-JS + real DO account — largely untestable offline).
+      - [x] P3e — Snowflake Cortex. DONE, committed `1847ab9d` (salvaged after producer verify-fail:
+            fixed reportPrivateUsage on oauth_flows._post_form → local _post_form; ruff-format nit).
+            Gates green: make check-pythinker-code + pytest tests/auth tests/ui_and_conv tests/cli
+            (497 passed). One shared-oauth.py change = the account-parsing refresh branch.
+            **PENDING LIVE VERIFY** (real Snowflake acct + browser). Known live-inference gap: cortexFetch
+            transforms not replicated by openai_legacy — follow-up, does not block login.
+      - [~] P3e(orig) — Snowflake Cortex. **SCOPE = FULL ROBUST ACCOUNT-SCOPED BUILD (user-confirmed
+            2026-07-18).** Materially the most complex P3 provider (NOT "simpler like xai"):
+            account-scoped OAuth + inference base_url (account + optional role PROMPTED at login),
+            role-dependent scope (`refresh_token session:role:<role>`), HTTP Basic client creds
+            (base64 `LOCAL_APPLICATION:LOCAL_APPLICATION`), loopback-PKCE (reuses P3a
+            run_loopback_pkce_flow, redirect_path "/"). Endpoints:
+            https://<account>.snowflakecomputing.com/oauth/{authorize,token-request}. **Account-aware
+            refresh: encode account into OAuthRef key `oauth/snowflake-cortex/<account>` and parse it
+            in oauth.py refresh dispatch → the ONE shared-oauth.py change.** Provider openai_legacy,
+            base_url per-account = https://<account>.snowflakecomputing.com/api/v2/cortex (VERIFY exact
+            path). KNOWN LIVE-INFERENCE GAP: cortexFetch transforms (max_tokens→max_completion_tokens,
+            400 "conversation complete"→stop, streaming role:""→"assistant") NOT replicated by
+            openai_legacy — does not block login; chat may need follow-up. Recon afd25065 mapping exact
+            wiring + primary-source constant verification. **PENDING LIVE VERIFY** (real Snowflake acct).
+- [ ] P4 — API-key providers: batch the models.dev env-keyed providers through the P1 catalog.
+- [ ] P0/P5 — Registry refactor (only if registry-first chosen; else optional last).
+
+Non-negotiables per Codex spec: full `make check-pythinker-code && make test-pythinker-code` gate;
+`## Unreleased` changelog line; deliberate snapshot updates; models.dev fail-open + no new dep;
+attribution on ported files; root-cause robust design (no workarounds).
+
+Out of scope (logged): `ultra` effort level (dropped, cap at max); any external endpoint beyond
+models.dev without approval.
+
+Review: _pending first delegation._
+
 ### Implementer-agent deepening: lighter/smarter/more robust (2026-07-17)
 
 Architecture review found: every implementer spawn carries ~7,300 words of prompt (root

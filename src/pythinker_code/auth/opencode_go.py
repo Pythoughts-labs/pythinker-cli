@@ -9,6 +9,13 @@ import aiohttp
 from pydantic import SecretStr
 
 from pythinker_code.auth import OPENCODE_GO_PLATFORM_ID
+from pythinker_code.auth.models_dev import (
+    ModelsDevCatalog,
+    ModelsDevProvider,
+    get_models_dev_catalog,
+    get_provider_models,
+    parse_models_dev_catalog,
+)
 from pythinker_code.auth.oauth import OAuthEvent
 from pythinker_code.config import Config, LLMModel, LLMProvider, save_config
 from pythinker_code.llm import ModelCapability
@@ -30,15 +37,7 @@ OPENCODE_GO_PROVIDER_KEYS = (
 OPENCODE_GO_DEFAULT_MODEL_ALIAS = "opencode-go/kimi-k2.6"
 OPENCODE_GO_DEFAULT_CONTEXT = 262_000
 
-# models.dev is OpenCode's own source of truth for model metadata (context
-# window, display name). The Go /models endpoint returns ids only, so we
-# enrich ids not in the curated catalog below from this catalog.
-MODELS_DEV_API_URL = "https://models.dev/api.json"
 MODELS_DEV_PROVIDER_ID = "opencode-go"
-# The models.dev fetch is best-effort enrichment, so it must not stall login on
-# the 120s default. A tight cap means a slow/partial endpoint degrades quickly
-# to the curated catalog instead of holding the user for up to two minutes.
-MODELS_DEV_TIMEOUT = aiohttp.ClientTimeout(total=15, sock_connect=8, sock_read=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,39 +209,28 @@ def _extract_model_ids(data: object) -> list[str]:
     return ids
 
 
-def _parse_models_dev_metadata(data: object) -> dict[str, _ModelsDevMeta]:
-    """Extract display name, context, and API shape per opencode-go model id."""
-    if not isinstance(data, dict):
-        return {}
-    provider = cast(dict[str, Any], data).get(MODELS_DEV_PROVIDER_ID)
-    if not isinstance(provider, dict):
-        return {}
-    models = cast(dict[str, Any], provider).get("models")
-    if not isinstance(models, dict):
-        return {}
-    default_npm = cast(dict[str, Any], provider).get("npm")
+def _metadata_from_catalog(catalog: ModelsDevCatalog) -> dict[str, _ModelsDevMeta]:
     result: dict[str, _ModelsDevMeta] = {}
-    for model_id, entry in cast(dict[str, Any], models).items():
-        if not isinstance(entry, dict):
-            continue
-        entry_d = cast(dict[str, Any], entry)
-        name = entry_d.get("name")
-        display_name = name if isinstance(name, str) and name else None
-        limit = entry_d.get("limit")
-        context = cast(dict[str, Any], limit).get("context") if isinstance(limit, dict) else None
-        max_context = context if isinstance(context, int) and context > 0 else None
-        model_provider = entry_d.get("provider")
-        npm = (
-            cast(dict[str, Any], model_provider).get("npm")
-            if isinstance(model_provider, dict)
-            else None
+    for model_id, model in get_provider_models(catalog, MODELS_DEV_PROVIDER_ID).items():
+        is_anthropic = model.npm == MODELS_DEV_ANTHROPIC_NPM if model.npm is not None else None
+        result[model_id] = _ModelsDevMeta(
+            display_name=model.display_name,
+            max_context=model.context_length,
+            is_anthropic=is_anthropic,
         )
-        effective_npm = npm or default_npm
-        is_anthropic = (
-            effective_npm == MODELS_DEV_ANTHROPIC_NPM if isinstance(effective_npm, str) else None
-        )
-        result[model_id] = _ModelsDevMeta(display_name, max_context, is_anthropic)
     return result
+
+
+def _parse_models_dev_metadata(data: object) -> dict[str, _ModelsDevMeta]:
+    """Compatibility wrapper over the shared models.dev catalog parser."""
+    raw_catalog = cast(dict[object, object], data) if isinstance(data, dict) else None
+    if raw_catalog is not None and all(
+        isinstance(provider, ModelsDevProvider) for provider in raw_catalog.values()
+    ):
+        catalog = cast(ModelsDevCatalog, raw_catalog)
+    else:
+        catalog = parse_models_dev_catalog(cast(object, data))
+    return _metadata_from_catalog(catalog)
 
 
 def _build_models(
@@ -282,18 +270,9 @@ def _build_models(
 
 
 async def _fetch_models_dev_metadata() -> dict[str, _ModelsDevMeta]:
-    """Best-effort metadata fetch. Returns {} on any failure so login still
-    succeeds (falling back to the curated catalog) when models.dev is
-    unreachable."""
-    try:
-        async with (
-            new_client_session(timeout=MODELS_DEV_TIMEOUT) as session,
-            session.get(MODELS_DEV_API_URL, raise_for_status=True) as response,
-        ):
-            payload = await response.json(content_type=None)
-    except (TimeoutError, aiohttp.ClientError, ValueError):
-        return {}
-    return _parse_models_dev_metadata(payload)
+    """Load best-effort OpenCode metadata from the shared models.dev catalog."""
+    result = await get_models_dev_catalog()
+    return _parse_models_dev_metadata(result.catalog)
 
 
 async def _discover_opencode_go_models(api_key: str) -> tuple[OpenCodeGoModel, ...]:
@@ -311,9 +290,8 @@ async def _discover_opencode_go_models(api_key: str) -> tuple[OpenCodeGoModel, .
     if not model_ids:
         return ()
 
-    # models.dev is the authority for API shape + context; fetch it on every
-    # login (best-effort) so the live list self-corrects even when our curated
-    # catalog drifts. Falls back to the catalog when models.dev is unreachable.
+    # models.dev is the authority for API shape + context. Its shared loader
+    # refreshes stale data on demand and falls back to disk when unavailable.
     metadata = await _fetch_models_dev_metadata()
     return _build_models(model_ids, metadata)
 

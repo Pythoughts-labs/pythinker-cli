@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import tempfile
 from enum import StrEnum
 from pathlib import Path
 from types import UnionType
@@ -1537,15 +1538,34 @@ def save_config(config: Config, config_file: Path | None = None):
     """
     config_file = config_file or get_config_file()
     logger.debug("Saving config to file: {file}", file=config_file)
-    config_file.parent.mkdir(parents=True, exist_ok=True)
+    target = config_file.resolve(strict=False) if config_file.is_symlink() else config_file
+    target.parent.mkdir(parents=True, exist_ok=True)
     config_data = config.model_dump(mode="json", exclude_none=True)
-    with open(config_file, "w", encoding="utf-8") as f:
-        if config_file.suffix.lower() == ".json":
-            f.write(json.dumps(config_data, ensure_ascii=False, indent=2))
-        else:
-            f.write(tomlkit.dumps(config_data))  # type: ignore[reportUnknownMemberType]
-    with contextlib.suppress(OSError):
-        os.chmod(config_file, 0o600)
+    if config_file.suffix.lower() == ".json":
+        serialized = json.dumps(config_data, ensure_ascii=False, indent=2)
+    else:
+        serialized = tomlkit.dumps(config_data)  # type: ignore[reportUnknownMemberType]
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(serialized)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        with contextlib.suppress(OSError):
+            os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, target)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
 
 
 class MigrationError(Exception):

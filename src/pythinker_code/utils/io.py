@@ -17,18 +17,35 @@ def file_lock(path: Path) -> Generator[None]:
     that both load before either saves drop each other's changes. Wrap the whole
     load → mutate → save in this lock to serialize concurrent writers. The lock
     file (``<path>.lock``) is kept on disk — unlinking would split the lock across
-    inodes. On platforms without ``fcntl`` (Windows), this is a no-op. Blocking
-    (flock + small JSON I/O) — call via ``asyncio.to_thread`` from event-loop code.
+    inodes. This call blocks; event-loop callers must run it via ``asyncio.to_thread``.
     """
     lock_file = path.with_name(path.name + ".lock")
     lock_file.parent.mkdir(parents=True, exist_ok=True)
-    fh = lock_file.open("a+", encoding="utf-8")
+    fh = lock_file.open("a+b")
     try:
-        try:
-            import fcntl
-        except ImportError:
-            yield
+        if os.name == "nt":
+            import msvcrt
+            import time
+
+            if os.fstat(fh.fileno()).st_size == 0:
+                fh.write(b"\0")
+                fh.flush()
+            while True:
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                with contextlib.suppress(OSError):
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
         else:
+            import fcntl
+
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
                 yield

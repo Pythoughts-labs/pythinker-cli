@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import platform
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,12 +36,14 @@ from pythinker_code.config import (
     OAuthRef,
     PythinkerAIFetchConfig,
     PythinkerAISearchConfig,
+    get_config_file,
     save_config,
 )
 from pythinker_code.constant import VERSION
 from pythinker_code.share import get_share_dir
 from pythinker_code.thinking import apply_login_thinking_defaults
 from pythinker_code.utils.aiohttp import new_client_session
+from pythinker_code.utils.io import file_lock
 from pythinker_code.utils.logging import logger
 
 if TYPE_CHECKING:
@@ -72,6 +75,10 @@ class OAuthError(RuntimeError):
 
 class OAuthUnauthorized(OAuthError):
     """OAuth credentials rejected."""
+
+
+class OAuthPersistenceError(OAuthError):
+    """OAuth credentials and configuration could not be persisted consistently."""
 
 
 class _RetryableRefreshError(OAuthError):
@@ -297,14 +304,22 @@ def _credentials_dir() -> Path:
     return path
 
 
+def _credential_file_stem(key: str) -> str:
+    relative_key = key.removeprefix("oauth/")
+    if "/" not in relative_key:
+        return relative_key or key
+    encoded = base64.urlsafe_b64encode(relative_key.encode(encoding="utf-8")).decode(
+        encoding="utf-8"
+    )
+    return f"v2-{encoded.rstrip('=')}"
+
+
 def _credentials_path(key: str) -> Path:
-    name = key.removeprefix("oauth/").split("/")[-1] or key
-    return _credentials_dir() / f"{name}.json"
+    return _credentials_dir() / f"{_credential_file_stem(key)}.json"
 
 
 def _credentials_lock_path(key: str) -> Path:
-    name = key.removeprefix("oauth/").split("/")[-1] or key
-    return _credentials_dir() / f"{name}.lock"
+    return _credentials_dir() / f"{_credential_file_stem(key)}.lock"
 
 
 class _CrossProcessLock:
@@ -486,6 +501,114 @@ def delete_tokens(ref: OAuthRef) -> None:
     if ref.storage == "keyring":
         _delete_from_keyring(ref.key)
     _delete_from_file(ref.key)
+
+
+def restore_config_state(config: Config, snapshot: Config) -> None:
+    """Restore every field of ``config`` in place from a prior deep-copy snapshot."""
+    for field_name in type(config).model_fields:
+        setattr(config, field_name, getattr(snapshot, field_name))
+
+
+def _persist_login_sync(
+    config: Config,
+    ref: OAuthRef,
+    token: OAuthToken,
+    apply_config: Callable[[Config], None],
+) -> None:
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        previous_token = load_tokens(ref)
+        save_tokens(ref, token)
+        try:
+            apply_config(config)
+            save_config(config)
+        except BaseException as persistence_error:
+            restore_config_state(config, snapshot)
+            try:
+                if previous_token is not None:
+                    save_tokens(ref, previous_token)
+                else:
+                    delete_tokens(ref)
+            except Exception as rollback_error:
+                logger.error(
+                    "Failed to roll back OAuth login persistence: {error}",
+                    error=rollback_error,
+                )
+                raise OAuthPersistenceError(
+                    "OAuth login persistence failed and credential rollback also failed."
+                ) from persistence_error
+            raise
+
+
+async def persist_login(
+    config: Config,
+    ref: OAuthRef,
+    token: OAuthToken,
+    apply_config: Callable[[Config], None],
+) -> None:
+    """Persist OAuth credentials and config together outside the event loop."""
+    await asyncio.to_thread(_persist_login_sync, config, ref, token, apply_config)
+
+
+def _persist_logout_sync(
+    config: Config,
+    ref: OAuthRef,
+    remove_config: Callable[[Config], None],
+) -> None:
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        remove_config(config)
+        try:
+            save_config(config)
+        except BaseException:
+            restore_config_state(config, snapshot)
+            raise
+        try:
+            delete_tokens(ref)
+        except Exception as delete_error:
+            restore_config_state(config, snapshot)
+            try:
+                save_config(config)
+            except Exception as rollback_error:
+                logger.error(
+                    "Failed to restore configuration after OAuth credential deletion failed: "
+                    "{error}",
+                    error=rollback_error,
+                )
+                raise OAuthPersistenceError(
+                    "OAuth logout failed and configuration rollback also failed."
+                ) from delete_error
+            raise OAuthPersistenceError(
+                "OAuth credential deletion failed; logout was rolled back."
+            ) from delete_error
+
+
+async def persist_logout(
+    config: Config,
+    ref: OAuthRef,
+    remove_config: Callable[[Config], None],
+) -> None:
+    """Persist OAuth logout outside the event loop, config removal first."""
+    await asyncio.to_thread(_persist_logout_sync, config, ref, remove_config)
+
+
+def _persist_config_change_sync(
+    config: Config,
+    apply_config: Callable[[Config], None],
+) -> None:
+    with file_lock(get_config_file()):
+        snapshot = config.model_copy(deep=True)
+        try:
+            apply_config(config)
+            save_config(config)
+        except BaseException:
+            restore_config_state(config, snapshot)
+            raise
+
+
+async def persist_config_change(config: Config, apply_config: Callable[[Config], None]) -> None:
+    """Persist a config-only change atomically outside the event loop."""
+    await asyncio.to_thread(_persist_config_change_sync, config, apply_config)
 
 
 async def request_device_authorization() -> DeviceAuthorization:
@@ -1152,10 +1275,26 @@ class OAuthManager:
                 xlock.release()
 
     async def _refresh_token_for_ref(self, ref: OAuthRef, refresh_token_value: str) -> OAuthToken:
+        from pythinker_code.auth.copilot import (
+            GITHUB_COPILOT_OAUTH_KEY,
+            refresh_copilot_token,
+        )
+
+        if ref.key == GITHUB_COPILOT_OAUTH_KEY:
+            return await refresh_copilot_token(refresh_token_value)
         if ref.key == "oauth/openai-chatgpt":
             from pythinker_code.auth.openai import refresh_openai_chatgpt_token
 
             return await refresh_openai_chatgpt_token(refresh_token_value)
+        if ref.key == "oauth/xai":
+            from pythinker_code.auth.xai import refresh_xai_token
+
+            return await refresh_xai_token(refresh_token_value)
+        if ref.key.startswith("oauth/snowflake-cortex/"):
+            from pythinker_code.auth.snowflake import refresh_snowflake_cortex_token
+
+            account = ref.key.removeprefix("oauth/snowflake-cortex/")
+            return await refresh_snowflake_cortex_token(account, refresh_token_value)
         return await refresh_token(refresh_token_value)
 
     def _apply_access_token(

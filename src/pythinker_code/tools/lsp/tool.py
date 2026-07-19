@@ -174,10 +174,10 @@ class Lsp(_tooling.CallableTool2[Params]):
         # plugin once per extension per session. Gated by recommendation_disabled /
         # recommendation_never inside get_matching_lsp_plugins. The reference's
         # persisted >=5 ignored-count auto-disable is intentionally NOT wired here:
-        # it requires incremental writes to the shared global config, and the
-        # current save_config() rewrites the whole file with no lock/atomic rename
-        # (multi-instance clobber risk). Deferred until a safe global-write path
-        # exists; the disabled/never flags still apply.
+        # it requires incremental writes to the shared global config. Atomic
+        # replacement prevents torn files, but save_config() still has no global
+        # read-modify-write lock (multi-instance clobber risk). Deferred until a
+        # safe global-update path exists; the disabled/never flags still apply.
         ext = Path(absolute_path).suffix.lower()
         if not ext or ext in self._recommended_exts:
             return None

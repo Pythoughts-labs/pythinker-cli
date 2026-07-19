@@ -42,6 +42,111 @@ def _make_config_with_model(
     )
 
 
+def test_digitalocean_platform_is_registered() -> None:
+    from pythinker_code.auth import DIGITALOCEAN_PLATFORM_ID
+    from pythinker_code.auth.platforms import get_platform_by_id, managed_provider_key
+
+    platform = get_platform_by_id(DIGITALOCEAN_PLATFORM_ID)
+
+    assert platform is not None
+    assert platform.name == "DigitalOcean"
+    assert platform.base_url == "https://inference.do-ai.run/v1"
+    assert managed_provider_key(platform.id) == "managed:digitalocean"
+
+
+def test_snowflake_platform_is_registered() -> None:
+    from pythinker_code.auth import SNOWFLAKE_CORTEX_PLATFORM_ID
+    from pythinker_code.auth.platforms import get_platform_by_id, managed_provider_key
+
+    platform = get_platform_by_id(SNOWFLAKE_CORTEX_PLATFORM_ID)
+
+    assert platform is not None
+    assert platform.name == "Snowflake Cortex"
+    assert platform.base_url == "https://app.snowflake.com"
+    assert managed_provider_key(platform.id) == "managed:snowflake-cortex"
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_skips_snowflake_curated_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_key = "managed:snowflake-cortex"
+    alias = "snowflake-cortex/claude-sonnet-4-5"
+    config = Config(
+        is_from_default_location=True,
+        default_model=alias,
+        providers={
+            provider_key: LLMProvider(
+                type="openai_legacy",
+                base_url="https://myorg-acct.snowflakecomputing.com/api/v2/cortex/v1",
+                api_key=SecretStr(""),
+                oauth=OAuthRef(storage="file", key="oauth/snowflake-cortex/myorg-acct"),
+            )
+        },
+        models={
+            alias: LLMModel(
+                provider=provider_key,
+                model="claude-sonnet-4-5",
+                max_context_size=200_000,
+            )
+        },
+    )
+    called = False
+
+    async def should_not_list_models(*args: Any, **kwargs: Any) -> list[ModelInfo]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("pythinker_code.auth.platforms.list_models", should_not_list_models)
+
+    changed = await refresh_managed_models(config)
+
+    assert called is False
+    assert changed is False
+    assert alias in config.models
+
+
+@pytest.mark.asyncio
+async def test_refresh_managed_models_skips_digitalocean_router_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_key = "managed:digitalocean"
+    alias = "digitalocean/router:production"
+    config = Config(
+        is_from_default_location=True,
+        default_model=alias,
+        providers={
+            provider_key: LLMProvider(
+                type="openai_legacy",
+                base_url="https://inference.do-ai.run/v1",
+                api_key=SecretStr("token"),
+            )
+        },
+        models={
+            alias: LLMModel(
+                provider=provider_key,
+                model="router:production",
+                max_context_size=128_000,
+            )
+        },
+    )
+    called = False
+
+    async def should_not_list_models(*args: Any, **kwargs: Any) -> list[ModelInfo]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr("pythinker_code.auth.platforms.list_models", should_not_list_models)
+
+    changed = await refresh_managed_models(config)
+
+    assert called is False
+    assert changed is False
+    assert alias in config.models
+
+
 # ── ModelInfo / _list_models: display_name parsing ─────────────────
 
 
