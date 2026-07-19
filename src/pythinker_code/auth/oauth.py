@@ -309,7 +309,7 @@ def _credential_file_stem(key: str) -> str:
     if "/" not in relative_key:
         return relative_key or key
     encoded = base64.urlsafe_b64encode(relative_key.encode(encoding="utf-8")).decode(
-        encoding="ascii"
+        encoding="utf-8"
     )
     return f"v2-{encoded.rstrip('=')}"
 
