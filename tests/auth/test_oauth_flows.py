@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import re
 from collections.abc import Callable, Mapping
 from typing import Any, cast
@@ -10,15 +11,18 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from pythinker_code.auth.oauth import OAuthDeviceExpired
+from pythinker_code.auth.oauth import OAuthDeviceExpired, OAuthError
 from pythinker_code.auth.oauth_flows import (
     DeviceCode,
+    ImplicitAuthorization,
     OAuthAccessDenied,
     OAuthStateMismatch,
+    _handle_implicit_loopback_callback,
     generate_pkce,
     generate_state,
     poll_device_token,
     request_device_code,
+    run_loopback_implicit_flow,
     run_loopback_pkce_flow,
 )
 
@@ -262,6 +266,40 @@ def _reader(request_target: str) -> asyncio.StreamReader:
     return reader
 
 
+def _request_reader(request: str, body: bytes = b"") -> asyncio.StreamReader:
+    reader = asyncio.StreamReader()
+    reader.feed_data(bytes(request, encoding="utf-8") + body)
+    reader.feed_eof()
+    return reader
+
+
+def _implicit_post_reader(payload: dict[str, object]) -> asyncio.StreamReader:
+    body_text = json.dumps(payload)
+    body = bytes(body_text, encoding="utf-8")
+    request = (
+        f"POST /oauth/token HTTP/1.1\r\nHost: localhost\r\ncOnTeNt-LeNgTh: {len(body)}\r\n\r\n"
+    )
+    return _request_reader(request, body)
+
+
+async def _drive_implicit_handler(
+    payload: dict[str, object],
+    *,
+    expected_state: str = "expected-state",
+) -> tuple[asyncio.Future[ImplicitAuthorization], _FakeWriter]:
+    result: asyncio.Future[ImplicitAuthorization] = asyncio.get_running_loop().create_future()
+    writer = _FakeWriter()
+    await _handle_implicit_loopback_callback(
+        _implicit_post_reader(payload),
+        cast("asyncio.StreamWriter", writer),
+        callback_path="/oauth/callback",
+        token_path="/oauth/token",
+        expected_state=expected_state,
+        result=result,
+    )
+    return result, writer
+
+
 def _mock_loopback_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[
@@ -346,5 +384,151 @@ async def test_loopback_flow_captures_code_with_ephemeral_port(
     assert params["prompt"] == ["login"]
     assert params["code_challenge_method"] == ["S256"]
     assert bytes(writer.buffer).startswith(b"HTTP/1.1 200 OK")
+    assert server.closed
+    assert server.waited_closed
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_serves_bootstrap_without_resolving_result() -> None:
+    result: asyncio.Future[ImplicitAuthorization] = asyncio.get_running_loop().create_future()
+    writer = _FakeWriter()
+
+    await _handle_implicit_loopback_callback(
+        _request_reader("GET /oauth/callback HTTP/1.1\r\n\r\n"),
+        cast("asyncio.StreamWriter", writer),
+        callback_path="/oauth/callback",
+        token_path="/oauth/token",
+        expected_state="expected-state",
+        result=result,
+    )
+
+    response = bytes(writer.buffer)
+    assert response.startswith(b"HTTP/1.1 200 OK")
+    assert b"Content-Type: text/html; charset=utf-8" in response
+    assert b'fetch("/oauth/token"' in response
+    assert b"window.location.hash" in response
+    assert not result.done()
+    assert writer.closed
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_resolves_access_token() -> None:
+    result, writer = await _drive_implicit_handler(
+        {
+            "access_token": "access-secret",
+            "expires_in": "3600",
+            "state": "expected-state",
+        }
+    )
+
+    assert await result == ImplicitAuthorization(
+        access_token="access-secret",
+        expires_in=3600,
+        state="expected-state",
+    )
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 200 OK")
+    assert b"Content-Type: application/json" in writer.buffer
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_rejects_state_mismatch() -> None:
+    result, writer = await _drive_implicit_handler(
+        {
+            "access_token": "access-secret",
+            "expires_in": 3600,
+            "state": "wrong-state",
+        }
+    )
+
+    with pytest.raises(OAuthStateMismatch):
+        await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_maps_access_denied_error() -> None:
+    result, writer = await _drive_implicit_handler({"error": "access_denied"})
+
+    with pytest.raises(OAuthAccessDenied):
+        await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+
+
+@pytest.mark.asyncio
+async def test_implicit_callback_requires_access_token() -> None:
+    result, writer = await _drive_implicit_handler({"access_token": "", "state": "expected-state"})
+
+    with pytest.raises(OAuthError):
+        await result
+    assert bytes(writer.buffer).startswith(b"HTTP/1.1 400 Bad Request")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_in", [None, "not-a-number"])
+async def test_implicit_callback_defaults_invalid_expiry(expires_in: object) -> None:
+    payload: dict[str, object] = {
+        "access_token": "access-secret",
+        "state": "expected-state",
+    }
+    if expires_in is not None:
+        payload["expires_in"] = expires_in
+
+    result, _writer = await _drive_implicit_handler(payload)
+
+    assert (await result).expires_in == 2_592_000
+
+
+@pytest.mark.asyncio
+async def test_implicit_flow_uses_pinned_localhost_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _FakeServer(port=9999)
+    captured: dict[str, Callable[[asyncio.StreamReader, asyncio.StreamWriter], None]] = {}
+    opened_urls: list[str] = []
+    writer = _FakeWriter()
+
+    async def fake_start_server(
+        handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], None],
+        host: str,
+        port: int,
+    ) -> _FakeServer:
+        assert host == "localhost"
+        assert port == 43124
+        captured["handler"] = handler
+        return server
+
+    def open_browser(url: str) -> None:
+        opened_urls.append(url)
+        params = parse_qs(urlsplit(url).query)
+        captured["handler"](
+            _implicit_post_reader(
+                {
+                    "access_token": "access-secret",
+                    "expires_in": 7200,
+                    "state": params["state"][0],
+                }
+            ),
+            cast("asyncio.StreamWriter", writer),
+        )
+
+    monkeypatch.setattr("pythinker_code.auth.oauth_flows.asyncio.start_server", fake_start_server)
+
+    result = await run_loopback_implicit_flow(
+        authorize_endpoint="https://login.example/oauth/authorize?audience=example",
+        client_id="client-id",
+        scope=["openid", "profile"],
+        callback_path="/oauth/callback",
+        token_path="/oauth/token",
+        port=43124,
+        extra_authorize_params={"prompt": "login"},
+        browser_open=open_browser,
+    )
+
+    assert result.access_token == "access-secret"
+    params = parse_qs(urlsplit(opened_urls[0]).query)
+    assert params["response_type"] == ["token"]
+    assert params["redirect_uri"] == ["http://localhost:43124/oauth/callback"]
+    assert params["scope"] == ["openid profile"]
+    assert params["prompt"] == ["login"]
     assert server.closed
     assert server.waited_closed

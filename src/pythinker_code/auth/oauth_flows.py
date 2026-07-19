@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -20,6 +21,26 @@ from pythinker_code.utils.aiohttp import new_client_session
 _DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _DEFAULT_DEVICE_INTERVAL = 5
 _SLOW_DOWN_INCREMENT = 5
+_DEFAULT_IMPLICIT_EXPIRES_IN = 60 * 60 * 24 * 30
+_IMPLICIT_BOOTSTRAP_HTML = """<!doctype html><html><body>
+<p>Finishing sign-in…</p>
+<script>
+(function () {
+  var h = window.location.hash.replace(/^#/, "");
+  var p = new URLSearchParams(h);
+  fetch("__TOKEN_PATH__", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      access_token: p.get("access_token"),
+      expires_in: p.get("expires_in"),
+      state: p.get("state"),
+      error: p.get("error"),
+      error_description: p.get("error_description")
+    })
+  }).then(function () { document.body.innerHTML = "<p>You can close this window.</p>"; });
+})();
+</script></body></html>"""
 
 
 class OAuthAccessDenied(OAuthError):
@@ -52,6 +73,14 @@ class LoopbackAuthorization(NamedTuple):
     authorization_code: str
     code_verifier: str
     redirect_uri: str
+
+
+class ImplicitAuthorization(NamedTuple):
+    """Successful OAuth implicit-flow result."""
+
+    access_token: str
+    expires_in: int
+    state: str
 
 
 def _base64url(data: bytes) -> str:
@@ -244,6 +273,24 @@ async def _write_callback_response(
     await writer.drain()
 
 
+async def _write_http_response(
+    writer: asyncio.StreamWriter,
+    *,
+    status: str,
+    body: bytes,
+    content_type: str,
+) -> None:
+    headers = bytes(
+        f"HTTP/1.1 {status}\r\n"
+        f"Content-Type: {content_type}\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n",
+        encoding="utf-8",
+    )
+    writer.write(headers + body)
+    await writer.drain()
+
+
 async def _handle_loopback_callback(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -312,6 +359,147 @@ async def _handle_loopback_callback(
         )
         if not result.done():
             result.set_result(code)
+    except asyncio.CancelledError:
+        raise
+    except (OSError, ValueError):
+        if not result.done():
+            result.set_exception(OAuthError("Failed to process the OAuth callback."))
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def _handle_implicit_loopback_callback(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    callback_path: str,
+    token_path: str,
+    expected_state: str,
+    result: asyncio.Future[ImplicitAuthorization],
+) -> None:
+    try:
+        line = await reader.readline()
+        parts = line.decode(encoding="utf-8", errors="replace").strip().split()
+        if len(parts) < 2:
+            await _write_http_response(
+                writer,
+                status="404 Not Found",
+                body=bytes("Not found.", encoding="utf-8"),
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+
+        method = parts[0]
+        path = urlsplit(parts[1]).path
+        if method == "GET" and path == callback_path:
+            html = _IMPLICIT_BOOTSTRAP_HTML.replace("__TOKEN_PATH__", token_path)
+            await _write_http_response(
+                writer,
+                status="200 OK",
+                body=bytes(html, encoding="utf-8"),
+                content_type="text/html; charset=utf-8",
+            )
+            return
+
+        if method != "POST" or path != token_path:
+            await _write_http_response(
+                writer,
+                status="404 Not Found",
+                body=bytes("Not found.", encoding="utf-8"),
+                content_type="text/plain; charset=utf-8",
+            )
+            return
+
+        content_length = 0
+        while True:
+            header = await reader.readline()
+            if header in (b"\r\n", b""):
+                break
+            header_text = header.decode(encoding="utf-8", errors="replace")
+            name, separator, value = header_text.partition(":")
+            if separator and name.strip().lower() == "content-length":
+                content_length = int(value.strip())
+
+        body = await reader.readexactly(content_length)
+        try:
+            payload_any: Any = json.loads(body.decode(encoding="utf-8"))
+            if not isinstance(payload_any, dict):
+                raise ValueError("OAuth callback body must be a JSON object.")
+            payload = cast(dict[str, Any], payload_any)
+        except ValueError:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                result.set_exception(OAuthError("OAuth callback contained invalid JSON."))
+            return
+
+        error = str(payload.get("error") or "")
+        if error:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                exc: OAuthError
+                if error == "access_denied":
+                    exc = OAuthAccessDenied("OAuth authorization was denied.")
+                else:
+                    exc = OAuthError("OAuth authorization callback reported an error.")
+                result.set_exception(exc)
+            return
+
+        state = str(payload.get("state") or "")
+        if state != expected_state:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                result.set_exception(OAuthStateMismatch("OAuth callback state did not match."))
+            return
+
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            await _write_http_response(
+                writer,
+                status="400 Bad Request",
+                body=bytes('{"ok": false}', encoding="utf-8"),
+                content_type="application/json",
+            )
+            if not result.done():
+                result.set_exception(OAuthError("OAuth callback did not include an access token."))
+            return
+
+        try:
+            expires_in = int(payload.get("expires_in") or _DEFAULT_IMPLICIT_EXPIRES_IN)
+        except (TypeError, ValueError):
+            expires_in = _DEFAULT_IMPLICIT_EXPIRES_IN
+        if expires_in <= 0:
+            expires_in = _DEFAULT_IMPLICIT_EXPIRES_IN
+
+        await _write_http_response(
+            writer,
+            status="200 OK",
+            body=bytes('{"ok": true}', encoding="utf-8"),
+            content_type="application/json",
+        )
+        if not result.done():
+            result.set_result(
+                ImplicitAuthorization(
+                    access_token=access_token,
+                    expires_in=expires_in,
+                    state=state,
+                )
+            )
     except asyncio.CancelledError:
         raise
     except (OSError, ValueError):
@@ -412,8 +600,86 @@ async def run_loopback_pkce_flow(
         await server.wait_closed()
 
 
+async def run_loopback_implicit_flow(
+    *,
+    authorize_endpoint: str,
+    client_id: str,
+    scope: str | Sequence[str],
+    callback_path: str,
+    token_path: str,
+    port: int,
+    timeout: float = 5 * 60,
+    redirect_host: str = "localhost",
+    extra_authorize_params: Mapping[str, str] | None = None,
+    browser_open: Callable[[str], object] | None = None,
+) -> ImplicitAuthorization:
+    """Run an OAuth implicit flow using a pinned loopback callback server."""
+    if not callback_path.startswith("/"):
+        raise ValueError("callback_path must start with '/'.")
+    if not token_path.startswith("/"):
+        raise ValueError("token_path must start with '/'.")
+    if not 0 <= port <= 65535:
+        raise ValueError("port must be between 0 and 65535.")
+    if timeout <= 0:
+        raise ValueError("timeout must be positive.")
+
+    state = generate_state()
+    result: asyncio.Future[ImplicitAuthorization] = asyncio.get_running_loop().create_future()
+    callback_tasks: set[asyncio.Task[None]] = set()
+
+    def on_client_connected(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.create_task(
+            _handle_implicit_loopback_callback(
+                reader,
+                writer,
+                callback_path=callback_path,
+                token_path=token_path,
+                expected_state=state,
+                result=result,
+            )
+        )
+        callback_tasks.add(task)
+        task.add_done_callback(callback_tasks.discard)
+
+    try:
+        server = await asyncio.start_server(on_client_connected, redirect_host, port)
+    except OSError as exc:
+        raise OAuthError(f"Failed to start the OAuth callback server on {redirect_host}.") from exc
+
+    try:
+        params = dict(extra_authorize_params or {})
+        params.update(
+            {
+                "response_type": "token",
+                "client_id": client_id,
+                "redirect_uri": f"http://{redirect_host}:{port}{callback_path}",
+                "scope": scope if isinstance(scope, str) else " ".join(scope),
+                "state": state,
+            }
+        )
+        separator = "&" if "?" in authorize_endpoint else "?"
+        authorize_url = f"{authorize_endpoint}{separator}{urlencode(params)}"
+        try:
+            (browser_open or _open_browser)(authorize_url)
+        except Exception as exc:
+            raise OAuthError("Failed to open a browser for OAuth authorization.") from exc
+
+        try:
+            return await asyncio.wait_for(result, timeout=timeout)
+        except TimeoutError as exc:
+            raise OAuthError("Timed out waiting for the OAuth authorization callback.") from exc
+    finally:
+        server.close()
+        for task in callback_tasks:
+            task.cancel()
+        if callback_tasks:
+            await asyncio.gather(*callback_tasks, return_exceptions=True)
+        await server.wait_closed()
+
+
 __all__ = [
     "DeviceCode",
+    "ImplicitAuthorization",
     "LoopbackAuthorization",
     "OAuthAccessDenied",
     "OAuthStateMismatch",
@@ -422,5 +688,6 @@ __all__ = [
     "generate_state",
     "poll_device_token",
     "request_device_code",
+    "run_loopback_implicit_flow",
     "run_loopback_pkce_flow",
 ]
