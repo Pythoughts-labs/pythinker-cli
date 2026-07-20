@@ -414,10 +414,7 @@ class WorkspaceIndex:
                 # Drain stdout and stderr concurrently: reading them
                 # sequentially can deadlock if git fills its stderr pipe buffer
                 # (e.g. submodule warnings) while we are still draining stdout.
-                stdout, _stderr = await asyncio.gather(
-                    self._read_bounded(process.stdout),
-                    self._read_bounded(process.stderr),
-                )
+                stdout = await self._read_streams(process)
                 returncode = await process.wait()
         except asyncio.CancelledError:
             if process is not None:
@@ -443,6 +440,24 @@ class WorkspaceIndex:
             return None
         encoding = "utf-8"
         return stdout.decode(encoding=encoding, errors="replace")
+
+    async def _read_streams(self, process: HostProcess) -> bytes:
+        """Drain stdout and stderr concurrently and return stdout.
+
+        Uses explicit tasks so that if either reader raises (or this coroutine
+        is cancelled), the sibling reader is cancelled and awaited rather than
+        left running against a closing pipe.
+        """
+        stdout_reader = asyncio.create_task(self._read_bounded(process.stdout))
+        stderr_reader = asyncio.create_task(self._read_bounded(process.stderr))
+        try:
+            stdout, _stderr = await asyncio.gather(stdout_reader, stderr_reader)
+        except BaseException:
+            for reader in (stdout_reader, stderr_reader):
+                reader.cancel()
+            await asyncio.gather(stdout_reader, stderr_reader, return_exceptions=True)
+            raise
+        return stdout
 
     @staticmethod
     async def _read_bounded(stream: AsyncReadable) -> bytes:

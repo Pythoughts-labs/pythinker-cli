@@ -208,6 +208,48 @@ async def test_git_failure_uses_degraded_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_streams_cancels_sibling_when_one_reader_fails() -> None:
+    # When one stream reader raises, the sibling reader must be cancelled and
+    # awaited rather than left draining a closing pipe.
+    host = _FakeHost()
+    index, lifecycle = _index(host, HostPath("/workspace"))
+
+    class _Blocking:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = False
+
+        async def read(self, _n: int = -1) -> bytes:
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return b""
+
+    class _Raising:
+        def __init__(self, gate: asyncio.Event) -> None:
+            self._gate = gate
+
+        async def read(self, _n: int = -1) -> bytes:
+            await self._gate.wait()  # ensure the sibling is mid-read first
+            raise RuntimeError("stdout reader boom")
+
+    blocking = _Blocking()
+
+    class _Proc:
+        stdout = _Raising(blocking.started)
+        stderr = blocking
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await index._read_streams(cast(Any, _Proc()))
+
+    assert blocking.cancelled is True
+    await lifecycle.aclose()
+
+
+@pytest.mark.asyncio
 async def test_results_are_truncated_at_one_thousand_entries() -> None:
     host = _FakeHost()
     root = HostPath("/workspace")
