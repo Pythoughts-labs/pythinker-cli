@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.shell_pty_helpers import (
+    _set_window_size,
     list_turn_begin_inputs,
     make_home_dir,
     make_work_dir,
@@ -216,6 +217,70 @@ def test_input_card_stays_visible_during_initial_loading_and_mid_turn(tmp_path: 
         shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
         assert any(_is_input_card_border(r) for r in _render(shell._raw_chunks)), (
             "idle input-card border did not return after the turn ended"
+        )
+    finally:
+        shell.close()
+
+
+def _render_sized(chunks: list[bytes], columns: int, rows: int) -> list[str]:
+    screen = pyte.Screen(columns, rows)
+    stream = pyte.ByteStream(screen)
+    stream.feed(b"".join(chunks))
+    return [line.rstrip() for line in screen.display]
+
+
+def test_prompt_scene_survives_shrinking_terminal_heights(tmp_path: Path) -> None:
+    """Mid-turn resizes down to tiny heights never crash or fossilize the card.
+
+    Resizes the live PTY through heights 12 → 8 → 6 → 4 while a slow tool keeps
+    the running prompt on screen. prompt_toolkit fully redraws on SIGWINCH, so
+    each post-resize frame is rendered from only the bytes emitted after that
+    resize, on a pyte screen of the new geometry. After restoring the original
+    size, the turn must still complete and the idle input card must return.
+    """
+    slow = {"id": "r1", "name": "Shell", "arguments": json.dumps({"command": "sleep 6"})}
+    config_path = write_scripted_config(
+        tmp_path,
+        [f"tool_call: {json.dumps(slow)}", "text: Resize turn finished."],
+        capabilities=["thinking"],
+    )
+    work_dir = make_work_dir(tmp_path)
+    home_dir = make_home_dir(tmp_path)
+    shell = start_shell_pty(
+        config_path=config_path,
+        work_dir=work_dir,
+        home_dir=home_dir,
+        yolo=True,
+        columns=_COLS,
+        lines=_ROWS,
+    )
+    try:
+        shell.read_until_contains("think first, then code")
+        read_until_prompt_ready(shell, after=shell.mark())
+        shell.send_line(_PROMPT_TEXT)
+        shell.read_until_contains("Bash(sleep 6", timeout=15.0)
+
+        for height in (12, 8, 6, 4):
+            resize_chunk_start = len(shell._raw_chunks)
+            _set_window_size(shell.master_fd, columns=_COLS, lines=height)
+            deadline = time.monotonic() + 2.5
+            while time.monotonic() < deadline:
+                shell.read_available(timeout=0.08)
+            assert shell.process.poll() is None, f"shell died after resize to {height} rows"
+            post_resize = shell._raw_chunks[resize_chunk_start:]
+            if post_resize:
+                # pyte always yields exactly `height` lines, so assert observable
+                # behavior instead: the redraw never wraps a row past the terminal
+                # width and never fossilizes an input-card border above content.
+                rows = _render_sized(post_resize, _COLS, height)
+                assert all(len(row) <= _COLS for row in rows)
+                assert not _has_fossil_border_above_content(rows)
+
+        _set_window_size(shell.master_fd, columns=_COLS, lines=_ROWS)
+        shell.read_until_contains("Resize turn finished.", timeout=20.0)
+        shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
+        assert any(_is_input_card_border(r) for r in _render(shell._raw_chunks)), (
+            "idle input-card border did not return after the resize sequence"
         )
     finally:
         shell.close()
