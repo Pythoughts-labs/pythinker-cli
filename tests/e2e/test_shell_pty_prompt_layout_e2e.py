@@ -269,8 +269,11 @@ def test_prompt_scene_survives_shrinking_terminal_heights(tmp_path: Path) -> Non
             assert shell.process.poll() is None, f"shell died after resize to {height} rows"
             post_resize = shell._raw_chunks[resize_chunk_start:]
             if post_resize:
+                # pyte always yields exactly `height` lines, so assert observable
+                # behavior instead: the redraw never wraps a row past the terminal
+                # width and never fossilizes an input-card border above content.
                 rows = _render_sized(post_resize, _COLS, height)
-                assert len(rows) == height
+                assert all(len(row) <= _COLS for row in rows)
                 assert not _has_fossil_border_above_content(rows)
 
         _set_window_size(shell.master_fd, columns=_COLS, lines=_ROWS)

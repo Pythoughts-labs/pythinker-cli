@@ -3127,6 +3127,11 @@ class CustomPromptSession:
     def _render_shell_prompt_message(self) -> FormattedText:
         frame = self._prompt_frame_for_render()
         columns = frame.columns
+        # Shell mode has no running-prompt scene allocator, so the footer keeps
+        # its natural height within the terminal. Refresh the budget every render
+        # (not just on the agent path) so a mode switch or resize cannot leave
+        # _fit_toolbar_to_terminal clipping against a stale agent-mode value.
+        self._prompt_footer_row_budget = frame.terminal_rows
         fragments: FormattedText = FormattedText()
 
         if getattr(self, "_shortcut_help_open", False):
