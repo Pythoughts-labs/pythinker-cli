@@ -232,7 +232,10 @@ def test_completion_context_reports_first_and_later_arguments():
     later = parse_completion_context(
         Document("/theme current extra"), known_commands=known, argument_commands=known
     )
-    escaped_whitespace = parse_completion_context(
+    # A backslash before a space is NOT an escape: the parser splits on raw
+    # whitespace, so "current\ value" is two arguments and the cursor token is
+    # the trailing "value" at argument index 1 (escape sequences unsupported).
+    backslash_before_space = parse_completion_context(
         Document(r"/theme current\ value"), known_commands=known, argument_commands=known
     )
 
@@ -243,7 +246,10 @@ def test_completion_context_reports_first_and_later_arguments():
         "cur",
     )
     assert (later.argument_index, later.token) == (1, "extra")
-    assert (escaped_whitespace.argument_index, escaped_whitespace.token) == (1, "value")
+    assert (backslash_before_space.argument_index, backslash_before_space.token) == (
+        1,
+        "value",
+    )
 
 
 def test_completion_context_rejects_cursor_mid_slash_token():
@@ -378,6 +384,18 @@ def test_discard_slash_command_ignores_non_root_slash_text():
 
     assert _discard_slash_command(buffer) is False
     assert buffer.text == "ask /theme"
+
+
+def test_discard_slash_command_declines_slash_argument():
+    # A slash *argument* ("/theme cur") has no root command draft to strip, so
+    # discard declines it and leaves the text intact. The Escape keybinding
+    # relies on this False return to fall back to buffer.cancel_completion(),
+    # which dismisses the argument menu instead of doing nothing.
+    buffer = Buffer()
+    buffer.set_document(Document(text="/theme cur", cursor_position=10), bypass_readonly=True)
+
+    assert _discard_slash_command(buffer) is False
+    assert buffer.text == "/theme cur"
 
 
 def test_completion_display_uses_canonical_command_name():

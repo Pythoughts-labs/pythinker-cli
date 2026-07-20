@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator
 from stat import S_IFDIR, S_IFREG
-from typing import Any, cast, override
+from typing import Any, cast
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
@@ -18,23 +18,7 @@ from pythinker_code.ui.shell.prompting.completion.workspace import (
     HostFileMentionCompleter,
     WorkspaceIndex,
 )
-from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
-
-
-class _Lifecycle(PromptLifecycle):
-    def __init__(self) -> None:
-        super().__init__()
-        self.created: list[asyncio.Task[None]] = []
-
-    @override
-    def create_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = super().create_task(coro)
-        self.created.append(task)
-        return task
-
-    async def drain(self) -> None:
-        if self.created:
-            await asyncio.gather(*self.created, return_exceptions=True)
+from tests.ui_and_conv._prompt_lifecycle import RecordingLifecycle as _Lifecycle
 
 
 class _Stream:
@@ -135,8 +119,11 @@ class _ControlledHost(_FakeHost):
 
 
 class _InspectableWorkspaceIndex(WorkspaceIndex):
+    # White-box accessor for the index's internal degradation bookkeeping, which
+    # has no production consumer to observe. Aggregates across every primed
+    # snapshot so the assertion holds regardless of how many keys are populated.
     def degraded(self) -> bool:
-        return next(iter(self._snapshots.values())).degraded
+        return any(snapshot.degraded for snapshot in self._snapshots.values())
 
 
 def _index(
@@ -268,6 +255,25 @@ async def test_quoted_path_with_spaces_uses_snapshot() -> None:
     completer = HostFileMentionCompleter(index)
 
     assert _completion_texts(completer, '@"docs/design') == ['"docs/design notes.md"']
+    await lifecycle.aclose()
+
+
+@pytest.mark.asyncio
+async def test_scoped_completion_ranks_basename_prefix_first() -> None:
+    # With a directory prefix in the fragment ("src/mai"), ranking must compare
+    # against the fragment's basename ("mai"): "main.py" (basename prefix) should
+    # sort before "domain.py" (basename only contains "mai").
+    host = _FakeHost()
+    root = HostPath("/workspace")
+    host.add_directory(str(root), [("src", True)])
+    host.add_directory(str(root / "src"), [("main.py", False), ("domain.py", False)])
+    index, lifecycle = _index(host, root)
+    index.request_refresh("src/mai")
+    await lifecycle.drain()
+
+    completer = HostFileMentionCompleter(index)
+
+    assert _completion_texts(completer, "@src/mai")[:2] == ["src/main.py", "src/domain.py"]
     await lifecycle.aclose()
 
 

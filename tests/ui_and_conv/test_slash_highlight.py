@@ -130,7 +130,8 @@ def test_quoted_at_mention_with_spaces_is_highlighted():
 
 
 def test_mention_after_allowed_punctuation_is_highlighted():
-    assert _mentions(_lex_line("read (@src/main.py), now")) == ["@src/main.py),"]
+    # Trailing prose punctuation (")", ",") must stay out of the mention span.
+    assert _mentions(_lex_line("read (@src/main.py), now")) == ["@src/main.py"]
 
 
 def test_email_like_at_not_highlighted():

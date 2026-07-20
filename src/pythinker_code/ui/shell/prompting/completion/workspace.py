@@ -411,8 +411,13 @@ class WorkspaceIndex:
         try:
             async with asyncio.timeout(_GIT_TIMEOUT_SECONDS):
                 process = await self._host.exec("git", *args, cwd=str(root))
-                stdout = await self._read_bounded(process.stdout)
-                await self._read_bounded(process.stderr)
+                # Drain stdout and stderr concurrently: reading them
+                # sequentially can deadlock if git fills its stderr pipe buffer
+                # (e.g. submodule warnings) while we are still draining stdout.
+                stdout, _stderr = await asyncio.gather(
+                    self._read_bounded(process.stdout),
+                    self._read_bounded(process.stderr),
+                )
                 returncode = await process.wait()
         except asyncio.CancelledError:
             if process is not None:
@@ -506,13 +511,17 @@ class HostFileMentionCompleter(Completer):
         candidates = list(fuzzy.get_completions(mention_doc, complete_event))
 
         frag_lower = fragment.lower()
+        # The typed fragment often carries a directory prefix (e.g. "src/mai"),
+        # but candidates are ranked by basename, so compare against the
+        # fragment's basename or prefix priority never applies to scoped paths.
+        frag_basename = frag_lower.rsplit("/", 1)[-1]
 
         def _rank(completion: Completion) -> tuple[int, int]:
             path = completion.text
             basename = path.rstrip("/").split("/")[-1].lower()
-            if basename.startswith(frag_lower):
+            if basename.startswith(frag_basename):
                 category = 0
-            elif frag_lower in basename:
+            elif frag_basename in basename:
                 category = 1
             else:
                 category = 2

@@ -35,6 +35,10 @@ class CompletionContext:
 _NONE = CompletionContext(CompletionKind.NONE, "", 0, None, None)
 _COMMAND_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:.-")
 _MENTION_TRIGGER_GUARDS = frozenset((".", "-", "_", "`", "'", '"', ":", "@", "#", "~"))
+# Trailing prose punctuation that should not be pulled into an unquoted mention
+# span (e.g. "(@src/main.py), now" -> "@src/main.py"). "." and "/" are excluded
+# because they are common in real filenames and paths.
+_MENTION_TRAILING_PUNCT = frozenset(")]}>,;:!?`'\"")
 _SLASH_TOKEN_RE = re.compile(r"(?<!\S)/([A-Za-z0-9][A-Za-z0-9_:.-]*)")
 _ARGUMENT_RE = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\s+(\S+))")
 
@@ -202,12 +206,6 @@ def parse_completion_context(
         )
         if slash.kind is CompletionKind.SLASH_COMMAND:
             return slash
-        if (
-            slash.kind is CompletionKind.SLASH_ARGUMENT
-            and slash.command in argument_commands
-            and slash.argument_index == 0
-        ):
-            return slash
         if slash.kind is CompletionKind.SLASH_ARGUMENT:
             return slash
     if allow_file:
@@ -270,6 +268,8 @@ def iter_completion_contexts(
             else:
                 while end < len(line) and not line[end].isspace() and line[end] != "@":
                     end += 1
+                while end - 1 > index and line[end - 1] in _MENTION_TRAILING_PUNCT:
+                    end -= 1
             parsed = parse_completion_context(
                 Document(line[:end], cursor_position=end),
                 allow_slash=False,

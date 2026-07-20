@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
-from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, override
 
 import pytest
 from inline_snapshot import snapshot
@@ -21,19 +18,7 @@ from pythinker_code.ui.shell.prompting.completion.context import (
     parse_completion_context,
 )
 from pythinker_code.ui.shell.prompting.completion.workspace import WorkspaceIndex
-from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
-
-
-class _Lifecycle(PromptLifecycle):
-    def __init__(self) -> None:
-        super().__init__()
-        self.created: list[asyncio.Task[None]] = []
-
-    @override
-    def create_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = super().create_task(coro)
-        self.created.append(task)
-        return task
+from tests.ui_and_conv._prompt_lifecycle import RecordingLifecycle as _Lifecycle
 
 
 async def _completion_results(root: Path, text: str, *, limit: int = 1000) -> list[Completion]:

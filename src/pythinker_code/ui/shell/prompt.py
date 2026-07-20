@@ -1864,9 +1864,16 @@ class CustomPromptSession:
 
         @_kb.add("escape", eager=True, filter=_slash_completion_filter)
         def _(event: KeyPressEvent) -> None:
-            """Slash command completion: Escape discards the draft command."""
-            if _discard_slash_command(event.current_buffer):
-                event.app.invalidate()
+            """Slash completion: Escape discards a draft command, or dismisses
+            the argument menu when there is no draft command to remove."""
+            buffer = event.current_buffer
+            if not _discard_slash_command(buffer):
+                # Slash-argument completion (e.g. "/model gpt"): the eager
+                # binding swallowed Escape but there is no root command to
+                # strip, so dismiss the completion menu explicitly instead of
+                # leaving it open.
+                buffer.cancel_completion()
+            event.app.invalidate()
 
         @_kb.add("enter", filter=_non_slash_completion_filter)
         def _(event: KeyPressEvent) -> None:
@@ -3687,8 +3694,17 @@ class CustomPromptSession:
     async def _prompt_once(self, *, append_history: bool | None) -> UserInput:
         workspace_index = getattr(self, "_workspace_index", None)
         if workspace_index is not None:
-            workspace_root = HostPath.cwd()
-            if workspace_root != getattr(self, "_workspace_root", None):
+            try:
+                workspace_root: HostPath | None = HostPath.cwd()
+            except OSError:
+                # CWD was removed mid-session (e.g. an external drive was
+                # unplugged). Keep the last known root instead of crashing the
+                # prompt turn; the statusline render raises CwdLostError on the
+                # same turn to exit gracefully.
+                workspace_root = None
+            if workspace_root is not None and workspace_root != getattr(
+                self, "_workspace_root", None
+            ):
                 self._workspace_root = workspace_root
                 workspace_index.set_root(workspace_root)
             workspace_index.request_refresh("")
