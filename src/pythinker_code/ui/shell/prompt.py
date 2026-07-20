@@ -89,6 +89,30 @@ from pythinker_code.ui.shell.prompting import (
     allocate_prompt_scene_rows,
 )
 from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
+from pythinker_code.ui.shell.prompting.state import (
+    BufferObserved,
+    Invalidate,
+    ModalAttached,
+    ModalDetached,
+    ModalState,
+    ModeChanged,
+    PromptEffect,
+    PromptEvent,
+    PromptMode,
+    PromptPhase,
+    PromptState,
+    RestoreDocument,
+    RunningDelegateAttached,
+    RunningDelegateDetached,
+    RunningPromptDelegate,
+    SelectCompleter,
+    SetEraseWhenDone,
+    ShortcutHelpToggled,
+    SuspendDocument,
+    TurnCleared,
+    TurnStarting,
+    transition,
+)
 from pythinker_code.ui.shell.spacing import (
     PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
     ensure_prompt_newline,
@@ -1859,17 +1883,6 @@ def _load_history_entries(history_file: Path) -> list[_HistoryEntry]:
     return entries
 
 
-class PromptMode(Enum):
-    AGENT = "agent"
-    SHELL = "shell"
-
-    def toggle(self) -> PromptMode:
-        return PromptMode.SHELL if self == PromptMode.AGENT else PromptMode.AGENT
-
-    def __str__(self) -> str:
-        return self.value
-
-
 class PromptUIState(Enum):
     NORMAL_INPUT = "normal_input"
     MODAL_HIDDEN_INPUT = "modal_hidden_input"
@@ -2155,26 +2168,6 @@ class _ToastEntry:
     """Optional prompt_toolkit style for the rendered line; "" uses the default toast style."""
 
 
-class RunningPromptDelegate(Protocol):
-    """Protocol for components that can take over the bottom prompt area."""
-
-    modal_priority: int
-
-    def render_running_prompt_body(self, columns: int) -> AnyFormattedText: ...
-
-    def running_prompt_placeholder(self) -> AnyFormattedText | None: ...
-
-    def running_prompt_allows_text_input(self) -> bool: ...
-
-    def running_prompt_hides_input_buffer(self) -> bool: ...
-
-    def running_prompt_accepts_submission(self) -> bool: ...
-
-    def should_handle_running_prompt_key(self, key: str) -> bool: ...
-
-    def handle_running_prompt_key(self, key: str, event: KeyPressEvent) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class BgTaskCounts:
     bash: int = 0
@@ -2392,6 +2385,7 @@ class CustomPromptSession:
         self._slash_menu_control: SlashCommandMenuControl | None = None
         self._last_ui_state: PromptUIState = PromptUIState.NORMAL_INPUT
         self._suspended_buffer_document: Document | None = None
+        self._prompt_state = PromptState(mode=self._mode)
         clipboard_available = is_clipboard_available()
         media_clipboard_available = is_media_clipboard_available()
         self._tips = _build_toolbar_tips(clipboard_available or media_clipboard_available)
@@ -2522,21 +2516,16 @@ class CustomPromptSession:
             if event.current_buffer.text.strip():
                 event.current_buffer.insert_text("?")
                 return
-            self._shortcut_help_open = not self._shortcut_help_open
-            event.app.invalidate()
+            self.toggle_shortcut_help()
 
         @_kb.add("c-x", eager=True)
         def _(event: KeyPressEvent) -> None:
             if self._active_prompt_delegate() is not None:
                 return
-            self._mode = self._mode.toggle()
+            self.toggle_mode()
             from pythinker_code.telemetry import track
 
             track("shortcut_mode_switch", to_mode=self._mode.value)
-            # Apply mode-specific settings
-            self._apply_mode(event)
-            # Redraw UI
-            event.app.invalidate()
 
         @_kb.add("s-tab", eager=True)
         def _(event: KeyPressEvent) -> None:
@@ -2726,8 +2715,7 @@ class CustomPromptSession:
             filter=Condition(lambda: self._shortcut_help_open),
         )
         def _(event: KeyPressEvent) -> None:
-            self._shortcut_help_open = False
-            event.app.invalidate()
+            self.close_shortcut_help()
 
         @_kb.add(
             "1",
@@ -2861,6 +2849,7 @@ class CustomPromptSession:
         def _(buffer: Buffer) -> None:
             self._last_input_activity_time = time.monotonic()
             self._input_activity_event.set()
+            self._dispatch(BufferObserved(buffer.document))
             if buffer.complete_while_typing() and not self._suppress_auto_completion:
                 buffer.start_completion()
 
@@ -3344,33 +3333,7 @@ class CustomPromptSession:
             app.invalidate()
 
     def _sync_prompt_ui_state(self) -> None:
-        new_state = self._active_ui_state()
-        old_state = getattr(self, "_last_ui_state", PromptUIState.NORMAL_INPUT)
-        buffer = self._session.default_buffer
-
-        if (
-            old_state != PromptUIState.MODAL_HIDDEN_INPUT
-            and new_state == PromptUIState.MODAL_HIDDEN_INPUT
-        ):
-            if self._suspended_buffer_document is None and buffer.text:
-                self._suspended_buffer_document = buffer.document
-                buffer.set_document(Document(), bypass_readonly=True)
-        elif (
-            old_state == PromptUIState.MODAL_HIDDEN_INPUT
-            and new_state != PromptUIState.MODAL_HIDDEN_INPUT
-            and self._suspended_buffer_document is not None
-        ):
-            if not buffer.text:
-                buffer.set_document(self._suspended_buffer_document, bypass_readonly=True)
-            else:
-                # Buffer was externally modified (e.g. approval inline feedback).
-                # Don't overwrite the new content, but log that the old input is lost.
-                logger.debug(
-                    "Dropping suspended buffer document because buffer was modified externally"
-                )
-            self._suspended_buffer_document = None
-
-        self._last_ui_state = new_state
+        self._last_ui_state = self._active_ui_state()
 
     def _render_agent_prompt_message(self) -> FormattedText:
         frame = self._prompt_frame_for_render()
@@ -4187,6 +4150,102 @@ class CustomPromptSession:
         await self._input_activity_event.wait()
         self._input_activity_event.clear()
 
+    def _prompt_reducer_state(self) -> PromptState:
+        """Return the authoritative reducer state, bootstrapping legacy sessions once.
+
+        A few integrations historically populated these attributes on partially
+        constructed sessions. Bootstrap those sessions at this boundary without
+        rebuilding reducer-owned state from mutable facade projections on every
+        dispatch.
+        """
+        existing = getattr(self, "_prompt_state", None)
+        if isinstance(existing, PromptState):
+            return existing
+
+        running = getattr(self, "_running_prompt_delegate", None)
+        turn_starting = getattr(self, "_turn_starting", False)
+        phase = (
+            PromptPhase.RUNNING
+            if running is not None
+            else PromptPhase.TURN_STARTING
+            if turn_starting
+            else PromptPhase.IDLE
+        )
+        return PromptState(
+            mode=getattr(self, "_mode", PromptMode.AGENT),
+            phase=phase,
+            running_delegate=running,
+            modal_stack=tuple(
+                ModalState(
+                    delegate=delegate,
+                    priority=delegate.modal_priority,
+                    hides_input=delegate.running_prompt_hides_input_buffer(),
+                )
+                for delegate in getattr(self, "_modal_delegates", ())
+            ),
+            suspended_document=getattr(self, "_suspended_buffer_document", None),
+            shortcut_help_open=getattr(self, "_shortcut_help_open", False),
+            running_previous_mode=getattr(
+                self,
+                "_running_prompt_previous_mode",
+                None,
+            ),
+        )
+
+    def _apply_reducer_state(self, state: PromptState) -> None:
+        self._prompt_state = state
+        self._mode = state.mode
+        self._turn_starting = state.phase is PromptPhase.TURN_STARTING
+        self._running_prompt_delegate = state.running_delegate
+        self._running_prompt_previous_mode = state.running_previous_mode
+        self._modal_delegates = [modal.delegate for modal in state.modal_stack]
+        self._suspended_buffer_document = state.suspended_document
+        self._shortcut_help_open = state.shortcut_help_open
+
+    def _apply_prompt_effect(self, effect: PromptEffect) -> None:
+        session = getattr(self, "_session", None)
+        buffer = getattr(session, "default_buffer", None)
+        if isinstance(effect, SelectCompleter):
+            if buffer is not None:
+                attribute = (
+                    "_shell_mode_completer"
+                    if effect.mode is PromptMode.SHELL
+                    else "_agent_mode_completer"
+                )
+                completer = getattr(self, attribute, None)
+                if completer is not None:
+                    buffer.completer = completer
+        elif isinstance(effect, SetEraseWhenDone):
+            app = getattr(session, "app", None)
+            if app is not None:
+                app.erase_when_done = effect.erase_when_done
+        elif isinstance(effect, SuspendDocument):
+            if buffer is not None and buffer.text:
+                buffer.set_document(Document(), bypass_readonly=True)
+        elif isinstance(effect, RestoreDocument) and buffer is not None and not buffer.text:
+            buffer.set_document(effect.document, bypass_readonly=True)
+
+    def _dispatch(self, event: PromptEvent, *, invalidate_noop: bool = False) -> None:
+        result = transition(self._prompt_reducer_state(), event)
+        self._apply_reducer_state(result.state)
+        should_invalidate = invalidate_noop
+        for effect in result.effects:
+            if isinstance(effect, Invalidate):
+                should_invalidate = True
+            else:
+                self._apply_prompt_effect(effect)
+        if should_invalidate:
+            self.invalidate()
+
+    def toggle_mode(self) -> None:
+        self._dispatch(ModeChanged(self._prompt_reducer_state().mode.toggle()))
+
+    def toggle_shortcut_help(self) -> None:
+        self._dispatch(ShortcutHelpToggled())
+
+    def close_shortcut_help(self) -> None:
+        self._dispatch(ShortcutHelpToggled(open=False))
+
     def mark_turn_starting(self) -> None:
         """Collapse the input card immediately, before the delegate attaches.
 
@@ -4196,11 +4255,7 @@ class CustomPromptSession:
         the stream). Superseded by the delegate once :meth:`attach_running_prompt`
         runs; cleared there and on detach.
         """
-        # Idempotent: a repeat call (e.g. two dispatches before an attach) must
-        # not cost an extra repaint.
-        if not self._turn_starting:
-            self._turn_starting = True
-            self.invalidate()
+        self._dispatch(TurnStarting())
 
     def clear_turn_starting(self) -> None:
         """Drop the pre-attach turn-starting hint without an attach/detach.
@@ -4210,52 +4265,30 @@ class CustomPromptSession:
         path that occurred before the running-prompt delegate ever attached —
         without reaching into the private ``_turn_starting`` attribute.
         """
-        self._turn_starting = False
-        self.invalidate()
+        self._dispatch(TurnCleared(), invalidate_noop=not hasattr(self, "_session"))
 
     def attach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
-        current = getattr(self, "_running_prompt_delegate", None)
-        if current is delegate:
-            return
-        if current is None:
-            self._running_prompt_previous_mode = self._mode
-        self._running_prompt_delegate = delegate
-        # The delegate is the source of truth now; drop the pre-attach hint.
-        self._turn_starting = False
-        self._mode = PromptMode.AGENT
-        self._apply_mode()
-        self.invalidate()
+        self._dispatch(RunningDelegateAttached(delegate))
 
     def detach_running_prompt(self, delegate: RunningPromptDelegate) -> None:
-        if getattr(self, "_running_prompt_delegate", None) is not delegate:
-            return
-        previous_mode = getattr(self, "_running_prompt_previous_mode", None)
-        self._running_prompt_delegate = None
-        self._running_prompt_previous_mode = None
-        self._turn_starting = False
-        if previous_mode is not None:
-            self._mode = previous_mode
-        self._apply_mode()
-        self.invalidate()
+        self._dispatch(RunningDelegateDetached(delegate))
 
     def attach_modal(self, delegate: RunningPromptDelegate) -> None:
-        modal_delegates: list[RunningPromptDelegate] | None = getattr(
-            self, "_modal_delegates", None
+        buffer = getattr(getattr(self, "_session", None), "default_buffer", None)
+        document = buffer.document if buffer is not None else Document()
+        self._dispatch(
+            ModalAttached(
+                delegate=delegate,
+                priority=delegate.modal_priority,
+                hides_input=delegate.running_prompt_hides_input_buffer(),
+                document=document,
+            )
         )
-        if modal_delegates is None:
-            modal_delegates = []
-            self._modal_delegates = modal_delegates
-        if delegate in modal_delegates:
-            return
-        modal_delegates.append(delegate)
-        self.invalidate()
 
     def detach_modal(self, delegate: RunningPromptDelegate) -> None:
-        modal_delegates = getattr(self, "_modal_delegates", None)
-        if not modal_delegates or delegate not in modal_delegates:
-            return
-        modal_delegates.remove(delegate)
-        self.invalidate()
+        buffer = getattr(getattr(self, "_session", None), "default_buffer", None)
+        document = buffer.document if buffer is not None else Document()
+        self._dispatch(ModalDetached(delegate, document))
 
     def running_prompt_accepts_submission(self) -> bool:
         delegate = self._active_prompt_delegate()
