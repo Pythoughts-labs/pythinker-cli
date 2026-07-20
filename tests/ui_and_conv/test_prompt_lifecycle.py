@@ -97,6 +97,31 @@ async def test_repeated_aclose_is_idempotent_and_refuses_new_work() -> None:
         lifecycle.create_task(refused())
 
 
+@pytest.mark.asyncio
+async def test_aclose_cancellation_propagates_and_halts_remaining_closers() -> None:
+    # If aclose() itself is cancelled (e.g. a wait_for timeout) while awaiting a
+    # closer, the cancellation must propagate — not be swallowed so shutdown
+    # keeps closing the remaining resources past the caller's deadline.
+    lifecycle = PromptLifecycle()
+    earlier_closer_ran = False
+
+    async def blocking_closer() -> None:
+        await asyncio.Event().wait()
+
+    async def earlier_closer() -> None:
+        nonlocal earlier_closer_ran
+        earlier_closer_ran = True
+
+    # Closers run in reverse registration order, so "blocking" runs first.
+    lifecycle.register_closer("earlier", earlier_closer)
+    lifecycle.register_closer("blocking", blocking_closer)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(lifecycle.aclose(), timeout=0.05)
+
+    assert earlier_closer_ran is False
+
+
 class _BlockingStdout:
     def __init__(self) -> None:
         self.read_started = asyncio.Event()

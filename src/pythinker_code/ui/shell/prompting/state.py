@@ -182,6 +182,29 @@ def _mode_effects(mode: PromptMode) -> tuple[PromptEffect, ...]:
     return SelectCompleter(mode), SetEraseWhenDone(mode is PromptMode.AGENT), Invalidate()
 
 
+def _suspend_restore_effects(
+    old_active: ModalState | None,
+    new_active: ModalState | None,
+    suspended: Document | None,
+    document: Document,
+) -> tuple[Document | None, tuple[PromptEffect, ...]]:
+    """Compute the suspended-document/effects transition shared by modal
+    attach and detach: suspend the live input when a hides-input modal takes
+    over, restore it when the last such modal leaves."""
+    old_hides_input = old_active is not None and old_active.hides_input
+    new_hides_input = new_active is not None and new_active.hides_input
+    if not old_hides_input and new_hides_input and document.text:
+        if suspended is None:
+            return document, (SuspendDocument(document),)
+        return suspended, ()
+    if old_hides_input and not new_hides_input and suspended is not None:
+        effects: tuple[PromptEffect, ...] = (
+            (RestoreDocument(suspended),) if not document.text else ()
+        )
+        return None, effects
+    return suspended, ()
+
+
 def transition(state: PromptState, event: PromptEvent) -> PromptTransition:
     """Return the next prompt state and ordered facade effects without doing I/O."""
     if isinstance(event, TurnStarting):
@@ -231,18 +254,9 @@ def transition(state: PromptState, event: PromptEvent) -> PromptTransition:
             ModalState(event.delegate, event.priority, event.hides_input),
         )
         new_active = _active_modal(stack)
-        suspended = state.suspended_document
-        effects: tuple[PromptEffect, ...] = ()
-        old_hides_input = old_active is not None and old_active.hides_input
-        new_hides_input = new_active is not None and new_active.hides_input
-        if not old_hides_input and new_hides_input and event.document.text:
-            if suspended is None:
-                suspended = event.document
-                effects = (SuspendDocument(event.document),)
-        elif old_hides_input and not new_hides_input and suspended is not None:
-            if not event.document.text:
-                effects = (RestoreDocument(suspended),)
-            suspended = None
+        suspended, effects = _suspend_restore_effects(
+            old_active, new_active, state.suspended_document, event.document
+        )
         next_state = replace(
             state,
             modal_stack=stack,
@@ -257,18 +271,9 @@ def transition(state: PromptState, event: PromptEvent) -> PromptTransition:
         old_active = _active_modal(state.modal_stack)
         stack = tuple(modal for modal in state.modal_stack if modal.delegate is not event.delegate)
         new_active = _active_modal(stack)
-        suspended = state.suspended_document
-        effects: tuple[PromptEffect, ...] = ()
-        old_hides_input = old_active is not None and old_active.hides_input
-        new_hides_input = new_active is not None and new_active.hides_input
-        if not old_hides_input and new_hides_input and event.document.text:
-            if suspended is None:
-                suspended = event.document
-                effects = (SuspendDocument(event.document),)
-        elif old_hides_input and not new_hides_input and suspended is not None:
-            if not event.document.text:
-                effects = (RestoreDocument(suspended),)
-            suspended = None
+        suspended, effects = _suspend_restore_effects(
+            old_active, new_active, state.suspended_document, event.document
+        )
         next_state = replace(state, modal_stack=stack, suspended_document=suspended)
         return PromptTransition(next_state, (*effects, Invalidate()))
 

@@ -60,7 +60,13 @@ class PromptLifecycle:
                 try:
                     await closer()
                 except asyncio.CancelledError:
-                    continue
+                    # Cancellation here means aclose() itself was cancelled (e.g.
+                    # a wait_for timeout), not a closer's own internal cancel —
+                    # propagate it instead of swallowing and closing on regardless.
+                    logger.warning(
+                        "Prompt lifecycle aclose cancelled while closing resource={}", name
+                    )
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "Prompt lifecycle resource failed during shutdown: resource={} error={!r}",
