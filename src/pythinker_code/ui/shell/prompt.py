@@ -81,6 +81,7 @@ from pythinker_code.ui.shell.placeholders import (
     normalize_pasted_text,
     sanitize_surrogates,
 )
+from pythinker_code.ui.shell.prompting import FrozenFragments, PromptFrame, PromptFrameCollector
 from pythinker_code.ui.shell.spacing import (
     PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
     ensure_prompt_newline,
@@ -2784,6 +2785,22 @@ class CustomPromptSession:
             style=get_prompt_style(),
             lexer=self._input_highlight_lexer,
         )
+        self._current_prompt_frame: PromptFrame | None = None
+        self._prompt_frame_collector = self._make_prompt_frame_collector()
+
+        def _capture_prompt_frame(app: Application[str]) -> None:
+            size = app.output.get_size()
+            self._current_prompt_frame = self._prompt_frame_collector.capture(
+                columns=size.columns,
+                terminal_rows=size.rows,
+            )
+
+        def _clear_prompt_frame(_app: Application[str]) -> None:
+            self._current_prompt_frame = None
+
+        self._session.app.before_render.add_handler(_capture_prompt_frame)
+        self._session.app.after_render.add_handler(_clear_prompt_frame)
+
         # Throttle redraws so the fast streaming-reveal cadence can't overwhelm
         # slower terminals (best practice for "invalidate is called a lot").
         # prompt_toolkit's renderer is already differential (only emits changed
@@ -3061,9 +3078,8 @@ class CustomPromptSession:
         return self._render_agent_prompt_message()
 
     def _render_shell_prompt_message(self) -> FormattedText:
-        app = get_app_or_none()
-        size = app.output.get_size() if app is not None else None
-        columns = size.columns if size is not None else 80
+        frame = self._prompt_frame_for_render()
+        columns = frame.columns
         fragments: FormattedText = FormattedText()
 
         if getattr(self, "_shortcut_help_open", False):
@@ -3073,27 +3089,27 @@ class CustomPromptSession:
         # Dynamic preamble (agent status + modal/interactive body). Keep it
         # within the visible terminal area so it cannot overlap the input/footer.
         preamble: FormattedText = FormattedText()
-        agent_status = self._render_agent_status(columns)
+        agent_status = self._render_agent_status(frame.agent_status)
         if agent_status:
             preamble.extend(agent_status)
             ensure_prompt_newline(preamble)
 
-        body = self._render_interactive_body(columns)
+        body = self._render_interactive_body(frame.interactive_body)
         if body:
             preamble.extend(body)
             ensure_prompt_newline(preamble)
 
-        pinned = self._render_pinned_status_tail(columns)
+        pinned = self._render_pinned_status_tail(frame.pinned_tail)
         if preamble or pinned:
             preamble = self._fit_preamble_with_pinned_tail(
                 preamble,
                 pinned,
                 columns,
-                _prompt_preamble_max_rows(getattr(size, "rows", None)),
+                _prompt_preamble_max_rows(frame.terminal_rows),
             )
             fragments.extend(preamble)
 
-        if self._active_modal_delegate() is not None:
+        if frame.modal_active:
             return fragments
         if is_card_style():
             ensure_prompt_newline(fragments)
@@ -3184,6 +3200,36 @@ class CustomPromptSession:
             return delegate
         return getattr(self, "_running_prompt_delegate", None)
 
+    def _make_prompt_frame_collector(self) -> PromptFrameCollector:
+        return PromptFrameCollector(
+            resolve_modal=self._active_modal_delegate,
+            resolve_running=lambda: getattr(self, "_running_prompt_delegate", None),
+            render_background_status=self._render_background_working_status,
+            render_status_block=self._render_status_block,
+            input_is_empty=lambda: (
+                not getattr(
+                    getattr(getattr(self, "_session", None), "default_buffer", None), "text", ""
+                )
+            ),
+            turn_is_starting=lambda: getattr(self, "_turn_starting", False),
+        )
+
+    def _prompt_frame_for_render(self, *, columns: int | None = None) -> PromptFrame:
+        current = getattr(self, "_current_prompt_frame", None)
+        if current is not None:
+            return current
+        app = get_app_or_none()
+        size = app.output.get_size() if app is not None else None
+        frame_columns = (
+            columns if columns is not None else (size.columns if size is not None else 80)
+        )
+        terminal_rows = getattr(size, "rows", 24) if size is not None else 24
+        collector = getattr(self, "_prompt_frame_collector", None)
+        if collector is None:
+            collector = self._make_prompt_frame_collector()
+            self._prompt_frame_collector = collector
+        return collector.capture(columns=frame_columns, terminal_rows=terminal_rows)
+
     def _active_ui_state(self) -> PromptUIState:
         delegate = self._active_modal_delegate()
         if delegate is None:
@@ -3194,7 +3240,7 @@ class CustomPromptSession:
             return PromptUIState.MODAL_TEXT_INPUT
         return PromptUIState.NORMAL_INPUT
 
-    def _input_card_hidden_pre_stream(self) -> bool:
+    def _input_card_hidden_pre_stream(self, captured: bool | None = None) -> bool:
         """Gate the empty pre-stream input surface until the first commit.
 
         Most running frames keep the input card visible. The only exception is
@@ -3204,6 +3250,8 @@ class CustomPromptSession:
         Skipped when the user has typed (non-empty buffer) or a modal owns the
         input line.
         """
+        if captured is not None:
+            return captured
         if self._active_modal_delegate() is not None:
             return False
         # Direct attribute access (not getattr-with-default): these are set in
@@ -3289,9 +3337,8 @@ class CustomPromptSession:
         self._last_ui_state = new_state
 
     def _render_agent_prompt_message(self) -> FormattedText:
-        app = get_app_or_none()
-        size = app.output.get_size() if app is not None else None
-        columns = size.columns if size is not None else 80
+        frame = self._prompt_frame_for_render()
+        columns = frame.columns
         fragments: FormattedText = FormattedText()
 
         # 1–2. Dynamic preamble — agent status is always rendered from the
@@ -3299,9 +3346,9 @@ class CustomPromptSession:
         # Cap the visible rows so large cards do not overwrite the input/footer.
         # When a modal is active, preserve the whole modal body and clip older
         # agent status above it first; approval/question controls must remain usable.
-        agent_status = self._render_agent_status(columns)
-        body = self._render_interactive_body(columns)
-        pinned = self._render_pinned_status_tail(columns)
+        agent_status = self._render_agent_status(frame.agent_status)
+        body = self._render_interactive_body(frame.interactive_body)
+        pinned = self._render_pinned_status_tail(frame.pinned_tail)
         body_rows = (
             len(_formatted_text_display_rows(body, columns))
             if body and any(fragment for _, fragment, *_ in body)
@@ -3312,29 +3359,16 @@ class CustomPromptSession:
             if pinned and any(fragment for _, fragment, *_ in pinned)
             else 0
         )
-        max_rows = _prompt_preamble_max_rows(getattr(size, "rows", None))
-        modal_active = self._active_modal_delegate() is not None
+        max_rows = _prompt_preamble_max_rows(frame.terminal_rows)
+        modal_active = frame.modal_active
 
         if getattr(self, "_shortcut_help_open", False) and not modal_active:
             fragments.extend(self._render_shortcut_help(columns))
             ensure_prompt_newline(fragments)
 
-        running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
-        if not modal_active and running_prompt_delegate is not None and is_card_style():
-            input_card_hidden = self._input_card_hidden_pre_stream()
-            render_running_body_attr = getattr(
-                running_prompt_delegate, "render_running_prompt_body", None
-            )
-            render_running_body = (
-                cast(Callable[[int], AnyFormattedText], render_running_body_attr)
-                if callable(render_running_body_attr)
-                else None
-            )
-            running_body = (
-                to_formatted_text(render_running_body(columns))
-                if render_running_body is not None
-                else FormattedText()
-            )
+        if not modal_active and frame.running_prompt_active and is_card_style():
+            input_card_hidden = self._input_card_hidden_pre_stream(frame.input_card_hidden)
+            running_body = body
             preamble = FormattedText()
             if agent_status and any(text for _, text, *_ in agent_status):
                 preamble.extend(agent_status)
@@ -3352,14 +3386,8 @@ class CustomPromptSession:
             if preamble and any(text for _, text, *_ in preamble):
                 fragments.extend(preamble)
 
-            if input_card_hidden:
-                hide_chrome = getattr(
-                    running_prompt_delegate,
-                    "running_prompt_hide_input_card_chrome",
-                    lambda: False,
-                )()
-                if hide_chrome:
-                    return fragments
+            if input_card_hidden and self._input_card_chrome_hidden(frame.input_chrome_hidden):
+                return fragments
 
             tc = get_toolbar_colors()
             scene_fragments: FormattedText = FormattedText()
@@ -3367,20 +3395,11 @@ class CustomPromptSession:
                 scene_fragments.extend(fragments)
                 ensure_prompt_newline(scene_fragments)
 
-            render_placeholder_attr = getattr(
-                running_prompt_delegate, "running_prompt_placeholder", None
-            )
-            render_placeholder = (
-                cast(Callable[[], AnyFormattedText | None], render_placeholder_attr)
-                if callable(render_placeholder_attr)
-                else None
-            )
-            placeholder_value: AnyFormattedText | None = (
-                render_placeholder()
-                if not input_card_hidden and render_placeholder is not None
+            placeholder_fragments = (
+                self._render_running_prompt_placeholder(frame.placeholder)
+                if not input_card_hidden
                 else FormattedText()
             )
-            placeholder_fragments = to_formatted_text(placeholder_value)
 
             scene_fragments.extend(self._render_input_top_border(columns, tc.separator))
             scene_fragments.append(("", "\n"))
@@ -3432,17 +3451,8 @@ class CustomPromptSession:
         # Hide editable input content during the narrow pre-stream/first-handoff
         # frame, but keep the empty card chrome visible so the prompt bar does not
         # disappear while the agent is loading.
-        if self._input_card_hidden_pre_stream():
-            running_prompt_delegate = getattr(self, "_running_prompt_delegate", None)
-            hide_chrome = (
-                running_prompt_delegate is not None
-                and getattr(
-                    running_prompt_delegate,
-                    "running_prompt_hide_input_card_chrome",
-                    lambda: False,
-                )()
-            )
-            if hide_chrome:
+        if self._input_card_hidden_pre_stream(frame.input_card_hidden):
+            if self._input_card_chrome_hidden(frame.input_chrome_hidden):
                 return fragments
             if is_card_style():
                 ensure_prompt_newline(fragments)
@@ -3525,18 +3535,26 @@ class CustomPromptSession:
         fragments.append((tc.separator, f"╰{border}╯"))
         return fragments
 
-    def _render_agent_status(self, columns: int) -> FormattedText:
-        """Render agent streaming output (always visible, independent of modals)."""
-        running = self._running_prompt_delegate
+    def _render_agent_status(self, captured: int | FrozenFragments) -> FormattedText:
+        """Render captured agent output without consulting the pinned-tail provider."""
+        if not isinstance(captured, int):
+            return FormattedText(list(captured))
+
+        columns = captured
+        running = getattr(self, "_running_prompt_delegate", None)
+        pinned_active = False
+        if running is not None and isinstance(running, PinnedStatusTailProvider):
+            pinned = to_formatted_text(running.render_pinned_status_tail(columns))
+            pinned_active = any(text for _, text, *_ in pinned)
         if running is not None and isinstance(running, AgentStatusProvider):
             rendered = to_formatted_text(running.render_agent_status(columns))
-            if any(fragment for _, fragment, *_ in rendered):
+            if any(text for _, text, *_ in rendered):
                 # A blocking foreground TaskOutput card can be visible while the
                 # actual background agent is still running. If the live view does
                 # not expose a pinned tail for that state, keep the background
                 # verb spinner visible above the prompt instead of showing only
                 # the footer count.
-                if not self._render_pinned_status_tail(columns):
+                if not pinned_active:
                     background = self._render_background_working_status(columns)
                     if background:
                         ensure_prompt_newline(rendered)
@@ -3551,7 +3569,6 @@ class CustomPromptSession:
         # An in-flight turn pins its own working indicator (the verb spinner)
         # and the bottom toolbar already reports background work — rendering a
         # count line here too would duplicate it under the executing step.
-        pinned_active = bool(self._render_pinned_status_tail(columns))
         fragments = (
             FormattedText([]) if pinned_active else self._render_background_working_status(columns)
         )
@@ -3561,12 +3578,14 @@ class CustomPromptSession:
             fragments.extend(status)
         return fragments
 
-    def _render_pinned_status_tail(self, columns: int) -> FormattedText:
-        """Trailing verb spinner that stays pinned below a clipped agent stream."""
-        running = self._running_prompt_delegate
+    def _render_pinned_status_tail(self, captured: int | FrozenFragments) -> FormattedText:
+        """Render the captured trailing status tail."""
+        if not isinstance(captured, int):
+            return FormattedText(list(captured))
+        running = getattr(self, "_running_prompt_delegate", None)
         if running is not None and isinstance(running, PinnedStatusTailProvider):
-            rendered = to_formatted_text(running.render_pinned_status_tail(columns))
-            if any(fragment for _, fragment, *_ in rendered):
+            rendered = to_formatted_text(running.render_pinned_status_tail(captured))
+            if any(text for _, text, *_ in rendered):
                 return rendered
         return FormattedText()
 
@@ -3785,12 +3804,22 @@ class CustomPromptSession:
             return True
         return time.monotonic() - last_active < _BG_QUIET_THRESHOLD_S
 
-    def _render_interactive_body(self, columns: int) -> FormattedText:
-        """Render the interactive area from the active delegate (modal or running prompt)."""
+    def _render_interactive_body(self, captured: int | FrozenFragments) -> FormattedText:
+        """Render the interactive area captured from the active delegate."""
+        if not isinstance(captured, int):
+            return FormattedText(list(captured))
         delegate = self._active_prompt_delegate()
         if delegate is None:
             return FormattedText([])
-        return to_formatted_text(delegate.render_running_prompt_body(columns))
+        return to_formatted_text(delegate.render_running_prompt_body(captured))
+
+    @staticmethod
+    def _render_running_prompt_placeholder(captured: FrozenFragments) -> FormattedText:
+        return FormattedText(list(captured))
+
+    @staticmethod
+    def _input_card_chrome_hidden(captured: bool) -> bool:
+        return captured
 
     def _render_status_block(self, columns: int) -> FormattedText:
         status_block_provider = getattr(self, "_status_block_provider", None)

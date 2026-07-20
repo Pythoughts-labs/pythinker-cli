@@ -723,7 +723,7 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
     monkeypatch.setattr(prompt_module, "get_toolbar_colors", lambda: SimpleNamespace(separator=""))
 
     def _rendered(hidden: bool) -> str:
-        monkeypatch.setattr(session, "_input_card_hidden_pre_stream", lambda: hidden)
+        monkeypatch.setattr(session, "_input_card_hidden_pre_stream", lambda *_a, **_k: hidden)
         return "".join(text for _style, text, *_ in session._render_agent_prompt_message())
 
     hidden_frame = _rendered(True)
@@ -785,7 +785,9 @@ def test_render_agent_prompt_message_uses_scene_order_for_stream_and_input_card(
     session = _card_session(delegate=_body_delegate("assistant chunk", hide_card=True))
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
-    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(
+        session, "_render_interactive_body", lambda captured: FormattedText(list(captured))
+    )
     monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
     monkeypatch.setattr(session, "_render_input_top_border", lambda _c, _f: [("", border)])
     monkeypatch.setattr(prompt_module, "is_card_style", lambda: True)
@@ -830,7 +832,9 @@ def test_render_agent_prompt_message_preserves_scene_fragment_styles(monkeypatch
     session = _card_session(delegate=_StyledDelegate())
     session._shortcut_help_open = False
     monkeypatch.setattr(session, "_render_agent_status", lambda _c: FormattedText())
-    monkeypatch.setattr(session, "_render_interactive_body", lambda _c: FormattedText())
+    monkeypatch.setattr(
+        session, "_render_interactive_body", lambda captured: FormattedText(list(captured))
+    )
     monkeypatch.setattr(session, "_render_pinned_status_tail", lambda _c: FormattedText())
     monkeypatch.setattr(
         session, "_render_input_top_border", lambda _c, _f: [("class:border", border)]
@@ -858,14 +862,7 @@ def test_render_agent_prompt_message_keeps_live_view_chrome_before_first_commit(
     from prompt_toolkit.formatted_text import FormattedText
 
     border = "──────── ● off"
-    view = object.__new__(_PromptLiveView)
-    view._scrollback_handoff_depth = 0
-    view._turn_ended = False
-    view._committed_scrollback_this_turn = False
-    view._current_approval_request_panel = None
-    view._transient_command_output = None
-    view._queued_messages = []
-    view._awaiting_input_card_restore_anchor = False
+    view = _make_prompt_live_view()
 
     session = _card_session(delegate=view)
     session._shortcut_help_open = False

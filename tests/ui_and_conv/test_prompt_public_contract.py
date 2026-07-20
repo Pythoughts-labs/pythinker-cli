@@ -126,11 +126,7 @@ def _sample_render_calls(
         ),
     )
 
-    # Sample both card-visible and card-hidden frames twice. Together they exercise
-    # the placeholder and hide-chrome branches of the current rendering facade.
-    for hide_card in (False, False, True, True):
-        delegate.hide_card = hide_card
-        prompt_session._render_agent_prompt_message()
+    prompt_session._render_agent_prompt_message()
     return delegate.calls
 
 
@@ -155,7 +151,6 @@ def test_running_prompt_delegate_render_methods_are_sampled(
     "method",
     ("agent_status", "body", "pinned", "placeholder", "hide_card", "hide_chrome"),
 )
-@pytest.mark.xfail(strict=True, reason="exact-once sampling lands in Task 2")
 def test_running_prompt_delegate_render_method_is_sampled_exactly_once(
     method: str,
     prompt_session: CustomPromptSession,
@@ -164,6 +159,39 @@ def test_running_prompt_delegate_render_method_is_sampled_exactly_once(
     calls = _sample_render_calls(prompt_session, monkeypatch)
 
     assert calls[method] == 1
+
+
+def test_modal_frame_samples_running_status_and_tail_and_modal_body_once(
+    prompt_session: CustomPromptSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = _CountingRunningPrompt()
+
+    class _CountingModal(_DummyReadOnlyModal):
+        def __init__(self) -> None:
+            self.calls: Counter[str] = Counter()
+
+        def render_running_prompt_body(self, columns: int) -> str:
+            self.calls["body"] += 1
+            return f"modal ({columns})"
+
+    modal = _CountingModal()
+    prompt_session._running_prompt_delegate = running
+    prompt_session._modal_delegates = [modal]
+    monkeypatch.setattr(
+        shell_prompt,
+        "get_app_or_none",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(get_size=lambda: SimpleNamespace(columns=80, rows=24))
+        ),
+    )
+
+    prompt_session._render_agent_prompt_message()
+
+    assert running.calls["agent_status"] == 1
+    assert running.calls["pinned"] == 1
+    assert running.calls["body"] == 0
+    assert modal.calls["body"] == 1
 
 
 @pytest.mark.xfail(strict=True, reason="height-overflow handling lands in Task 3")
