@@ -145,6 +145,41 @@ def test_one_row_scene_keeps_modal_then_input_before_footer(
     assert prompt._prompt_footer_row_budget == 0
 
 
+def test_shell_render_refreshes_update_notice_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # _append_update_notice trusts the per-frame snapshot _prompt_frame_update_notice
+    # whenever a frame is captured. Only the agent render path refreshed it, so a
+    # shell frame would replay a stale agent-mode notice — or the initial None,
+    # suppressing a live notice. The shell render must refresh the snapshot too.
+    session = _session_for_scene(
+        "body", width=80, height=10, card_style=False, monkeypatch=monkeypatch
+    )
+    session._mode = PromptMode.SHELL
+
+    # A live notice must overwrite a stale agent-mode value, and — because the
+    # captured frame makes _append_update_notice read the snapshot rather than the
+    # provider — actually reach the rendered footer.
+    session._prompt_frame_update_notice = "STALE agent-mode notice"
+    session._update_notice_provider = lambda: "↑ Update available"
+    session._render_shell_prompt_message()
+    assert session._prompt_frame_update_notice == "↑ Update available"
+    fragments: list[tuple[str, str]] = []
+    session._append_update_notice(fragments, 80)
+    assert any("Update available" in text for _, text in fragments)
+    assert not any("STALE" in text for _, text in fragments)
+
+    # No pending notice must clear the snapshot, never leave it stale — and the
+    # footer stays empty instead of replaying the old text.
+    session._prompt_frame_update_notice = "STALE agent-mode notice"
+    session._update_notice_provider = lambda: None
+    session._render_shell_prompt_message()
+    assert session._prompt_frame_update_notice is None
+    fragments = []
+    session._append_update_notice(fragments, 80)
+    assert fragments == []
+
+
 def test_two_row_modal_uses_hint_then_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session_for_scene(
         "modal",

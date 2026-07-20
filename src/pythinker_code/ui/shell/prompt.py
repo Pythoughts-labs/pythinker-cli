@@ -2844,6 +2844,9 @@ class CustomPromptSession:
 
         def _clear_prompt_frame(_app: Application[str]) -> None:
             self._current_prompt_frame = None
+            # Drop the per-frame notice snapshot with the frame so a later render
+            # can never read a value captured for a stale frame/mode.
+            self._prompt_frame_update_notice = None
 
         self._session.app.before_render.add_handler(_capture_prompt_frame)
         self._session.app.after_render.add_handler(_clear_prompt_frame)
@@ -3132,6 +3135,15 @@ class CustomPromptSession:
         # (not just on the agent path) so a mode switch or resize cannot leave
         # _fit_toolbar_to_terminal clipping against a stale agent-mode value.
         self._prompt_footer_row_budget = frame.terminal_rows
+        # Snapshot the update notice for this frame too. The agent path caches it
+        # in _render_agent_prompt_message; without the same refresh here,
+        # _append_update_notice would replay a stale agent-mode notice (or the
+        # initial None, suppressing a live notice) once a frame is captured.
+        provider = cast(
+            Callable[[], str | None] | None,
+            getattr(self, "_update_notice_provider", None),
+        )
+        self._prompt_frame_update_notice = provider() if callable(provider) else None
         fragments: FormattedText = FormattedText()
 
         if getattr(self, "_shortcut_help_open", False):
