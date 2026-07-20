@@ -88,6 +88,7 @@ from pythinker_code.ui.shell.prompting import (
     PromptSceneBudget,
     allocate_prompt_scene_rows,
 )
+from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
 from pythinker_code.ui.shell.spacing import (
     PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
     ensure_prompt_newline,
@@ -141,23 +142,6 @@ def _pythinker_unraisable_hook(unraisable: Any) -> None:
     if _is_prompt_toolkit_keyprocessor_shutdown_noise(unraisable):
         return
     _ORIGINAL_UNRAISABLE_HOOK(unraisable)
-
-
-def _is_prompt_toolkit_empty_exception_context(context: dict[str, Any]) -> bool:
-    """Return true for prompt_toolkit's unhelpful ``Exception None`` report.
-
-    prompt_toolkit prints ``Unhandled exception in event loop`` and blocks on
-    ``Press ENTER to continue`` even when asyncio only supplied a diagnostic
-    context with no exception object. That message has no traceback or useful
-    recovery action for users, so Pythinker logs it instead of surfacing a modal
-    terminal pause.
-    """
-    if context.get("exception") is not None:
-        return False
-    message = str(context.get("message") or "")
-    if not message:
-        return True
-    return message.startswith(("Task was destroyed but it is pending", "Future exception"))
 
 
 # Python 3.14 can report prompt_toolkit's already-cancelled key-timeout coroutine as an
@@ -2341,10 +2325,14 @@ class CustomPromptSession:
         _statusline_cfg = statusline_config or StatusLineConfig()
         self._statusline_layout = resolve_segments(_statusline_cfg)
         self._statusline_runner: StatusLineCommandRunner | None = None
+        self._lifecycle = PromptLifecycle()
         if self._statusline_layout.show_command and _statusline_cfg.command:
             self._statusline_runner = StatusLineCommandRunner(
                 command=_statusline_cfg.command,
                 timeout_ms=_statusline_cfg.command_timeout_ms,
+            )
+            self._lifecycle.register_closer(
+                "statusline command runner", self._statusline_runner.stop
             )
         self._statusline_cfg = _statusline_cfg
         self._statusline_started_at = time.monotonic()
@@ -2863,7 +2851,6 @@ class CustomPromptSession:
                 and not delegate.running_prompt_allows_text_input()
             )
         )
-        self._install_prompt_exception_filter()
         self._install_slash_completion_menu()
         self._install_prompt_buffer_visibility()
         self._apply_mode()
@@ -2898,22 +2885,6 @@ class CustomPromptSession:
             state.complete_index = 0
 
         self._status_refresh_task: asyncio.Task[None] | None = None
-
-    def _install_prompt_exception_filter(self) -> None:
-        """Avoid prompt_toolkit's blocking ``Exception None`` terminal pause."""
-        app = self._session.app
-        original_handler = app._handle_exception  # pyright: ignore[reportPrivateUsage]
-
-        def _handle_exception(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
-            if _is_prompt_toolkit_empty_exception_context(context):
-                logger.debug(
-                    "Suppressed prompt_toolkit empty exception context: {context}",
-                    context={k: repr(v) for k, v in context.items()},
-                )
-                return
-            original_handler(loop, context)
-
-        app._handle_exception = _handle_exception  # pyright: ignore[reportPrivateUsage]
 
     def _install_slash_completion_menu(self) -> None:
         float_container = _find_prompt_float_container(self._session.layout.container)
@@ -4032,9 +4003,9 @@ class CustomPromptSession:
         """Render the prompt label (empty — cursor starts at column 0)."""
         return FormattedText([("", "  ")])
 
-    def __enter__(self) -> CustomPromptSession:
+    def _start(self) -> None:
         if self._status_refresh_task is not None and not self._status_refresh_task.done():
-            return self
+            return
 
         async def _refresh() -> None:
             try:
@@ -4065,17 +4036,31 @@ class CustomPromptSession:
                 # graceful exit
                 pass
 
-        self._status_refresh_task = asyncio.create_task(_refresh())
+        self._status_refresh_task = self._lifecycle.create_task(_refresh())
         if self._statusline_runner is not None:
             self._statusline_runner.start()
+
+    def __enter__(self) -> CustomPromptSession:
+        self._start()
         return self
 
-    def __exit__(self, *_) -> None:
+    def __exit__(self, *_: object) -> None:
         if self._status_refresh_task is not None and not self._status_refresh_task.done():
             self._status_refresh_task.cancel()
         self._status_refresh_task = None
         if self._statusline_runner is not None:
             self._statusline_runner.cancel()
+
+    async def __aenter__(self) -> CustomPromptSession:
+        self._start()
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._lifecycle.aclose()
+        self._status_refresh_task = None
 
     def _get_placeholder_manager(self) -> PromptPlaceholderManager:
         manager = getattr(self, "_placeholder_manager", None)
@@ -4288,7 +4273,11 @@ class CustomPromptSession:
         self._staged_suggestion_prefill = None
         with patch_stdout(raw=True):
             command = str(
-                await self._session.prompt_async(placeholder=placeholder, default=default)
+                await self._session.prompt_async(
+                    placeholder=placeholder,
+                    default=default,
+                    set_exception_handler=False,
+                )
             ).strip()
             command = command.replace("\x00", "")  # just in case null bytes are somehow inserted
             # Sanitize UTF-16 surrogates that may come from Windows clipboard

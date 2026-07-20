@@ -229,6 +229,27 @@ async def test_command_runner_lifecycle_start_stop():
     assert runner.is_running is False
 
 
+@pytest.mark.asyncio
+async def test_command_runner_repeated_start_and_stop_are_idempotent(monkeypatch):
+    runner = StatusLineCommandRunner(command="echo hi", timeout_ms=5000)
+    refresh_started = asyncio.Event()
+
+    async def blocking_refresh():
+        refresh_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(runner, "refresh_once", blocking_refresh)
+    runner.start()
+    first_task = runner._task
+    runner.start()
+    await refresh_started.wait()
+
+    assert runner._task is first_task
+    await runner.stop()
+    await runner.stop()
+    assert runner.is_running is False
+
+
 # ---------------------------------------------------------------------------
 # Footer render integration
 # ---------------------------------------------------------------------------
