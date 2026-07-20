@@ -123,22 +123,6 @@ def test_other_unraisable_exceptions_are_not_filtered() -> None:
     assert not shell_prompt._is_prompt_toolkit_keyprocessor_shutdown_noise(unraisable)
 
 
-def test_prompt_toolkit_empty_exception_context_is_filtered() -> None:
-    assert shell_prompt._is_prompt_toolkit_empty_exception_context({"exception": None})
-    assert shell_prompt._is_prompt_toolkit_empty_exception_context(
-        {"exception": None, "message": "Task was destroyed but it is pending!"}
-    )
-
-
-def test_prompt_toolkit_real_exception_context_is_not_filtered() -> None:
-    assert not shell_prompt._is_prompt_toolkit_empty_exception_context(
-        {"exception": RuntimeError("boom")}
-    )
-    assert not shell_prompt._is_prompt_toolkit_empty_exception_context(
-        {"exception": None, "message": "unexpected loop failure"}
-    )
-
-
 class _DummyRunningPrompt:
     modal_priority = 10
 

@@ -40,6 +40,12 @@ class _FakePromptSession:
     def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
+    async def __aenter__(self) -> _FakePromptSession:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
     async def prompt_next(self) -> UserInput:
         self.prompt_calls += 1
         response = _FakePromptSession.responses.popleft()

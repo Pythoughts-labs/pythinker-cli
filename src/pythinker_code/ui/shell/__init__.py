@@ -931,7 +931,7 @@ class Shell:
             _bg_cache.time = now
             return _bg_cache.counts
 
-        with CustomPromptSession(
+        async with CustomPromptSession(
             status_provider=lambda: self.soul.status,
             status_block_provider=_mcp_status_block,
             fast_refresh_provider=_mcp_status_loading,
