@@ -11,27 +11,20 @@ import subprocess
 import sys
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from hashlib import md5
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, override, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app_or_none
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
-from prompt_toolkit.completion import (
-    CompleteEvent,
-    Completer,
-    Completion,
-    FuzzyCompleter,
-    WordCompleter,
-    merge_completers,
-)
+from prompt_toolkit.completion import Completion, merge_completers
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, has_completions
@@ -59,6 +52,7 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.utils import get_cwidth
 from pydantic import BaseModel, ValidationError
+from pythinker_host import get_current_host
 from pythinker_host.path import HostPath
 
 from pythinker_code.config import StatusLineConfig
@@ -96,6 +90,10 @@ from pythinker_code.ui.shell.prompting.completion.slash import (
     SlashCommandCompleter,
     command_name_set,
     discard_slash_command,
+)
+from pythinker_code.ui.shell.prompting.completion.workspace import (
+    HostFileMentionCompleter,
+    WorkspaceIndex,
 )
 from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
 from pythinker_code.ui.shell.prompting.state import (
@@ -1163,183 +1161,7 @@ class LocalFileMentionMenuControl(UIControl):
         return fragments
 
 
-class LocalFileMentionCompleter(Completer):
-    """Offer fuzzy `@` path completion by indexing workspace files.
-
-    File discovery and ignore rules are delegated to
-    :mod:`pythinker_code.utils.file_filter` so that the web backend can reuse
-    them.
-    """
-
-    _FRAGMENT_PATTERN = re.compile(r"[^\s@]+")
-
-    def __init__(
-        self,
-        root: Path,
-        *,
-        refresh_interval: float = 2.0,
-        limit: int = 1000,
-    ) -> None:
-        self._root = root
-        self._refresh_interval = refresh_interval
-        self._limit = limit
-        self._cache_time: float = 0.0
-        self._cached_paths: list[str] = []
-        self._cache_scope: str | None = None
-        self._top_cache_time: float = 0.0
-        self._top_cached_paths: list[str] = []
-        self._fragment_hint: str | None = None
-        self._is_git: bool | None = None  # lazily detected
-        self._git_index_mtime: float | None = None
-
-        self._word_completer = WordCompleter(
-            self._get_paths,
-            WORD=False,
-            pattern=self._FRAGMENT_PATTERN,
-        )
-
-        self._fuzzy = FuzzyCompleter(
-            self._word_completer,
-            WORD=False,
-            pattern=r"^[^\s@]*",
-        )
-
-    def _get_paths(self) -> list[str]:
-        fragment = self._fragment_hint or ""
-        if "/" not in fragment and len(fragment) < 3:
-            return self._get_top_level_paths()
-        return self._get_deep_paths()
-
-    def _get_top_level_paths(self) -> list[str]:
-        from pythinker_code.utils.file_filter import is_ignored
-
-        now = time.monotonic()
-        if now - self._top_cache_time <= self._refresh_interval:
-            return self._top_cached_paths
-
-        entries: list[str] = []
-        try:
-            for entry in sorted(self._root.iterdir(), key=lambda p: p.name):
-                name = entry.name
-                if is_ignored(name):
-                    continue
-                entries.append(f"{name}/" if entry.is_dir() else name)
-                if len(entries) >= self._limit:
-                    break
-        except OSError:
-            return self._top_cached_paths
-
-        self._top_cached_paths = entries
-        self._top_cache_time = now
-        return self._top_cached_paths
-
-    def _get_deep_paths(self) -> list[str]:
-        from pythinker_code.utils.file_filter import (
-            detect_git,
-            git_index_mtime,
-            list_files_git,
-            list_files_walk,
-        )
-
-        fragment = self._fragment_hint or ""
-
-        scope: str | None = None
-        if "/" in fragment:
-            scope = fragment.rsplit("/", 1)[0]
-
-        now = time.monotonic()
-        cache_valid = (
-            now - self._cache_time <= self._refresh_interval and self._cache_scope == scope
-        )
-
-        # Invalidate on .git/index mtime change.
-        if cache_valid and self._is_git:
-            mtime = git_index_mtime(self._root)
-            if mtime != self._git_index_mtime:
-                cache_valid = False
-
-        if cache_valid:
-            return self._cached_paths
-
-        if self._is_git is None:
-            self._is_git = detect_git(self._root)
-
-        paths: list[str] | None = None
-        if self._is_git:
-            paths = list_files_git(self._root, scope)
-            self._git_index_mtime = git_index_mtime(self._root)
-        if paths is None:
-            paths = list_files_walk(self._root, scope, limit=self._limit)
-
-        self._cached_paths = paths
-        self._cache_scope = scope
-        self._cache_time = now
-        return self._cached_paths
-
-    @staticmethod
-    def should_complete(document: Document) -> bool:
-        """Return whether `@` file completion should be active for the buffer."""
-        context = parse_completion_context(document, allow_slash=False)
-        return context.kind is CompletionKind.FILE
-
-    def _is_completed_file(self, fragment: str) -> bool:
-        candidate = fragment.rstrip("/")
-        if not candidate:
-            return False
-        try:
-            return (self._root / candidate).is_file()
-        except OSError:
-            return False
-
-    @override
-    def get_completions(
-        self, document: Document, complete_event: CompleteEvent
-    ) -> Iterable[Completion]:
-        context = parse_completion_context(document, allow_slash=False)
-        if context.kind is not CompletionKind.FILE:
-            return
-        fragment = context.token
-        if self._is_completed_file(fragment):
-            return
-
-        mention_doc = Document(text=fragment, cursor_position=len(fragment))
-        self._fragment_hint = fragment
-        try:
-            # First, ask the fuzzy completer for candidates.
-            candidates = list(self._fuzzy.get_completions(mention_doc, complete_event))
-
-            # re-rank: prefer basename matches
-            frag_lower = fragment.lower()
-
-            def _rank(c: Completion) -> tuple[int, ...]:
-                path = c.text
-                base = path.rstrip("/").split("/")[-1].lower()
-                if base.startswith(frag_lower):
-                    cat = 0
-                elif frag_lower in base:
-                    cat = 1
-                else:
-                    cat = 2
-                test_penalty = int(any("test" in segment.lower() for segment in path.split("/")))
-                # preserve original FuzzyCompleter's order in the same category
-                return (cat, test_penalty)
-
-            candidates.sort(key=_rank)
-            if not context.quoted:
-                yield from candidates
-                return
-            for candidate in candidates:
-                escaped = candidate.text.replace("\\", "\\\\").replace('"', '\\"')
-                yield Completion(
-                    text=f'"{escaped}"',
-                    start_position=context.start_position,
-                    display=candidate.display,
-                    display_meta=candidate.display_meta,
-                    style=candidate.style,
-                    selected_style=candidate.selected_style,
-                )
-        finally:
-            self._fragment_hint = None
+LocalFileMentionCompleter = HostFileMentionCompleter
 
 
 class _HistoryEntry(BaseModel):
@@ -1959,11 +1781,19 @@ class CustomPromptSession:
             is_task_running=lambda: self._running_prompt_delegate is not None,
             arg_suggestions=self._slash_arg_suggestions,
         )
+        self._workspace_root = HostPath.cwd()
+        self._workspace_index = WorkspaceIndex(
+            get_current_host(),
+            self._lifecycle,
+            self._workspace_root,
+            on_publish=self._on_workspace_snapshot_published,
+        )
+        self._lifecycle.register_closer("workspace index", self._workspace_index.aclose)
+        self._file_mention_completer = HostFileMentionCompleter(self._workspace_index)
         self._agent_mode_completer = merge_completers(
             [
                 self._agent_slash_completer,
-                # TODO(host): we need an async HostFileMentionCompleter
-                LocalFileMentionCompleter(HostPath.cwd().unsafe_to_local_path()),
+                self._file_mention_completer,
             ],
             deduplicate=True,
         )
@@ -3843,7 +3673,25 @@ class CustomPromptSession:
             return False
         return delegate.running_prompt_accepts_submission()
 
+    def _on_workspace_snapshot_published(self) -> None:
+        """Re-run file completion when a fresh workspace snapshot lands mid-menu."""
+        app = self._session.app
+        if not app.is_running:
+            return
+        buffer = self._session.default_buffer
+        if not HostFileMentionCompleter.should_complete(buffer.document):
+            return
+        buffer.start_completion(select_first=False)
+        app.invalidate()
+
     async def _prompt_once(self, *, append_history: bool | None) -> UserInput:
+        workspace_index = getattr(self, "_workspace_index", None)
+        if workspace_index is not None:
+            workspace_root = HostPath.cwd()
+            if workspace_root != getattr(self, "_workspace_root", None):
+                self._workspace_root = workspace_root
+                workspace_index.set_root(workspace_root)
+            workspace_index.request_refresh("")
         placeholder = None
         if (delegate := self._active_prompt_delegate()) is not None:
             placeholder = delegate.running_prompt_placeholder()
