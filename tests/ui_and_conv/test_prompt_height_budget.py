@@ -179,6 +179,14 @@ def test_shell_render_refreshes_update_notice_snapshot(
     session._append_update_notice(fragments, 80)
     assert fragments == []
 
+    # The registered after_render cleanup drops the snapshot with the frame, so a
+    # completed frame never leaves a value for the next render to read.
+    session._current_prompt_frame = object()  # type: ignore[assignment]
+    session._prompt_frame_update_notice = "↑ Update available"
+    session._clear_prompt_frame_snapshot()
+    assert session._current_prompt_frame is None
+    assert session._prompt_frame_update_notice is None
+
 
 def test_two_row_modal_uses_hint_then_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session_for_scene(

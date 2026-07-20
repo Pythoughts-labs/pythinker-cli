@@ -2842,14 +2842,8 @@ class CustomPromptSession:
                 terminal_rows=size.rows,
             )
 
-        def _clear_prompt_frame(_app: Application[str]) -> None:
-            self._current_prompt_frame = None
-            # Drop the per-frame notice snapshot with the frame so a later render
-            # can never read a value captured for a stale frame/mode.
-            self._prompt_frame_update_notice = None
-
         self._session.app.before_render.add_handler(_capture_prompt_frame)
-        self._session.app.after_render.add_handler(_clear_prompt_frame)
+        self._session.app.after_render.add_handler(self._clear_prompt_frame_snapshot)
 
         # Throttle redraws so the fast streaming-reveal cadence can't overwhelm
         # slower terminals (best practice for "invalidate is called a lot").
@@ -3277,6 +3271,13 @@ class CustomPromptSession:
             ),
             turn_is_starting=lambda: getattr(self, "_turn_starting", False),
         )
+
+    def _clear_prompt_frame_snapshot(self, _app: Application[str] | None = None) -> None:
+        """after_render handler: drop the captured frame and its per-frame update
+        notice together, so a later render can never read a snapshot captured for a
+        stale frame/mode."""
+        self._current_prompt_frame = None
+        self._prompt_frame_update_notice = None
 
     def _prompt_frame_for_render(self, *, columns: int | None = None) -> PromptFrame:
         current = getattr(self, "_current_prompt_frame", None)
