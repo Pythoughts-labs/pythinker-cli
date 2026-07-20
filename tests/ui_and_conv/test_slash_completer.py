@@ -22,6 +22,10 @@ from pythinker_code.ui.shell.prompt import (
     _find_prompt_float_container,
     _wrap_to_width,
 )
+from pythinker_code.ui.shell.prompting.completion.context import (
+    CompletionKind,
+    parse_completion_context,
+)
 from pythinker_code.ui.shell.slash import slash_command_arg_suggestions
 from pythinker_code.utils.slashcmd import SlashCommand
 
@@ -202,6 +206,50 @@ def test_should_complete_only_for_root_slash_token():
     assert not SlashCommandCompleter.should_complete(Document(text="test /he", cursor_position=8))
     assert not SlashCommandCompleter.should_complete(Document(text="@src", cursor_position=4))
     assert not SlashCommandCompleter.should_complete(Document(text="/he next", cursor_position=8))
+
+
+def test_completion_context_preserves_root_and_mid_line_slash_facets():
+    root = parse_completion_context(Document("/he"))
+    mid_line_root = parse_completion_context(Document("please /he"))
+    mid_line_suggest = parse_completion_context(Document("please /he"), slash_activation="any")
+
+    assert (root.kind, root.token, root.start_position) == (
+        CompletionKind.SLASH_COMMAND,
+        "/he",
+        -3,
+    )
+    assert mid_line_root.kind is CompletionKind.NONE
+    assert mid_line_suggest.kind is CompletionKind.SLASH_COMMAND
+    assert mid_line_suggest.token == "/he"
+
+
+def test_completion_context_reports_first_and_later_arguments():
+    known = frozenset({"theme"})
+
+    first = parse_completion_context(
+        Document("/theme cur"), known_commands=known, argument_commands=known
+    )
+    later = parse_completion_context(
+        Document("/theme current extra"), known_commands=known, argument_commands=known
+    )
+    escaped_whitespace = parse_completion_context(
+        Document(r"/theme current\ value"), known_commands=known, argument_commands=known
+    )
+
+    assert (first.kind, first.command, first.argument_index, first.token) == (
+        CompletionKind.SLASH_ARGUMENT,
+        "theme",
+        0,
+        "cur",
+    )
+    assert (later.argument_index, later.token) == (1, "extra")
+    assert (escaped_whitespace.argument_index, escaped_whitespace.token) == (1, "value")
+
+
+def test_completion_context_rejects_cursor_mid_slash_token():
+    context = parse_completion_context(Document(text="/help", cursor_position=3))
+
+    assert context.kind is CompletionKind.NONE
 
 
 def test_completion_active_for_theme_subcommand():

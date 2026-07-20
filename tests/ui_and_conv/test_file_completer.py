@@ -10,6 +10,10 @@ from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 
 from pythinker_code.ui.shell.prompt import LocalFileMentionCompleter
+from pythinker_code.ui.shell.prompting.completion.context import (
+    CompletionKind,
+    parse_completion_context,
+)
 
 
 def _completion_texts(completer: LocalFileMentionCompleter, text: str) -> list[str]:
@@ -90,6 +94,57 @@ def test_at_guard_prevents_email_like_fragments(tmp_path: Path):
     texts = _completion_texts(completer, "email@example.com")
 
     assert not texts
+
+
+def test_file_context_matrix_for_boundaries_quotes_and_cursor_position():
+    quoted = parse_completion_context(Document('@"docs/design notes.md'))
+    punctuation = parse_completion_context(Document("see (@src/main.py"))
+    email = parse_completion_context(Document("email@example.com"))
+    escaped_whitespace = parse_completion_context(Document(r"@docs/design\ notes.md"))
+    mid_token = parse_completion_context(Document(text="@src/main.py", cursor_position=len("@src")))
+
+    assert (quoted.kind, quoted.token, quoted.quoted) == (
+        CompletionKind.FILE,
+        "docs/design notes.md",
+        True,
+    )
+    assert (punctuation.kind, punctuation.token) == (CompletionKind.FILE, "src/main.py")
+    assert email.kind is CompletionKind.NONE
+    assert escaped_whitespace.kind is CompletionKind.NONE
+    assert (mid_token.kind, mid_token.token) == (CompletionKind.FILE, "src")
+
+
+def test_quoted_completion_retains_quotes_and_escapes_path(tmp_path: Path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    path = docs / 'design "notes"\\draft.md'
+    path.write_text("notes\n")
+    completer = LocalFileMentionCompleter(tmp_path)
+    document = Document('@"docs/design')
+    event = CompleteEvent(completion_requested=True)
+
+    completions = list(completer.get_completions(document, event))
+
+    assert [completion.text for completion in completions] == [
+        '"docs/design \\"notes\\"\\\\draft.md"'
+    ]
+    assert completions[0].start_position == -len('"docs/design')
+
+
+def test_unicode_and_cjk_paths_complete(tmp_path: Path):
+    (tmp_path / "café.md").write_text("accent\n")
+    (tmp_path / "设计说明.md").write_text("CJK\n")
+    completer = LocalFileMentionCompleter(tmp_path)
+
+    assert "café.md" in _completion_texts(completer, "@caf")
+    assert "设计说明.md" in _completion_texts(completer, "@设计")
+
+
+def test_completed_quoted_file_short_circuits_completions(tmp_path: Path):
+    (tmp_path / "design notes.md").write_text("done\n")
+    completer = LocalFileMentionCompleter(tmp_path)
+
+    assert not _completion_texts(completer, '@"design notes.md"')
 
 
 def test_scoped_walk_finds_late_alphabetical_dirs(tmp_path: Path):
