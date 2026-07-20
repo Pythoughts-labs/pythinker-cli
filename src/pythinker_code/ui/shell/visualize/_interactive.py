@@ -887,17 +887,12 @@ class _PromptLiveView(_LiveView):
         # transient body for the duration of the handoff.
         if self._suppress_transient_preamble:
             return ANSI("")
-        from prompt_toolkit.application import get_app_or_none
-
-        from pythinker_code.ui.shell.prompt import _prompt_preamble_max_rows
-
-        app = get_app_or_none()
-        terminal_rows = app.output.get_size().rows if app is not None else None
-        # Reserve one row for the pinned verb spinner rendered below the clip hint.
-        body_budget = max(1, _prompt_preamble_max_rows(terminal_rows) - 1)
         content_block = getattr(self, "_current_content_block", None)
         if content_block is not None:
-            content_block.set_preview_row_budget(body_budget)
+            # The prompt renderer owns the single authoritative scene allocation.
+            # Pre-clipping here would spend the same rows a second time before
+            # pinned/status regions have been measured.
+            content_block.set_preview_row_budget(None)
         # Exclude activity rows here — the prompt pins the active spinner
         # separately via ``render_pinned_status_tail`` so a clipped agent stream
         # cannot hide it or place it between committed prose and the live tail.

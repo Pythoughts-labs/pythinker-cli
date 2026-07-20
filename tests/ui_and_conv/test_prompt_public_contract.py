@@ -194,7 +194,6 @@ def test_modal_frame_samples_running_status_and_tail_and_modal_body_once(
     assert modal.calls["body"] == 1
 
 
-@pytest.mark.xfail(strict=True, reason="height-overflow handling lands in Task 3")
 def test_running_prompt_layers_do_not_overflow_terminal_height(
     prompt_session: CustomPromptSession,
     monkeypatch: pytest.MonkeyPatch,

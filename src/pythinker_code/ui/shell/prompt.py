@@ -81,7 +81,13 @@ from pythinker_code.ui.shell.placeholders import (
     normalize_pasted_text,
     sanitize_surrogates,
 )
-from pythinker_code.ui.shell.prompting import FrozenFragments, PromptFrame, PromptFrameCollector
+from pythinker_code.ui.shell.prompting import (
+    FrozenFragments,
+    PromptFrame,
+    PromptFrameCollector,
+    PromptSceneBudget,
+    allocate_prompt_scene_rows,
+)
 from pythinker_code.ui.shell.spacing import (
     PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
     ensure_prompt_newline,
@@ -821,13 +827,52 @@ def _fit_formatted_text_to_rows(
     return out
 
 
+def _fit_prompt_scene_to_rows(
+    fragments: FormattedText,
+    columns: int,
+    max_rows: int,
+    *,
+    show_clip_hint: bool = True,
+    drop_blank_rows: bool = False,
+) -> FormattedText:
+    """Tail-clip a complete scene, changing nothing unless it overflows."""
+    if max_rows <= 0:
+        return FormattedText()
+    rows = _formatted_text_display_rows(fragments, max(1, columns))
+    if len(rows) <= max_rows:
+        return fragments
+    if drop_blank_rows:
+        rows = [row for row in rows if any(text for _, text, *_ in row)]
+    while rows and not any(text for _, text, *_ in rows[-1]):
+        rows.pop()
+    if not rows:
+        return FormattedText()
+    if len(rows) <= max_rows:
+        out = FormattedText()
+        _extend_rows(out, rows)
+        return out
+    if max_rows == 1 or not show_clip_hint:
+        selected = rows[-max_rows:]
+        out = FormattedText()
+        _extend_rows(out, selected)
+        return out
+    out = FormattedText(
+        [
+            (
+                "class:dim",
+                _truncate_right(PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT, columns),
+            ),
+            ("", "\n"),
+        ]
+    )
+    _extend_rows(out, rows[-(max_rows - 1) :])
+    return out
+
+
 def _prompt_preamble_max_rows(terminal_rows: int | None) -> int:
     if terminal_rows is None or terminal_rows <= 0:
         return 20
-    # Reserve rows for: spacer, separator, input row, toolbar separator, footer
-    # rows, and one safety row. This prevents large tool cards from painting
-    # underneath the prompt/footer on short terminals.
-    return max(1, terminal_rows - 7)
+    return PromptSceneBudget(terminal_rows=terminal_rows).preamble_rows
 
 
 def _wrap_to_width(text: str, width: int, *, max_lines: int | None = None) -> list[str]:
@@ -2322,6 +2367,8 @@ class CustomPromptSession:
         self._fast_refresh_provider = fast_refresh_provider
         self._background_task_count_provider = background_task_count_provider
         self._update_notice_provider = update_notice_provider
+        self._prompt_frame_update_notice: str | None = None
+        self._prompt_footer_row_budget = 0
         self._editor_command_provider = editor_command_provider
         self._turn_recaps_provider = turn_recaps_provider
         self._plan_mode_toggle_callback = plan_mode_toggle_callback
@@ -3341,6 +3388,114 @@ class CustomPromptSession:
         columns = frame.columns
         fragments: FormattedText = FormattedText()
 
+        provider = cast(
+            Callable[[], str | None] | None,
+            getattr(self, "_update_notice_provider", None),
+        )
+        update_notice = provider() if callable(provider) else None
+        self._prompt_frame_update_notice = update_notice
+        footer_rows = 3 + (1 if update_notice else 0)
+
+        def finish(scene: FormattedText, *, input_rows: int) -> FormattedText:
+            scene_rows = len(_formatted_text_display_rows(scene, columns))
+            if scene_rows + footer_rows <= frame.terminal_rows:
+                self._prompt_footer_row_budget = footer_rows
+                return scene
+            has_content_before_pinned = bool(body_rows) or bool(
+                agent_status and any(text for _, text, *_ in agent_status)
+            )
+            allocation = allocate_prompt_scene_rows(
+                PromptSceneBudget(terminal_rows=frame.terminal_rows),
+                modal_rows=body_rows if modal_active else 0,
+                input_rows=input_rows,
+                footer_rows=footer_rows,
+                pinned_rows=pinned_rows,
+                separator_rows=(
+                    1 if not modal_active and pinned_rows and has_content_before_pinned else 0
+                ),
+                body_rows=0 if modal_active else body_rows,
+                status_rows=status_rows,
+                shortcut_rows=(
+                    len(_formatted_text_display_rows(self._render_shortcut_help(columns), columns))
+                    if getattr(self, "_shortcut_help_open", False) and not modal_active
+                    else 0
+                ),
+            )
+            self._prompt_footer_row_budget = allocation.footer_rows
+            if modal_active:
+                modal_scene = FormattedText()
+                if allocation.status_rows:
+                    modal_scene.extend(
+                        _fit_prompt_scene_to_rows(
+                            agent_status,
+                            columns,
+                            allocation.status_rows,
+                        )
+                    )
+                    ensure_prompt_newline(modal_scene)
+                if allocation.modal_rows:
+                    modal_scene.extend(
+                        _fit_prompt_scene_to_rows(body, columns, allocation.modal_rows)
+                    )
+                if allocation.pinned_rows:
+                    ensure_prompt_newline(modal_scene)
+                    modal_scene.extend(
+                        _fit_prompt_scene_to_rows(
+                            pinned,
+                            columns,
+                            allocation.pinned_rows,
+                            show_clip_hint=False,
+                        )
+                    )
+                return _fit_prompt_scene_to_rows(
+                    modal_scene,
+                    columns,
+                    allocation.prompt_rows,
+                )
+
+            scene_rows = _formatted_text_display_rows(scene, columns)
+            input_region = FormattedText()
+            if allocation.input_rows:
+                _extend_rows(input_region, scene_rows[-input_rows:])
+
+            overflow_scene = FormattedText()
+
+            def append_region(region: FormattedText, rows: int) -> None:
+                if rows <= 0:
+                    return
+                fitted = _fit_prompt_scene_to_rows(
+                    region,
+                    columns,
+                    rows,
+                    show_clip_hint=False,
+                    drop_blank_rows=True,
+                )
+                if not fitted:
+                    return
+                if overflow_scene:
+                    ensure_prompt_newline(overflow_scene)
+                overflow_scene.extend(fitted)
+
+            if allocation.shortcut_rows:
+                append_region(self._render_shortcut_help(columns), allocation.shortcut_rows)
+            append_region(agent_status, allocation.status_rows)
+            append_region(body, allocation.body_rows)
+            if (
+                allocation.separator_rows
+                and allocation.pinned_rows
+                and (allocation.body_rows or allocation.status_rows)
+            ):
+                ensure_prompt_newline(overflow_scene)
+                overflow_scene.append(("", "\n"))
+            append_region(pinned, allocation.pinned_rows)
+            append_region(input_region, allocation.input_rows)
+            return _fit_prompt_scene_to_rows(
+                overflow_scene,
+                columns,
+                allocation.prompt_rows,
+                show_clip_hint=False,
+            )
+
         # 1–2. Dynamic preamble — agent status is always rendered from the
         # running prompt delegate, and body comes from the active modal/delegate.
         # Cap the visible rows so large cards do not overwrite the input/footer.
@@ -3352,6 +3507,11 @@ class CustomPromptSession:
         body_rows = (
             len(_formatted_text_display_rows(body, columns))
             if body and any(fragment for _, fragment, *_ in body)
+            else 0
+        )
+        status_rows = (
+            len(_formatted_text_display_rows(agent_status, columns))
+            if agent_status and any(fragment for _, fragment, *_ in agent_status)
             else 0
         )
         pinned_rows = (
@@ -3387,7 +3547,7 @@ class CustomPromptSession:
                 fragments.extend(preamble)
 
             if input_card_hidden and self._input_card_chrome_hidden(frame.input_chrome_hidden):
-                return fragments
+                return finish(fragments, input_rows=0)
 
             tc = get_toolbar_colors()
             scene_fragments: FormattedText = FormattedText()
@@ -3409,7 +3569,7 @@ class CustomPromptSession:
             )
             if placeholder_fragments:
                 scene_fragments.extend(placeholder_fragments)
-            return scene_fragments
+            return finish(scene_fragments, input_rows=2)
 
         if modal_active and body:
             status_budget = max(0, max_rows - body_rows - pinned_rows)
@@ -3446,14 +3606,14 @@ class CustomPromptSession:
 
         # 3. When a modal is active, skip the normal input chrome.
         if modal_active:
-            return fragments
+            return finish(fragments, input_rows=0)
 
         # Hide editable input content during the narrow pre-stream/first-handoff
         # frame, but keep the empty card chrome visible so the prompt bar does not
         # disappear while the agent is loading.
         if self._input_card_hidden_pre_stream(frame.input_card_hidden):
             if self._input_card_chrome_hidden(frame.input_chrome_hidden):
-                return fragments
+                return finish(fragments, input_rows=0)
             if is_card_style():
                 ensure_prompt_newline(fragments)
                 tc = get_toolbar_colors()
@@ -3465,7 +3625,7 @@ class CustomPromptSession:
             fragments.append(
                 (self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} ")
             )
-            return fragments
+            return finish(fragments, input_rows=2 if is_card_style() else 1)
 
         if is_card_style():
             ensure_prompt_newline(fragments)
@@ -3476,7 +3636,7 @@ class CustomPromptSession:
         else:
             fragments.append(("", "\n"))
         fragments.append((self._thinking_prompt_prefix_style(), f"{PROMPT_SYMBOL_AGENT_INPUT} "))
-        return fragments
+        return finish(fragments, input_rows=2 if is_card_style() else 1)
 
     def _render_shortcut_help(self, columns: int) -> FormattedText:
         """Render a small keyboard-shortcuts popup above the prompt."""
@@ -3600,25 +3760,45 @@ class CustomPromptSession:
         (the verb spinner) below it, so the clip hint never covers the spinner.
         """
         if not (pinned and any(fragment for _, fragment, *_ in pinned)):
-            # No separate pinned tail: keep the old behavior of preserving the
-            # last status row so delegates that don't split stay correct.
-            return _fit_formatted_text_to_rows(preamble, columns, max_rows, preserve_tail_rows=1)
-        pinned_rows = len(_formatted_text_display_rows(pinned, columns))
-        body_budget = max(1, max_rows - pinned_rows)
-        clipped = _fit_formatted_text_to_rows(preamble, columns, body_budget)
+            # Status is composed before the current live body. Tail clipping
+            # therefore drops older status first and keeps the newest live row.
+            return _fit_prompt_scene_to_rows(preamble, columns, max_rows)
         out: FormattedText = FormattedText()
-        out.extend(clipped)
-        ensure_prompt_newline(out)
-        # Keep the pinned verb spinner visually separated from preceding tool
-        # output/background summaries; when it is the first visible row, this
-        # also creates the initial breathing room above the spinner.
-        out.append(("", "\n"))
-        out.extend(pinned)
-        # Mirror the breathing room below the pinned tail so the todo list / verb
-        # spinner is never flush against the prompt separator beneath it.
-        ensure_prompt_newline(out)
-        out.append(("", "\n"))
-        return out
+        if max_rows <= 0:
+            return out
+        original: FormattedText = FormattedText()
+        original.extend(preamble)
+        ensure_prompt_newline(original)
+        original.append(("", "\n"))
+        original.extend(pinned)
+        ensure_prompt_newline(original)
+        original.append(("", "\n"))
+        if len(_formatted_text_display_rows(original, columns)) <= max_rows:
+            return original
+
+        pinned_rows = _formatted_text_display_rows(pinned, columns)
+        visible_pinned_rows = pinned_rows[-max_rows:]
+        pinned_budget = len(visible_pinned_rows)
+        separator_budget = 1 if preamble and max_rows > pinned_budget else 0
+        body_budget = max(0, max_rows - pinned_budget - separator_budget)
+        if body_budget:
+            out.extend(
+                _fit_prompt_scene_to_rows(
+                    preamble,
+                    columns,
+                    body_budget,
+                    show_clip_hint=body_budget >= 2,
+                    drop_blank_rows=True,
+                )
+            )
+            ensure_prompt_newline(out)
+            if separator_budget:
+                out.append(("", "\n"))
+        if pinned_budget:
+            pinned_out = FormattedText()
+            _extend_rows(pinned_out, visible_pinned_rows)
+            out.extend(pinned_out)
+        return _fit_prompt_scene_to_rows(out, columns, max_rows)
 
     def update_pinned_todos(self, items: Sequence[TodoDisplayItem]) -> None:
         """Remember the latest agent todo list for between-turn background waits."""
@@ -4167,10 +4347,16 @@ class CustomPromptSession:
         none) and adds no trailing newline, so it never leaves a blank row at the
         bottom. No-op when no update is pending; style-agnostic across both
         toolbar layouts."""
-        provider = getattr(self, "_update_notice_provider", None)
-        if provider is None:
-            return
-        text = provider()
+        if getattr(self, "_current_prompt_frame", None) is not None and hasattr(
+            self, "_prompt_frame_update_notice"
+        ):
+            text = self._prompt_frame_update_notice
+        else:
+            provider = cast(
+                Callable[[], str | None] | None,
+                getattr(self, "_update_notice_provider", None),
+            )
+            text = provider() if callable(provider) else None
         if not text:
             return
         line = _truncate_right(text, max(0, columns - 1))
@@ -4179,6 +4365,20 @@ class CustomPromptSession:
         tokens = _get_tui_tokens()
         style = f"fg:{tokens.warning or 'ansiyellow'} bold"
         fragments.extend([("", "\n"), (style, line)])
+
+    def _fit_toolbar_to_terminal(self, fragments: FormattedText, columns: int) -> FormattedText:
+        app = get_app_or_none()
+        size = app.output.get_size() if app is not None else None
+        rows = getattr(size, "rows", None)
+        if not isinstance(rows, int) or rows <= 0:
+            return fragments
+        max_rows = min(rows, max(0, getattr(self, "_prompt_footer_row_budget", rows)))
+        return _fit_prompt_scene_to_rows(
+            fragments,
+            columns,
+            max_rows,
+            show_clip_hint=False,
+        )
 
     def _render_bottom_toolbar(self) -> FormattedText:
         if (
@@ -4324,7 +4524,7 @@ class CustomPromptSession:
         fragments.append((secondary_style, right_text))
 
         self._append_update_notice(fragments, columns)
-        return FormattedText(fragments)
+        return self._fit_toolbar_to_terminal(FormattedText(fragments), columns)
 
     def _build_statusline_context(self, columns: int) -> StatusLineContext:
         from pythinker_code.ui.shell.statusline import (
@@ -4498,7 +4698,7 @@ class CustomPromptSession:
         fragments.append(("", " " * max(0, usable - left_width - right_width)))
         fragments.extend(line2_right)
         self._append_update_notice(fragments, columns)
-        return FormattedText(fragments)
+        return self._fit_toolbar_to_terminal(FormattedText(fragments), columns)
 
     def _get_two_rotating_tips(self) -> str | None:
         """Return a string with exactly 2 tips from the rotation, or fewer if not enough."""

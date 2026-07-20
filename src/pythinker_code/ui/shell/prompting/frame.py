@@ -13,6 +13,8 @@ from prompt_toolkit.formatted_text import (
     to_formatted_text,
 )
 
+from pythinker_code.ui.shell.prompting.renderer import PromptSceneBudget
+
 FrozenFragments = tuple[OneStyleAndTextTuple, ...]
 
 
@@ -37,6 +39,7 @@ class PromptFrame:
 
     columns: int
     terminal_rows: int
+    body_rows: int
     agent_status: FrozenFragments
     interactive_body: FrozenFragments
     pinned_tail: FrozenFragments
@@ -71,6 +74,10 @@ class PromptFrameCollector:
         """Capture every render-facing delegate value exactly once."""
         modal = self._resolve_modal()
         running = self._resolve_running()
+        body_rows = PromptSceneBudget(
+            terminal_rows=terminal_rows,
+            input_rows=0 if modal is not None else 2,
+        ).preamble_rows
 
         pinned_method = cast(
             Callable[[int], AnyFormattedText] | None,
@@ -128,6 +135,7 @@ class PromptFrameCollector:
         return PromptFrame(
             columns=columns,
             terminal_rows=terminal_rows,
+            body_rows=body_rows,
             agent_status=agent_status,
             interactive_body=interactive_body,
             pinned_tail=pinned,
