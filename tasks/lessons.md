@@ -225,3 +225,31 @@ Format: trigger → rule.
   `origin/main` so the PR carries only its intended change.
 - **Verification trap:** `make ... | tail -N` reports `tail`'s exit code (0), not `make`'s.
   Redirect to a file and check `$?` with `set -o pipefail`, or the real failure hides.
+
+## Codex-lane operating contract (TUI refactor delegations, 2026-07-19)
+
+- **Producer sandbox rules that void candidates** (each cost one 10-25-min run):
+  no `rm`/deletions (rejection kills structured output → `invalid-output`); no git
+  commands (index writes denied — leave edits uncommitted, the runtime snapshots the
+  tree); no repo copies or new top-level dirs (freeze `out-of-scope-write`);
+  `src/pythinker_code/CHANGELOG.md` is a tracked symlink — any touch is
+  `modified-symlink`; pytest MUST run with `--basetemp=.venv/pytest-tmp` or
+  `pytest-of-*` root dirs void the freeze.
+- **Producer env:** shared uv cache is sandbox-inaccessible; first action
+  `UV_CACHE_DIR=.venv/.uv-cache uv sync --all-packages --all-groups` (offline
+  fallback works). A producer that cannot run tests flies blind and rewrites
+  behavior — always give it a working test recipe and require a passing focused
+  run before finish.
+- **Byte-identical constraint must be structural:** when a refactor must not change
+  fitting-scene output, put the untouched-path short-circuit in the spec ("return
+  unchanged unless overflow") and freeze the legacy behavior test files in
+  `forbiddenScope` so the producer cannot adjust them to pass.
+- **PTY e2e tests are cold-worktree-flaky** (fail at clean baseline in disposable
+  worktrees, pass in the main checkout): never use them as clean-room gates;
+  verify locally at integration instead.
+- **`/reload-plugins` kills in-flight MCP delegations** ("Connection closed");
+  concurrent delegations from other sessions can also break the shared runtime
+  ("git status output exceeded the runtime bound") — serialize sessions' delegations
+  and don't reload plugins mid-run.
+- **Recover a killed run's spec** from the session transcript jsonl (`tool_use`
+  input of the last `delegatePipeline` call) — `run-start.json` does not persist it.
