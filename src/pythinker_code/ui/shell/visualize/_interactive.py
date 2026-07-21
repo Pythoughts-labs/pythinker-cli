@@ -550,6 +550,20 @@ class _PromptLiveView(_LiveView):
         self._queued_messages.clear()
         return msgs
 
+    async def commit_scrollback_echo(self, renderable: RenderableType) -> None:
+        """Print a user-echo line to scrollback through the scrollback handoff.
+
+        The shell echoes each drained queued command above the next turn. Doing
+        that with a raw ``console.print`` erases and repaints the prompt with the
+        input card still in the pre-handoff frame, so under load the card's top
+        border fossilizes into scrollback just above the echoed command. Routing
+        the echo through ``_run_scrollback_handoff`` raises the handoff depth
+        first — which drives ``running_prompt_hide_input_card`` True and keeps the
+        border out of the frame the terminal teardown erases — exactly as streamed
+        turn content is committed.
+        """
+        await self._run_scrollback_handoff(lambda: console.print(renderable), reason="queued_echo")
+
     async def wait_for_btw_dismiss(self) -> None:
         """Wait for btw LLM completion + user dismiss, then clean up.
 

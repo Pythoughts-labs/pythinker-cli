@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Fix a rare queued-follow-up "ghost card": echoing a drained queued command now commits through the scrollback handoff (which hides the input card before the terminal teardown erases the prompt), so the input-card border can no longer fossilize into scrollback above the echoed command under heavy load.
 - Freeze the public shell prompt compatibility contract with constructor and rendering coverage.
 - Unify slash and file-mention completion behind one canonical completion context, adding quoted `@"path with spaces"` file mentions.
 - Index workspace file mentions asynchronously with a cwd-aware, generation-owned snapshot index so completion never blocks on disk or Git scans.

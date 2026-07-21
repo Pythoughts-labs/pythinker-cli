@@ -734,6 +734,50 @@ def test_render_agent_prompt_message_keeps_prompt_marker_when_card_gate_hides_bu
     assert prompt_module.PROMPT_SYMBOL_AGENT_INPUT in shown_frame
 
 
+@pytest.mark.asyncio
+async def test_commit_scrollback_echo_hides_input_card_during_emit(monkeypatch) -> None:
+    """The queued-drain echo commits while the input card is hidden.
+
+    Regression guard for the queued-follow-up ghost: echoing a drained command
+    with a raw ``console.print`` leaves the input-card border in the frame the
+    terminal teardown erases, so under load the border fossilizes above the echo.
+    ``commit_scrollback_echo`` routes through the scrollback handoff, which raises
+    the handoff depth so ``running_prompt_hide_input_card`` is True at the exact
+    moment the echo is written.
+    """
+    from pythinker_code.ui.shell.console import console as shared_console
+
+    class _PromptSession:
+        def update_pinned_todos(self, _items: object) -> None:
+            pass
+
+        def invalidate(self) -> None:
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+    # First turn has ended: without the handoff the card is shown — the
+    # fossil-prone state the raw console.print used to commit against.
+    view._turn_ended = True
+    assert view.running_prompt_hide_input_card() is False
+
+    hidden_when_written: list[bool] = []
+    monkeypatch.setattr(shared_console, "_force_terminal", False)
+    monkeypatch.setattr(
+        shared_console,
+        "print",
+        lambda *_a, **_k: hidden_when_written.append(view.running_prompt_hide_input_card()),
+    )
+
+    await view.commit_scrollback_echo(Text("❯ queued command"))
+
+    assert hidden_when_written == [True]  # card hidden at the instant the echo committed
+    assert view.running_prompt_hide_input_card() is False  # restored for the next turn
+
+
 def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_stream(
     monkeypatch,
 ) -> None:
