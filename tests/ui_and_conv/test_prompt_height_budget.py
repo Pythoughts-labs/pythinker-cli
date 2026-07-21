@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Literal
 
 import pytest
 from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.utils import get_cwidth
 
 from pythinker_code.ui.shell import prompt as shell_prompt
 from pythinker_code.ui.shell.prompt import CustomPromptSession, PromptMode
@@ -14,6 +17,8 @@ from pythinker_code.ui.shell.prompting import (
     PromptSceneBudget,
     allocate_prompt_scene_rows,
     freeze_fragments,
+    truncate_footer_left,
+    truncate_footer_right,
 )
 
 Scene = Literal[
@@ -478,3 +483,108 @@ def test_scene_budget_is_zero_safe(terminal_rows: int) -> None:
     )
 
     assert budget.preamble_rows == max(0, terminal_rows - 12)
+
+
+# Unicode / terminal-capability cases. Row and column measurements must use terminal
+# CELL width (prompt_toolkit ``get_cwidth``), not codepoint counts: combining marks are
+# zero cells, emoji and CJK are two cells, RTL text is one cell per letter.
+_UNICODE_SAMPLES = (
+    ("combining_marks", "e\u0301" * 30),
+    ("emoji", "\U0001f642" * 30),
+    ("cjk_wide", "漢字端末幅測定" * 8),
+    ("rtl", "مرحبا بالعالم اختبار" * 3),
+    ("wide_key_labels", "⌘K 漢🙂 " * 8),
+    ("ascii_glyphs", "[tool] running... -> ok " * 4),
+)
+
+
+def _cell_width(text: str) -> int:
+    return sum(max(0, get_cwidth(character)) for character in text)
+
+
+@pytest.mark.parametrize(("case", "text"), _UNICODE_SAMPLES, ids=lambda value: str(value))
+@pytest.mark.parametrize("width", (20, 40, 80))
+def test_display_rows_measure_unicode_in_terminal_cells(
+    case: str,
+    text: str,
+    width: int,
+) -> None:
+    rows = shell_prompt._formatted_text_display_rows(FormattedText([("", text)]), width)
+
+    # Every rendered row fits the terminal width when measured in cells; a
+    # codepoint-based split would overflow rows containing wide characters.
+    for row in rows:
+        assert _cell_width("".join(fragment[1] for fragment in row)) <= width
+    # Cell accounting requires at least ceil(total_cells / width) rows, and a
+    # codepoint count would demand more rows than cells allow for combining marks.
+    total_cells = _cell_width(text)
+    assert len(rows) >= math.ceil(total_cells / width)
+    if case == "combining_marks":
+        # 30 base letters + 30 zero-width combining marks is 30 cells, not 60.
+        assert total_cells == 30
+        assert len(rows) == math.ceil(30 / width)
+    if case == "cjk_wide":
+        # Even widths pack wide chars exactly: two cells per char, no spare cell.
+        assert len(rows) == math.ceil(total_cells / width)
+
+
+@pytest.mark.parametrize(("case", "text"), _UNICODE_SAMPLES, ids=lambda value: str(value))
+@pytest.mark.parametrize(("width", "height"), ((20, 6), (40, 10)))
+def test_unicode_scenes_stay_within_height_budget(
+    case: str,
+    text: str,
+    width: int,
+    height: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del case
+    session = _session_for_scene(
+        "body_pinned",
+        width=width,
+        height=height,
+        card_style=False,
+        monkeypatch=monkeypatch,
+    )
+    frame = session._current_prompt_frame
+    assert frame is not None
+    session._current_prompt_frame = replace(
+        frame,
+        interactive_body=_text(text),
+        pinned_tail=_text(f"⏺ {text}"),
+    )
+
+    message = session._render_agent_prompt_message()
+    message_rows = len(shell_prompt._formatted_text_display_rows(message, width)) if message else 0
+    monkeypatch.setattr(
+        shell_prompt,
+        "get_app_or_none",
+        lambda: SimpleNamespace(
+            output=SimpleNamespace(get_size=lambda: SimpleNamespace(columns=width, rows=height))
+        ),
+    )
+    footer = session._fit_toolbar_to_terminal(FormattedText([("", text)]), width)
+    footer_rows = len(shell_prompt._formatted_text_display_rows(footer, width)) if footer else 0
+
+    assert message_rows + footer_rows <= height
+
+
+@pytest.mark.parametrize("ascii_only", (False, True), ids=("unicode", "ascii"))
+@pytest.mark.parametrize("width", (6, 11, 24))
+def test_footer_truncation_counts_wide_labels_in_cells(
+    ascii_only: bool,
+    width: int,
+) -> None:
+    text = "⌘K 漢字🙂 model: qwen3.6-35b"
+
+    right = truncate_footer_right(text, width, ascii_only=ascii_only)
+    left = truncate_footer_left(text, width, ascii_only=ascii_only)
+
+    assert _cell_width(right) <= width
+    assert _cell_width(left) <= width
+    ellipsis = "..." if ascii_only else "…"
+    assert right.endswith(ellipsis)
+    assert left.startswith(ellipsis)
+    if ascii_only:
+        # ASCII glyph mode must never introduce non-ASCII ellipsis characters.
+        assert "…" not in right
+        assert "…" not in left
