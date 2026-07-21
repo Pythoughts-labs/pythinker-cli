@@ -1498,7 +1498,13 @@ class Shell:
                 if not pending:
                     break
                 queued = pending.pop(0)
-                console.print(render_user_echo_text(queued.resolved_command))
+                # Commit the echo through the view's scrollback handoff (not a raw
+                # console.print): the handoff hides the input card before the
+                # terminal teardown erases the prompt, so the card border cannot
+                # fossilize into scrollback above the echoed command under load.
+                await captured_view.commit_scrollback_echo(
+                    render_user_echo_text(queued.resolved_command)
+                )
                 if prompt_session is not None:
                     prompt_session.mark_turn_starting()
                 if runtime is not None:
