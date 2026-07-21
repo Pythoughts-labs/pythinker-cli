@@ -8,6 +8,7 @@ from rich.console import Console, RenderableType
 from rich.style import Style
 from rich.text import Text
 
+from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ASSISTANT_MARKER
 from pythinker_code.ui.shell.visualize import (
     _ContentBlock,
     _estimate_tokens,
@@ -450,6 +451,22 @@ def _style_for(renderable: Text, text: str) -> Style:
     return Style.parse(span.style) if isinstance(span.style, str) else span.style
 
 
+def _segment_styles_for_text(renderable: RenderableType, text: str) -> list[Style]:
+    console = Console(record=True, width=120, color_system=None)
+    styles: list[Style] = []
+    for segment in console.render(renderable):
+        if segment.control is not None or text not in segment.text:
+            continue
+        segment_style = segment.style
+        if isinstance(segment_style, str):
+            styles.append(Style.parse(segment_style))
+        elif segment_style is not None:
+            styles.append(segment_style)
+    if not styles:
+        raise AssertionError(f"Text {text!r} not found in rendered segments")
+    return styles
+
+
 def test_composing_and_thinking_labels_are_neutral_grey():
     # Both Composing and Thinking read as neutral thinking grey, never the
     # bright activity-label white or purple-tinted muted color.
@@ -739,6 +756,70 @@ class TestShowThinkingStream:
         block.append("Some thought content")
         result = block.compose_final()
         assert isinstance(result, BulletColumns)
+
+    def test_stream_mode_compose_final_renders_same_index_on_one_markdown_line(self):
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Planning", summary_index=0)
+        block.append(" the implementation**", summary_index=0)
+
+        console = Console(record=True, width=120, color_system=None)
+        console.print(block.compose_final())
+        output = console.export_text()
+
+        assert "**" not in output
+        assert output.count(TRANSCRIPT_ASSISTANT_MARKER) == 1
+        assert "Planning the implementation" in output.splitlines()[0]
+
+    def test_stream_mode_compose_final_preserves_out_of_order_summary_segments(self):
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Planning the implementation**", summary_index=2)
+        block.append("**Evaluating terminal edge cases**", summary_index=1)
+        block.append("**Finalizing markdown rendering**", summary_index=2)
+
+        console = Console(record=True, width=120, color_system=None)
+        console.print(block.compose_final())
+        lines = [line for line in console.export_text().splitlines() if line.strip()]
+
+        assert len(lines) == 3
+        assert "**" not in "\n".join(lines)
+        assert lines[0].startswith(f"{TRANSCRIPT_ASSISTANT_MARKER} Planning the implementation")
+        assert any("Evaluating terminal edge cases" in line for line in lines[1:])
+        assert any("Finalizing markdown rendering" in line for line in lines[1:])
+
+    def test_stream_mode_compose_final_unindexed_chunks_still_concatenate(self):
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Legacy reasoning", summary_index=None)
+        block.append(" stays grouped**", summary_index=None)
+
+        console = Console(record=True, width=120, color_system=None)
+        console.print(block.compose_final())
+        lines = [line for line in console.export_text().splitlines() if line.strip()]
+
+        assert lines == [f"{TRANSCRIPT_ASSISTANT_MARKER} Legacy reasoning stays grouped"]
+
+    def test_stream_mode_compose_final_applies_muted_italic_thinking_style_to_segments(self):
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("**Planning the implementation**", summary_index=0)
+        block.append("**Evaluating terminal edge cases**", summary_index=1)
+        renderable = block.compose_final()
+
+        thinking_style = tui_rich_style("thinking_text")
+        for text in ("Planning the implementation", "Evaluating terminal edge cases"):
+            styles = _segment_styles_for_text(renderable, text)
+            assert all(style.color == thinking_style.color for style in styles)
+            assert all(style.italic for style in styles)
+
+    def test_stream_mode_compose_final_drops_empty_summary_boundaries(self):
+        block = _ContentBlock(is_think=True, show_thinking_stream=True)
+        block.append("", summary_index=0)
+        block.append("**Only non-empty summary**", summary_index=1)
+        block.append("", summary_index=2)
+
+        console = Console(record=True, width=120, color_system=None)
+        console.print(block.compose_final())
+        lines = [line for line in console.export_text().splitlines() if line.strip()]
+
+        assert lines == [f"{TRANSCRIPT_ASSISTANT_MARKER} Only non-empty summary"]
 
     def test_stream_mode_compose_final_empty_returns_empty_text(self):
         from rich.text import Text

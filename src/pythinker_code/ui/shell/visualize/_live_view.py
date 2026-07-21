@@ -1691,42 +1691,23 @@ class _LiveView:
 
     def append_content(self, part: ContentPart) -> None:
         match part:
-            case ThinkPart(think=text) | TextPart(text=text):
-                is_think = isinstance(part, ThinkPart)
-                # Skip empty TextPart, but still create the block for empty
-                # ThinkPart so the "Thinking" indicator shows immediately
-                # (e.g. Anthropic/OpenAI block-start events yield think="").
-                if not text and not is_think:
+            case ThinkPart(think=text, summary_index=summary_index):
+                is_think = True
+            case TextPart(text=text):
+                if not text:
                     return
-                self._current_step_retry = None
-                if self._current_content_block is None:
-                    self._current_content_block = _ContentBlock(
-                        is_think,
-                        show_thinking_stream=self._show_thinking_stream,
-                        paced=self._stream_pacing,
-                    )
-                    self.refresh_soon()
-                elif self._current_content_block.is_think != is_think:
-                    transition = (
-                        FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT
-                    )
-                    self.flush_content(transition)
-                    self._current_content_block = _ContentBlock(
-                        is_think,
-                        show_thinking_stream=self._show_thinking_stream,
-                        paced=self._stream_pacing,
-                    )
-                    self.refresh_soon()
-                if text:
-                    self._current_content_block.append(text)
-                    self.refresh_soon()
+                is_think = False
+                summary_index = None
             case ImageURLPart():
                 self._append_content_label("[image]")
+                return
             case AudioURLPart(audio_url=audio):
                 suffix = f":{sanitize_ansi(audio.id)}" if audio.id else ""
                 self._append_content_label(f"[audio{suffix}]")
+                return
             case VideoURLPart():
                 self._append_content_label("[video]")
+                return
             case _:
                 part_type = part.type
                 if part_type not in self._seen_unknown_content_part_types:
@@ -1736,6 +1717,27 @@ class _LiveView:
                         part_type=part_type,
                     )
                 self._append_content_label(f"[{sanitize_ansi(part_type)}]", unknown=True)
+                return
+
+        self._current_step_retry = None
+        if self._current_content_block is None:
+            self._current_content_block = _ContentBlock(
+                is_think,
+                show_thinking_stream=self._show_thinking_stream,
+                paced=self._stream_pacing,
+            )
+            self.refresh_soon()
+        elif self._current_content_block.is_think != is_think:
+            self.flush_content(FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT)
+            self._current_content_block = _ContentBlock(
+                is_think,
+                show_thinking_stream=self._show_thinking_stream,
+                paced=self._stream_pacing,
+            )
+            self.refresh_soon()
+        if text:
+            self._current_content_block.append(text, summary_index=summary_index)
+            self.refresh_soon()
 
     def _append_content_label(self, label: str, *, unknown: bool = False) -> None:
         """Render a payload-free media or future-content placeholder."""

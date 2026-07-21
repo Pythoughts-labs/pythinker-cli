@@ -12,11 +12,14 @@ import random
 import re
 import time
 from collections import Counter, deque
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, NamedTuple, cast
 
 import streamingjson  # type: ignore[reportMissingTypeStubs]
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.measure import Measurement
+from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
 
@@ -563,11 +566,31 @@ def _tail_lines(text: str, n: int) -> str:
     return text[pos + 1 :]
 
 
+@dataclass(slots=True)
+class _ThinkingSegment:
+    summary_index: int | None
+    text: str = ""
+
+
+class _StyleOverrideRenderable:
+    def __init__(self, renderable: RenderableType, style: Style) -> None:
+        self._renderable = renderable
+        self._style = style
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement.get(console, options, self._renderable)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        for segment in console.render(self._renderable, options):
+            style = self._style if segment.style is None else segment.style + self._style
+            yield Segment(segment.text, style, segment.control)
+
+
 _COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--(?:(?!-->).)*?-->[ \t]*(?=\r?$)")
 
 
-def _render_thinking_preview(preview: str) -> RenderableType | None:
-    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
+def _clean_thinking_markdown(text: str) -> str:
+    """Strip complete top-level HTML comment lines outside fenced code."""
     segments: list[str] = []
     unfenced: list[str] = []
 
@@ -577,18 +600,26 @@ def _render_thinking_preview(preview: str) -> RenderableType | None:
         segments.append(_COMPLETE_HTML_COMMENT_BLOCK_RE.sub("", "".join(unfenced)))
         unfenced.clear()
 
-    for line, inside_fence in iter_fence_aware_lines(preview):
+    for line, inside_fence in iter_fence_aware_lines(text):
         if inside_fence:
             flush_unfenced()
             segments.append(line)
         else:
             unfenced.append(line)
     flush_unfenced()
+    return "".join(segments)
 
-    cleaned = "".join(segments)
+
+def _render_thinking_markdown(text: str) -> RenderableType | None:
+    cleaned = _clean_thinking_markdown(text)
     if not cleaned.strip():
         return None
     return render_agent_body(cleaned)
+
+
+def _render_thinking_preview(preview: str) -> RenderableType | None:
+    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
+    return _render_thinking_markdown(preview)
 
 
 def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
@@ -632,6 +663,7 @@ class _ContentBlock:
         # instead of all at once on each delta, for smooth streaming.
         self._paced = paced and not is_think
         self.raw_text = ""
+        self._thinking_segments: list[_ThinkingSegment] = []
         # Accumulated float estimate — avoids per-chunk int truncation.
         self._token_count: float = 0.0
         self._start_time = time.monotonic()
@@ -692,9 +724,11 @@ class _ContentBlock:
         finally:
             self._report_update.set_expanded(was_expanded)
 
-    def append(self, content: str) -> None:
+    def append(self, content: str, *, summary_index: int | None = None) -> None:
         self.raw_text += content
         self._token_count += _estimate_tokens(content)
+        if self.is_think and content:
+            self._append_thinking_segment(content, summary_index=summary_index)
         self._invalidate_preview_cache()
         if self._paced:
             # Reveal is paced by reveal_tick() for smooth streaming; just buffer
@@ -825,15 +859,16 @@ class _ContentBlock:
         """Render the remaining uncommitted content when the block ends."""
         if self.is_think:
             if self._show_thinking_stream:
-                remaining = self._pending_text()
-                if not remaining:
+                thinking_style = tui_rich_style("thinking_text") + Style(italic=True)
+                rendered_segments = [
+                    _StyleOverrideRenderable(rendered, thinking_style)
+                    for segment in self._thinking_segments
+                    if (rendered := _render_thinking_markdown(segment.text)) is not None
+                ]
+                if not rendered_segments:
                     return Text("")
-                thinking_style = tui_rich_style("thinking_text")
-                # Render reasoning as plain muted text — not themed Markdown — so
-                # it reads as uniform grey rather than picking up bright heading /
-                # purple emphasis colors.
                 return BulletColumns(
-                    Text(remaining, style=thinking_style + Style(italic=True)),
+                    Group(*rendered_segments),
                     bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=thinking_style),
                 )
             elapsed_str = format_elapsed(time.monotonic() - self._start_time)
@@ -896,6 +931,12 @@ class _ContentBlock:
         return renderables
 
     # -- Private -------------------------------------------------------------
+
+    def _append_thinking_segment(self, content: str, *, summary_index: int | None) -> None:
+        if self._thinking_segments and self._thinking_segments[-1].summary_index == summary_index:
+            self._thinking_segments[-1].text += content
+            return
+        self._thinking_segments.append(_ThinkingSegment(summary_index=summary_index, text=content))
 
     def _pending_text(self) -> str:
         return self.raw_text[self._committed_len : self._revealed_len]
