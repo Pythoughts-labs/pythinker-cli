@@ -184,16 +184,27 @@ def test_footer_rows_respect_display_width_with_wide_and_combining_chars(
     """
     monkeypatch.setenv("NO_COLOR", "1")
     session = _session()
-    wide_command = "全角指令" + "é" * 3
-    for width in (40, 80, 120):
-        model = _model(width, command=wide_command, ascii_only=False)
-        assert select_footer_content(model) is not None
-        legacy = session._render_legacy_bottom_toolbar(model)
-        card = session._render_card_bottom_toolbar(model)
-        for rendered in (legacy, card):
-            rows = _text(rendered).splitlines()
-            assert all(_display_width(row) <= width for row in rows)
-            assert "Update available"[: max(0, width - 1)] in rows[-1]
+    # A run of CJK glyphs (each two columns, one code point) plus a zero-width
+    # combining mark: display width far exceeds the code-point count.
+    wide_command = "全角指令文字幅測試漢字表示幅検証" + "é"
+    # Derive a terminal narrower than the command's display width so the left
+    # region must truncate. A len()-based guard would treat the command as fitting
+    # and under-truncate, overflowing the row; only display-width accounting keeps
+    # the row within bounds and emits the capability-safe ellipsis.
+    width = _display_width(wide_command) - 6
+    model = _model(width, command=wide_command, ascii_only=False)
+    selected = select_footer_content(model)
+    assert selected is not None and selected.kind == "command"
+    legacy = session._render_legacy_bottom_toolbar(model)
+    card = session._render_card_bottom_toolbar(model)
+    for rendered in (legacy, card):
+        text = _text(rendered)
+        rows = text.splitlines()
+        assert all(_display_width(row) <= width for row in rows)
+        # Truncation must have fired at this boundary (regression guard: a
+        # len()-based renderer would not have needed to truncate here).
+        assert "…" in text
+        assert "Update available"[: max(0, width - 1)] in rows[-1]
 
 
 def test_left_and_right_toasts_both_render(monkeypatch: pytest.MonkeyPatch) -> None:
