@@ -9,7 +9,7 @@ import pytest
 from prompt_toolkit.formatted_text import FormattedText
 
 from pythinker_code.config import StatusLineConfig
-from pythinker_code.ui.shell.prompt import CustomPromptSession, PromptMode
+from pythinker_code.ui.shell.prompt import CustomPromptSession, PromptMode, _display_width
 from pythinker_code.ui.shell.prompting.footer import (
     FooterViewModel,
     background_task_summary,
@@ -153,7 +153,9 @@ def test_legacy_and_card_adapters_share_left_policy_and_width_safety(
 
     for rendered in (legacy, card):
         rows = _text(rendered).splitlines()
-        assert all(len(row) <= width for row in rows)
+        # Production truncation reserves terminal columns by display width, so the
+        # width guard must measure display width, not code-point count.
+        assert all(_display_width(row) <= width for row in rows)
         assert "Update available"[: max(0, width - 1)] in rows[-1]
         assert "…" not in _text(rendered)
 
@@ -169,6 +171,29 @@ def test_legacy_and_card_adapters_share_left_policy_and_width_safety(
     elif expected_kind == "background":
         assert "toast-only" not in _text(legacy)
         assert "toast-only" not in _text(card)
+
+
+def test_footer_rows_respect_display_width_with_wide_and_combining_chars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wide/combining glyphs must be width-accounted so no rendered row overflows.
+
+    ``len()`` would mis-measure both directions — a CJK glyph occupies two columns
+    but counts as one code point, while a combining mark occupies zero columns but
+    counts as one — so only a display-width guard catches terminal overflow here.
+    """
+    monkeypatch.setenv("NO_COLOR", "1")
+    session = _session()
+    wide_command = "全角指令" + "é" * 3
+    for width in (40, 80, 120):
+        model = _model(width, command=wide_command, ascii_only=False)
+        assert select_footer_content(model) is not None
+        legacy = session._render_legacy_bottom_toolbar(model)
+        card = session._render_card_bottom_toolbar(model)
+        for rendered in (legacy, card):
+            rows = _text(rendered).splitlines()
+            assert all(_display_width(row) <= width for row in rows)
+            assert "Update available"[: max(0, width - 1)] in rows[-1]
 
 
 def test_left_and_right_toasts_both_render(monkeypatch: pytest.MonkeyPatch) -> None:

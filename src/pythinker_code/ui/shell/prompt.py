@@ -3138,22 +3138,11 @@ class CustomPromptSession:
         if self._statusline_runner is not None:
             self._statusline_runner.start()
 
-    def __enter__(self) -> CustomPromptSession:
-        self._bind_resource_bindings()
-        try:
-            self._start()
-            return self
-        except BaseException:
-            self._reset_resource_bindings()
-            raise
-
-    def __exit__(self, *_: object) -> None:
-        if self._status_refresh_task is not None and not self._status_refresh_task.done():
-            self._status_refresh_task.cancel()
-        self._status_refresh_task = None
-        if self._statusline_runner is not None:
-            self._statusline_runner.cancel()
-        self._reset_resource_bindings()
+    # Only the async context manager is supported: ``_start()`` schedules a
+    # lifecycle task via ``asyncio.create_task`` (needs a running loop) and
+    # teardown is inherently async (``_lifecycle.aclose()`` awaits task
+    # cancellation and each registered closer). A synchronous ``with`` could
+    # never run its closers, so it is intentionally omitted — use ``async with``.
 
     async def __aenter__(self) -> CustomPromptSession:
         self._bind_resource_bindings()
