@@ -11,28 +11,20 @@ import subprocess
 import sys
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from hashlib import md5
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, override, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app_or_none
-from prompt_toolkit.auto_suggest import AutoSuggest, Suggestion
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
-from prompt_toolkit.completion import (
-    CompleteEvent,
-    Completer,
-    Completion,
-    FuzzyCompleter,
-    WordCompleter,
-    merge_completers,
-)
+from prompt_toolkit.completion import Completion, merge_completers
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, has_completions
@@ -57,10 +49,10 @@ from prompt_toolkit.layout.controls import BufferControl, UIContent, UIControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.margins import Margin
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.utils import get_cwidth
 from pydantic import BaseModel, ValidationError
+from pythinker_host import get_current_host
 from pythinker_host.path import HostPath
 
 from pythinker_code.config import StatusLineConfig
@@ -87,6 +79,21 @@ from pythinker_code.ui.shell.prompting import (
     PromptFrameCollector,
     PromptSceneBudget,
     allocate_prompt_scene_rows,
+)
+from pythinker_code.ui.shell.prompting.completion.context import (
+    CompletionKind,
+    parse_completion_context,
+)
+from pythinker_code.ui.shell.prompting.completion.slash import (
+    InputHighlightLexer,
+    SlashCommandAutoSuggest,
+    SlashCommandCompleter,
+    command_name_set,
+    discard_slash_command,
+)
+from pythinker_code.ui.shell.prompting.completion.workspace import (
+    HostFileMentionCompleter,
+    WorkspaceIndex,
 )
 from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
 from pythinker_code.ui.shell.prompting.state import (
@@ -180,463 +187,8 @@ class CwdLostError(OSError):
     """Raised when the working directory no longer exists (e.g. external drive unplugged)."""
 
 
-def _command_name_set(commands: Sequence[SlashCommand[Any]]) -> frozenset[str]:
-    """Lowercased names and aliases for slash highlighting and completion."""
-    names: set[str] = set()
-    for cmd in commands:
-        names.add(cmd.name.lower())
-        names.update(alias.lower() for alias in cmd.aliases)
-    return frozenset(names)
-
-
-def _is_known_slash_command_prefix(name: str, known: frozenset[str]) -> bool:
-    """True when ``name`` is a registered command or a prefix of one (e.g. ``/skill:py``)."""
-    lower = name.lower()
-    if lower in known:
-        return True
-    return any(command_name.startswith(lower) for command_name in known)
-
-
-def _fuzzy_subsequence(needle: str, haystack: str) -> bool:
-    """True when ``needle`` is an (ordered, gap-tolerant) subsequence of ``haystack``.
-
-    Mirrors the selector/settings filters (``selector.py``, ``settings_list.py``);
-    used as the lowest-priority slash match so a misspelled distinctive word like
-    ``gurd`` still surfaces ``/skill:pythinker-guard`` when no prefix matches.
-    """
-    pos = 0
-    for ch in needle:
-        found = haystack.find(ch, pos)
-        if found < 0:
-            return False
-        pos = found + 1
-    return True
-
-
-def _slash_first_arg_context(
-    document: Document,
-    known_names: frozenset[str],
-    arg_suggestions: dict[str, tuple[str, ...]],
-) -> tuple[str, str] | None:
-    """When the cursor trails the first argument of a known slash command, return (cmd, partial)."""
-    if document.text_after_cursor.strip():
-        return None
-    line = document.current_line_before_cursor
-    if not line.startswith("/"):
-        return None
-    match = re.match(r"^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\s+(\S*))?$", line)
-    if match is None:
-        return None
-    command = match.group(1).lower()
-    if command not in known_names or command not in arg_suggestions:
-        return None
-    return command, match.group(2) or ""
-
-
-def _slash_command_token_before_cursor(document: Document) -> str | None:
-    """Return the active slash-command token, or ``None`` when completion should stay hidden."""
-    text = document.text_before_cursor
-
-    if document.text_after_cursor.strip():
-        return None
-
-    last_space = text.rfind(" ")
-    token = text[last_space + 1 :]
-    prefix = text[: last_space + 1] if last_space != -1 else ""
-
-    if prefix.strip() or not token.startswith("/"):
-        return None
-    return token
-
-
-def _slash_suggest_token_before_cursor(document: Document) -> str | None:
-    """Return the active slash token for inline ghost-text suggestion.
-
-    Unlike :func:`_slash_command_token_before_cursor` (which gates the dropdown
-    menu and only fires when the slash command starts the line), this accepts a
-    ``/name`` token anywhere on the current line, so mid-sentence references such
-    as ``use /desi`` still ghost-complete. Ghost text only renders at the end of
-    the buffer, so we still require nothing typed after the cursor.
-    """
-    if document.text_after_cursor.strip():
-        return None
-    line = document.current_line_before_cursor
-    last_space = line.rfind(" ")
-    token = line[last_space + 1 :]
-    if not token.startswith("/"):
-        return None
-    return token
-
-
-def _discard_slash_command(buffer: Buffer) -> bool:
-    """Cancel slash completion and remove the in-progress root slash command."""
-    document = buffer.document
-    token = _slash_command_token_before_cursor(document)
-    if token is None:
-        return False
-
-    buffer.cancel_completion()
-    prefix = document.text_before_cursor[: -len(token)]
-    new_text = prefix + document.text_after_cursor
-    if not new_text.strip():
-        buffer.set_document(Document(), bypass_readonly=True)
-        return True
-
-    buffer.set_document(
-        Document(new_text, cursor_position=min(len(prefix), len(new_text))),
-        bypass_readonly=True,
-    )
-    return True
-
-
-# A "/name" token that starts the input or follows whitespace. The name charset
-# matches registered command names and aliases (including "skill:x" / "flow:x").
-_SLASH_TOKEN_RE = re.compile(r"(?<!\S)/([A-Za-z0-9][A-Za-z0-9_:.-]*)")
-# An "@path" mention: "@" followed by a non-space fragment. The word boundary
-# before "@" is validated separately to mirror LocalFileMentionCompleter.
-_MENTION_TOKEN_RE = re.compile(r"@[^\s@]+")
-# Characters that, immediately before "@", disqualify it as a mention boundary
-# (so emails like "foo@bar" don't trigger). Shared by the lexer and completer.
-_MENTION_TRIGGER_GUARDS = frozenset((".", "-", "_", "`", "'", '"', ":", "@", "#", "~"))
-
-
-class InputHighlightLexer(Lexer):
-    """Highlight recognized input tokens in the prompt buffer.
-
-    Three token kinds are styled, composing on the same line:
-
-    - **Slash commands** (``class:slash-command``) -- registered command names,
-      aliases, and in-progress prefixes (``/cle``, ``/skill:py``), anywhere on
-      the line.
-    - **Slash arguments** (``class:slash-arg``) -- the first token after a
-      command that declares fixed subcommands (e.g. ``current`` in
-      ``/theme current``).
-    - **``@file`` mentions** (``class:file-mention``) -- agent mode only, styled
-      syntactically at a word boundary. The lexer runs on every keystroke and
-      cannot touch the filesystem, so mentions are not resolution-checked.
-    - **Leading ``!`` bash prefix** (``class:bash-prefix``) -- agent mode only,
-      the first character when the input is a one-shot shell command (mirrors
-      ``_build_user_input``).
-    """
-
-    def __init__(
-        self,
-        known_names: Callable[[], frozenset[str]],
-        *,
-        agent_mode: Callable[[], bool],
-        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
-    ) -> None:
-        self._known_names = known_names
-        self._agent_mode = agent_mode
-        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
-
-    @override
-    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
-        known = self._known_names()
-        arg_suggestions = self._arg_suggestions()
-        agent_mode = self._agent_mode()
-        lines = document.lines
-
-        def spans(line: str, lineno: int) -> list[tuple[int, int, str]]:
-            out: list[tuple[int, int, str]] = []
-            # Leading "!" bash prefix: first line, agent mode, command after it.
-            if agent_mode and lineno == 0 and line.startswith("!") and line[1:].strip():
-                out.append((0, 1, "class:bash-prefix"))
-            # Slash commands anywhere on the line (registered names and prefixes).
-            for match in _SLASH_TOKEN_RE.finditer(line):
-                name = match.group(1)
-                if not _is_known_slash_command_prefix(name, known):
-                    continue
-                # Path-like tokens ("/clear/subdir") are not commands.
-                if match.end() < len(line) and line[match.end()] == "/":
-                    continue
-                out.append((match.start(), match.end(), "class:slash-command"))
-            # First argument after a line-start slash command with known subcommands.
-            if line.startswith("/"):
-                arg_match = re.match(r"^/([A-Za-z0-9][A-Za-z0-9_:.-]*)(?:\s+(\S+))", line)
-                if arg_match is not None:
-                    command = arg_match.group(1).lower()
-                    partial = arg_match.group(2)
-                    options = arg_suggestions.get(command)
-                    if options and any(option.startswith(partial.lower()) for option in options):
-                        arg_start = arg_match.start(2)
-                        out.append((arg_start, arg_match.end(2), "class:slash-arg"))
-            # "@path" file mentions at a word boundary (agent mode only).
-            if agent_mode:
-                for match in _MENTION_TOKEN_RE.finditer(line):
-                    start = match.start()
-                    if start > 0:
-                        prev = line[start - 1]
-                        if prev.isalnum() or prev in _MENTION_TRIGGER_GUARDS:
-                            continue
-                    out.append((start, match.end(), "class:file-mention"))
-            out.sort(key=lambda span: span[0])
-            return out
-
-        def get_line(lineno: int) -> StyleAndTextTuples:
-            try:
-                line = lines[lineno]
-            except IndexError:
-                return []
-            fragments: StyleAndTextTuples = []
-            pos = 0
-            for start, end, style in spans(line, lineno):
-                if start < pos:
-                    continue  # defensive: drop overlapping spans
-                if start > pos:
-                    fragments.append(("", line[pos:start]))
-                fragments.append((style, line[start:end]))
-                pos = end
-            if pos < len(line):
-                fragments.append(("", line[pos:]))
-            return fragments
-
-        return get_line
-
-
-def _no_exact_suggestions() -> dict[str, str]:
-    return {}
-
-
-def _no_arg_suggestions() -> dict[str, tuple[str, ...]]:
-    return {}
-
-
-class SlashCommandAutoSuggest(AutoSuggest):
-    """Inline ghost-text completion for a partially typed slash command.
-
-    While the user types a ``/name`` token -- at the start of the line *or*
-    mid-sentence (e.g. ``use /desi``) -- the remainder of the best (alphabetically
-    first) matching command renders as dim ghost text after the cursor; Tab
-    accepts it word-for-word. After a command that declares fixed subcommands
-    (e.g. ``/theme cur``), the first argument is ghost-completed too. The dropdown
-    menu stays line-start-only, so mid-sentence typing never pops a completion
-    list. Rendering and the standard accept bindings (right-arrow / ctrl-e) come
-    from prompt_toolkit's auto-suggest plumbing; the Tab binding is added in
-    CustomPromptSession.
-    """
-
-    def __init__(
-        self,
-        known_names: Callable[[], frozenset[str]],
-        *,
-        exact_suggestions: Callable[[], dict[str, str]] | None = None,
-        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
-    ) -> None:
-        self._known_names = known_names
-        self._exact_suggestions = exact_suggestions or _no_exact_suggestions
-        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
-
-    @override
-    def get_suggestion(self, buffer: Buffer, document: Document) -> Suggestion | None:
-        arg_ctx = _slash_first_arg_context(document, self._known_names(), self._arg_suggestions())
-        if arg_ctx is not None:
-            command, partial = arg_ctx
-            options = self._arg_suggestions()[command]
-            partial_lower = partial.lower()
-            if not partial:
-                return Suggestion(options[0])
-            matches = [
-                option
-                for option in options
-                if option.startswith(partial_lower) and len(option) > len(partial)
-            ]
-            if matches:
-                return Suggestion(matches[0][len(partial) :])
-            return None
-
-        token = _slash_suggest_token_before_cursor(document)
-        if token is None or len(token) < 2:
-            return None
-        typed = token[1:]
-        typed_lower = typed.lower()
-        exact = self._exact_suggestions().get(typed_lower)
-        if exact is not None and typed_lower in self._known_names():
-            return Suggestion(exact)
-        matches = sorted(
-            name
-            for name in self._known_names()
-            if name.lower().startswith(typed_lower) and len(name) > len(typed)
-        )
-        if not matches:
-            return None
-        return Suggestion(matches[0][len(typed) :])
-
-
-class SlashCommandCompleter(Completer):
-    """
-    A completer that:
-    - Shows one line per slash command using the canonical "/name"
-    - Matches exact names first, then name/alias prefixes, while inserting the canonical "/name"
-    - Only activates when the current token starts with '/'
-    """
-
-    def __init__(
-        self,
-        available_commands: Sequence[SlashCommand[Any]],
-        *,
-        annotate_meta: bool = False,
-        command_scope: str = "command",
-        is_task_running: Callable[[], bool] | None = None,
-        arg_suggestions: Callable[[], dict[str, tuple[str, ...]]] | None = None,
-    ) -> None:
-        super().__init__()
-        self._available_commands = sorted(available_commands, key=lambda c: c.name)
-        self._command_names = _command_name_set(available_commands)
-        self._annotate_meta = annotate_meta
-        self._command_scope = command_scope
-        self._is_task_running = is_task_running
-        self._arg_suggestions = arg_suggestions or _no_arg_suggestions
-
-    def completion_active(self, document: Document) -> bool:
-        """Return whether slash command or subcommand completion should be active."""
-        if _slash_command_token_before_cursor(document) is not None:
-            return True
-        return (
-            _slash_first_arg_context(document, self._command_names, self._arg_suggestions())
-            is not None
-        )
-
-    @staticmethod
-    def should_complete(document: Document) -> bool:
-        """Return whether slash command completion should be active for the current buffer."""
-        return _slash_command_token_before_cursor(document) is not None
-
-    @override
-    def get_completions(
-        self, document: Document, complete_event: CompleteEvent
-    ) -> Iterable[Completion]:
-        if not self.completion_active(document):
-            return
-
-        arg_ctx = _slash_first_arg_context(document, self._command_names, self._arg_suggestions())
-        if arg_ctx is not None:
-            _, partial = arg_ctx
-            partial_lower = partial.lower()
-            for option in self._arg_suggestions()[arg_ctx[0]]:
-                if partial and not option.startswith(partial_lower):
-                    continue
-                yield Completion(
-                    text=option[len(partial) :] if partial else option,
-                    start_position=-len(partial),
-                    display=option,
-                )
-            return
-
-        token = _slash_command_token_before_cursor(document)
-        if token is None:
-            return
-
-        typed = token[1:]
-        typed_lower = typed.lower()
-        seen: set[str] = set()
-
-        def emit(cmd: SlashCommand[Any], label: str | None = None) -> Iterable[Completion]:
-            if cmd.name in seen:
-                return
-            seen.add(cmd.name)
-            shown = label or cmd.name
-            yield Completion(
-                text=f"/{shown}",
-                start_position=-len(token),
-                display=f"/{shown}",
-                display_meta=self._display_meta(cmd),
-            )
-
-        if not typed:
-            for cmd in self._available_commands:
-                yield from emit(cmd)
-            return
-
-        def match_tier(cmd: SlashCommand[Any]) -> tuple[int, str] | None:
-            """Return ``(tier, label)`` or ``None``. Lower tier = stronger match.
-            Name matches rank above alias matches so typing toward a command name
-            (e.g. ``/report`` → ``/reports``) wins over a command that only matches
-            via an exact alias. For alias-only matches the label is the matched
-            alias, so the menu surfaces what the user typed toward (e.g. ``/res``
-            → ``/resume``) rather than the differently-named command (``/sessions``)."""
-            name_lower = cmd.name.lower()
-            if name_lower == typed_lower:
-                return (0, cmd.name)
-            if name_lower.startswith(typed_lower):
-                return (1, cmd.name)
-            alias_prefix: str | None = None
-            for alias in cmd.aliases:
-                alias_lower = alias.lower()
-                if alias_lower == typed_lower:
-                    return (2, alias)
-                if alias_prefix is None and alias_lower.startswith(typed_lower):
-                    alias_prefix = alias
-            if alias_prefix is not None:
-                return (3, alias_prefix)
-            # Namespaced commands ("skill:designer-skill", "flow:build-api") also
-            # match on their bare segment after the prefix, so `/designer` or
-            # `/build` surfaces them. The label stays the canonical name so the
-            # accepted completion inserts "/skill:designer-skill", not the bare
-            # term -- one execution path, no duplicate command.
-            segment = name_lower.split(":", 1)[1] if ":" in name_lower else name_lower
-            if ":" in name_lower:
-                if segment == typed_lower:
-                    return (4, cmd.name)
-                if segment.startswith(typed_lower):
-                    return (5, cmd.name)
-            # Last resort: fuzzy subsequence on the bare segment, so the
-            # distinctive word -- even misspelled (``gurd`` -> ``guard``) --
-            # surfaces a command whose shared prefix (``pythinker-``) makes
-            # plain prefix matching useless. Gated at 2+ chars to avoid a
-            # single keystroke matching nearly everything. Label is canonical.
-            if len(typed_lower) >= 2 and _fuzzy_subsequence(typed_lower, segment):
-                return (6, cmd.name)
-            return None
-
-        # Rank by (match tier, command-name length, name): the closest, shortest
-        # command name surfaces first within each tier.
-        matched: list[tuple[int, int, str, str, SlashCommand[Any]]] = []
-        for cmd in self._available_commands:
-            result = match_tier(cmd)
-            if result is not None:
-                tier, label = result
-                matched.append((tier, len(cmd.name), cmd.name, label, cmd))
-        matched.sort(key=lambda item: (item[0], item[1], item[2]))
-        if matched and matched[0][0] < 6:
-            matched = [item for item in matched if item[0] < 6]
-
-        for _, _, _, label, cmd in matched:
-            yield from emit(cmd, label)
-
-    def _disabled_during_task(self, cmd: SlashCommand[Any]) -> bool:
-        """True when a running turn blocks this shell-level command."""
-        if self._is_task_running is None or not self._is_task_running():
-            return False
-        from pythinker_code.ui.shell.slash import registry as shell_registry
-
-        shell_cmd = shell_registry.find_command(cmd.name)
-        return shell_cmd is not None and not shell_cmd.available_during_task
-
-    def _display_meta(self, cmd: SlashCommand[Any]) -> str:
-        if self._disabled_during_task(cmd):
-            return "disabled while a task is in progress"
-        if not self._annotate_meta:
-            return cmd.description
-
-        # Only surface a kind tag when it distinguishes the entry from a plain
-        # command. Skills and flows are interleaved with commands in the agent
-        # menu, so their tag carries information; the generic command/shell scope
-        # is already obvious from the menu itself, so tagging every row is noise.
-        if cmd.name.startswith("skill:"):
-            kind: str | None = "skill"
-        elif cmd.name.startswith("flow:"):
-            kind = "flow"
-        else:
-            kind = None
-
-        parts: list[str] = []
-        if kind is not None:
-            parts.append(f"[{kind}]")
-        parts.append(cmd.description)
-        if cmd.aliases:
-            parts.append(f"aliases: {', '.join('/' + alias for alias in cmd.aliases)}")
-        return "  ".join(part for part in parts if part)
+_command_name_set = command_name_set
+_discard_slash_command = discard_slash_command
 
 
 def _card_side_padding() -> int:
@@ -1240,10 +792,10 @@ class SlashCommandMenuControl(UIControl):
         document = getattr(getattr(app, "current_buffer", None), "document", None)
         if not isinstance(document, Document):
             return 0
-        token = _slash_command_token_before_cursor(document)
-        if token is None:
+        context = parse_completion_context(document, allow_file=False)
+        if context.kind is not CompletionKind.SLASH_COMMAND:
             return 0
-        return len(token[1:])
+        return len(context.token[1:])
 
     def _selected_meta_lines(self, text: str, meta_width: int) -> list[str]:
         lines = _wrap_to_width(
@@ -1609,190 +1161,7 @@ class LocalFileMentionMenuControl(UIControl):
         return fragments
 
 
-class LocalFileMentionCompleter(Completer):
-    """Offer fuzzy `@` path completion by indexing workspace files.
-
-    File discovery and ignore rules are delegated to
-    :mod:`pythinker_code.utils.file_filter` so that the web backend can reuse
-    them.
-    """
-
-    _FRAGMENT_PATTERN = re.compile(r"[^\s@]+")
-    _TRIGGER_GUARDS = _MENTION_TRIGGER_GUARDS
-
-    def __init__(
-        self,
-        root: Path,
-        *,
-        refresh_interval: float = 2.0,
-        limit: int = 1000,
-    ) -> None:
-        self._root = root
-        self._refresh_interval = refresh_interval
-        self._limit = limit
-        self._cache_time: float = 0.0
-        self._cached_paths: list[str] = []
-        self._cache_scope: str | None = None
-        self._top_cache_time: float = 0.0
-        self._top_cached_paths: list[str] = []
-        self._fragment_hint: str | None = None
-        self._is_git: bool | None = None  # lazily detected
-        self._git_index_mtime: float | None = None
-
-        self._word_completer = WordCompleter(
-            self._get_paths,
-            WORD=False,
-            pattern=self._FRAGMENT_PATTERN,
-        )
-
-        self._fuzzy = FuzzyCompleter(
-            self._word_completer,
-            WORD=False,
-            pattern=r"^[^\s@]*",
-        )
-
-    def _get_paths(self) -> list[str]:
-        fragment = self._fragment_hint or ""
-        if "/" not in fragment and len(fragment) < 3:
-            return self._get_top_level_paths()
-        return self._get_deep_paths()
-
-    def _get_top_level_paths(self) -> list[str]:
-        from pythinker_code.utils.file_filter import is_ignored
-
-        now = time.monotonic()
-        if now - self._top_cache_time <= self._refresh_interval:
-            return self._top_cached_paths
-
-        entries: list[str] = []
-        try:
-            for entry in sorted(self._root.iterdir(), key=lambda p: p.name):
-                name = entry.name
-                if is_ignored(name):
-                    continue
-                entries.append(f"{name}/" if entry.is_dir() else name)
-                if len(entries) >= self._limit:
-                    break
-        except OSError:
-            return self._top_cached_paths
-
-        self._top_cached_paths = entries
-        self._top_cache_time = now
-        return self._top_cached_paths
-
-    def _get_deep_paths(self) -> list[str]:
-        from pythinker_code.utils.file_filter import (
-            detect_git,
-            git_index_mtime,
-            list_files_git,
-            list_files_walk,
-        )
-
-        fragment = self._fragment_hint or ""
-
-        scope: str | None = None
-        if "/" in fragment:
-            scope = fragment.rsplit("/", 1)[0]
-
-        now = time.monotonic()
-        cache_valid = (
-            now - self._cache_time <= self._refresh_interval and self._cache_scope == scope
-        )
-
-        # Invalidate on .git/index mtime change.
-        if cache_valid and self._is_git:
-            mtime = git_index_mtime(self._root)
-            if mtime != self._git_index_mtime:
-                cache_valid = False
-
-        if cache_valid:
-            return self._cached_paths
-
-        if self._is_git is None:
-            self._is_git = detect_git(self._root)
-
-        paths: list[str] | None = None
-        if self._is_git:
-            paths = list_files_git(self._root, scope)
-            self._git_index_mtime = git_index_mtime(self._root)
-        if paths is None:
-            paths = list_files_walk(self._root, scope, limit=self._limit)
-
-        self._cached_paths = paths
-        self._cache_scope = scope
-        self._cache_time = now
-        return self._cached_paths
-
-    @staticmethod
-    def _extract_fragment(text: str) -> str | None:
-        index = text.rfind("@")
-        if index == -1:
-            return None
-
-        if index > 0:
-            prev = text[index - 1]
-            if prev.isalnum() or prev in LocalFileMentionCompleter._TRIGGER_GUARDS:
-                return None
-
-        fragment = text[index + 1 :]
-        if not fragment:
-            return ""
-
-        if any(ch.isspace() for ch in fragment):
-            return None
-
-        return fragment
-
-    @staticmethod
-    def should_complete(document: Document) -> bool:
-        """Return whether `@` file completion should be active for the buffer."""
-        return LocalFileMentionCompleter._extract_fragment(document.text_before_cursor) is not None
-
-    def _is_completed_file(self, fragment: str) -> bool:
-        candidate = fragment.rstrip("/")
-        if not candidate:
-            return False
-        try:
-            return (self._root / candidate).is_file()
-        except OSError:
-            return False
-
-    @override
-    def get_completions(
-        self, document: Document, complete_event: CompleteEvent
-    ) -> Iterable[Completion]:
-        fragment = self._extract_fragment(document.text_before_cursor)
-        if fragment is None:
-            return
-        if self._is_completed_file(fragment):
-            return
-
-        mention_doc = Document(text=fragment, cursor_position=len(fragment))
-        self._fragment_hint = fragment
-        try:
-            # First, ask the fuzzy completer for candidates.
-            candidates = list(self._fuzzy.get_completions(mention_doc, complete_event))
-
-            # re-rank: prefer basename matches
-            frag_lower = fragment.lower()
-
-            def _rank(c: Completion) -> tuple[int, ...]:
-                path = c.text
-                base = path.rstrip("/").split("/")[-1].lower()
-                if base.startswith(frag_lower):
-                    cat = 0
-                elif frag_lower in base:
-                    cat = 1
-                else:
-                    cat = 2
-                test_penalty = int(any("test" in segment.lower() for segment in path.split("/")))
-                # preserve original FuzzyCompleter's order in the same category
-                return (cat, test_penalty)
-
-            candidates.sort(key=_rank)
-            yield from candidates
-        finally:
-            self._fragment_hint = None
+LocalFileMentionCompleter = HostFileMentionCompleter
 
 
 class _HistoryEntry(BaseModel):
@@ -2412,11 +1781,19 @@ class CustomPromptSession:
             is_task_running=lambda: self._running_prompt_delegate is not None,
             arg_suggestions=self._slash_arg_suggestions,
         )
+        self._workspace_root = HostPath.cwd()
+        self._workspace_index = WorkspaceIndex(
+            get_current_host(),
+            self._lifecycle,
+            self._workspace_root,
+            on_publish=self._on_workspace_snapshot_published,
+        )
+        self._lifecycle.register_closer("workspace index", self._workspace_index.aclose)
+        self._file_mention_completer = HostFileMentionCompleter(self._workspace_index)
         self._agent_mode_completer = merge_completers(
             [
                 self._agent_slash_completer,
-                # TODO(host): we need an async HostFileMentionCompleter
-                LocalFileMentionCompleter(HostPath.cwd().unsafe_to_local_path()),
+                self._file_mention_completer,
             ],
             deduplicate=True,
         )
@@ -2487,9 +1864,16 @@ class CustomPromptSession:
 
         @_kb.add("escape", eager=True, filter=_slash_completion_filter)
         def _(event: KeyPressEvent) -> None:
-            """Slash command completion: Escape discards the draft command."""
-            if _discard_slash_command(event.current_buffer):
-                event.app.invalidate()
+            """Slash completion: Escape discards a draft command, or dismisses
+            the argument menu when there is no draft command to remove."""
+            buffer = event.current_buffer
+            if not _discard_slash_command(buffer):
+                # Slash-argument completion (e.g. "/model gpt"): the eager
+                # binding swallowed Escape but there is no root command to
+                # strip, so dismiss the completion menu explicitly instead of
+                # leaving it open.
+                buffer.cancel_completion()
+            event.app.invalidate()
 
         @_kb.add("enter", filter=_non_slash_completion_filter)
         def _(event: KeyPressEvent) -> None:
@@ -4296,7 +3680,34 @@ class CustomPromptSession:
             return False
         return delegate.running_prompt_accepts_submission()
 
+    def _on_workspace_snapshot_published(self) -> None:
+        """Re-run file completion when a fresh workspace snapshot lands mid-menu."""
+        app = self._session.app
+        if not app.is_running:
+            return
+        buffer = self._session.default_buffer
+        if not HostFileMentionCompleter.should_complete(buffer.document):
+            return
+        buffer.start_completion(select_first=False)
+        app.invalidate()
+
     async def _prompt_once(self, *, append_history: bool | None) -> UserInput:
+        workspace_index = getattr(self, "_workspace_index", None)
+        if workspace_index is not None:
+            try:
+                workspace_root: HostPath | None = HostPath.cwd()
+            except OSError:
+                # CWD was removed mid-session (e.g. an external drive was
+                # unplugged). Keep the last known root instead of crashing the
+                # prompt turn; the statusline render raises CwdLostError on the
+                # same turn to exit gracefully.
+                workspace_root = None
+            if workspace_root is not None and workspace_root != getattr(
+                self, "_workspace_root", None
+            ):
+                self._workspace_root = workspace_root
+                workspace_index.set_root(workspace_root)
+            workspace_index.request_refresh("")
         placeholder = None
         if (delegate := self._active_prompt_delegate()) is not None:
             placeholder = delegate.running_prompt_placeholder()

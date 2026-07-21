@@ -194,6 +194,8 @@ iterm = "iterm"
 informations = "informations"
 # Project/domain-specific names and generated IDs.
 reviewr = "reviewr"
+# ASCII prefix used in a file-completion test (@caf -> "café.md").
+caf = "caf"
 fnd = "fnd"
 edn = "edn"
 Encrypter = "Encrypter"

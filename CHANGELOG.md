@@ -16,6 +16,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 ## Unreleased
 
 - Freeze the public shell prompt compatibility contract with constructor and rendering coverage.
+- Unify slash and file-mention completion behind one canonical completion context, adding quoted `@"path with spaces"` file mentions.
+- Index workspace file mentions asynchronously with a cwd-aware, generation-owned snapshot index so completion never blocks on disk or Git scans.
+- Harden prompt completion: Escape now dismisses the slash-argument menu (not just draft commands), file-mention highlighting no longer swallows trailing prose punctuation, scoped `@dir/name` completions rank basename-prefix matches first, workspace Git scans drain stdout/stderr concurrently to avoid a pipe deadlock, and a mid-session working-directory removal no longer crashes the prompt turn.
 - Keep the interactive prompt scene within the terminal height with a priority-ordered row allocator, and shut prompt background tasks/processes down with an awaited lifecycle.
 - Add xAI Grok OAuth login (browser loopback and device-code).
 - Add GitHub Copilot device-code OAuth login for individual github.com accounts.

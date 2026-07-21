@@ -125,6 +125,15 @@ def test_at_mention_at_start_highlighted():
     assert _mentions(_lex_line("@README.md")) == ["@README.md"]
 
 
+def test_quoted_at_mention_with_spaces_is_highlighted():
+    assert _mentions(_lex_line('read @"docs/design notes.md" now')) == ['@"docs/design notes.md"']
+
+
+def test_mention_after_allowed_punctuation_is_highlighted():
+    # Trailing prose punctuation (")", ",") must stay out of the mention span.
+    assert _mentions(_lex_line("read (@src/main.py), now")) == ["@src/main.py"]
+
+
 def test_email_like_at_not_highlighted():
     # "@" glued to an alphanumeric is not a mention boundary.
     assert _mentions(_lex_line("ping foo@bar.com")) == []
