@@ -367,6 +367,8 @@ class SubagentEvent(BaseModel):
     """The subagent instance ID."""
     subagent_type: str | None = None
     """The built-in subagent type used by this instance."""
+    description: str | None = None
+    """Short user-facing description of the subagent's assignment."""
     event: Event
     """The event from the subagent."""
     # TODO: maybe restrict the event types? to exclude approval request, etc.

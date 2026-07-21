@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import pytest
 from pythinker_core.message import ToolCall
 from pythinker_core.tooling import ToolOk
 from rich.console import Console, RenderableType
 
+from pythinker_code.ui.shell.components.render_utils import cell_width
+from pythinker_code.ui.shell.tool_renderers import (
+    clear_tool_renderers,
+    register_builtin_renderers,
+)
 from pythinker_code.ui.shell.visualize import _LiveView
 from pythinker_code.wire.types import (
     StatusUpdate,
@@ -22,6 +29,14 @@ from pythinker_code.wire.types import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tool_renderer_registry() -> Generator[None, None, None]:
+    clear_tool_renderers()
+    register_builtin_renderers()
+    yield
+    clear_tool_renderers()
+
+
 def _render(view: _LiveView, *, width: int = 100) -> str:
     console = Console(width=width, record=True, highlight=False, color_system=None)
     console.print(view.compose())
@@ -34,6 +49,25 @@ def _agent_call(call_id: str = "agent-1") -> WireToolCall:
         function=WireToolCall.FunctionBody(
             name="Agent",
             arguments='{"description":"security scan","subagent_type":"security-reviewer","prompt":"check it"}',
+        ),
+    )
+
+
+def _run_agents_call(call_id: str = "run-agents-1") -> WireToolCall:
+    return WireToolCall(
+        id=call_id,
+        function=WireToolCall.FunctionBody(
+            name="RunAgents",
+            arguments=(
+                '{"summary":"Audit TODOs","run_in_background":false,"agents":['
+                '{"title":"Find TODO comments","name":"todo_scan","subagent_type":"explore",'
+                '"prompt":"grep -r TODO /repo/src/secret.py"},'
+                '{"title":"Count files","name":"file_count","subagent_type":"explore",'
+                '"prompt":"read /repo/src/private.py"},'
+                '{"title":"Queued worker","name":"queued","subagent_type":"explore",'
+                '"prompt":"do not leak this prompt"}'
+                "]}"
+            ),
         ),
     )
 
@@ -194,3 +228,169 @@ def test_output_cleared_after_sub_tool_call_finishes():
 
     output = _render(view)
     assert "SHOULD_DISAPPEAR" not in output
+
+
+def test_run_agents_activity_tree_keeps_same_type_agents_separate_and_safe():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call(
+                "sub-a1", "Grep", '{"pattern":"TODO","path":"/repo/src/secret.py"}'
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolExecutionStarted(tool_call_id="sub-a1"),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolOutputPart(tool_call_id="sub-a1", text="src/app.py:42: # TODO\n"),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a2",
+            subagent_type="explore",
+            description="Count files",
+            event=_sub_tool_call("sub-a2", "Read", '{"file_path":"/repo/src/private.py"}'),
+        )
+    )
+
+    output = _render(view, width=100)
+    assert output.count("Agents") == 1
+    assert "RunAgents(" not in output
+    assert "Explore" in output
+    assert output.count("Find TODO comments") == 1
+    assert "searching…" in output
+    assert output.count("Count files") == 1
+    assert "reading…" in output
+    assert "1 queued" in output
+    assert "├─" in output
+    assert "└─" in output
+    assert "│  ⎿" in output
+    assert "agent searching" not in output
+    assert "agent reading" not in output
+    assert "grep -r TODO" not in output
+    assert "/repo/src/secret.py" not in output
+    assert "/repo/src/private.py" not in output
+    assert "src/app.py:42" not in output
+    assert "a1" not in output
+    assert "a2" not in output
+    assert "do not leak this prompt" not in output
+
+
+def test_run_agents_activity_states_update_one_row_per_agent():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call("sub-a1", "Grep", '{"pattern":"TODO"}'),
+        )
+    )
+    waiting = _render(view)
+    assert "waiting" in waiting
+    assert "searching…" in waiting
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolExecutionStarted(tool_call_id="sub-a1"),
+        )
+    )
+    running = _render(view)
+    assert "running" in running
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolResult(tool_call_id="sub-a1", return_value=ToolOk(output="done")),
+        )
+    )
+    thinking = _render(view)
+    assert "thinking…" in thinking
+    assert thinking.count("Find TODO comments") == 1
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call("sub-a1b", "Read", '{"file_path":"/repo/next.py"}'),
+        )
+    )
+    updated = _render(view)
+    assert updated.count("Find TODO comments") == 1
+    assert "reading…" in updated
+
+
+def test_run_agents_activity_tree_bounds_overflow_and_width():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(
+        WireToolCall(
+            id="run-agents-overflow",
+            function=WireToolCall.FunctionBody(
+                name="RunAgents",
+                arguments=(
+                    '{"summary":"many","agents":['
+                    + ",".join(
+                        f'{{"title":"Worker {i}","subagent_type":"explore","prompt":"hidden {i}"}}'
+                        for i in range(8)
+                    )
+                    + "]}"
+                ),
+            ),
+        )
+    )
+    for i in range(8):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="run-agents-overflow",
+                agent_id=f"agent-{i}",
+                subagent_type="explore",
+                description=f"Worker {i}",
+                event=_sub_tool_call(f"sub-{i}", "Read", '{"file_path":"/repo/hidden.py"}'),
+            )
+        )
+
+    output = _render(view, width=40)
+    assert output.count("Agents") == 1
+    assert "more agents" in output
+    assert "├─" in output
+    assert "└─" in output
+    assert "│  ⎿" in output or "   ⎿" in output
+    assert "/repo/hidden.py" not in output
+    assert "hidden 7" not in output
+    for line in output.splitlines():
+        assert cell_width(line) <= 40

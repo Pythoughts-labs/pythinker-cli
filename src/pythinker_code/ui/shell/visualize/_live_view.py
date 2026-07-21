@@ -262,6 +262,7 @@ class _LiveView:
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
         self._subagent_tool_call_ancestry: dict[str, tuple[_ToolCallBlock, int]] = {}
+        self._subagent_tool_call_owners: dict[str, str] = {}
         # Per-view so the "log an unknown content-part type once" guarantee is
         # scoped to this session/view rather than the whole process (keeps the
         # log-once behavior deterministic and test-isolated).
@@ -1553,6 +1554,7 @@ class _LiveView:
         self._btw_spinner = None
         self._hook_blocks.clear()
         self._subagent_tool_call_ancestry.clear()
+        self._subagent_tool_call_owners.clear()
         self._current_step_retry = None
 
         if is_interrupt:
@@ -1579,6 +1581,7 @@ class _LiveView:
         self._current_content_block = None
         self._tool_call_blocks.clear()
         self._subagent_tool_call_ancestry.clear()
+        self._subagent_tool_call_owners.clear()
         self._last_tool_call_block = None
         self._held_tool_search_block = None
         self._current_step_retry = retry
@@ -1681,6 +1684,7 @@ class _LiveView:
         ]
         for tool_call_id in stale_ids:
             del self._subagent_tool_call_ancestry[tool_call_id]
+            self._subagent_tool_call_owners.pop(tool_call_id, None)
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
@@ -1976,7 +1980,7 @@ class _LiveView:
             block, parent_depth = ancestry
 
         if event.agent_id is not None and event.subagent_type is not None:
-            block.set_subagent_metadata(event.agent_id, event.subagent_type)
+            block.set_subagent_metadata(event.agent_id, event.subagent_type, event.description)
 
         match event.event:
             case SubagentEvent() as nested_event:
@@ -2001,22 +2005,40 @@ class _LiveView:
                     )
                     return
                 self._subagent_tool_call_ancestry[tool_call.id] = (block, tool_depth)
-                block.append_sub_tool_call(tool_call)
+                if event.agent_id is not None:
+                    self._subagent_tool_call_owners[tool_call.id] = event.agent_id
+                block.append_sub_tool_call(tool_call, agent_id=event.agent_id)
                 self.refresh_soon()
             case ToolCallPart() as tool_call_part:
-                block.append_sub_tool_call_part(tool_call_part)
+                owner_agent_id = event.agent_id
+                if owner_agent_id is None and tool_call_part.stream_call_id is not None:
+                    owner_agent_id = self._subagent_tool_call_owners.get(
+                        tool_call_part.stream_call_id
+                    )
+                block.append_sub_tool_call_part(tool_call_part, agent_id=owner_agent_id)
                 self.refresh_soon()
             case ToolResult() as tool_result:
-                block.finish_sub_tool_call(tool_result)
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    tool_result.tool_call_id
+                )
+                block.finish_sub_tool_call(tool_result, agent_id=owner_agent_id)
+                self._subagent_tool_call_owners.pop(tool_result.tool_call_id, None)
                 self.refresh_soon()
             case ToolExecutionStarted() as started:
-                block.mark_sub_execution_started(started.tool_call_id)
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    started.tool_call_id
+                )
+                block.mark_sub_execution_started(started.tool_call_id, agent_id=owner_agent_id)
                 self.refresh_soon()
             case ToolOutputPart() as output_part:
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    output_part.tool_call_id
+                )
                 block.append_sub_output_part(
                     output_part.tool_call_id,
                     output_part.text,
                     stream=output_part.stream,
+                    agent_id=owner_agent_id,
                 )
                 self.refresh_soon()
             case _:
