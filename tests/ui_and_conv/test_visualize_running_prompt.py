@@ -803,14 +803,26 @@ async def test_commit_scrollback_echo_is_best_effort_when_handoff_fails(monkeypa
         prompt_session=cast(Any, _PromptSession()),
         steer=lambda _content: None,
     )
+    view._turn_ended = True  # card shown → the handoff actually runs its emit
 
-    async def _boom(*_a: object, **_k: object) -> None:
+    from rich.console import Console
+
+    # Exercise the real emit seam: a non-terminal console makes the handoff call
+    # console.print directly, and that raise must be swallowed by the best-effort
+    # commit rather than propagating out and dropping the queued command.
+    test_console = Console(force_terminal=False)
+    monkeypatch.setattr(_interactive_mod, "console", test_console)
+    attempted: list[bool] = []
+
+    def _fail_print(*_a: object, **_k: object) -> None:
+        attempted.append(True)
         raise RuntimeError("handoff teardown exploded")
 
-    monkeypatch.setattr(view, "_run_scrollback_handoff", _boom)
+    monkeypatch.setattr(test_console, "print", _fail_print)
 
-    # Must not raise: the failure is swallowed and logged, not propagated.
-    await view.commit_scrollback_echo(Text("queued command echo"))
+    await view.commit_scrollback_echo(Text("queued command echo"))  # must not raise
+
+    assert attempted == [True]  # the real print seam was reached and its raise swallowed
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_stream(
