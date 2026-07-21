@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import random
-import re
 import shlex
-import subprocess
 import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -23,7 +21,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app_or_none
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
 from prompt_toolkit.completion import Completion, merge_completers
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.document import Document
@@ -51,7 +48,7 @@ from prompt_toolkit.layout.margins import Margin
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.utils import get_cwidth
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from pythinker_host import get_current_host
 from pythinker_host.path import HostPath
 
@@ -74,11 +71,31 @@ from pythinker_code.ui.shell.placeholders import (
     sanitize_surrogates,
 )
 from pythinker_code.ui.shell.prompting import (
+    ClipboardAdapter,
     FrozenFragments,
+    GitSnapshot,
+    GitStatusIndex,
     PromptFrame,
     PromptFrameCollector,
+    PromptHistoryError,
+    PromptHistoryStore,
     PromptSceneBudget,
+    ToastManager,
+    ToastSnapshot,
     allocate_prompt_scene_rows,
+)
+from pythinker_code.ui.shell.prompting.clipboard import (
+    bind_clipboard_adapter,
+    reset_clipboard_adapter,
+)
+from pythinker_code.ui.shell.prompting.clipboard import (
+    grab_media_from_clipboard as grab_media_from_clipboard,
+)
+from pythinker_code.ui.shell.prompting.clipboard import (
+    is_clipboard_available as is_clipboard_available,
+)
+from pythinker_code.ui.shell.prompting.clipboard import (
+    is_media_clipboard_available as is_media_clipboard_available,
 )
 from pythinker_code.ui.shell.prompting.completion.context import (
     CompletionKind,
@@ -94,6 +111,17 @@ from pythinker_code.ui.shell.prompting.completion.slash import (
 from pythinker_code.ui.shell.prompting.completion.workspace import (
     HostFileMentionCompleter,
     WorkspaceIndex,
+)
+from pythinker_code.ui.shell.prompting.git_status import (
+    bind_git_status_index,
+    current_git_snapshot,
+    reset_git_status_index,
+)
+from pythinker_code.ui.shell.prompting.history import (
+    HistoryEntry,
+    ensure_private_history_path,
+    load_history_entries,
+    redact_history_secrets,
 )
 from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
 from pythinker_code.ui.shell.prompting.state import (
@@ -120,6 +148,13 @@ from pythinker_code.ui.shell.prompting.state import (
     TurnStarting,
     transition,
 )
+from pythinker_code.ui.shell.prompting.toasts import (
+    bind_toast_manager,
+    bootstrap_toast_queues,
+    current_toast,
+    reset_toast_manager,
+    toast,
+)
 from pythinker_code.ui.shell.spacing import (
     PREAMBLE_EARLIER_OUTPUT_HIDDEN_HINT,
     ensure_prompt_newline,
@@ -130,11 +165,6 @@ from pythinker_code.ui.terminal_capabilities import synchronized_output_enabled
 from pythinker_code.ui.theme import get_prompt_style, get_toolbar_colors, thinking_dot_style
 from pythinker_code.ui.theme import get_tui_tokens as _get_tui_tokens
 from pythinker_code.ui.tui_config import is_card_style
-from pythinker_code.utils.clipboard import (
-    grab_media_from_clipboard,
-    is_clipboard_available,
-    is_media_clipboard_available,
-)
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.slashcmd import SlashCommand
 from pythinker_code.wire.types import ContentPart, TextPart
@@ -1164,35 +1194,7 @@ class LocalFileMentionMenuControl(UIControl):
 LocalFileMentionCompleter = HostFileMentionCompleter
 
 
-class _HistoryEntry(BaseModel):
-    content: str
-
-
-_HISTORY_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (
-        re.compile(r"(?i)\b((?:authorization\s*:\s*)?(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}"),
-        r"\1[REDACTED]",
-    ),
-    (
-        re.compile(
-            r"(?i)([\"']?(?:api[_-]?key|token|secret|password|access[_-]?token|"
-            r"refresh[_-]?token|id[_-]?token|session[_-]?token)[\"']?\s*[:=]\s*[\"'])"
-            r"([^\"'\r\n]{8,})([\"'])"
-        ),
-        r"\1[REDACTED]\3",
-    ),
-    (
-        re.compile(
-            r"(?i)\b(api[_-]?key|token|secret|password|access[_-]?token|"
-            r"refresh[_-]?token|id[_-]?token|session[_-]?token)(\s*[:=]\s*)([^\s'\"&]{8,})"
-        ),
-        r"\1\2[REDACTED]",
-    ),
-    (re.compile(r"\b(sk-[A-Za-z0-9][A-Za-z0-9_-]{16,})\b"), "[REDACTED]"),
-    (re.compile(r"\b(?:gh[opusr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"), "[REDACTED]"),
-    (re.compile(r"\b(AKIA[0-9A-Z]{16})\b"), "[REDACTED]"),
-    (re.compile(r"\b(AIza[0-9A-Za-z_-]{20,})\b"), "[REDACTED]"),
-)
+_HistoryEntry = HistoryEntry
 
 
 def _env_truthy(name: str) -> bool:
@@ -1200,56 +1202,11 @@ def _env_truthy(name: str) -> bool:
 
 
 def _redact_history_secrets(text: str) -> str:
-    redacted = text
-    for pattern, replacement in _HISTORY_SECRET_PATTERNS:
-        redacted = pattern.sub(replacement, redacted)
-    return redacted
+    return redact_history_secrets(text)
 
 
-def _ensure_private_history_path(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        os.chmod(path.parent, 0o700)
-    if path.exists():
-        with contextlib.suppress(OSError):
-            os.chmod(path, 0o600)
-
-
-def _load_history_entries(history_file: Path) -> list[_HistoryEntry]:
-    entries: list[_HistoryEntry] = []
-    if not history_file.exists():
-        return entries
-
-    try:
-        with history_file.open(encoding="utf-8") as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning(
-                        "Failed to parse user history line; skipping: {line}",
-                        line=line,
-                    )
-                    continue
-                try:
-                    entry = _HistoryEntry.model_validate(record)
-                    entries.append(entry)
-                except ValidationError:
-                    logger.warning(
-                        "Failed to validate user history entry; skipping: {line}",
-                        line=line,
-                    )
-                    continue
-    except OSError as exc:
-        logger.warning(
-            "Failed to load user history file: {file} ({error})",
-            file=history_file,
-            error=exc,
-        )
-
-    return entries
+_ensure_private_history_path = ensure_private_history_path
+_load_history_entries = load_history_entries
 
 
 class PromptUIState(Enum):
@@ -1279,131 +1236,20 @@ _RUNNING_REFRESH_INTERVAL = 0.1
 # ponytail: 2s quiet threshold — silent dev servers drop to idle refresh
 _BG_QUIET_THRESHOLD_S = 2.0
 
-_GIT_BRANCH_TTL = 5.0
-_GIT_STATUS_TTL = 15.0
 _TIP_ROTATE_INTERVAL = 30.0
 _MAX_CWD_COLS = 30
 _MAX_BRANCH_COLS = 22
 
 
-@dataclass
-class _GitBranchState:
-    timestamp: float = 0.0
-    branch: str | None = None
-    proc: subprocess.Popen[str] | None = None
-
-
-@dataclass
-class _GitStatusState:
-    timestamp: float = 0.0
-    dirty: bool = False
-    ahead: int = 0
-    behind: int = 0
-    proc: subprocess.Popen[str] | None = None
-
-
-_git_branch_state = _GitBranchState()
-_git_status_state = _GitStatusState()
-
-_GIT_STATUS_AB_RE = re.compile(r"\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]")
-
-
 def _get_git_branch() -> str | None:
-    """Return the current git branch name via a non-blocking cached subprocess."""
-    state = _git_branch_state
-    now = time.monotonic()
-
-    # Collect result if a previously launched process has finished
-    if state.proc is not None:
-        returncode = state.proc.poll()
-        if returncode is not None:
-            try:
-                stdout, _ = state.proc.communicate()
-                new_branch = stdout.strip() or None
-                # Branch changed — discard any in-flight status subprocess so it cannot
-                # write stale results for the old branch, then force an immediate refresh.
-                if new_branch != state.branch:
-                    if _git_status_state.proc is not None:
-                        with contextlib.suppress(Exception):
-                            _git_status_state.proc.terminate()
-                        _git_status_state.proc = None
-                    _git_status_state.timestamp = 0.0
-                state.branch = new_branch
-            except Exception:
-                state.branch = None
-            state.proc = None
-
-    # Launch a new process when the TTL has expired and nothing is running
-    if state.timestamp + _GIT_BRANCH_TTL <= now and state.proc is None:
-        state.timestamp = now
-        try:
-            state.proc = subprocess.Popen(
-                ["git", "branch", "--show-current"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except Exception:
-            state.branch = None
-
-    return state.branch
+    """Return the active session's cached branch without blocking on I/O."""
+    return current_git_snapshot().branch
 
 
 def _get_git_status() -> tuple[bool, int, int]:
-    """Return (dirty, ahead, behind) via a non-blocking cached subprocess.
-
-    Runs ``git status --porcelain -b`` (includes untracked files so newly created
-    files show as dirty).  TTL is longer than the branch check because file-tree
-    scanning is expensive.
-    """
-    state = _git_status_state
-    now = time.monotonic()
-
-    if state.proc is not None:
-        returncode = state.proc.poll()
-        if returncode is not None:
-            try:
-                stdout, _ = state.proc.communicate()
-                dirty = False
-                ahead = 0
-                behind = 0
-                for line in stdout.splitlines():
-                    if line.startswith("## "):
-                        m = _GIT_STATUS_AB_RE.search(line)
-                        if m:
-                            ahead = int(m.group(1) or 0)
-                            behind = int(m.group(2) or 0)
-                    elif line.strip():
-                        dirty = True
-                state.dirty = dirty
-                state.ahead = ahead
-                state.behind = behind
-            except Exception:
-                pass
-            state.proc = None
-        elif now - state.timestamp > _GIT_STATUS_TTL:
-            # Subprocess is stuck (e.g. OS pipe buffer full from many untracked files).
-            # Terminate it so the toolbar is not permanently frozen; retry after next TTL.
-            with contextlib.suppress(Exception):
-                state.proc.terminate()
-            state.proc = None
-            state.timestamp = now  # delay next spawn by one full TTL
-
-    if state.timestamp + _GIT_STATUS_TTL <= now and state.proc is None:
-        state.timestamp = now
-        with contextlib.suppress(Exception):
-            state.proc = subprocess.Popen(
-                ["git", "status", "--porcelain", "-b"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-
-    return state.dirty, state.ahead, state.behind
+    """Return the active session's cached dirty/ahead/behind state."""
+    snapshot = current_git_snapshot()
+    return snapshot.dirty, snapshot.ahead, snapshot.behind
 
 
 def _format_git_badge(branch: str, dirty: bool, ahead: int, behind: int) -> str:
@@ -1423,55 +1269,9 @@ def _format_git_badge(branch: str, dirty: bool, ahead: int, behind: int) -> str:
     return f"{branch} [{' '.join(parts)}]"
 
 
-_GIT_DIFFSTAT_TTL = 15.0
-
-
-@dataclass
-class _GitDiffStatState:
-    timestamp: float = 0.0
-    added: int = 0
-    removed: int = 0
-    proc: subprocess.Popen[str] | None = None
-
-
-_git_diffstat_state = _GitDiffStatState()
-
-
 def _get_git_diffstat() -> tuple[int, int] | None:
-    """Return (added, removed) working-tree line counts via a non-blocking cached
-    subprocess. None when not a repo / no changes."""
-    from pythinker_code.ui.shell.statusline import parse_shortstat
-
-    state = _git_diffstat_state
-    now = time.monotonic()
-    if state.proc is not None:
-        returncode = state.proc.poll()
-        if returncode is not None:
-            try:
-                stdout, _ = state.proc.communicate()
-                state.added, state.removed = parse_shortstat(stdout)
-            except Exception:
-                logger.debug("git diff --shortstat read/parse failed", exc_info=True)
-            state.proc = None
-        elif now - state.timestamp > _GIT_DIFFSTAT_TTL:
-            with contextlib.suppress(Exception):
-                state.proc.terminate()
-            state.proc = None
-            state.timestamp = now
-    if state.timestamp + _GIT_DIFFSTAT_TTL <= now and state.proc is None:
-        state.timestamp = now
-        with contextlib.suppress(Exception):
-            state.proc = subprocess.Popen(
-                ["git", "--no-optional-locks", "diff", "--shortstat"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-    if state.added == 0 and state.removed == 0:
-        return None
-    return state.added, state.removed
+    """Return the active session's cached working-tree line counts."""
+    return current_git_snapshot().diffstat
 
 
 def _shorten_cwd(path: str) -> str:
@@ -1527,16 +1327,6 @@ def _truncate_right(text: str, max_cols: int) -> str:
     return "".join(chars) + ellipsis
 
 
-@dataclass(slots=True)
-class _ToastEntry:
-    topic: str | None
-    """There can be only one toast of each non-None topic in the queue."""
-    message: str
-    expires_at: float
-    style: str = ""
-    """Optional prompt_toolkit style for the rendered line; "" uses the default toast style."""
-
-
 @dataclass(frozen=True, slots=True)
 class BgTaskCounts:
     bash: int = 0
@@ -1568,48 +1358,8 @@ class PinnedStatusTailProvider(Protocol):
     def render_pinned_status_tail(self, columns: int) -> AnyFormattedText: ...
 
 
-_toast_queues: dict[Literal["left", "right"], deque[_ToastEntry]] = {
-    "left": deque(),
-    "right": deque(),
-}
-"""The queue of toasts to show, including the one currently being shown (the first one)."""
-
-
-def toast(
-    message: str,
-    duration: float = 5.0,
-    topic: str | None = None,
-    immediate: bool = False,
-    position: Literal["left", "right"] = "left",
-    style: str = "",
-) -> None:
-    queue = _toast_queues[position]
-    duration = max(duration, _IDLE_REFRESH_INTERVAL)
-    entry = _ToastEntry(
-        topic=topic,
-        message=message,
-        expires_at=time.monotonic() + duration,
-        style=style,
-    )
-    if topic is not None:
-        # Remove existing toasts with the same topic
-        for existing in list(queue):
-            if existing.topic == topic:
-                queue.remove(existing)
-    if immediate:
-        queue.appendleft(entry)
-    else:
-        queue.append(entry)
-
-
-def _current_toast(position: Literal["left", "right"] = "left") -> _ToastEntry | None:
-    queue = _toast_queues[position]
-    now = time.monotonic()
-    while queue and queue[0].expires_at <= now:
-        queue.popleft()
-    if not queue:
-        return None
-    return queue[0]
+_toast_queues = bootstrap_toast_queues
+_current_toast = current_toast
 
 
 def _build_toolbar_tips(clipboard_available: bool) -> list[str]:
@@ -1711,7 +1461,24 @@ class CustomPromptSession:
         )
         if self._history_enabled:
             history_dir.mkdir(parents=True, exist_ok=True)
-            _ensure_private_history_path(self._history_file)
+        self._history_store = PromptHistoryStore(
+            self._history_file,
+            enabled=self._history_enabled,
+        )
+        self._lifecycle.register_closer("prompt history", self._history_store.aclose)
+        self._toast_manager = ToastManager()
+        self._lifecycle.register_closer("toast manager", self._toast_manager.aclose)
+        self._clipboard_adapter = ClipboardAdapter()
+        self._lifecycle.register_closer("clipboard adapter", self._clipboard_adapter.aclose)
+        self._git_status_index = GitStatusIndex(
+            get_current_host(),
+            self._lifecycle,
+            on_publish=self.invalidate,
+        )
+        self._lifecycle.register_closer("Git status index", self._git_status_index.aclose)
+        self._git_status_token: Token[GitStatusIndex | None] | None = None
+        self._toast_token: Token[ToastManager | None] | None = None
+        self._clipboard_token: Token[ClipboardAdapter | None] | None = None
         self._status_provider = status_provider
         self._status_block_provider = status_block_provider
         self._fast_refresh_provider = fast_refresh_provider
@@ -1755,12 +1522,12 @@ class CustomPromptSession:
         self._last_ui_state: PromptUIState = PromptUIState.NORMAL_INPUT
         self._suspended_buffer_document: Document | None = None
         self._prompt_state = PromptState(mode=self._mode)
-        clipboard_available = is_clipboard_available()
-        media_clipboard_available = is_media_clipboard_available()
+        clipboard_available = self._clipboard_adapter.is_text_available()
+        media_clipboard_available = self._clipboard_adapter.is_media_available()
         self._tips = _build_toolbar_tips(clipboard_available or media_clipboard_available)
         self._tip_rotation_index: int = random.randrange(len(self._tips)) if self._tips else 0
 
-        history_entries = _load_history_entries(self._history_file) if self._history_enabled else []
+        history_entries = self._history_store.load()
         history = InMemoryHistory()
         for entry in history_entries:
             history.append_string(entry.content)
@@ -2163,20 +1930,17 @@ class CustomPromptSession:
                 if self._try_paste_media(event):
                     return
                 if clipboard_available:
-                    try:
-                        clipboard_data = event.app.clipboard.get_data()
-                    except Exception:
+                    clipboard_text = self._clipboard_adapter.paste_text(event.app.clipboard)
+                    if clipboard_text is None:
                         return
-                    if clipboard_data is None:  # type: ignore[reportUnnecessaryComparison]
-                        return
-                    self._insert_pasted_text(event.current_buffer, clipboard_data.text)
+                    self._insert_pasted_text(event.current_buffer, clipboard_text)
                     event.app.invalidate()
 
         # Only use PyperclipClipboard when pyperclip actually works.
         # PromptSession built-in keybindings (ctrl-k, ctrl-w, ctrl-y)
         # use clipboard without error handling, so a broken clipboard
         # object would crash the UI.
-        clipboard = PyperclipClipboard() if clipboard_available else None
+        clipboard = self._clipboard_adapter.create_text_clipboard(available=clipboard_available)
 
         self._session = PromptSession[str](
             message=self._render_message,
@@ -3388,8 +3152,13 @@ class CustomPromptSession:
             self._statusline_runner.start()
 
     def __enter__(self) -> CustomPromptSession:
-        self._start()
-        return self
+        self._bind_resource_bindings()
+        try:
+            self._start()
+            return self
+        except BaseException:
+            self._reset_resource_bindings()
+            raise
 
     def __exit__(self, *_: object) -> None:
         if self._status_refresh_task is not None and not self._status_refresh_task.done():
@@ -3397,17 +3166,51 @@ class CustomPromptSession:
         self._status_refresh_task = None
         if self._statusline_runner is not None:
             self._statusline_runner.cancel()
+        self._reset_resource_bindings()
 
     async def __aenter__(self) -> CustomPromptSession:
-        self._start()
-        return self
+        self._bind_resource_bindings()
+        try:
+            self._start()
+            return self
+        except BaseException:
+            self._reset_resource_bindings()
+            raise
+
+    def _bind_resource_bindings(self) -> None:
+        self._git_status_token = bind_git_status_index(self._git_status_index)
+        self._toast_token = bind_toast_manager(self._toast_manager)
+        self._clipboard_token = bind_clipboard_adapter(self._clipboard_adapter)
 
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
-        await self._lifecycle.aclose()
-        self._status_refresh_task = None
+        try:
+            await self._lifecycle.aclose()
+            self._status_refresh_task = None
+        finally:
+            self._reset_resource_bindings()
+
+    def _reset_resource_bindings(self) -> None:
+        # Partially constructed sessions (lifecycle tests) may never have bound tokens.
+        clipboard_token = getattr(self, "_clipboard_token", None)
+        self._clipboard_token = None
+        if clipboard_token is not None:
+            reset_clipboard_adapter(clipboard_token)
+        toast_token = getattr(self, "_toast_token", None)
+        self._toast_token = None
+        if toast_token is not None:
+            reset_toast_manager(toast_token)
+        git_status_token = getattr(self, "_git_status_token", None)
+        self._git_status_token = None
+        if git_status_token is not None:
+            reset_git_status_index(git_status_token)
+
+    @property
+    def prompt_history_store(self) -> PromptHistoryStore:
+        """Expose this session's history store to the shell slash command."""
+        return self._history_store
 
     def _get_placeholder_manager(self) -> PromptPlaceholderManager:
         manager = getattr(self, "_placeholder_manager", None)
@@ -3439,7 +3242,12 @@ class CustomPromptSession:
         Returns True if any media content was inserted.
         """
         try:
-            result = grab_media_from_clipboard()
+            clipboard_adapter = getattr(self, "_clipboard_adapter", None)
+            result = (
+                clipboard_adapter.paste_media()
+                if clipboard_adapter is not None
+                else grab_media_from_clipboard()
+            )
         except Exception:
             # ImageGrab.grabclipboard() may fail on headless Linux if the
             # real xclip cannot connect to an X server. Silently ignore so
@@ -3774,16 +3582,14 @@ class CustomPromptSession:
         if entry.content == self._last_history_content:
             return
 
+        history_store = getattr(self, "_history_store", None)
+        if not isinstance(history_store, PromptHistoryStore):
+            history_store = PromptHistoryStore(self._history_file)
+            self._history_store = history_store
         try:
-            self._history_file.parent.mkdir(parents=True, exist_ok=True)
-            _ensure_private_history_path(self._history_file)
-            fd = os.open(self._history_file, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(entry.model_dump_json(ensure_ascii=False) + "\n")
-            with contextlib.suppress(OSError):
-                os.chmod(self._history_file, 0o600)
-            self._last_history_content = entry.content
-        except OSError as exc:
+            if history_store.append(entry.content):
+                self._last_history_content = entry.content
+        except PromptHistoryError as exc:
             logger.warning(
                 "Failed to append user history entry: {file} ({error})",
                 file=self._history_file,
@@ -3816,6 +3622,32 @@ class CustomPromptSession:
         tokens = _get_tui_tokens()
         style = f"fg:{tokens.warning or 'ansiyellow'} bold"
         fragments.extend([("", "\n"), (style, line)])
+
+    def _prompt_git_snapshot(self, root: HostPath) -> GitSnapshot:
+        index = getattr(self, "_git_status_index", None)
+        if isinstance(index, GitStatusIndex):
+            snapshot = index.snapshot(root)
+            index.request_refresh(root)
+            return snapshot
+        branch = _get_git_branch()
+        dirty, ahead, behind = _get_git_status() if branch else (False, 0, 0)
+        diffstat = _get_git_diffstat()
+        added, removed = diffstat if diffstat is not None else (0, 0)
+        return GitSnapshot(
+            root=root.canonical(),
+            branch=branch,
+            dirty=dirty,
+            ahead=ahead,
+            behind=behind,
+            added=added,
+            removed=removed,
+        )
+
+    def _prompt_toast(self, position: Literal["left", "right"]) -> ToastSnapshot | None:
+        manager = getattr(self, "_toast_manager", None)
+        if isinstance(manager, ToastManager):
+            return manager.current(position)
+        return _current_toast(position)
 
     def _fit_toolbar_to_terminal(self, fragments: FormattedText, columns: int) -> FormattedText:
         app = get_app_or_none()
@@ -3894,7 +3726,8 @@ class CustomPromptSession:
         # CWD (truncated from left) + git branch with status badge
         # Degrade gracefully on narrow terminals: full → cwd-only → truncated cwd → skip
         try:
-            cwd = _truncate_left(_shorten_cwd(str(HostPath.cwd())), _MAX_CWD_COLS)
+            git_root = HostPath.cwd()
+            cwd = _truncate_left(_shorten_cwd(str(git_root)), _MAX_CWD_COLS)
         except OSError:
             # CWD no longer exists (e.g. external drive unplugged).  Ask
             # prompt_toolkit to exit; the raised exception will propagate out
@@ -3902,11 +3735,16 @@ class CustomPromptSession:
             # crash report with session info and exits cleanly.
             app.exit(exception=CwdLostError())
             return FormattedText([])
-        branch = _get_git_branch()
+        git_snapshot = self._prompt_git_snapshot(git_root)
+        branch = git_snapshot.branch
         if branch:
-            dirty, ahead, behind = _get_git_status()
             branch = _truncate_right(branch, _MAX_BRANCH_COLS)
-            badge = _format_git_badge(branch, dirty, ahead, behind)
+            badge = _format_git_badge(
+                branch,
+                git_snapshot.dirty,
+                git_snapshot.ahead,
+                git_snapshot.behind,
+            )
             cwd_text = f"{cwd}  {badge}"
         else:
             cwd_text = cwd
@@ -3957,7 +3795,7 @@ class CustomPromptSession:
         right_text = self._render_right_span(status)
         right_width = _display_width(right_text)
 
-        left_toast = _current_toast("left")
+        left_toast = self._prompt_toast("left")
         if left_toast is not None:
             max_left = max(0, columns - right_width - 2)
             if max_left > 0:
@@ -4010,22 +3848,23 @@ class CustomPromptSession:
             rate_out_sampler.reset()
 
         try:
-            cwd_text = _truncate_left(_shorten_cwd(str(HostPath.cwd())), _MAX_CWD_COLS)
+            git_root = HostPath.cwd()
+            cwd_text = _truncate_left(_shorten_cwd(str(git_root)), _MAX_CWD_COLS)
         except OSError as exc:
             raise CwdLostError() from exc
 
         git_info: GitInfo | None = None
-        branch = _get_git_branch()
+        git_snapshot = self._prompt_git_snapshot(git_root)
+        branch = git_snapshot.branch
         if branch:
-            dirty, ahead, behind = _get_git_status()
             git_info = GitInfo(
                 branch=_truncate_right(branch, _MAX_BRANCH_COLS),
-                dirty=dirty,
-                ahead=ahead,
-                behind=behind,
+                dirty=git_snapshot.dirty,
+                ahead=git_snapshot.ahead,
+                behind=git_snapshot.behind,
             )
 
-        diff = _get_git_diffstat()
+        diff = git_snapshot.diffstat
         diff_added, diff_removed = diff if diff is not None else (None, None)
 
         thinking_effort = getattr(self, "_thinking_effort", None)
@@ -4138,7 +3977,7 @@ class CustomPromptSession:
             fragments.append((tc.bg_tasks, bg_summary))
             left_width = _display_width(bg_summary)
         else:
-            left_toast = _current_toast("left")
+            left_toast = self._prompt_toast("left")
             if left_toast is not None:
                 left_text = _truncate_right(left_toast.message, max_left_width)
                 fragments.append((left_toast.style or secondary_style, left_text))
@@ -4169,13 +4008,12 @@ class CustomPromptSession:
             return None
         return self._tips[self._tip_rotation_index % len(self._tips)]
 
-    @staticmethod
-    def _render_right_span(status: StatusSnapshot) -> str:
-        current_toast = _current_toast("right")
-        if current_toast is None:
+    def _render_right_span(self, status: StatusSnapshot) -> str:
+        right_toast = self._prompt_toast("right")
+        if right_toast is None:
             return format_context_status(
                 status.context_usage,
                 status.context_tokens,
                 status.max_context_tokens,
             )
-        return current_toast.message
+        return right_toast.message

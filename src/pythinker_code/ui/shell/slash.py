@@ -65,6 +65,7 @@ SKILL_COMMAND_PREFIX = "skill:"
 
 # Ordered first-token hints for slash commands with fixed subcommands (ghost text + menu).
 _THEME_ARGS: tuple[str, ...] = ("current", "doctor", "tokens", "code", "dark", "light", "auto")
+_PROMPT_HISTORY_ARGS: tuple[str, ...] = ("status", "clear")
 
 
 def slash_command_arg_suggestions() -> dict[str, tuple[str, ...]]:
@@ -72,6 +73,7 @@ def slash_command_arg_suggestions() -> dict[str, tuple[str, ...]]:
     return {
         "theme": _THEME_ARGS,
         "color": _THEME_ARGS,
+        "prompt-history": _PROMPT_HISTORY_ARGS,
     }
 
 
@@ -170,6 +172,50 @@ def version(app: Shell, args: str):
     from pythinker_code.constant import VERSION
 
     console.print(f"pythinker, version {VERSION}")
+
+
+@registry.command(name="prompt-history", available_during_task=True)
+@shell_mode_registry.command(name="prompt-history")
+def prompt_history(app: Shell, args: str) -> None:
+    """Inspect or clear prompt history. Usage: /prompt-history status|clear"""
+    from pythinker_code.ui.shell.prompt import CustomPromptSession
+    from pythinker_code.ui.shell.prompting.history import PromptHistoryError
+    from pythinker_code.ui.theme import get_tui_tokens
+
+    tokens = get_tui_tokens()
+    action = args.strip().lower()
+    if action not in _PROMPT_HISTORY_ARGS:
+        console.print(f"[{tokens.error}]Usage: /prompt-history status|clear[/]")
+        return
+
+    prompt_session = getattr(app, "_prompt_session", None)
+    if not isinstance(prompt_session, CustomPromptSession):
+        console.print(
+            f"[{tokens.error}]Prompt history is unavailable because no shell session is active.[/]"
+        )
+        return
+    store = prompt_session.prompt_history_store
+    if action == "status":
+        status = store.status()
+        state = "enabled" if status.enabled else "disabled"
+        total_size = status.size_bytes + status.rotated_size_bytes
+        console.print(
+            f"Prompt history: [{tokens.info}]{state}[/] · {status.entries} entries · "
+            f"{total_size} bytes\n"
+            f"[{tokens.muted}]current: {_rich_escape(status.path)}\n"
+            f"rotated: {_rich_escape(status.rotated_path)}[/]"
+        )
+        return
+
+    try:
+        status = store.clear()
+    except PromptHistoryError as exc:
+        console.print(
+            f"[{tokens.error}]Failed to clear prompt history: {_rich_escape(exc)}. "
+            "Close other Pythinker sessions using this workspace and try again.[/]"
+        )
+        return
+    console.print(f"[{tokens.success}]Prompt history cleared: {status.entries} entries remain.[/]")
 
 
 @registry.command(available_during_task=True)

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import stat
+from types import SimpleNamespace
+from typing import Any, cast
 
 from PIL import Image
 
 from pythinker_code.ui.shell import prompt as shell_prompt
+from pythinker_code.ui.shell import slash as shell_slash
 from pythinker_code.ui.shell.placeholders import AttachmentCache, PromptPlaceholderManager
+from pythinker_code.ui.shell.prompting.history import PromptHistoryError, PromptHistoryStore
+from pythinker_code.ui.shell.slash import registry, slash_command_arg_suggestions
 
 
 def _make_prompt_session(
@@ -138,3 +143,88 @@ def test_append_history_entry_restricts_file_permissions(tmp_path) -> None:
 
     mode = stat.S_IMODE(prompt_session._history_file.stat().st_mode)
     assert mode == 0o600
+
+
+def test_prompt_history_store_loads_only_configured_tail(tmp_path) -> None:
+    store = PromptHistoryStore(tmp_path / "history.jsonl", max_entries=2)
+
+    assert store.append("one")
+    assert store.append("two")
+    assert store.append("three")
+
+    assert [entry.content for entry in store.load()] == ["two", "three"]
+
+
+def test_prompt_history_store_excludes_credential_commands(tmp_path) -> None:
+    store = PromptHistoryStore(tmp_path / "history.jsonl")
+
+    assert store.append("/login api-key") is False
+    assert store.append("logout openai") is False
+    assert not store.path.exists()
+
+
+def test_prompt_history_store_skips_oversized_records(tmp_path) -> None:
+    store = PromptHistoryStore(tmp_path / "history.jsonl")
+
+    assert store.append("x" * (256 * 1024)) is False
+    assert not store.path.exists()
+
+
+def test_prompt_history_store_clear_confirms_both_files_are_removed(tmp_path) -> None:
+    store = PromptHistoryStore(tmp_path / "history.jsonl")
+    assert store.append("kept")
+    encoding = "utf-8"
+    store.rotated_path.write_text('{"content":"older"}\n', encoding=encoding)
+
+    status = store.clear()
+
+    assert status.entries == 0
+    assert not store.path.exists()
+    assert not store.rotated_path.exists()
+
+
+def test_prompt_history_slash_command_has_only_supported_argument_suggestions() -> None:
+    command = registry.find_command("prompt-history")
+
+    assert command is not None
+    assert command.name == "prompt-history"
+    assert slash_command_arg_suggestions()["prompt-history"] == ("status", "clear")
+
+
+def test_prompt_history_clear_reports_success_only_after_confirmed_removal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = PromptHistoryStore(tmp_path / "history.jsonl")
+    assert store.append("kept")
+    prompt_session = object.__new__(shell_prompt.CustomPromptSession)
+    cast(Any, prompt_session)._history_store = store
+    app = SimpleNamespace(_prompt_session=prompt_session)
+    messages: list[str] = []
+    monkeypatch.setattr(shell_slash.console, "print", lambda message: messages.append(str(message)))
+    command = registry.find_command("prompt-history")
+    assert command is not None
+
+    command.func(cast(Any, app), "clear")
+
+    assert any("Prompt history cleared" in message for message in messages)
+    assert not store.path.exists()
+
+
+def test_prompt_history_clear_failure_never_claims_success(monkeypatch) -> None:
+    class _FailingStore:
+        def clear(self) -> None:
+            raise PromptHistoryError("lock timed out")
+
+    prompt_session = object.__new__(shell_prompt.CustomPromptSession)
+    cast(Any, prompt_session)._history_store = _FailingStore()
+    app = SimpleNamespace(_prompt_session=prompt_session)
+    messages: list[str] = []
+    monkeypatch.setattr(shell_slash.console, "print", lambda message: messages.append(str(message)))
+    command = registry.find_command("prompt-history")
+    assert command is not None
+
+    command.func(cast(Any, app), "clear")
+
+    assert any("Failed to clear prompt history" in message for message in messages)
+    assert all("Prompt history cleared" not in message for message in messages)
