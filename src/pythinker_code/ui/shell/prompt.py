@@ -121,8 +121,6 @@ from pythinker_code.ui.shell.prompting.git_status import (
 )
 from pythinker_code.ui.shell.prompting.history import (
     HistoryEntry,
-    ensure_private_history_path,
-    load_history_entries,
     redact_history_secrets,
 )
 from pythinker_code.ui.shell.prompting.lifecycle import PromptLifecycle
@@ -1195,10 +1193,6 @@ def _env_truthy(name: str) -> bool:
 
 def _redact_history_secrets(text: str) -> str:
     return redact_history_secrets(text)
-
-
-_ensure_private_history_path = ensure_private_history_path
-_load_history_entries = load_history_entries
 
 
 class PromptUIState(Enum):
