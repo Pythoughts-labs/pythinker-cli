@@ -13,7 +13,7 @@ from rich.style import Style as RichStyle
 from pythinker_code.ui.color_utils import blend, parse_hex_color, to_hex_color
 from pythinker_code.ui.terminal_capabilities import color_depth, colors_disabled
 
-from .capabilities import get_terminal_capabilities
+from .capabilities import TerminalCapabilities, get_terminal_capabilities
 from .palettes import THEME_SPECS
 from .resolver import StyleResolver
 from .spec import (
@@ -72,9 +72,13 @@ def get_theme_spec(theme: ThemeName | None = None) -> ThemeSpec:
     return THEME_SPECS[_mode(theme)]
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=16)
+def _resolver_for(theme: ThemeName, caps: TerminalCapabilities) -> StyleResolver:
+    return StyleResolver(THEME_SPECS[_mode(theme)], caps)
+
+
 def get_resolver(theme: ThemeName = "dark") -> StyleResolver:
-    return StyleResolver(THEME_SPECS[_mode(theme)], get_terminal_capabilities())
+    return _resolver_for(theme, get_terminal_capabilities())
 
 
 def active_resolver() -> StyleResolver:

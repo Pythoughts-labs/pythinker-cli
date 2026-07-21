@@ -72,6 +72,7 @@ from pythinker_code.ui.shell.placeholders import (
 )
 from pythinker_code.ui.shell.prompting import (
     ClipboardAdapter,
+    FooterViewModel,
     FrozenFragments,
     GitSnapshot,
     GitStatusIndex,
@@ -83,6 +84,10 @@ from pythinker_code.ui.shell.prompting import (
     ToastManager,
     ToastSnapshot,
     allocate_prompt_scene_rows,
+    background_task_summary,
+    select_footer_content,
+    truncate_footer_left,
+    truncate_footer_right,
 )
 from pythinker_code.ui.shell.prompting.clipboard import (
     bind_clipboard_adapter,
@@ -324,17 +329,7 @@ class _PromptRightPaddingMargin(Margin):
 
 
 def _background_task_summary(counts: BgTaskCounts) -> str | None:
-    total = counts.bash + counts.agent
-    if total <= 0:
-        return None
-    noun = "background task" if total == 1 else "background tasks"
-    parts: list[str] = []
-    if counts.bash:
-        parts.append(f"{counts.bash} bash")
-    if counts.agent:
-        parts.append(f"{counts.agent} agent")
-    detail = f" ({', '.join(parts)})" if parts else ""
-    return f"{total} {noun} running{detail} · /task to view"
+    return background_task_summary(bash=counts.bash, agent=counts.agent) or None
 
 
 def _append_footer_hint_fragments(
@@ -1957,6 +1952,7 @@ class CustomPromptSession:
             lexer=self._input_highlight_lexer,
         )
         self._current_prompt_frame: PromptFrame | None = None
+        self._current_footer_view_model: FooterViewModel | None = None
         self._prompt_frame_collector = self._make_prompt_frame_collector()
 
         def _capture_prompt_frame(app: Application[str]) -> None:
@@ -1965,6 +1961,11 @@ class CustomPromptSession:
                 columns=size.columns,
                 terminal_rows=size.rows,
             )
+            try:
+                self._current_footer_view_model = self._build_footer_view_model(size.columns)
+            except CwdLostError as exc:
+                self._current_footer_view_model = None
+                app.exit(exception=exc)
 
         self._session.app.before_render.add_handler(_capture_prompt_frame)
         self._session.app.after_render.add_handler(self._clear_prompt_frame_snapshot)
@@ -2237,15 +2238,7 @@ class CustomPromptSession:
         # (not just on the agent path) so a mode switch or resize cannot leave
         # _fit_toolbar_to_terminal clipping against a stale agent-mode value.
         self._prompt_footer_row_budget = frame.terminal_rows
-        # Snapshot the update notice for this frame too. The agent path caches it
-        # in _render_agent_prompt_message; without the same refresh here,
-        # _append_update_notice would replay a stale agent-mode notice (or the
-        # initial None, suppressing a live notice) once a frame is captured.
-        provider = cast(
-            Callable[[], str | None] | None,
-            getattr(self, "_update_notice_provider", None),
-        )
-        self._prompt_frame_update_notice = provider() if callable(provider) else None
+        self._prompt_frame_update_notice = self._update_notice_for_render()
         fragments: FormattedText = FormattedText()
 
         if getattr(self, "_shortcut_help_open", False):
@@ -2385,6 +2378,7 @@ class CustomPromptSession:
         notice together, so a later render can never read a snapshot captured for a
         stale frame/mode."""
         self._current_prompt_frame = None
+        self._current_footer_view_model = None
         self._prompt_frame_update_notice = None
 
     def _prompt_frame_for_render(self, *, columns: int | None = None) -> PromptFrame:
@@ -2488,11 +2482,7 @@ class CustomPromptSession:
         columns = frame.columns
         fragments: FormattedText = FormattedText()
 
-        provider = cast(
-            Callable[[], str | None] | None,
-            getattr(self, "_update_notice_provider", None),
-        )
-        update_notice = provider() if callable(provider) else None
+        update_notice = self._update_notice_for_render()
         self._prompt_frame_update_notice = update_notice
         footer_rows = 3 + (1 if update_notice else 0)
 
@@ -3121,6 +3111,12 @@ class CustomPromptSession:
         async def _refresh() -> None:
             try:
                 while True:
+                    git_index = getattr(self, "_git_status_index", None)
+                    if isinstance(git_index, GitStatusIndex):
+                        # A lost CWD is reported explicitly at the render boundary.
+                        with contextlib.suppress(OSError):
+                            git_index.request_refresh(HostPath.cwd())
+
                     app = self._app_for_repaint()
                     if app is not None:
                         app.invalidate()
@@ -3596,7 +3592,12 @@ class CustomPromptSession:
                 error=exc,
             )
 
-    def _append_update_notice(self, fragments: list[tuple[str, str]], columns: int) -> None:
+    def _append_update_notice(
+        self,
+        fragments: list[tuple[str, str]],
+        columns: int,
+        footer: FooterViewModel | None = None,
+    ) -> None:
         """Append a persistent yellow 'update available' line as the *last* footer
         row — below the status/clock line — so it sits fully clear of the prompt
         input box instead of glued to it. Call this last, after the status lines
@@ -3604,9 +3605,12 @@ class CustomPromptSession:
         none) and adds no trailing newline, so it never leaves a blank row at the
         bottom. No-op when no update is pending; style-agnostic across both
         toolbar layouts."""
-        if getattr(self, "_current_prompt_frame", None) is not None and hasattr(
+        if footer is not None:
+            text = footer.update_notice
+        elif getattr(self, "_current_prompt_frame", None) is not None and hasattr(
             self, "_prompt_frame_update_notice"
         ):
+            # Reuse the notice sampled for this frame; never re-sample mid-frame.
             text = self._prompt_frame_update_notice
         else:
             provider = cast(
@@ -3616,7 +3620,11 @@ class CustomPromptSession:
             text = provider() if callable(provider) else None
         if not text:
             return
-        line = _truncate_right(text, max(0, columns - 1))
+        line = truncate_footer_right(
+            text,
+            max(0, columns - 1),
+            ascii_only=footer.status.ascii_only if footer is not None else False,
+        )
         if not line:
             return
         tokens = _get_tui_tokens()
@@ -3626,9 +3634,7 @@ class CustomPromptSession:
     def _prompt_git_snapshot(self, root: HostPath) -> GitSnapshot:
         index = getattr(self, "_git_status_index", None)
         if isinstance(index, GitStatusIndex):
-            snapshot = index.snapshot(root)
-            index.request_refresh(root)
-            return snapshot
+            return index.snapshot(root)
         branch = _get_git_branch()
         dirty, ahead, behind = _get_git_status() if branch else (False, 0, 0)
         diffstat = _get_git_diffstat()
@@ -3673,6 +3679,11 @@ class CustomPromptSession:
         app = get_app_or_none()
         assert app is not None
         columns = app.output.get_size().columns
+        try:
+            footer = self._footer_view_model_for_render(columns)
+        except CwdLostError as exc:
+            app.exit(exception=exc)
+            return FormattedText([])
 
         # Pythinker footer dispatch. Mirrors components/footer.ts layout while
         # reusing the existing data sources so we never lose information vs
@@ -3680,7 +3691,15 @@ class CustomPromptSession:
         from pythinker_code.ui.tui_config import is_card_style
 
         if is_card_style():
-            return self._render_card_bottom_toolbar(columns)
+            return self._render_card_bottom_toolbar(footer)
+
+        return self._render_legacy_bottom_toolbar(footer)
+
+    def _render_legacy_bottom_toolbar(self, footer: FooterViewModel) -> FormattedText:
+        """Render legacy footer chrome over one immutable footer snapshot."""
+        from pythinker_code.ui.shell.statusline import format_git_badge
+
+        columns = footer.status.columns
 
         fragments: list[tuple[str, str]] = []
         tc = get_toolbar_colors()
@@ -3697,14 +3716,14 @@ class CustomPromptSession:
             self._last_tip_rotate_time = now
 
         # Status flags: yolo / auto / plan
-        status = self._status_provider()
-        if status.yolo_enabled:
+        ctx = footer.status
+        if ctx.flags.yolo:
             fragments.extend([(tc.yolo_label, "yolo"), ("", "  ")])
             remaining -= 6  # "yolo" = 4, "  " = 2
-        if status.auto_enabled:
+        if ctx.flags.auto:
             fragments.extend([(tc.auto_label, "auto"), ("", "  ")])
             remaining -= 6  # "auto" = 4, "  " = 2
-        if status.plan_mode:
+        if ctx.flags.plan:
             fragments.extend([(tc.plan_label, "plan"), ("", "  ")])
             remaining -= 6
 
@@ -3725,26 +3744,10 @@ class CustomPromptSession:
 
         # CWD (truncated from left) + git branch with status badge
         # Degrade gracefully on narrow terminals: full → cwd-only → truncated cwd → skip
-        try:
-            git_root = HostPath.cwd()
-            cwd = _truncate_left(_shorten_cwd(str(git_root)), _MAX_CWD_COLS)
-        except OSError:
-            # CWD no longer exists (e.g. external drive unplugged).  Ask
-            # prompt_toolkit to exit; the raised exception will propagate out
-            # of prompt_async() into the Shell's event router which prints a
-            # crash report with session info and exits cleanly.
-            app.exit(exception=CwdLostError())
-            return FormattedText([])
-        git_snapshot = self._prompt_git_snapshot(git_root)
-        branch = git_snapshot.branch
-        if branch:
-            branch = _truncate_right(branch, _MAX_BRANCH_COLS)
-            badge = _format_git_badge(
-                branch,
-                git_snapshot.dirty,
-                git_snapshot.ahead,
-                git_snapshot.behind,
-            )
+        cwd = ctx.cwd or ""
+        git_info = ctx.git
+        if git_info is not None:
+            badge = format_git_badge(git_info, ascii_only=ctx.ascii_only)
             cwd_text = f"{cwd}  {badge}"
         else:
             cwd_text = cwd
@@ -3753,7 +3756,11 @@ class CustomPromptSession:
             cwd_text = cwd  # drop badge
             cwd_w = _display_width(cwd_text)
         if cwd_w > remaining - 2:
-            cwd_text = _truncate_right(cwd, max(0, remaining - 2))
+            cwd_text = truncate_footer_right(
+                cwd,
+                max(0, remaining - 2),
+                ascii_only=ctx.ascii_only,
+            )
             cwd_w = _display_width(cwd_text)
         if cwd_text and remaining >= cwd_w + 2:
             fragments.extend([(tc.cwd, cwd_text), ("", "  ")])
@@ -3762,15 +3769,13 @@ class CustomPromptSession:
         # Active background task counts (bash + agent, each rendered as its own
         # badge). Order matters: bash renders first; if there isn't room for the
         # agent badge too, drop agent and keep bash.
-        bg_counts = (
-            self._background_task_count_provider()
-            if self._background_task_count_provider
-            else BgTaskCounts()
-        )
-        for kind_label, kind_count in (("bash", bg_counts.bash), ("agent", bg_counts.agent)):
+        for kind_label, kind_count in (
+            ("bash", ctx.background_bash),
+            ("agent", ctx.background_agent),
+        ):
             if kind_count <= 0:
                 continue
-            bg_text = f"◇ {kind_label}: {kind_count}"
+            bg_text = f"{'*' if ctx.ascii_only else '◇'} {kind_label}: {kind_count}"
             bg_width = _display_width(bg_text)
             if remaining < bg_width + 2:
                 break
@@ -3792,30 +3797,52 @@ class CustomPromptSession:
         # ── line 2: toast (left) + context (right) — always rendered ──────
         fragments.append(("", "\n"))
 
-        right_text = self._render_right_span(status)
+        usable = max(0, columns - 1)
+        right_text = self._render_right_span(footer)
         right_width = _display_width(right_text)
+        if right_width > usable:
+            right_text = truncate_footer_left(
+                right_text,
+                usable,
+                ascii_only=ctx.ascii_only,
+            )
+            right_width = _display_width(right_text)
 
-        left_toast = self._prompt_toast("left")
-        if left_toast is not None:
-            max_left = max(0, columns - right_width - 2)
+        left_content = select_footer_content(footer)
+        if left_content is not None:
+            max_left = max(0, usable - right_width - 1)
             if max_left > 0:
-                left_text = left_toast.message
+                left_text = left_content.text
                 if _display_width(left_text) > max_left:
-                    left_text = _truncate_right(left_text, max_left)
+                    left_text = truncate_footer_right(
+                        left_text,
+                        max_left,
+                        ascii_only=ctx.ascii_only,
+                    )
                 left_width = _display_width(left_text)
-                fragments.append((left_toast.style or secondary_style, left_text))
+                left_style = {
+                    "background": tc.bg_tasks,
+                    "toast": left_content.style or secondary_style,
+                }.get(left_content.kind, tc.tip)
+                fragments.append((left_style, left_text))
             else:
                 left_width = 0
         else:
             left_width = 0
 
-        fragments.append(("", " " * max(0, columns - left_width - right_width)))
+        fragments.append(("", " " * max(0, usable - left_width - right_width)))
         fragments.append((secondary_style, right_text))
 
-        self._append_update_notice(fragments, columns)
+        self._append_update_notice(fragments, columns, footer)
         return self._fit_toolbar_to_terminal(FormattedText(fragments), columns)
 
-    def _build_statusline_context(self, columns: int) -> StatusLineContext:
+    def _build_statusline_context(
+        self,
+        columns: int,
+        *,
+        status: StatusSnapshot | None = None,
+        background_counts: BgTaskCounts | None = None,
+    ) -> StatusLineContext:
         from pythinker_code.ui.shell.statusline import (
             GitInfo,
             RateSampler,
@@ -3825,11 +3852,12 @@ class CustomPromptSession:
         from pythinker_code.ui.terminal_capabilities import ascii_glyphs_enabled
 
         cfg = getattr(self, "_statusline_cfg", None) or StatusLineConfig()
-        status = self._status_provider()
+        status = status if status is not None else self._status_provider()
+        background_counts = background_counts or self._background_task_counts()
         now = time.monotonic()
 
         self._statusline_frame = getattr(self, "_statusline_frame", 0) + 1
-        working = self._has_background_tasks()
+        working = background_counts.bash > 0 or background_counts.agent > 0
 
         # Samplers may be missing when a session is constructed without __init__
         # (test helpers do this); fall back to fresh ones so rendering is robust.
@@ -3847,9 +3875,14 @@ class CustomPromptSession:
             rate_in_sampler.reset()
             rate_out_sampler.reset()
 
+        ascii_only = ascii_glyphs_enabled()
         try:
             git_root = HostPath.cwd()
-            cwd_text = _truncate_left(_shorten_cwd(str(git_root)), _MAX_CWD_COLS)
+            cwd_text = truncate_footer_left(
+                _shorten_cwd(str(git_root)),
+                _MAX_CWD_COLS,
+                ascii_only=ascii_only,
+            )
         except OSError as exc:
             raise CwdLostError() from exc
 
@@ -3858,7 +3891,11 @@ class CustomPromptSession:
         branch = git_snapshot.branch
         if branch:
             git_info = GitInfo(
-                branch=_truncate_right(branch, _MAX_BRANCH_COLS),
+                branch=truncate_footer_right(
+                    branch,
+                    _MAX_BRANCH_COLS,
+                    ascii_only=ascii_only,
+                ),
                 dirty=git_snapshot.dirty,
                 ahead=git_snapshot.ahead,
                 behind=git_snapshot.behind,
@@ -3877,7 +3914,7 @@ class CustomPromptSession:
             columns=columns,
             working=working,
             frame=self._statusline_frame,
-            model_name=self._model_name,
+            model_name=getattr(self, "_model_name", None),
             provider_label=None,
             effort=effort,
             rate_in=rate_in,
@@ -3898,12 +3935,79 @@ class CustomPromptSession:
                 plan=status.plan_mode,
             ),
             limits=None,
-            ascii_only=ascii_glyphs_enabled(),
+            ascii_only=ascii_only,
             style=cfg.style if cfg.enabled else "plain",
             bar_width=cfg.bar_width,
+            context_usage=status.context_usage,
+            background_bash=background_counts.bash,
+            background_agent=background_counts.agent,
         )
 
-    def _render_card_bottom_toolbar(self, columns: int) -> FormattedText:
+    def _build_footer_view_model(self, columns: int) -> FooterViewModel:
+        """Sample every dynamic footer provider exactly once for one frame."""
+        from pythinker_code.extensions import footer_statuses
+        from pythinker_code.ui.shell.statusline import StatusLineCommandRunner
+
+        cfg = getattr(self, "_statusline_cfg", None) or StatusLineConfig()
+        status = self._status_provider()
+        background_counts = self._background_task_counts()
+        runner = getattr(self, "_statusline_runner", None)
+        command_line = ""
+        if (
+            cfg.enabled
+            and "command" in cfg.segments
+            and isinstance(runner, StatusLineCommandRunner)
+        ):
+            command_line = runner.current_line
+
+        left_toast = self._prompt_toast("left")
+        toast_snapshot = left_toast if left_toast is not None else self._prompt_toast("right")
+        update_provider = cast(
+            Callable[[], str | None] | None,
+            getattr(self, "_update_notice_provider", None),
+        )
+        return FooterViewModel(
+            status=self._build_statusline_context(
+                columns,
+                status=status,
+                background_counts=background_counts,
+            ),
+            command_line=command_line,
+            extension_statuses=tuple(sorted(footer_statuses().items())),
+            background_summary=background_task_summary(
+                bash=background_counts.bash,
+                agent=background_counts.agent,
+            ),
+            toast=toast_snapshot,
+            update_notice=update_provider() if callable(update_provider) else None,
+        )
+
+    def _update_notice_for_render(self) -> str | None:
+        """Read the update notice for message rendering without building a footer.
+
+        Message rendering must stay independent of the footer providers so
+        partially constructed sessions (tests, shell mode) can render; prefer
+        the per-frame footer snapshot when one exists.
+        """
+        footer = getattr(self, "_current_footer_view_model", None)
+        if footer is not None:
+            return footer.update_notice
+        provider = cast(
+            Callable[[], str | None] | None,
+            getattr(self, "_update_notice_provider", None),
+        )
+        return provider() if callable(provider) else None
+
+    def _footer_view_model_for_render(self, columns: int) -> FooterViewModel:
+        current = getattr(self, "_current_footer_view_model", None)
+        if current is not None and current.status.columns == columns:
+            return current
+        footer = self._build_footer_view_model(columns)
+        if getattr(self, "_current_prompt_frame", None) is not None:
+            self._current_footer_view_model = footer
+        return footer
+
+    def _render_card_bottom_toolbar(self, footer: FooterViewModel) -> FormattedText:
         """Pythinker two-line footer (statusline v2).
 
         Line 1 + line-2 right are assembled from the segment registry; the
@@ -3911,12 +4015,12 @@ class CustomPromptSession:
         precedence from the legacy footer.
         """
         from pythinker_code.config import StatusLineConfig
-        from pythinker_code.extensions import footer_statuses
         from pythinker_code.ui.shell.statusline import (
             DEFAULT_STATUSLINE_SEGMENTS,
             assemble_footer,
         )
 
+        columns = footer.status.columns
         cfg = getattr(self, "_statusline_cfg", None) or StatusLineConfig()
         tc = get_toolbar_colors()
         tokens = _get_tui_tokens()
@@ -3926,16 +4030,8 @@ class CustomPromptSession:
         fragments.append((self._prompt_separator_style(tc.separator), _prompt_rule(columns)))
         fragments.append(("", "\n"))
 
-        try:
-            ctx = self._build_statusline_context(columns)
-        except CwdLostError as exc:
-            app = get_app_or_none()
-            if app is not None:
-                app.exit(exception=exc)
-            return FormattedText([])
-
         segments = list(cfg.segments) if cfg.enabled else list(DEFAULT_STATUSLINE_SEGMENTS)
-        line1, line2_right = assemble_footer(ctx, segments)
+        line1, line2_right = assemble_footer(footer.status, segments)
         fragments.extend(line1)
         fragments.append(("", "\n"))
 
@@ -3946,48 +4042,34 @@ class CustomPromptSession:
         right_text = "".join(t for _, t in line2_right)
         right_width = _display_width(right_text)
         if right_width > usable:
-            right_text = _truncate_left(right_text, usable)
+            right_text = truncate_footer_left(
+                right_text,
+                usable,
+                ascii_only=footer.status.ascii_only,
+            )
             line2_right = [(secondary_style, right_text)]
             right_width = _display_width(right_text)
 
         max_left_width = max(0, usable - right_width - 1)
-        command_line = ""
-        runner = getattr(self, "_statusline_runner", None)
-        if cfg.enabled and "command" in segments and runner is not None:
-            command_line = runner.current_line
-        ext = footer_statuses()
-        if command_line:
-            command_line = _truncate_right(command_line, max_left_width)
-            fragments.append((tc.tip, command_line))
-            left_width = _display_width(command_line)
-        elif ext:
-            ordered = sorted(ext.items())
-            ext_line = " ".join(f"{k}:{v}" for k, v in ordered)
-            ext_line = _truncate_right(ext_line, max_left_width)
-            fragments.append((tc.tip, ext_line))
-            left_width = _display_width(ext_line)
-        elif (
-            bg_summary := _background_task_summary(
-                self._background_task_count_provider()
-                if self._background_task_count_provider
-                else BgTaskCounts()
+        left_content = select_footer_content(footer)
+        if left_content is not None:
+            left_text = truncate_footer_right(
+                left_content.text,
+                max_left_width,
+                ascii_only=footer.status.ascii_only,
             )
-        ) is not None:
-            bg_summary = _truncate_right(bg_summary, max_left_width)
-            fragments.append((tc.bg_tasks, bg_summary))
-            left_width = _display_width(bg_summary)
+            left_style = {
+                "background": tc.bg_tasks,
+                "toast": left_content.style or secondary_style,
+            }.get(left_content.kind, tc.tip)
+            fragments.append((left_style, left_text))
+            left_width = _display_width(left_text)
         else:
-            left_toast = self._prompt_toast("left")
-            if left_toast is not None:
-                left_text = _truncate_right(left_toast.message, max_left_width)
-                fragments.append((left_toast.style or secondary_style, left_text))
-                left_width = _display_width(left_text)
-            else:
-                left_width = 0
+            left_width = 0
 
         fragments.append(("", " " * max(0, usable - left_width - right_width)))
         fragments.extend(line2_right)
-        self._append_update_notice(fragments, columns)
+        self._append_update_notice(fragments, columns, footer)
         return self._fit_toolbar_to_terminal(FormattedText(fragments), columns)
 
     def _get_two_rotating_tips(self) -> str | None:
@@ -4008,12 +4090,22 @@ class CustomPromptSession:
             return None
         return self._tips[self._tip_rotation_index % len(self._tips)]
 
-    def _render_right_span(self, status: StatusSnapshot) -> str:
-        right_toast = self._prompt_toast("right")
-        if right_toast is None:
+    def _render_right_span(self, footer: FooterViewModel) -> str:
+        if footer.toast is None or footer.toast.position != "right":
+            status = footer.status
             return format_context_status(
                 status.context_usage,
                 status.context_tokens,
                 status.max_context_tokens,
             )
-        return right_toast.message
+        return footer.toast.message
+
+
+# Compatibility surface kept for tests that still import the legacy footer
+# helpers (tests/ui_and_conv/test_prompt_tips.py); rendering now goes through
+# pythinker_code.ui.shell.prompting.footer.
+_LEGACY_FOOTER_HELPERS = (
+    _background_task_summary,
+    _format_git_badge,
+    _truncate_left,
+)

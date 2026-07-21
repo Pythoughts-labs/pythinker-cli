@@ -1,6 +1,14 @@
 """Deep prompt rendering and session-resource modules."""
 
 from pythinker_code.ui.shell.prompting.clipboard import ClipboardAdapter
+from pythinker_code.ui.shell.prompting.footer import (
+    FooterContent,
+    FooterViewModel,
+    background_task_summary,
+    select_footer_content,
+    truncate_footer_left,
+    truncate_footer_right,
+)
 from pythinker_code.ui.shell.prompting.frame import (
     FrozenFragments,
     PromptFrame,
@@ -23,6 +31,8 @@ from pythinker_code.ui.shell.prompting.toasts import ToastManager, ToastSnapshot
 __all__ = (
     "ClipboardAdapter",
     "FrozenFragments",
+    "FooterContent",
+    "FooterViewModel",
     "GitSnapshot",
     "GitStatusIndex",
     "PromptFrame",
@@ -35,5 +45,9 @@ __all__ = (
     "ToastManager",
     "ToastSnapshot",
     "allocate_prompt_scene_rows",
+    "background_task_summary",
     "freeze_fragments",
+    "select_footer_content",
+    "truncate_footer_left",
+    "truncate_footer_right",
 )

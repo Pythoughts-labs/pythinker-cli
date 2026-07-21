@@ -186,6 +186,9 @@ class StatusLineContext:
     ascii_only: bool
     style: str  # "fancy" | "plain"
     bar_width: int
+    context_usage: float = 0.0
+    background_bash: int = 0
+    background_agent: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,13 +499,22 @@ def assemble_footer(
     if "context" in line2_ids and "tokens" in line2_ids:
         line2_ids = [seg for seg in line2_ids if seg != "tokens"]
     line2_parts = rendered(line2_ids)
-    line2: list[StyleFragment] = []
-    for i, (_seg, seg_frags) in enumerate(line2_parts):
-        if i:
-            line2.append((_style(ctx, colors.dim), sep_bar))
-        line2.extend(seg_frags)
 
-    return joined(line1_parts), line2
+    def joined_line2(parts: list[tuple[str, list[StyleFragment]]]) -> list[StyleFragment]:
+        line: list[StyleFragment] = []
+        for index, (_seg, seg_frags) in enumerate(parts):
+            if index:
+                line.append((_style(ctx, colors.dim), sep_bar))
+            line.extend(seg_frags)
+        return line
+
+    while width(joined_line2(line2_parts)) > ctx.columns and len(line2_parts) > 1:
+        victim = max(line2_parts, key=lambda part: SEGMENT_REGISTRY[part[0]].drop_priority)
+        if SEGMENT_REGISTRY[victim[0]].drop_priority == 0:
+            break
+        line2_parts.remove(victim)
+
+    return joined(line1_parts), joined_line2(line2_parts)
 
 
 SEGMENT_REGISTRY: dict[str, SegmentSpec] = {
