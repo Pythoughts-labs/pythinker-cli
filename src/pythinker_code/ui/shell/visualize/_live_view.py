@@ -42,7 +42,11 @@ from pythinker_code.ui.shell.components.render_utils import (
 from pythinker_code.ui.shell.console import console, current_console_width
 from pythinker_code.ui.shell.echo import render_user_echo
 from pythinker_code.ui.shell.focus_model import FocusTuiModel
-from pythinker_code.ui.shell.glyphs import TRANSCRIPT_ACTIVE_MARKER, TRANSCRIPT_TOOL_GUTTER
+from pythinker_code.ui.shell.glyphs import (
+    TRANSCRIPT_ACTIVE_MARKER,
+    TRANSCRIPT_ASSISTANT_MARKER,
+    TRANSCRIPT_TOOL_GUTTER,
+)
 from pythinker_code.ui.shell.keyboard import KeyboardListener, KeyEvent
 from pythinker_code.ui.shell.mcp_status import render_mcp_startup_text
 from pythinker_code.ui.shell.motion import (
@@ -91,10 +95,12 @@ from pythinker_code.ui.theme import tui_rich_style
 from pythinker_code.utils.aioqueue import Queue, QueueShutDown
 from pythinker_code.utils.datetime import format_elapsed
 from pythinker_code.utils.logging import logger
+from pythinker_code.utils.rich.columns import BulletColumns
 from pythinker_code.wire import WireUISide
 from pythinker_code.wire.types import (
     ApprovalRequest,
     ApprovalResponse,
+    AudioURLPart,
     BtwBegin,
     BtwEnd,
     CompactionBegin,
@@ -102,6 +108,7 @@ from pythinker_code.wire.types import (
     ContentPart,
     HookResolved,
     HookTriggered,
+    ImageURLPart,
     MCPLoadingBegin,
     MCPLoadingEnd,
     Notification,
@@ -126,6 +133,7 @@ from pythinker_code.wire.types import (
     ToolResult,
     TurnBegin,
     TurnEnd,
+    VideoURLPart,
     WireMessage,
 )
 
@@ -143,6 +151,7 @@ _ACTION_SPACER = BLANK_ROW
 # running long enough that a quick turn won't flash it.
 _WORKING_TIP_MIN_ELAPSED_S = 4.0
 _MAX_PINNED_TODO_ROWS = 5
+_MAX_SUBAGENT_EVENT_DEPTH = 16
 
 
 def _todo_activity_label(label: str) -> str:
@@ -252,6 +261,11 @@ class _LiveView:
 
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
+        self._subagent_tool_call_ancestry: dict[str, tuple[_ToolCallBlock, int]] = {}
+        # Per-view so the "log an unknown content-part type once" guarantee is
+        # scoped to this session/view rather than the whole process (keeps the
+        # log-once behavior deterministic and test-isolated).
+        self._seen_unknown_content_part_types: set[str] = set()
         self._last_tool_call_block: _ToolCallBlock | None = None
         self._held_tool_search_block: _ToolCallBlock | None = None
         self._completed_expandable_tool_blocks = deque[_ToolCallBlock](maxlen=20)
@@ -1538,6 +1552,7 @@ class _LiveView:
         self._mcp_loading_spinner = None
         self._btw_spinner = None
         self._hook_blocks.clear()
+        self._subagent_tool_call_ancestry.clear()
         self._current_step_retry = None
 
         if is_interrupt:
@@ -1563,6 +1578,7 @@ class _LiveView:
         """
         self._current_content_block = None
         self._tool_call_blocks.clear()
+        self._subagent_tool_call_ancestry.clear()
         self._last_tool_call_block = None
         self._held_tool_search_block = None
         self._current_step_retry = retry
@@ -1635,6 +1651,11 @@ class _LiveView:
 
             self._archive_completed_tool_card(block)
             self._tool_call_blocks.pop(tool_call_id)
+            # Drop ancestry entries for this now-archived root so nested-event
+            # ids don't accumulate for the rest of the turn and a late/duplicate
+            # nested event resolves via the "missing ancestry" fallback instead
+            # of silently mutating a block that is no longer rendered live.
+            self._purge_ancestry_for_block(block)
             if self._last_tool_call_block == block:
                 self._last_tool_call_block = None
             if block.is_tool_search:
@@ -1645,6 +1666,21 @@ class _LiveView:
                 if self.focus_model is None:
                     self._emit_action_block(block.compose())
             self.refresh_soon()
+
+    def _purge_ancestry_for_block(self, block: _ToolCallBlock) -> None:
+        """Drop subagent ancestry entries whose root is *block*.
+
+        All nested tool-call ids under a subagent tree resolve to the same root
+        ``_ToolCallBlock`` (the ancestry fallback propagates it down), so once
+        that root is flushed its whole subtree of ancestry entries is stale.
+        """
+        stale_ids = [
+            tool_call_id
+            for tool_call_id, (ancestor, _depth) in self._subagent_tool_call_ancestry.items()
+            if ancestor is block
+        ]
+        for tool_call_id in stale_ids:
+            del self._subagent_tool_call_ancestry[tool_call_id]
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
@@ -1684,9 +1720,36 @@ class _LiveView:
                 if text:
                     self._current_content_block.append(text)
                     self.refresh_soon()
+            case ImageURLPart():
+                self._append_content_label("[image]")
+            case AudioURLPart(audio_url=audio):
+                suffix = f":{sanitize_ansi(audio.id)}" if audio.id else ""
+                self._append_content_label(f"[audio{suffix}]")
+            case VideoURLPart():
+                self._append_content_label("[video]")
             case _:
-                # TODO: support more content part types
-                pass
+                part_type = part.type
+                if part_type not in self._seen_unknown_content_part_types:
+                    self._seen_unknown_content_part_types.add(part_type)
+                    logger.debug(
+                        "Rendering unknown content part type in live view: {part_type}",
+                        part_type=part_type,
+                    )
+                self._append_content_label(f"[{sanitize_ansi(part_type)}]", unknown=True)
+
+    def _append_content_label(self, label: str, *, unknown: bool = False) -> None:
+        """Render a payload-free media or future-content placeholder."""
+        self._current_step_retry = None
+        self.flush_content(FlushReason.TOOL_START)
+        muted = tui_rich_style("muted")
+        marker_style = muted if unknown else tui_rich_style("success")
+        self._emit_final_scrollback(
+            BulletColumns(
+                Text(label, style=muted),
+                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=marker_style),
+            )
+        )
+        self.refresh_soon()
 
     def append_tool_call(self, tool_call: ToolCall) -> None:
         self._current_step_retry = None
@@ -1877,16 +1940,65 @@ class _LiveView:
                 self._on_question_panel_state_changed()
 
     def handle_subagent_event(self, event: SubagentEvent) -> None:
-        if event.parent_tool_call_id is None:
+        self._dispatch_subagent_event(event, recursive_depth=1)
+
+    def _dispatch_subagent_event(self, event: SubagentEvent, *, recursive_depth: int) -> None:
+        if recursive_depth > _MAX_SUBAGENT_EVENT_DEPTH:
+            self._render_subagent_event_fallback(
+                event,
+                reason="depth limit reached",
+                depth=recursive_depth,
+            )
             return
-        block = self._tool_call_blocks.get(event.parent_tool_call_id)
+
+        parent_tool_call_id = event.parent_tool_call_id
+        if parent_tool_call_id is None:
+            self._render_subagent_event_fallback(
+                event,
+                reason="missing ancestry",
+                depth=recursive_depth,
+            )
+            return
+
+        block = self._tool_call_blocks.get(parent_tool_call_id)
+        parent_depth = 0
         if block is None:
-            return
+            ancestry = self._subagent_tool_call_ancestry.get(parent_tool_call_id)
+            if ancestry is None:
+                self._render_subagent_event_fallback(
+                    event,
+                    reason="missing ancestry",
+                    depth=recursive_depth,
+                )
+                return
+            block, parent_depth = ancestry
+
         if event.agent_id is not None and event.subagent_type is not None:
             block.set_subagent_metadata(event.agent_id, event.subagent_type)
 
         match event.event:
+            case SubagentEvent() as nested_event:
+                if recursive_depth >= _MAX_SUBAGENT_EVENT_DEPTH:
+                    self._render_subagent_event_fallback(
+                        nested_event,
+                        reason="depth limit reached",
+                        depth=recursive_depth + 1,
+                    )
+                    return
+                self._dispatch_subagent_event(
+                    nested_event,
+                    recursive_depth=recursive_depth + 1,
+                )
             case ToolCall() as tool_call:
+                tool_depth = parent_depth + 1
+                if tool_depth > _MAX_SUBAGENT_EVENT_DEPTH:
+                    self._render_subagent_event_fallback(
+                        event,
+                        reason="depth limit reached",
+                        depth=tool_depth,
+                    )
+                    return
+                self._subagent_tool_call_ancestry[tool_call.id] = (block, tool_depth)
                 block.append_sub_tool_call(tool_call)
                 self.refresh_soon()
             case ToolCallPart() as tool_call_part:
@@ -1906,6 +2018,29 @@ class _LiveView:
                 )
                 self.refresh_soon()
             case _:
-                # ignore other events for now
-                # TODO: may need to handle multi-level nested subagents
                 pass
+
+    def _render_subagent_event_fallback(
+        self,
+        event: SubagentEvent,
+        *,
+        reason: str,
+        depth: int,
+    ) -> None:
+        event_type = type(event.event).__name__
+        logger.debug(
+            "Unable to render nested subagent event: reason={reason} parent={parent} "
+            "depth={depth} event_type={event_type}",
+            reason=reason,
+            parent=event.parent_tool_call_id,
+            depth=depth,
+            event_type=event_type,
+        )
+        muted = tui_rich_style("muted")
+        self._emit_action_block(
+            BulletColumns(
+                Text(f"Nested subagent activity unavailable · {reason}", style=muted),
+                bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=muted),
+            )
+        )
+        self.refresh_soon()

@@ -4,7 +4,6 @@ import ast
 import asyncio
 import contextlib
 import json
-import os
 import re
 import shlex
 import textwrap
@@ -12,7 +11,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
@@ -25,7 +24,6 @@ from pythinker_core.chat_provider import (
     APITimeoutError,
     ChatProviderError,
 )
-from pythinker_host.windows import windows_console_detach_flags
 from rich import box
 from rich.align import Align
 from rich.cells import cell_len
@@ -49,6 +47,7 @@ from pythinker_code.soul import (
     run_soul,
 )
 from pythinker_code.soul.pythinkersoul import FLOW_COMMAND_PREFIX, PythinkerSoul
+from pythinker_code.ui.shell.command_runner import ShellCommandRunner
 from pythinker_code.ui.shell.components.render_utils import (
     cell_width,
     render_message_response,
@@ -106,7 +105,6 @@ from pythinker_code.utils.envvar import get_env_bool
 from pythinker_code.utils.logging import logger
 from pythinker_code.utils.signals import install_sigint_handler
 from pythinker_code.utils.slashcmd import SlashCommand, SlashCommandCall, parse_slash_command_call
-from pythinker_code.utils.subprocess_env import get_clean_env
 from pythinker_code.utils.term import ensure_new_line, ensure_tty_sane
 from pythinker_code.wire.types import (
     ApprovalRequest,
@@ -117,9 +115,20 @@ from pythinker_code.wire.types import (
 )
 
 
+class PromptEventKind(StrEnum):
+    INPUT = "input"
+    INPUT_ACTIVITY = "input_activity"
+    BACKGROUND_GRACE_EXPIRED = "background_grace_expired"
+    BACKGROUND_NOOP = "bg_noop"
+    INTERRUPT = "interrupt"
+    EOF = "eof"
+    CWD_LOST = "cwd_lost"
+    ERROR = "error"
+
+
 @dataclass(slots=True)
 class _PromptEvent:
-    kind: str
+    kind: PromptEventKind
     user_input: UserInput | None = None
 
 
@@ -235,15 +244,19 @@ class _BackgroundCompletionWatcher:
         assert self._event is not None
         bg_wait_task = asyncio.create_task(self._event.wait())
 
-        done, _ = await asyncio.wait(
-            [idle_task, bg_wait_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for t in (idle_task, bg_wait_task):
-            if t not in done:
-                t.cancel()
+        done: set[asyncio.Task[Any]] = set()
+        try:
+            done, _ = await asyncio.wait(
+                [idle_task, bg_wait_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in (idle_task, bg_wait_task):
+                if task.done():
+                    continue
+                task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
-                    await t
+                    await task
 
         if idle_task in done:
             if bg_wait_task in done:
@@ -255,8 +268,8 @@ class _BackgroundCompletionWatcher:
         if self._has_pending_llm_notifications():
             if self._can_auto_trigger_pending():
                 return None
-            return _PromptEvent(kind="bg_noop")
-        return _PromptEvent(kind="bg_noop")
+            return _PromptEvent(kind=PromptEventKind.BACKGROUND_NOOP)
+        return _PromptEvent(kind=PromptEventKind.BACKGROUND_NOOP)
 
     def _has_pending_llm_notifications(self) -> bool:
         if self._notifications is None:
@@ -735,7 +748,7 @@ class Shell:
                         self._running_interrupt_handler()
                     continue
                 resume_prompt.clear()
-                await idle_events.put(_PromptEvent(kind="interrupt"))
+                await idle_events.put(_PromptEvent(kind=PromptEventKind.INTERRUPT))
                 continue
             except EOFError:
                 logger.debug("Prompt router got EOF")
@@ -748,17 +761,17 @@ class Shell:
                         self._running_interrupt_handler()
                     return
                 resume_prompt.clear()
-                await idle_events.put(_PromptEvent(kind="eof"))
+                await idle_events.put(_PromptEvent(kind=PromptEventKind.EOF))
                 return
             except CwdLostError:
                 logger.error("Working directory no longer exists")
                 resume_prompt.clear()
-                await idle_events.put(_PromptEvent(kind="cwd_lost"))
+                await idle_events.put(_PromptEvent(kind=PromptEventKind.CWD_LOST))
                 return
             except Exception:
                 logger.exception("Prompt router crashed")
                 resume_prompt.clear()
-                await idle_events.put(_PromptEvent(kind="error"))
+                await idle_events.put(_PromptEvent(kind=PromptEventKind.ERROR))
                 return
 
             if prompt_session.last_submission_was_running:  # noqa: SIM102
@@ -769,7 +782,7 @@ class Shell:
                 # Handler already unbound — fall through to idle path.
 
             resume_prompt.clear()
-            await idle_events.put(_PromptEvent(kind="input", user_input=user_input))
+            await idle_events.put(_PromptEvent(kind=PromptEventKind.INPUT, user_input=user_input))
 
     def _register_task_label_resolver(self) -> None:
         """Let TaskOutput/TaskStop headers show a task's friendly description
@@ -1042,6 +1055,13 @@ class Shell:
                         else:
                             result = await bg_watcher.wait_for_next(idle_events)
 
+                    if (
+                        result is not None
+                        and result.kind is PromptEventKind.BACKGROUND_GRACE_EXPIRED
+                    ):
+                        logger.debug("Background auto-trigger input grace elapsed")
+                        result = None
+
                     if result is None:
                         if self._should_defer_background_auto_trigger(prompt_session):
                             deferred_bg_trigger = True
@@ -1082,28 +1102,29 @@ class Shell:
 
                     event = result
 
-                    if event.kind == "input_activity":
+                    if event.kind is PromptEventKind.INPUT_ACTIVITY:
+                        logger.debug("Deferring background auto-trigger for local input activity")
                         continue
 
-                    if event.kind == "bg_noop":
+                    if event.kind is PromptEventKind.BACKGROUND_NOOP:
                         continue
 
-                    if event.kind == "interrupt":
+                    if event.kind is PromptEventKind.INTERRUPT:
                         _t = _get_tui_tokens()
                         console.print(f"[{_t.muted}]Tip: press Ctrl-D or send 'exit' to quit[/]")
                         resume_prompt.set()
                         continue
 
-                    if event.kind == "eof":
+                    if event.kind is PromptEventKind.EOF:
                         console.print("Bye!")
                         break
 
-                    if event.kind == "cwd_lost":
+                    if event.kind is PromptEventKind.CWD_LOST:
                         self._print_cwd_lost_crash()
                         shell_ok = False
                         break
 
-                    if event.kind == "error":
+                    if event.kind is PromptEventKind.ERROR:
                         shell_ok = False
                         break
 
@@ -1251,67 +1272,31 @@ class Shell:
 
         track("input_bash")
 
-        proc: asyncio.subprocess.Process | None = None
-        max_output_bytes = 1_000_000
+        runner_task = asyncio.create_task(ShellCommandRunner().run(command))
+        interrupted = False
 
-        async def _read_stream_limited(stream: asyncio.StreamReader | None, limit: int) -> bytes:
-            if stream is None:
-                return b""
-            chunks: list[bytes] = []
-            total = 0
-            truncated = False
-            while True:
-                chunk = await stream.read(65536)
-                if not chunk:
-                    break
-                remaining = limit - total
-                if remaining > 0:
-                    chunks.append(chunk[:remaining])
-                    total += min(len(chunk), remaining)
-                if len(chunk) > remaining:
-                    truncated = True
-            if truncated:
-                chunks.append(b"\n... output truncated ...\n")
-            return b"".join(chunks)
-
-        def _handler():
+        def _handler() -> None:
+            nonlocal interrupted
             logger.debug("SIGINT received.")
-            if proc:
-                proc.terminate()
+            interrupted = True
+            runner_task.cancel()
 
         loop = asyncio.get_running_loop()
         remove_sigint = install_sigint_handler(loop, _handler)
         try:
-            # TODO: For the sake of simplicity, we now use `create_subprocess_shell`.
-            # Later we should consider making this behave like a real shell.
-            spawn_kwargs: dict[str, Any] = {}
-            if os.name == "nt":
-                # CREATE_NO_WINDOW: don't share the interactive console — a child
-                # touching it via the Win32 console API bypasses the pipes and
-                # can blank the TUI until terminal restart.
-                spawn_kwargs["creationflags"] = windows_console_detach_flags(
-                    new_process_group=False
-                )
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                env=get_clean_env(),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **spawn_kwargs,
-            )
-            stdout_task = asyncio.create_task(_read_stream_limited(proc.stdout, max_output_bytes))
-            stderr_task = asyncio.create_task(_read_stream_limited(proc.stderr, max_output_bytes))
-            await proc.wait()
-            stdout_bytes, stderr_bytes = await asyncio.gather(stdout_task, stderr_task)
-            stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-            stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            # Commands intentionally run in the detected configured shell. Each
+            # execution remains isolated, so state such as `cd` is not persistent.
+            result = await runner_task
             output = _format_local_shell_output(
-                stdout=stdout,
-                stderr=stderr,
-                returncode=proc.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                returncode=result.returncode,
             )
             if output is not None:
                 console.print(render_message_response(output))
+        except asyncio.CancelledError:
+            if not interrupted:
+                raise
         except Exception as e:
             logger.exception("Failed to run shell command:")
             console.print(
@@ -1794,7 +1779,9 @@ class Shell:
 
         if idle_task in done:
             return idle_task.result()
-        return _PromptEvent(kind="input_activity")
+        if activity_task in done:
+            return _PromptEvent(kind=PromptEventKind.INPUT_ACTIVITY)
+        return _PromptEvent(kind=PromptEventKind.BACKGROUND_GRACE_EXPIRED)
 
     async def _watch_root_wire_hub(self) -> None:
         if not isinstance(self.soul, PythinkerSoul):

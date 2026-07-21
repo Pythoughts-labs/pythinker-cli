@@ -14,6 +14,7 @@ from pythinker_code.ui.shell.tool_renderers import (
     get_tool_renderer,
     register_builtin_renderers,
 )
+from pythinker_code.ui.shell.visualize import _blocks as blocks_module
 from pythinker_code.ui.shell.visualize import _ToolCallBlock, _worklog
 from pythinker_code.wire.types import ToolResult
 
@@ -388,6 +389,33 @@ def test_streaming_args_never_flash_invalid_badge(
         block.append_args_part(ch)
         rendered = _plain(block.compose())
         assert "<invalid>" not in rendered, f"flashed <invalid> after streaming {ch!r}"
+
+
+def test_streaming_large_arguments_bounds_label_extraction_scans(monkeypatch) -> None:
+    original = blocks_module.extract_key_argument
+    extraction_calls = 0
+    first_non_empty_call: int | None = None
+
+    def _recording_extract(arguments: str, tool_name: str) -> str | None:
+        nonlocal extraction_calls, first_non_empty_call
+        extraction_calls += 1
+        result = original(arguments, tool_name)
+        if result and first_non_empty_call is None:
+            first_non_empty_call = extraction_calls
+        return result
+
+    monkeypatch.setattr(blocks_module, "extract_key_argument", _recording_extract)
+    block = _ToolCallBlock(_tool_call("Shell", ""))
+    arguments = json.dumps({"command": "x" * (64 * 1024)})
+    encoding = "utf-8"
+    for offset in range(0, len(arguments), 64):
+        block.append_args_part(arguments[offset : offset + 64])
+    block.mark_execution_started()
+
+    assert first_non_empty_call is not None
+    scanned_after_label = extraction_calls - first_non_empty_call
+    growth_scans = (len(arguments.encode(encoding=encoding)) + 1023) // 1024
+    assert scanned_after_label <= growth_scans + 1
 
 
 def test_finished_call_with_non_string_command_still_shows_invalid_badge(
