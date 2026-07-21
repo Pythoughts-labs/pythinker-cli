@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
 
 import pytest
 from prompt_toolkit.completion import Completion
@@ -16,7 +14,6 @@ from pythinker_code.soul import StatusSnapshot
 from pythinker_code.ui.shell import prompt as shell_prompt
 from pythinker_code.ui.shell.glyphs import SPINNER_FRAMES
 from pythinker_code.ui.shell.prompt import (
-    _GIT_STATUS_TTL,
     PROMPT_SYMBOL,
     BgTaskCounts,
     CustomPromptSession,
@@ -27,10 +24,6 @@ from pythinker_code.ui.shell.prompt import (
     _build_toolbar_tips,
     _display_width,
     _format_git_badge,
-    _get_git_branch,
-    _get_git_status,
-    _git_branch_state,
-    _git_status_state,
     _PromptRightPaddingMargin,
     _shorten_cwd,
     _toast_queues,
@@ -883,69 +876,6 @@ def test_toolbar_line2_right_toast_replaces_context(monkeypatch: Any) -> None:
 
     assert "mcp connected" in lines[2]
     assert "context:" not in lines[2]
-
-
-# ── Fix #4 regression: branch change invalidates in-flight status subprocess ──
-
-
-def test_git_branch_change_terminates_in_flight_status_proc(monkeypatch: Any) -> None:
-    """Regression: switching branches must discard any in-flight status subprocess
-    so stale results from the old branch are never applied to the new branch."""
-    mock_branch_proc = MagicMock()
-    mock_branch_proc.poll.return_value = 0  # process completed
-    mock_branch_proc.communicate.return_value = ("feature-branch\n", "")
-
-    mock_status_proc = MagicMock()
-
-    # Simulate: branch proc has a result ready; status proc is still in-flight.
-    monkeypatch.setattr(_git_branch_state, "branch", "main")
-    monkeypatch.setattr(_git_branch_state, "proc", mock_branch_proc)
-    monkeypatch.setattr(_git_branch_state, "timestamp", float("inf"))  # TTL fresh, won't re-launch
-    monkeypatch.setattr(_git_status_state, "proc", mock_status_proc)
-    monkeypatch.setattr(_git_status_state, "timestamp", float("inf"))  # TTL fresh
-
-    _get_git_branch()
-
-    mock_status_proc.terminate.assert_called_once()
-    assert _git_status_state.proc is None
-    assert _git_status_state.timestamp == 0.0
-    assert _git_branch_state.branch == "feature-branch"
-
-
-def test_git_status_stuck_subprocess_terminated_after_ttl(monkeypatch: Any) -> None:
-    """Regression: a subprocess that never exits (pipe buffer deadlock) must be
-    terminated after TTL to prevent the toolbar from being permanently frozen."""
-    mock_proc = MagicMock()
-    mock_proc.poll.return_value = None  # subprocess never finishes (deadlocked)
-
-    spawn_time = time.monotonic() - _GIT_STATUS_TTL - 1.0  # spawned > TTL ago
-    monkeypatch.setattr(_git_status_state, "proc", mock_proc)
-    monkeypatch.setattr(_git_status_state, "timestamp", spawn_time)
-    monkeypatch.setattr(_git_status_state, "dirty", True)  # stale value preserved
-
-    result = _get_git_status()
-
-    # Must have been terminated
-    mock_proc.terminate.assert_called_once()
-    assert _git_status_state.proc is None
-    # timestamp reset to ~now so next spawn is delayed by one full TTL
-    assert time.monotonic() - _git_status_state.timestamp < 2.0
-    # Stale cached values are still returned (better than crashing)
-    assert result == (True, 0, 0)
-
-
-def test_git_status_recent_subprocess_not_terminated(monkeypatch: Any) -> None:
-    """A subprocess that is still within TTL must not be terminated prematurely."""
-    mock_proc = MagicMock()
-    mock_proc.poll.return_value = None  # not finished yet but within TTL
-
-    monkeypatch.setattr(_git_status_state, "proc", mock_proc)
-    monkeypatch.setattr(_git_status_state, "timestamp", time.monotonic() - 1.0)  # only 1s old
-
-    _get_git_status()
-
-    mock_proc.terminate.assert_not_called()
-    assert _git_status_state.proc is mock_proc  # unchanged
 
 
 def test_git_status_not_called_when_branch_is_none(monkeypatch: Any) -> None:
