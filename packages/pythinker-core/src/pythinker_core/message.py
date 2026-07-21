@@ -98,10 +98,13 @@ class ThinkPart(ContentPart):
     think: str
     encrypted: str | None = None
     """Encrypted thinking content, or signature."""
+    summary_index: int | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @override
     def merge_in_place(self, other: Any) -> bool:
         if not isinstance(other, ThinkPart):
+            return False
+        if self.summary_index != other.summary_index:
             return False
         if self.encrypted:
             return False

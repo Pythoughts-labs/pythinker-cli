@@ -301,6 +301,21 @@ def test_message_with_empty_list_content():
     )
 
 
+def test_think_part_summary_index_round_trips_through_pydantic() -> None:
+    part = ThinkPart(think="Plan", summary_index=3)
+    dumped = part.model_dump()
+
+    assert dumped == snapshot(
+        {
+            "type": "think",
+            "think": "Plan",
+            "encrypted": None,
+            "summary_index": 3,
+        }
+    )
+    assert ThinkPart.model_validate(dumped) == part
+
+
 def test_message_extract_text():
     message = Message(
         role="user",

@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Sequence
+from types import SimpleNamespace
 from typing import Literal, Self, cast
 
 import pytest
@@ -39,7 +40,7 @@ from pythinker_core.chat_provider.pythinker import PythinkerStreamedMessage
 from pythinker_core.contrib.chat_provider.anthropic import AnthropicStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacyStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponsesStreamedMessage
-from pythinker_core.message import Message, ToolCall, ToolCallPart
+from pythinker_core.message import Message, ThinkPart, ToolCall, ToolCallPart
 from pythinker_core.tooling import Tool
 
 
@@ -90,6 +91,10 @@ def _response(
 
 async def _collect(stream: object) -> list[ToolCall | ToolCallPart]:
     return [part async for part in cast(AsyncIterator[ToolCall | ToolCallPart], stream)]
+
+
+async def _collect_parts(stream: object) -> list[StreamedMessagePart]:
+    return [part async for part in cast(AsyncIterator[StreamedMessagePart], stream)]
 
 
 class _StaticStreamProvider:
@@ -355,6 +360,111 @@ async def test_openai_responses_uses_output_index_and_semantic_call_id() -> None
             stream_index=3,
             stream_call_id=None,
         ),
+    ]
+
+
+async def test_openai_responses_preserves_reasoning_summary_order_and_indices() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=0),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Plan",
+                summary_index=0,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=2),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Check",
+                summary_index=2,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Evaluate",
+                summary_index=1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Finish",
+                summary_index=2,
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert [(part.think, part.summary_index) for part in parts] == [
+        ("", 0),
+        ("Plan", 0),
+        ("", 2),
+        ("Check", 2),
+        ("Evaluate", 1),
+        ("Finish", 2),
+    ]
+
+
+async def test_openai_responses_reasoning_summary_invalid_indices_fallback_to_none() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=True),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="bool",
+                summary_index=True,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="negative",
+                summary_index=-1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="string",
+                summary_index="3",
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_text.delta", delta="missing"),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert [(part.think, part.summary_index) for part in parts] == [
+        ("", None),
+        ("bool", None),
+        ("negative", None),
+        ("string", None),
+        ("missing", None),
     ]
 
 

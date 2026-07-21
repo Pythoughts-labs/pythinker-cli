@@ -475,6 +475,12 @@ def _responses_finish_reason(response: Response) -> str | None:
     return response.status
 
 
+def _reasoning_summary_index(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 class OpenAIResponsesStreamedMessage:
     def __init__(self, response: Response | AsyncStream[ResponseStreamEvent]):
         if isinstance(response, Response):
@@ -535,10 +541,12 @@ class OpenAIResponsesStreamedMessage:
                     ),
                 )
             elif item.type == "reasoning":
-                for summary in item.summary:
+                encrypted_content = getattr(item, "encrypted_content", None)
+                for summary_index, summary in enumerate(getattr(item, "summary", ())):
                     yield ThinkPart(
                         think=summary.text,
-                        encrypted=item.encrypted_content,
+                        encrypted=encrypted_content,
+                        summary_index=summary_index,
                     )
 
     async def _convert_stream_response(
@@ -572,9 +580,19 @@ class OpenAIResponsesStreamedMessage:
                         stream_index=chunk.output_index,
                     )
                 elif chunk.type == "response.reasoning_summary_part.added":
-                    yield ThinkPart(think="")
+                    yield ThinkPart(
+                        think="",
+                        summary_index=_reasoning_summary_index(
+                            getattr(chunk, "summary_index", None)
+                        ),
+                    )
                 elif chunk.type == "response.reasoning_summary_text.delta":
-                    yield ThinkPart(think=chunk.delta)
+                    yield ThinkPart(
+                        think=getattr(chunk, "delta", ""),
+                        summary_index=_reasoning_summary_index(
+                            getattr(chunk, "summary_index", None)
+                        ),
+                    )
                 elif isinstance(chunk, ResponseErrorEvent):
                     self._finish_reason = "failed"
                     return
