@@ -55,6 +55,18 @@ PUBLIC_PROMPT_CONTRACT = {
 }
 
 
+# Narrow façade methods that external shell callers (ui/shell/__init__.py,
+# ui/shell/visualize/_interactive.py) use instead of reaching into private
+# prompt internals.
+PROMPT_SESSION_FACADE_METHODS = (
+    "input_text",
+    "input_state",
+    "clear_input",
+    "build_user_input",
+    "serialize_for_history",
+)
+
+
 def test_prompt_module_preserves_repository_import_surface() -> None:
     """Names found by searching prompt imports and ``shell_prompt`` references stay exported."""
     for name, imported in PUBLIC_PROMPT_CONTRACT.items():
@@ -79,6 +91,44 @@ def test_custom_prompt_session_keyword_initialization_contract(
     assert prompt_session._mode is PromptMode.AGENT
     assert prompt_session._session.default_buffer.completer is prompt_session._agent_mode_completer
     assert prompt_session._session.app.max_render_postpone_time == pytest.approx(1 / 30)
+
+
+def test_prompt_session_exposes_facade_methods(prompt_session: CustomPromptSession) -> None:
+    for name in PROMPT_SESSION_FACADE_METHODS:
+        assert callable(getattr(prompt_session, name))
+
+
+@pytest.mark.asyncio
+async def test_input_facade_reads_and_clears_default_buffer(
+    prompt_session: CustomPromptSession,
+) -> None:
+    assert prompt_session.input_state() == ("", 0)
+    prompt_session._session.default_buffer.set_document(
+        shell_prompt.Document("hello", 5), bypass_readonly=True
+    )
+    assert prompt_session.input_text() == "hello"
+    assert prompt_session.input_state() == ("hello", 5)
+    prompt_session.clear_input()
+    assert prompt_session.input_state() == ("", 0)
+
+
+def test_input_facade_tolerates_partially_constructed_session() -> None:
+    bare = CustomPromptSession.__new__(CustomPromptSession)
+    assert bare.input_text() == ""
+    assert bare.input_state() == ("", 0)
+    bare.clear_input()  # must not raise
+
+
+def test_serialize_for_history_passes_plain_text_through(
+    prompt_session: CustomPromptSession,
+) -> None:
+    assert prompt_session.serialize_for_history("plain text") == "plain text"
+
+
+def test_build_user_input_returns_user_input(prompt_session: CustomPromptSession) -> None:
+    user_input = prompt_session.build_user_input("hello world")
+    assert isinstance(user_input, UserInput)
+    assert user_input.command == "hello world"
 
 
 class _CountingRunningPrompt(_DummyRunningPrompt):

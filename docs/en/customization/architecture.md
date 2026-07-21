@@ -231,6 +231,33 @@ events include `StepBegin`, `StepRetry`, `StepInterrupted`, `ToolExecutionStarte
 The shell can run with a working directory inside its subtree, so `src/pythinker_code/ui/`
 is a candidate for a focused nested guide on prompt, visualization, and component layout.
 
+### Shell prompt deep modules
+
+`src/pythinker_code/ui/shell/prompt.py` is a compatibility façade: it keeps the public
+`CustomPromptSession` surface and re-exports legacy underscore helper names, while the
+implementation lives in the `src/pythinker_code/ui/shell/prompting/` deep modules.
+
+| Path | Owns |
+| --- | --- |
+| `prompting/frame.py` | One-frame snapshot flow: `PromptFrameCollector` samples every render delegate exactly once per frame into an immutable `PromptFrame`. |
+| `prompting/state.py` | Reducer-style prompt state: UI events flow through the reducer; render code reads state, never mutates it. |
+| `prompting/lifecycle.py` | Async task ownership and closers: startup/shutdown symmetry for session-owned background tasks. |
+| `prompting/renderer.py` | Scene row allocation and rendering within the terminal height/width budget (cell-width measured). |
+| `prompting/footer.py` | `FooterViewModel` plus content precedence and cell-width truncation, consumed by both toolbar adapters (pythinker and card styles). |
+| `prompting/toasts.py`, `git_status.py`, `history.py`, `clipboard.py` | Session-owned resources: toast queue, Git status snapshots, prompt history persistence, clipboard integration. |
+| `prompting/config.py` | `PromptConfig` / `PromptProviders`: constructor-time wiring of callbacks and providers. |
+| `prompting/keybindings.py` | `build_prompt_key_bindings` over the `PromptController` protocol. |
+| `prompting/completion/` | Canonical `CompletionContext`, slash-command completion, workspace-indexed `@` file mentions, and completion menus. |
+
+Workspace and Git snapshots publish asynchronously under a generation counter: each refresh
+owns its generation, and results from a superseded generation are discarded rather than
+rendered stale.
+
+Compatibility policy: legacy underscore helper names re-exported from `prompt.py` delegate to
+the session modules and remain import-compatible, but private implementation helpers are not
+supported extension interfaces and may change without notice; extend via the documented
+public surfaces (`CustomPromptSession`, `PromptConfig`/`PromptProviders`, tool renderers).
+
 ## ACP server
 
 | Path | Purpose | Key entry points and interfaces |

@@ -345,9 +345,7 @@ class _PromptLiveView(_LiveView):
         self._btw_modal = modal
         self._prompt_session.attach_modal(modal)
         # Now safe to clear — buffer is hidden by modal
-        buf = self._prompt_session._session.default_buffer  # pyright: ignore[reportPrivateUsage]
-        if buf.text:
-            buf.set_document(Document(), bypass_readonly=True)
+        self._prompt_session.clear_input()
         self._btw_refresh_task = asyncio.create_task(self._btw_refresh_loop())
         self._btw_run_task = asyncio.create_task(self._run_btw(question))
 
@@ -1067,8 +1065,7 @@ class _PromptLiveView(_LiveView):
         # Only intercept when buffer is empty — otherwise let prompt_toolkit
         # handle ↑ for cursor movement / history navigation.
         if key == "up" and self._queued_messages:
-            buf = self._prompt_session._session.default_buffer  # pyright: ignore[reportPrivateUsage]
-            return not buf.text.strip()
+            return not self._prompt_session.input_text().strip()
         # Ctrl+S: immediate steer
         return key == "c-s"
 
@@ -1121,7 +1118,7 @@ class _PromptLiveView(_LiveView):
             buf = event.current_buffer
             text = buf.text.strip()
             if text:
-                steer_input = self._prompt_session._build_user_input(text)  # pyright: ignore[reportPrivateUsage]
+                steer_input = self._prompt_session.build_user_input(text)
                 self._clear_buffer(buf)
                 self.handle_immediate_steer(steer_input)
             elif self._queued_messages:
@@ -1186,8 +1183,8 @@ class _PromptLiveView(_LiveView):
                 panel,
                 on_advance=self._advance_question,
                 on_invalidate=self._flush_prompt_refresh,
-                buffer_text_provider=lambda: self._prompt_session._session.default_buffer.text,  # pyright: ignore[reportPrivateUsage]
-                text_expander=self._prompt_session._get_placeholder_manager().serialize_for_history,  # pyright: ignore[reportPrivateUsage]
+                buffer_text_provider=self._prompt_session.input_text,
+                text_expander=self._prompt_session.serialize_for_history,
             )
             self._prompt_session.attach_modal(self._question_modal)
         else:
