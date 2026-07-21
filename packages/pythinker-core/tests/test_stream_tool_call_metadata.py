@@ -24,7 +24,9 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionToolCall,
+    ResponseOutputItem,
     ResponseOutputItemAddedEvent,
+    ResponseReasoningItem,
     ResponseStreamEvent,
 )
 from openai.types.responses.response import IncompleteDetails
@@ -72,13 +74,14 @@ def _response(
     response_id: str = "response_1",
     status: Literal["completed", "failed", "cancelled", "incomplete"] = "completed",
     incomplete_reason: Literal["max_output_tokens", "content_filter"] | None = None,
+    output: list[ResponseOutputItem] | None = None,
 ) -> Response:
     return Response(
         id=response_id,
         created_at=1,
         model="gpt-5",
         object="response",
-        output=[],
+        output=[] if output is None else output,
         parallel_tool_calls=True,
         tool_choice="auto",
         tools=[],
@@ -465,6 +468,32 @@ async def test_openai_responses_reasoning_summary_invalid_indices_fallback_to_no
         ("negative", None),
         ("string", None),
         ("missing", None),
+    ]
+
+
+async def test_openai_responses_completed_reasoning_summaries_keep_order_and_encryption() -> None:
+    response = _response(
+        output=[
+            ResponseReasoningItem.model_validate(
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_1",
+                    "summary": [
+                        {"type": "summary_text", "text": "Plan"},
+                        {"type": "summary_text", "text": "Check"},
+                    ],
+                    "encrypted_content": "enc_abc",
+                }
+            )
+        ]
+    )
+    stream = OpenAIResponsesStreamedMessage(response)
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [
+        ThinkPart(think="Plan", encrypted="enc_abc", summary_index=0),
+        ThinkPart(think="Check", encrypted="enc_abc", summary_index=1),
     ]
 
 
