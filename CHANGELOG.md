@@ -15,6 +15,9 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Render image/audio/video and unknown content parts as payload-free labels in the live view, roll nested subagent activity (up to 16 levels) under the correct root tool card, and stop provider-remapped tool results from starting replay user turns.
+- **Behavior change:** `!` shell commands now run through the detected configured shell (`<shell> -c`, PowerShell `-command` on Windows) instead of the implicit `/bin/sh`/`cmd.exe`, with separate 1 MiB stdout/stderr caps and cancellation cleanup; existing `cmd.exe`-syntax commands on Windows may need updating.
+- Distinguish background auto-trigger grace expiry from user input activity with typed prompt events, and bound streamed tool-argument label scans to 1 KiB growth boundaries.
 - Scope prompt Git status, toasts, history, and clipboard to each shell session with a new `/prompt-history status|clear` command, bounded locked history storage, and cross-session isolation.
 - Unify the shell footer behind one per-frame view model shared by the legacy and card renderers, and key theme style-resolver caching by terminal capabilities.
 - Fix a rare queued-follow-up "ghost card": echoing a drained queued command now commits through the scrollback handoff (which hides the input card before the terminal teardown erases the prompt), so the input-card border can no longer fossilize into scrollback above the echoed command under heavy load.
