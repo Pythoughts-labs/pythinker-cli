@@ -745,7 +745,7 @@ async def test_commit_scrollback_echo_hides_input_card_during_emit(monkeypatch) 
     the handoff depth so ``running_prompt_hide_input_card`` is True at the exact
     moment the echo is written.
     """
-    from pythinker_code.ui.shell.console import console as shared_console
+    from rich.console import Console
 
     class _PromptSession:
         def update_pinned_todos(self, _items: object) -> None:
@@ -765,17 +765,52 @@ async def test_commit_scrollback_echo_hides_input_card_during_emit(monkeypatch) 
     assert view.running_prompt_hide_input_card() is False
 
     hidden_when_written: list[bool] = []
-    monkeypatch.setattr(shared_console, "_force_terminal", False)
+    # A non-terminal console makes the handoff emit synchronously (no
+    # run_in_terminal); patch the module reference rather than Rich internals.
+    test_console = Console(force_terminal=False)
+    monkeypatch.setattr(_interactive_mod, "console", test_console)
     monkeypatch.setattr(
-        shared_console,
+        test_console,
         "print",
         lambda *_a, **_k: hidden_when_written.append(view.running_prompt_hide_input_card()),
     )
 
-    await view.commit_scrollback_echo(Text("❯ queued command"))
+    await view.commit_scrollback_echo(Text("queued command echo"))
 
     assert hidden_when_written == [True]  # card hidden at the instant the echo committed
     assert view.running_prompt_hide_input_card() is False  # restored for the next turn
+
+
+@pytest.mark.asyncio
+async def test_commit_scrollback_echo_is_best_effort_when_handoff_fails(monkeypatch) -> None:
+    """A failed handoff must not drop the queued command.
+
+    The echo is cosmetic — the command still runs via ``run_soul`` — so
+    ``commit_scrollback_echo`` logs a handoff failure instead of propagating it.
+    The shell drain loop pops the queued item before echoing, so a raising echo
+    would otherwise lose that command.
+    """
+
+    class _PromptSession:
+        def update_pinned_todos(self, _items: object) -> None:
+            pass
+
+        def invalidate(self) -> None:
+            pass
+
+    view = _PromptLiveView(
+        StatusUpdate(),
+        prompt_session=cast(Any, _PromptSession()),
+        steer=lambda _content: None,
+    )
+
+    async def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("handoff teardown exploded")
+
+    monkeypatch.setattr(view, "_run_scrollback_handoff", _boom)
+
+    # Must not raise: the failure is swallowed and logged, not propagated.
+    await view.commit_scrollback_echo(Text("queued command echo"))
 
 
 def test_render_agent_prompt_message_keeps_prompt_marker_in_classic_style_pre_stream(

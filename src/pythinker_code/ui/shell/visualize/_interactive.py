@@ -561,8 +561,20 @@ class _PromptLiveView(_LiveView):
         first — which drives ``running_prompt_hide_input_card`` True and keeps the
         border out of the frame the terminal teardown erases — exactly as streamed
         turn content is committed.
+
+        Best-effort: the echo is cosmetic, so a failed handoff is logged rather
+        than raised — the queued command still runs via ``run_soul`` and must not
+        be dropped just because its scrollback echo could not be painted (the
+        handoff resets the renderer for recovery before it re-raises). Cancellation
+        still propagates, since ``CancelledError`` is not an ``Exception``.
         """
-        await self._run_scrollback_handoff(lambda: console.print(renderable), reason="queued_echo")
+        try:
+            await self._run_scrollback_handoff(
+                lambda: console.print(renderable), reason="queued_echo"
+            )
+        except Exception as exc:  # noqa: BLE001 — cosmetic echo; must not drop the queued command
+            _handoff_trace(f"QUEUED_ECHO_FAIL\t{type(exc).__name__}:{exc}")
+            logger.warning("Queued-echo scrollback commit failed; the command still runs: {}", exc)
 
     async def wait_for_btw_dismiss(self) -> None:
         """Wait for btw LLM completion + user dismiss, then clean up.
