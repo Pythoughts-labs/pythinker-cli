@@ -192,3 +192,34 @@ def test_recursive_depth_overflow_renders_one_fallback(
     assert "Nested subagent activity unavailable" in output
     assert "depth limit reached" in output
     assert "TOO_DEEP" not in output
+
+
+def test_flushing_root_agent_purges_nested_ancestry() -> None:
+    view = _view()
+    # Two nested tool calls under the root Agent populate the ancestry map.
+    view.dispatch_wire_message(
+        _nested_event([], _tool_call("nested-1", "Agent", '{"description":"deeper"}'))
+    )
+    view.dispatch_wire_message(
+        _nested_event(["nested-1"], _tool_call("nested-2", "Read", '{"file_path":"x"}'))
+    )
+    root_block = view._tool_call_blocks["root-agent"]
+    assert set(view._subagent_tool_call_ancestry) == {"nested-1", "nested-2"}
+
+    # Finishing the root Agent tool call flushes it out of the live area.
+    view.dispatch_wire_message(
+        ToolResult(tool_call_id="root-agent", return_value=ToolOk(output="done"))
+    )
+
+    assert "root-agent" not in view._tool_call_blocks
+    # The whole nested subtree's ancestry is purged, not left dangling on the
+    # now-archived root block.
+    assert view._subagent_tool_call_ancestry == {}
+    assert root_block is not None  # kept referenced so identity purge is exercised
+
+    # A late nested event for a now-purged parent falls back to "missing
+    # ancestry" instead of resolving to (and mutating) the archived root block.
+    view.dispatch_wire_message(
+        _nested_event(["nested-1"], _tool_call("nested-3", "Read", '{"file_path":"y"}'))
+    )
+    assert "nested-3" not in view._subagent_tool_call_ancestry

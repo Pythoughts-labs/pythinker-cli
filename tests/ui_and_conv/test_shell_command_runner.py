@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pythinker_host import get_current_host
+from pythinker_host import Host, get_current_host
 from pythinker_host.path import HostPath
 
 import pythinker_code.ui.shell as shell_module
@@ -36,6 +36,52 @@ def _runner(
         environment=_environment(shell_path),
         output_limit_bytes=output_limit_bytes,
     )
+
+
+def test_runner_rejects_negative_output_limit() -> None:
+    with pytest.raises(ValueError):
+        ShellCommandRunner(
+            get_current_host(),
+            environment=_environment(),
+            output_limit_bytes=-1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runner_reaps_process_when_stdin_close_fails() -> None:
+    """A failure after spawn (here stdin.close()) must still terminate/reap the child."""
+
+    class _FailingStdin:
+        def close(self) -> None:
+            raise BrokenPipeError("stdin already closed")
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = _FailingStdin()
+            self.killed = False
+            self.reaped = False
+
+        async def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.reaped = True
+            return 0
+
+    process = _FakeProcess()
+
+    class _FakeHost:
+        async def exec(self, *_argv: str, env: dict[str, str] | None = None) -> _FakeProcess:
+            return process
+
+    runner = ShellCommandRunner(cast(Host, _FakeHost()), environment=_environment())
+
+    with pytest.raises(BrokenPipeError):
+        await runner.run("echo hi")
+
+    # The spawned child was terminated and reaped rather than leaked.
+    assert process.killed is True
+    assert process.reaped is True
 
 
 @pytest.mark.asyncio

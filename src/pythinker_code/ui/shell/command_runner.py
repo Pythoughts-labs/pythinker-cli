@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 from pythinker_host import AsyncReadable, Host, HostProcess, get_current_host
 
@@ -52,17 +53,21 @@ class ShellCommandRunner:
             shell_path=str(environment.shell_path),
         )
         process = await self._host.exec(*argv, env=get_clean_env())
-        process.stdin.close()
-
-        stdout_task = asyncio.create_task(
-            self._read_stream_limited(process.stdout, self._output_limit_bytes)
-        )
-        stderr_task = asyncio.create_task(
-            self._read_stream_limited(process.stderr, self._output_limit_bytes)
-        )
-        wait_task = asyncio.create_task(process.wait())
-        tasks = (stdout_task, stderr_task, wait_task)
+        # Everything after a successful spawn runs inside the guarded scope: if
+        # stdin.close() or task creation raises, the child would otherwise leak
+        # with nothing left to terminate/reap it. `tasks` starts empty so cleanup
+        # is safe even when the failure happens before any task is created.
+        tasks: tuple[asyncio.Task[Any], ...] = ()
         try:
+            process.stdin.close()
+            stdout_task = asyncio.create_task(
+                self._read_stream_limited(process.stdout, self._output_limit_bytes)
+            )
+            stderr_task = asyncio.create_task(
+                self._read_stream_limited(process.stderr, self._output_limit_bytes)
+            )
+            wait_task = asyncio.create_task(process.wait())
+            tasks = (stdout_task, stderr_task, wait_task)
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
             await self._terminate_and_reap(process, tasks)
@@ -107,11 +112,7 @@ class ShellCommandRunner:
     @staticmethod
     async def _terminate_and_reap(
         process: HostProcess,
-        tasks: tuple[
-            asyncio.Task[tuple[bytes, bool]],
-            asyncio.Task[tuple[bytes, bool]],
-            asyncio.Task[int],
-        ],
+        tasks: tuple[asyncio.Task[Any], ...],
     ) -> None:
         try:
             await process.kill()

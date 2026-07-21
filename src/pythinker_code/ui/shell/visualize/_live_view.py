@@ -152,7 +152,6 @@ _ACTION_SPACER = BLANK_ROW
 _WORKING_TIP_MIN_ELAPSED_S = 4.0
 _MAX_PINNED_TODO_ROWS = 5
 _MAX_SUBAGENT_EVENT_DEPTH = 16
-_SEEN_UNKNOWN_CONTENT_PART_TYPES: set[str] = set()
 
 
 def _todo_activity_label(label: str) -> str:
@@ -263,6 +262,10 @@ class _LiveView:
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
         self._subagent_tool_call_ancestry: dict[str, tuple[_ToolCallBlock, int]] = {}
+        # Per-view so the "log an unknown content-part type once" guarantee is
+        # scoped to this session/view rather than the whole process (keeps the
+        # log-once behavior deterministic and test-isolated).
+        self._seen_unknown_content_part_types: set[str] = set()
         self._last_tool_call_block: _ToolCallBlock | None = None
         self._held_tool_search_block: _ToolCallBlock | None = None
         self._completed_expandable_tool_blocks = deque[_ToolCallBlock](maxlen=20)
@@ -1648,6 +1651,11 @@ class _LiveView:
 
             self._archive_completed_tool_card(block)
             self._tool_call_blocks.pop(tool_call_id)
+            # Drop ancestry entries for this now-archived root so nested-event
+            # ids don't accumulate for the rest of the turn and a late/duplicate
+            # nested event resolves via the "missing ancestry" fallback instead
+            # of silently mutating a block that is no longer rendered live.
+            self._purge_ancestry_for_block(block)
             if self._last_tool_call_block == block:
                 self._last_tool_call_block = None
             if block.is_tool_search:
@@ -1658,6 +1666,21 @@ class _LiveView:
                 if self.focus_model is None:
                     self._emit_action_block(block.compose())
             self.refresh_soon()
+
+    def _purge_ancestry_for_block(self, block: _ToolCallBlock) -> None:
+        """Drop subagent ancestry entries whose root is *block*.
+
+        All nested tool-call ids under a subagent tree resolve to the same root
+        ``_ToolCallBlock`` (the ancestry fallback propagates it down), so once
+        that root is flushed its whole subtree of ancestry entries is stale.
+        """
+        stale_ids = [
+            tool_call_id
+            for tool_call_id, (ancestor, _depth) in self._subagent_tool_call_ancestry.items()
+            if ancestor is block
+        ]
+        for tool_call_id in stale_ids:
+            del self._subagent_tool_call_ancestry[tool_call_id]
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
@@ -1706,8 +1729,8 @@ class _LiveView:
                 self._append_content_label("[video]")
             case _:
                 part_type = part.type
-                if part_type not in _SEEN_UNKNOWN_CONTENT_PART_TYPES:
-                    _SEEN_UNKNOWN_CONTENT_PART_TYPES.add(part_type)
+                if part_type not in self._seen_unknown_content_part_types:
+                    self._seen_unknown_content_part_types.add(part_type)
                     logger.debug(
                         "Rendering unknown content part type in live view: {part_type}",
                         part_type=part_type,
