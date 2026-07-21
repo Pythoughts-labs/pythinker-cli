@@ -1252,6 +1252,7 @@ class _ToolCallBlock:
         self._subagent_type: str | None = None
 
         self._ongoing_subagent_tool_calls: dict[str, ToolCall] = {}
+        self._finished_subagent_tool_call_ids: set[str] = set()
         self._last_subagent_tool_call: ToolCall | None = None
         self._n_finished_subagent_tool_calls = 0
         self._finished_subagent_tool_counts: Counter[str] = Counter()
@@ -1385,6 +1386,8 @@ class _ToolCallBlock:
         self._renderable = self._compose()
 
     def append_sub_tool_call(self, tool_call: ToolCall):
+        if tool_call.id in self._finished_subagent_tool_call_ids:
+            return
         self._ongoing_subagent_tool_calls[tool_call.id] = tool_call
         self._last_subagent_tool_call = tool_call
         self._renderable = self._compose()
@@ -1401,10 +1404,13 @@ class _ToolCallBlock:
         self._renderable = self._compose()
 
     def finish_sub_tool_call(self, tool_result: ToolResult):
+        if tool_result.tool_call_id in self._finished_subagent_tool_call_ids:
+            return
         self._last_subagent_tool_call = None
         sub_tool_call = self._ongoing_subagent_tool_calls.pop(tool_result.tool_call_id, None)
         if sub_tool_call is None:
             return
+        self._finished_subagent_tool_call_ids.add(tool_result.tool_call_id)
         self._subagent_output_parts.pop(tool_result.tool_call_id, None)
         self._subagent_output_had_stderr.pop(tool_result.tool_call_id, None)
         self._subagent_execution_started.discard(tool_result.tool_call_id)

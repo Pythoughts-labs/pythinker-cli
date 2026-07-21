@@ -162,8 +162,9 @@ def _is_clear_command_input(user_input: str | list[ContentPart]) -> bool:
 
 
 def _is_user_message(message: Message) -> bool:
-    # FIXME: should consider non-text tool call results which are sent as user messages
     if message.role != "user":
+        return False
+    if message.tool_call_id is not None:
         return False
     if message.extract_text().startswith("<system>CHECKPOINT"):
         return False

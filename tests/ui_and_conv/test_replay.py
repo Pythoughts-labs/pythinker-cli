@@ -14,7 +14,7 @@ from pythinker_code.ui.shell.replay import (
 )
 from pythinker_code.utils.aioqueue import QueueShutDown
 from pythinker_code.wire.file import WireFile
-from pythinker_code.wire.types import SteerInput, StepBegin, TextPart, TurnBegin
+from pythinker_code.wire.types import ImageURLPart, SteerInput, StepBegin, TextPart, TurnBegin
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +129,44 @@ def test_build_replay_turns_from_history_keeps_plain_steer_as_user_turn() -> Non
     assert len(turns) == 2
     assert turns[0].user_message.extract_text(" ") == "Original question"
     assert turns[1].user_message.extract_text(" ") == "A steer follow-up"
+
+
+def test_real_user_media_message_starts_replay_turn() -> None:
+    media = ImageURLPart(
+        image_url=ImageURLPart.ImageURL(url="data:image/png;base64,REAL_USER_MEDIA")
+    )
+    history = [
+        Message(role="user", content=[media]),
+        Message(role="assistant", content=[TextPart(text="I can inspect that image.")]),
+    ]
+
+    turns = _build_replay_turns_from_history(history)
+
+    assert len(turns) == 1
+    assert turns[0].user_message.content == [media]
+    assert turns[0].user_message.tool_call_id is None
+
+
+def test_user_role_media_tool_result_does_not_start_replay_turn() -> None:
+    remapped_tool_media = ImageURLPart(
+        image_url=ImageURLPart.ImageURL(url="data:image/png;base64,TOOL_RESULT_MEDIA")
+    )
+    history = [
+        Message(role="user", content=[TextPart(text="Inspect the generated image")]),
+        Message(role="assistant", content=[TextPart(text="Starting inspection")]),
+        Message(
+            role="user",
+            content=[remapped_tool_media],
+            tool_call_id="provider-remapped-tool-result",
+        ),
+        Message(role="assistant", content=[TextPart(text="Inspection complete")]),
+    ]
+
+    turns = _build_replay_turns_from_history(history)
+
+    assert len(turns) == 1
+    assert turns[0].user_message.extract_text(" ") == "Inspect the generated image"
+    assert turns[0].n_steps == 2
 
 
 @pytest.mark.asyncio

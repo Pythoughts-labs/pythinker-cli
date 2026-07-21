@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from pythinker_core.message import ToolCall
 from pythinker_core.tooling import ToolOk
-from rich.console import Console
+from rich.console import Console, RenderableType
 
 from pythinker_code.ui.shell.visualize import _LiveView
 from pythinker_code.wire.types import (
@@ -127,9 +128,19 @@ def test_subagent_tool_call_and_args_request_live_refresh():
     assert "src/app.py" in _render(view)
 
 
-def test_output_part_for_unknown_parent_is_silently_ignored():
+def test_output_part_for_unknown_parent_renders_fallback_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
     view = _LiveView(StatusUpdate(context_tokens=1000))
     view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    emitted: list[RenderableType] = []
+    from pythinker_code.ui.shell.visualize import _live_view as live_view_module
+
+    monkeypatch.setattr(
+        live_view_module,
+        "emit_scrollback_block",
+        lambda _console, renderable: emitted.append(renderable),
+    )
     # No agent tool call dispatched — parent_tool_call_id won't resolve
     view.dispatch_wire_message(
         SubagentEvent(
@@ -139,9 +150,15 @@ def test_output_part_for_unknown_parent_is_silently_ignored():
             event=ToolOutputPart(tool_call_id="sub-1", text="should be ignored\n"),
         )
     )
-    # Must not raise; compose must still work
+    # Must not raise or expose the nested payload; a muted fallback is emitted.
     output = _render(view)
     assert "should be ignored" not in output
+    assert len(emitted) == 1
+    console = Console(width=100, record=True, highlight=False, color_system=None)
+    console.print(emitted[0])
+    fallback = console.export_text()
+    assert "Nested subagent activity unavailable" in fallback
+    assert "should be ignored" not in fallback
 
 
 def test_output_cleared_after_sub_tool_call_finishes():
