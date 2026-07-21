@@ -2509,6 +2509,32 @@ class CustomPromptSession:
             return False
         return delegate.running_prompt_accepts_submission()
 
+    def input_text(self) -> str:
+        """Current text of the input buffer ("" when the session is not built yet)."""
+        buffer = getattr(getattr(self, "_session", None), "default_buffer", None)
+        return buffer.text if buffer is not None else ""
+
+    def input_state(self) -> tuple[str, int]:
+        """Current input buffer text and cursor position."""
+        buffer = getattr(getattr(self, "_session", None), "default_buffer", None)
+        if buffer is None:
+            return "", 0
+        return buffer.text, buffer.cursor_position
+
+    def clear_input(self) -> None:
+        """Clear the input buffer when it holds text."""
+        buffer = getattr(getattr(self, "_session", None), "default_buffer", None)
+        if buffer is not None and buffer.text:
+            buffer.set_document(Document(), bypass_readonly=True)
+
+    def build_user_input(self, command: str) -> UserInput:
+        """Resolve *command* (placeholders, mode) into a submission-ready ``UserInput``."""
+        return self._build_user_input(command)
+
+    def serialize_for_history(self, command: str) -> str:
+        """Expand placeholder tokens in *command* into their history/audit form."""
+        return self._get_placeholder_manager().serialize_for_history(command)
+
     def _on_workspace_snapshot_published(self) -> None:
         """Re-run file completion when a fresh workspace snapshot lands mid-menu."""
         app = self._session.app

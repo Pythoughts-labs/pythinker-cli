@@ -233,6 +233,15 @@ async def test_shell_background_approval_with_prompt_session_uses_prompt_modal(
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
 
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
+
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 
     request = ApprovalRequest(
@@ -300,6 +309,15 @@ async def test_shell_prompt_approval_modal_keeps_current_request_when_new_reques
 
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
+
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
 
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 
@@ -376,6 +394,15 @@ async def test_shell_prompt_approval_modal_advances_fifo_after_current_response(
 
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
+
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
 
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 
@@ -724,6 +751,15 @@ async def test_shell_background_approval_modal_includes_display_blocks(
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
 
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
+
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 
     request = ApprovalRequest(
@@ -801,6 +837,15 @@ async def test_shell_background_approval_renders_subagent_metadata(
 
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
+
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
 
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 

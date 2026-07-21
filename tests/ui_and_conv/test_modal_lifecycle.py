@@ -604,6 +604,15 @@ async def test_prompt_live_view_question_modal_attaches_and_detaches() -> None:
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
 
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
+
     view = _PromptLiveView(
         StatusUpdate(),
         prompt_session=cast(Any, _PromptSession()),
@@ -646,6 +655,15 @@ async def test_prompt_live_view_question_modal_updates_on_advance() -> None:
 
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
+
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
 
     view = _PromptLiveView(
         StatusUpdate(),
@@ -700,6 +718,15 @@ async def test_prompt_live_view_cleanup_clears_panel_but_modal_detached_in_final
 
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
+
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
 
     view = _PromptLiveView(
         StatusUpdate(),
@@ -1063,6 +1090,15 @@ async def test_shell_external_approval_response_syncs_modal(
         def _get_placeholder_manager(self) -> _FakePlaceholderManager:
             return _FakePlaceholderManager()
 
+        def serialize_for_history(self, command: str) -> str:
+            return _FakePlaceholderManager.serialize_for_history(command)
+
+        def input_text(self) -> str:
+            return ""
+
+        def input_state(self) -> tuple[str, int]:
+            return "", 0
+
     shell._prompt_session = _PromptSession()  # type: ignore[attr-defined]
 
     # Send both requests
@@ -1168,6 +1204,9 @@ async def test_prompt_live_view_question_does_not_affect_should_handle_key() -> 
                     "detach_modal": lambda self, d: None,
                     "invalidate": lambda self: None,
                     "_get_placeholder_manager": lambda self: _FakePlaceholderManager(),
+                    "serialize_for_history": lambda self, command: command,
+                    "input_text": lambda self: "",
+                    "input_state": lambda self: ("", 0),
                 },
             )(),
         ),
@@ -1207,6 +1246,9 @@ async def test_prompt_live_view_render_body_no_awaiting_other_hint() -> None:
                     "detach_modal": lambda self, d: None,
                     "invalidate": lambda self: None,
                     "_get_placeholder_manager": lambda self: _FakePlaceholderManager(),
+                    "serialize_for_history": lambda self, command: command,
+                    "input_text": lambda self: "",
+                    "input_state": lambda self: ("", 0),
                 },
             )(),
         ),
