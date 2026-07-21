@@ -5,6 +5,12 @@ from pythinker_code.ui.shell.prompting.completion.context import (
     CompletionKind,
     parse_completion_context,
 )
+from pythinker_code.ui.shell.prompting.completion.menus import (
+    LocalFileMentionMenuControl,
+    SlashCommandMenuControl,
+    truncate_to_width,
+    wrap_to_width,
+)
 from pythinker_code.ui.shell.prompting.completion.slash import (
     InputHighlightLexer,
     SlashCommandAutoSuggest,
@@ -24,10 +30,14 @@ __all__ = (
     "HostFileMentionCompleter",
     "InputHighlightLexer",
     "LocalFileMentionCompleter",
+    "LocalFileMentionMenuControl",
     "SlashCommandAutoSuggest",
+    "SlashCommandMenuControl",
     "SlashCommandCompleter",
     "WorkspaceEntry",
     "WorkspaceIndex",
     "WorkspaceSnapshot",
     "parse_completion_context",
+    "truncate_to_width",
+    "wrap_to_width",
 )
