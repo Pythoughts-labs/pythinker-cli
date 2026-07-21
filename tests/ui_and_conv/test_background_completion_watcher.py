@@ -10,7 +10,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from pythinker_code.soul import Soul
-from pythinker_code.ui.shell import Shell, _BackgroundCompletionWatcher, _PromptEvent
+from pythinker_code.ui.shell import (
+    PromptEventKind,
+    Shell,
+    _BackgroundCompletionWatcher,
+    _PromptEvent,
+)
 
 
 def _make_watcher(
@@ -42,7 +47,7 @@ async def test_pending_notification_and_empty_queue_waits_for_user_input():
     await asyncio.sleep(0)
     assert task.done() is False
 
-    event = _PromptEvent(kind="input")
+    event = _PromptEvent(kind=PromptEventKind.INPUT)
     await queue.put(event)
     result = await task
     assert result is event
@@ -53,7 +58,7 @@ async def test_pending_notification_but_user_input_queued_returns_event():
     """Pending LLM notification + queued user input → user input wins."""
     watcher = _make_watcher(has_pending=True, can_auto_trigger_pending=False)
     queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
-    event = _PromptEvent(kind="input")
+    event = _PromptEvent(kind=PromptEventKind.INPUT)
     await queue.put(event)
 
     result = await watcher.wait_for_next(queue)
@@ -65,7 +70,7 @@ async def test_pending_notification_but_eof_queued_returns_eof():
     """Pending notification + queued EOF → user can still exit."""
     watcher = _make_watcher(has_pending=True, can_auto_trigger_pending=False)
     queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
-    eof = _PromptEvent(kind="eof")
+    eof = _PromptEvent(kind=PromptEventKind.EOF)
     await queue.put(eof)
 
     result = await watcher.wait_for_next(queue)
@@ -123,7 +128,7 @@ async def test_bg_event_with_pending_returns_noop_before_shell_is_armed():
     asyncio.create_task(_set_event())
     result = await watcher.wait_for_next(queue)
     assert result is not None
-    assert result.kind == "bg_noop"
+    assert result.kind is PromptEventKind.BACKGROUND_NOOP
 
 
 @pytest.mark.asyncio
@@ -140,7 +145,7 @@ async def test_bg_event_fires_no_pending_returns_noop():
     asyncio.create_task(_set_event())
     result = await watcher.wait_for_next(queue)
     assert result is not None
-    assert result.kind == "bg_noop"
+    assert result.kind is PromptEventKind.BACKGROUND_NOOP
 
 
 @pytest.mark.asyncio
@@ -148,7 +153,7 @@ async def test_user_input_wins_over_simultaneous_bg_event():
     """Both idle and bg fire simultaneously → user input takes priority."""
     watcher = _make_watcher()
     queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
-    event = _PromptEvent(kind="input")
+    event = _PromptEvent(kind=PromptEventKind.INPUT)
 
     # Both ready before await
     await queue.put(event)
@@ -173,7 +178,7 @@ async def test_disabled_watcher_just_awaits_idle():
     assert not watcher.enabled
 
     queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
-    event = _PromptEvent(kind="input")
+    event = _PromptEvent(kind=PromptEventKind.INPUT)
     await queue.put(event)
 
     result = await watcher.wait_for_next(queue)
@@ -192,6 +197,7 @@ class _FakePromptActivity:
         self._recent = recent
         self._remaining = remaining
         self._event = asyncio.Event()
+        self.wait_cancelled = False
 
     def has_pending_input(self) -> bool:
         return self._pending
@@ -203,7 +209,11 @@ class _FakePromptActivity:
         return self._remaining
 
     async def wait_for_input_activity(self) -> None:
-        await self._event.wait()
+        try:
+            await self._event.wait()
+        except asyncio.CancelledError:
+            self.wait_cancelled = True
+            raise
         self._event.clear()
 
 
@@ -236,7 +246,7 @@ async def test_shell_wait_for_input_or_activity_returns_activity_event() -> None
     prompt._event.set()
 
     result = await task
-    assert result.kind == "input_activity"
+    assert result.kind is PromptEventKind.INPUT_ACTIVITY
 
 
 @pytest.mark.asyncio
@@ -244,7 +254,7 @@ async def test_shell_wait_for_input_or_activity_returns_idle_event() -> None:
     shell = Shell(cast(Soul, SimpleNamespace(available_slash_commands=[], name="x")), None)
     prompt = _FakePromptActivity()
     queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
-    expected = _PromptEvent(kind="input")
+    expected = _PromptEvent(kind=PromptEventKind.INPUT)
 
     task = asyncio.create_task(shell._wait_for_input_or_activity(prompt, queue))
     await queue.put(expected)
@@ -263,5 +273,53 @@ async def test_shell_wait_for_input_or_activity_times_out_for_recent_activity_on
     result = await shell._wait_for_input_or_activity(prompt, queue, timeout_s=0.05)
     elapsed = asyncio.get_running_loop().time() - started
 
-    assert result.kind == "input_activity"
+    assert result.kind is PromptEventKind.BACKGROUND_GRACE_EXPIRED
     assert elapsed >= 0.04
+
+
+@pytest.mark.asyncio
+async def test_shell_wait_for_input_or_activity_user_input_wins_activity_tie() -> None:
+    shell = Shell(cast(Soul, SimpleNamespace(available_slash_commands=[], name="x")), None)
+    prompt = _FakePromptActivity()
+    queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
+    expected = _PromptEvent(kind=PromptEventKind.INPUT)
+
+    await queue.put(expected)
+    prompt._event.set()
+
+    result = await shell._wait_for_input_or_activity(prompt, queue, timeout_s=0)
+    assert result is expected
+
+
+@pytest.mark.asyncio
+async def test_shell_wait_for_input_or_activity_cleans_up_tasks_when_cancelled() -> None:
+    shell = Shell(cast(Soul, SimpleNamespace(available_slash_commands=[], name="x")), None)
+    prompt = _FakePromptActivity()
+    queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
+
+    task = asyncio.create_task(shell._wait_for_input_or_activity(prompt, queue, timeout_s=30))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert prompt.wait_cancelled is True
+    expected = _PromptEvent(kind=PromptEventKind.INPUT)
+    await queue.put(expected)
+    assert queue.get_nowait() is expected
+
+
+@pytest.mark.asyncio
+async def test_background_watcher_cleans_up_waiters_when_cancelled() -> None:
+    watcher = _make_watcher()
+    queue: asyncio.Queue[_PromptEvent] = asyncio.Queue()
+
+    task = asyncio.create_task(watcher.wait_for_next(queue))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    expected = _PromptEvent(kind=PromptEventKind.INPUT)
+    await queue.put(expected)
+    assert queue.get_nowait() is expected

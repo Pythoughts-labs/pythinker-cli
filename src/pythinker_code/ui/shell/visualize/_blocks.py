@@ -89,6 +89,7 @@ from pythinker_code.wire.types import (
 _ELLIPSIS = "..."
 _THINKING_PREVIEW_LINES = 6
 _COMPOSING_PREVIEW_LINES = 12
+_ARGUMENT_SCAN_GROWTH_BYTES = 1024
 
 # Smooth-streaming reveal pacing (composing text only). Deltas arrive bursty;
 # instead of revealing each whole chunk at once, a paced reveal cursor advances
@@ -1247,6 +1248,7 @@ class _ToolCallBlock:
         self._argument = self._extract_worklog_argument(
             tool_call.function.arguments, self._tool_name
         )
+        self._argument_scan_bytes = 0
         self._result: ToolReturnValue | None = None
         self._subagent_id: str | None = None
         self._subagent_type: str | None = None
@@ -1347,21 +1349,33 @@ class _ToolCallBlock:
         if self.finished:
             return
         self._lexer.append_string(args_part)
-        # TODO: maybe don't extract detail if it's already stable
-        argument = self._extract_worklog_argument(self._lexer.complete_json(), self._tool_name)
-        if argument and argument != self._argument:
-            self._argument = argument
-            self._renderable = self._compose()
+        encoding = "utf-8"
+        self._argument_scan_bytes += len(args_part.encode(encoding=encoding))
+        terminal_delimiter = args_part.rstrip().endswith(("}", "]"))
+        if (
+            not self._argument
+            or self._argument_scan_bytes >= _ARGUMENT_SCAN_GROWTH_BYTES
+            or terminal_delimiter
+        ):
+            self._scan_worklog_argument()
 
     def mark_execution_started(self) -> None:
         # Terminal states are monotonic: a late ToolExecutionStarted (event
         # reordering, duplicate delivery) must not restyle a finished row.
         if self._execution_started or self.finished:
             return
+        self._scan_worklog_argument()
         self._execution_started = True
         if self._tui_card is not None:
             self._tui_card.mark_execution_started()
         self._renderable = self._compose()
+
+    def _scan_worklog_argument(self) -> None:
+        argument = self._extract_worklog_argument(self._lexer.complete_json(), self._tool_name)
+        self._argument_scan_bytes = 0
+        if argument and argument != self._argument:
+            self._argument = argument
+            self._renderable = self._compose()
 
     def append_output_part(self, text: str, *, stream: str = "output") -> None:
         if self.finished or not text:

@@ -6,32 +6,47 @@ from types import SimpleNamespace
 import pytest
 
 import pythinker_code.ui.shell as shell_module
+from pythinker_code.ui.shell.command_runner import ShellCommandResult
 
 
 @pytest.mark.asyncio
-async def test_bang_command_detaches_windows_console(monkeypatch) -> None:
-    """`!` foreground commands must not attach to the interactive console on Windows.
+async def test_bang_command_runs_through_host_exec_runner(monkeypatch) -> None:
+    """`!` foreground commands must execute via ShellCommandRunner/Host.exec.
 
-    A child sharing the TUI's console can clear it or reset its modes via the
-    Win32 console API (bypassing the stdio pipes), blanking the shell UI until
-    the terminal is restarted; CREATE_NO_WINDOW detaches it.
+    Host.exec applies CREATE_NO_WINDOW on Windows (covered by
+    packages/pythinker-host/tests/test_local_host.py), which keeps a child off
+    the interactive console: console-API writes from a child sharing the TUI's
+    console bypass the stdio pipes and can blank the shell UI until terminal
+    restart. The shell must therefore never fall back to
+    asyncio.create_subprocess_shell for `!` commands.
     """
     shell = object.__new__(shell_module.Shell)
 
-    captured: dict[str, object] = {}
+    ran: dict[str, object] = {}
 
-    async def _capture_and_abort(command: str, **kwargs):
-        captured.update(kwargs)
-        raise RuntimeError("spawn intercepted by test")
+    class _RecordingRunner:
+        async def run(self, command: str) -> ShellCommandResult:
+            ran["command"] = command
+            return ShellCommandResult(
+                stdout="hi\n",
+                stderr="",
+                returncode=0,
+                truncated_stdout=False,
+                truncated_stderr=False,
+            )
 
-    monkeypatch.setattr(asyncio, "create_subprocess_shell", _capture_and_abort)
+    async def _forbidden_shell_spawn(command: str, **kwargs):
+        raise AssertionError("`!` commands must not use create_subprocess_shell")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _forbidden_shell_spawn)
+    monkeypatch.setattr(shell_module, "ShellCommandRunner", _RecordingRunner)
     monkeypatch.setattr(shell_module, "install_sigint_handler", lambda loop, handler: lambda: None)
-    # Swap the module's `os` reference rather than mutating the global
-    # `os.name`, which corrupts pathlib/pytest path handling mid-run.
-    monkeypatch.setattr(shell_module, "os", SimpleNamespace(name="nt"))
+    printed: list[object] = []
+    monkeypatch.setattr(
+        shell_module, "console", SimpleNamespace(print=lambda value=None: printed.append(value))
+    )
 
     await shell._run_shell_command("echo hi")
 
-    flags = captured["creationflags"]
-    assert isinstance(flags, int)
-    assert flags & 0x08000000  # CREATE_NO_WINDOW
+    assert ran["command"] == "echo hi"
+    assert printed
