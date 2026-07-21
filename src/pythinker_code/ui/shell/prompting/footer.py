@@ -23,6 +23,10 @@ class FooterViewModel:
     background_summary: str
     toast: ToastSnapshot | None
     update_notice: str | None
+    # Left- and right-positioned toasts can be active at once; the right toast is
+    # rendered by the right span, so it must be carried separately from ``toast``
+    # (which feeds left-side content precedence) or it would be dropped.
+    toast_right: ToastSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

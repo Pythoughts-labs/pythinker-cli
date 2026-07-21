@@ -20,6 +20,7 @@ from pythinker_code.utils.clipboard import (
 from pythinker_code.utils.clipboard import (
     is_media_clipboard_available as utility_is_media_clipboard_available,
 )
+from pythinker_code.utils.logging import logger
 
 
 class ClipboardAdapter:
@@ -54,7 +55,8 @@ class ClipboardAdapter:
         """Return pasted text, preserving the prompt's silent failure behavior."""
         try:
             data = clipboard.get_data()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Clipboard text read failed: error={!r}", exc)
             return None
         return data.text
 

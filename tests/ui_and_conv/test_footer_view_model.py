@@ -171,6 +171,39 @@ def test_legacy_and_card_adapters_share_left_policy_and_width_safety(
         assert "toast-only" not in _text(card)
 
 
+def test_left_and_right_toasts_both_render(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: a left toast must not drop a simultaneously active right toast."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    session = _session()
+    left = ToastSnapshot(
+        message="left-toast",
+        position="left",
+        style="bold",
+        topic=None,
+        expires_at=float("inf"),
+    )
+    right = ToastSnapshot(
+        message="right-toast",
+        position="right",
+        style="bold",
+        topic=None,
+        expires_at=float("inf"),
+    )
+    model = FooterViewModel(
+        status=_status(120, ascii_only=True),
+        command_line="",
+        extension_statuses=(),
+        background_summary="",
+        toast=left,
+        update_notice=None,
+        toast_right=right,
+    )
+
+    rendered = _text(session._render_legacy_bottom_toolbar(model))
+    assert "left-toast" in rendered
+    assert "right-toast" in rendered
+
+
 def test_footer_view_model_is_immutable_and_width_specific() -> None:
     model = _model(80, command="cached")
     narrower = replace(model, status=replace(model.status, columns=40))

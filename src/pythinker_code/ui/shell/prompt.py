@@ -97,9 +97,6 @@ from pythinker_code.ui.shell.prompting.clipboard import (
     grab_media_from_clipboard as grab_media_from_clipboard,
 )
 from pythinker_code.ui.shell.prompting.clipboard import (
-    is_clipboard_available as is_clipboard_available,
-)
-from pythinker_code.ui.shell.prompting.clipboard import (
     is_media_clipboard_available as is_media_clipboard_available,
 )
 from pythinker_code.ui.shell.prompting.completion.context import (
@@ -3960,8 +3957,6 @@ class CustomPromptSession:
         ):
             command_line = runner.current_line
 
-        left_toast = self._prompt_toast("left")
-        toast_snapshot = left_toast if left_toast is not None else self._prompt_toast("right")
         update_provider = cast(
             Callable[[], str | None] | None,
             getattr(self, "_update_notice_provider", None),
@@ -3978,8 +3973,9 @@ class CustomPromptSession:
                 bash=background_counts.bash,
                 agent=background_counts.agent,
             ),
-            toast=toast_snapshot,
+            toast=self._prompt_toast("left"),
             update_notice=update_provider() if callable(update_provider) else None,
+            toast_right=self._prompt_toast("right"),
         )
 
     def _update_notice_for_render(self) -> str | None:
@@ -4091,14 +4087,14 @@ class CustomPromptSession:
         return self._tips[self._tip_rotation_index % len(self._tips)]
 
     def _render_right_span(self, footer: FooterViewModel) -> str:
-        if footer.toast is None or footer.toast.position != "right":
+        if footer.toast_right is None:
             status = footer.status
             return format_context_status(
                 status.context_usage,
                 status.context_tokens,
                 status.max_context_tokens,
             )
-        return footer.toast.message
+        return footer.toast_right.message
 
 
 # Compatibility surface kept for tests that still import the legacy footer

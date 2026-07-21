@@ -148,9 +148,12 @@ def test_append_history_entry_restricts_file_permissions(tmp_path) -> None:
 def test_prompt_history_store_loads_only_configured_tail(tmp_path) -> None:
     store = PromptHistoryStore(tmp_path / "history.jsonl", max_entries=2)
 
-    assert store.append("one")
-    assert store.append("two")
-    assert store.append("three")
+    appended_one = store.append("one")
+    appended_two = store.append("two")
+    appended_three = store.append("three")
+    assert appended_one
+    assert appended_two
+    assert appended_three
 
     assert [entry.content for entry in store.load()] == ["two", "three"]
 
@@ -158,21 +161,25 @@ def test_prompt_history_store_loads_only_configured_tail(tmp_path) -> None:
 def test_prompt_history_store_excludes_credential_commands(tmp_path) -> None:
     store = PromptHistoryStore(tmp_path / "history.jsonl")
 
-    assert store.append("/login api-key") is False
-    assert store.append("logout openai") is False
+    login_appended = store.append("/login api-key")
+    logout_appended = store.append("logout openai")
+    assert login_appended is False
+    assert logout_appended is False
     assert not store.path.exists()
 
 
 def test_prompt_history_store_skips_oversized_records(tmp_path) -> None:
     store = PromptHistoryStore(tmp_path / "history.jsonl")
 
-    assert store.append("x" * (256 * 1024)) is False
+    oversized_appended = store.append("x" * (256 * 1024))
+    assert oversized_appended is False
     assert not store.path.exists()
 
 
 def test_prompt_history_store_clear_confirms_both_files_are_removed(tmp_path) -> None:
     store = PromptHistoryStore(tmp_path / "history.jsonl")
-    assert store.append("kept")
+    kept_appended = store.append("kept")
+    assert kept_appended
     encoding = "utf-8"
     store.rotated_path.write_text('{"content":"older"}\n', encoding=encoding)
 
@@ -196,7 +203,8 @@ def test_prompt_history_clear_reports_success_only_after_confirmed_removal(
     monkeypatch,
 ) -> None:
     store = PromptHistoryStore(tmp_path / "history.jsonl")
-    assert store.append("kept")
+    kept_appended = store.append("kept")
+    assert kept_appended
     prompt_session = object.__new__(shell_prompt.CustomPromptSession)
     cast(Any, prompt_session)._history_store = store
     app = SimpleNamespace(_prompt_session=prompt_session)
