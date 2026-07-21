@@ -1331,7 +1331,6 @@ class _ToolCallBlock:
 
         self._subagent_activities: dict[str, _SubagentActivityState] = {}
         self._subagent_tool_call_owner: dict[str, str] = {}
-        self._last_subagent_tool_call_by_agent: dict[str, ToolCall] = {}
         self._ongoing_subagent_tool_calls: dict[str, ToolCall] = {}
         self._finished_subagent_tool_call_ids: set[str] = set()
         self._last_subagent_tool_call: ToolCall | None = None
@@ -1485,7 +1484,6 @@ class _ToolCallBlock:
             return
         if self._tool_name == "RunAgents" and agent_id is not None:
             self._subagent_tool_call_owner[tool_call.id] = agent_id
-            self._last_subagent_tool_call_by_agent[agent_id] = tool_call
             state = self._subagent_activities.get(agent_id)
             if state is not None:
                 state.current_tool_name = tool_call.function.name
@@ -1732,12 +1730,7 @@ class _ToolCallBlock:
             children.append(heading)
 
         states = list(self._subagent_activities.values())
-        state_priority = {"running": 0, "waiting": 1, "failed": 2, "completed": 3}
-        ordered = sorted(
-            enumerate(states),
-            key=lambda item: (state_priority[item[1].state], item[0]),
-        )
-        visible = [state for _, state in ordered[:_MAX_RUN_AGENTS_ACTIVITY_ROWS]]
+        visible = states[:_MAX_RUN_AGENTS_ACTIVITY_ROWS]
         hidden = max(0, len(states) - len(visible))
         queued = max(0, self._run_agents_requested_count() - len(self._subagent_activities))
         total_rows = len(visible) + (1 if queued else 0) + (1 if hidden else 0)
@@ -1793,6 +1786,8 @@ class _ToolCallBlock:
         include_run_agents_heading: bool = True,
     ) -> list[RenderableType]:
         if self._tool_name == "RunAgents":
+            if self._result is not None:
+                return []
             return self._run_agents_activity_children(include_heading=include_run_agents_heading)
         children: list[RenderableType] = []
         should_show_activity = include_completed_subagent or not (
@@ -1970,6 +1965,8 @@ class _ToolCallBlock:
         """
         definition = get_tool_renderer(self._tool_name)
         if definition is None:
+            if self._tool_name == "RunAgents":
+                return None
             definition = generic_renderer()
         if self._tui_card is None:
             self._tui_card = ToolExecutionComponent(

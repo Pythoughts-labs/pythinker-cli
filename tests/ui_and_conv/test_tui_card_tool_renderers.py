@@ -1612,7 +1612,7 @@ def test_run_agents_no_color_keeps_glyphs_and_status_words(monkeypatch: pytest.M
         output=(
             "tool_status: success\n"
             "mode: foreground\n"
-            "agent_count: 3\n"
+            "agent_count: 4\n"
             "agents:\n"
             "- name: done\n"
             "  subagent_type: explore\n"
@@ -1623,12 +1623,117 @@ def test_run_agents_no_color_keeps_glyphs_and_status_words(monkeypatch: pytest.M
             "- name: queued\n"
             "  subagent_type: explore\n"
             "  status: deferred\n"
+            "- name: lost\n"
+            "  subagent_type: explore\n"
+            "  status: vortex\n"
         ),
         width=100,
     )
     assert "✓" in rendered and "completed" in rendered
     assert "✘" in rendered and "failed" in rendered
     assert "○" in rendered and "queued" in rendered
+    assert "?" in rendered and "unknown" in rendered
+    assert "lost" in rendered
+    assert "running/background" not in rendered
+
+
+def test_run_agents_failed_brief_never_leaks_in_collapsed_rows():
+    sentinel_brief = "LEAK_BRIEF_COMMAND_SENTINEL /private/secret-token STACK_SECRET_SENTINEL"
+    output = (
+        "tool_status: success\n"
+        "mode: foreground\n"
+        "agent_count: 1\n"
+        "agents:\n"
+        "- name: failed_agent\n"
+        "  subagent_type: explore\n"
+        "  status: failed\n"
+        f"  brief: {sentinel_brief}\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "failed_agent"}]},
+        output=output,
+        width=120,
+    )
+    assert "failed_agent" in collapsed
+    assert "failed" in collapsed
+    assert sentinel_brief not in collapsed
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "failed_agent"}]},
+        output=output,
+        expanded=True,
+        width=120,
+    )
+    assert sentinel_brief in expanded
+
+
+def test_run_agents_error_result_collapsed_hides_raw_text_until_expanded():
+    raw_error = (
+        "Traceback (most recent call last):\n"
+        '  File "/private/secret-token/tool.py", line 7, in run\n'
+        "RuntimeError: STACK_SECRET_SENTINEL agent-id-secret-123\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "agent"}]},
+        output=raw_error,
+        is_error=True,
+        width=120,
+    )
+    assert "Agents" in collapsed
+    assert "failed" in collapsed.lower()
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+    assert "agent-id-secret-123" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "agent"}]},
+        output=raw_error,
+        is_error=True,
+        expanded=True,
+        width=120,
+    )
+    assert "/private/secret-token" in expanded
+    assert "STACK_SECRET_SENTINEL" in expanded
+    assert "agent-id-secret-123" in expanded
+
+
+def test_run_agents_parse_fallback_collapsed_hides_raw_text_until_expanded():
+    raw_result = (
+        "malformed RunAgents result /private/secret-token\n"
+        "internal id agent-id-secret-123\n"
+        "STACK_SECRET_SENTINEL\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "malformed", "agents": [{"title": "agent"}]},
+        output=raw_result,
+        width=120,
+    )
+    assert "Agents" in collapsed
+    assert "result unavailable" in collapsed
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+    assert "agent-id-secret-123" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "malformed", "agents": [{"title": "agent"}]},
+        output=raw_result,
+        expanded=True,
+        width=120,
+    )
+    assert "/private/secret-token" in expanded
+    assert "STACK_SECRET_SENTINEL" in expanded
+    assert "agent-id-secret-123" in expanded
 
 
 # ---------------------------------------------------------------------------

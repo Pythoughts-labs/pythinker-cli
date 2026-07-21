@@ -415,7 +415,7 @@ def _normalize_run_agents_status(status: str, *, mode: str) -> str:
         return "failed"
     if norm in {"deferred", "queued", "pending"}:
         return "queued"
-    if mode == "background" or norm in {
+    if norm in {
         "created",
         "starting",
         "running",
@@ -423,7 +423,9 @@ def _normalize_run_agents_status(status: str, *, mode: str) -> str:
         "awaiting approval",
     }:
         return "running/background"
-    return "running/background"
+    if mode == "background" and not norm:
+        return "running/background"
+    return "unknown"
 
 
 def _run_agents_status_glyph(status: str) -> str:
@@ -433,6 +435,8 @@ def _run_agents_status_glyph(status: str) -> str:
         return "✘"
     if status == "queued":
         return "○"
+    if status == "unknown":
+        return "?"
     return "●"
 
 
@@ -479,9 +483,10 @@ def _render_agent_progress_line(
         row.append(truncate_to_width(description, budget), style=tui_rich_style("tool_title"))
     if status == "completed":
         row.append(" · Done", style=tui_rich_style("dim"))
-    if status == "failed" and entry.get("brief"):
-        row.append(" · ", style=tui_rich_style("dim"))
-        row.append(truncate_to_width(entry["brief"], 32), style=tui_rich_style("error"))
+    elif status == "failed":
+        row.append(" · Failed", style=tui_rich_style("dim"))
+    elif status == "unknown":
+        row.append(" · Status unknown", style=tui_rich_style("dim"))
     row.no_wrap = True
     row.overflow = "ellipsis"
     return row
@@ -708,10 +713,18 @@ def _render_run_agents_text_result(
     if not text:
         return None
     ctx.state["__suppress_generic_expand_hint__"] = True
+    ctx.state["__has_expandable_payload__"] = True
+    if not ctx.expanded:
+        status = "failed" if result.is_error else "result unavailable"
+        detail = "raw details preserved"
+        return Group(
+            fg("error" if result.is_error else "muted", f"Agents {status}"),
+            key_hint("app.tools.expand", detail),
+        )
     body, remaining = format_lines_block(
         text,
-        expanded=ctx.expanded,
-        collapsed_max_lines=_RUN_AGENTS_ERROR_COLLAPSED_LINES,
+        expanded=True,
+        collapsed_max_lines=10**9,
         style_token="error" if result.is_error else "tool_output",
     )
     if remaining > 0:

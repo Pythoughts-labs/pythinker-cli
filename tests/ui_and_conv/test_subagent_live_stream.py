@@ -354,6 +354,162 @@ def test_run_agents_activity_states_update_one_row_per_agent():
     assert "reading…" in updated
 
 
+def test_run_agents_activity_preserves_launch_order_across_state_transitions():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+
+    for agent_id, description, tool_name in (
+        ("a1", "First launch", "Grep"),
+        ("a2", "Second launch", "Read"),
+        ("a3", "Third launch", "Bash"),
+    ):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="run-agents-1",
+                agent_id=agent_id,
+                subagent_type="explore",
+                description=description,
+                event=_sub_tool_call(f"sub-{agent_id}", tool_name, "{}"),
+            )
+        )
+
+    waiting = _render(view)
+    assert (
+        waiting.index("First launch")
+        < waiting.index("Second launch")
+        < waiting.index("Third launch")
+    )
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a3",
+            subagent_type="explore",
+            description="Third launch",
+            event=ToolExecutionStarted(tool_call_id="sub-a3"),
+        )
+    )
+    running = _render(view)
+    assert (
+        running.index("First launch")
+        < running.index("Second launch")
+        < running.index("Third launch")
+    )
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="First launch",
+            event=ToolResult(tool_call_id="sub-a1", return_value=ToolOk(output="done")),
+        )
+    )
+    thinking = _render(view)
+    assert (
+        thinking.index("First launch")
+        < thinking.index("Second launch")
+        < thinking.index("Third launch")
+    )
+
+
+def test_run_agents_parent_result_owns_terminal_rows_after_nested_activity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    emitted: list[RenderableType] = []
+    from pythinker_code.ui.shell.visualize import _live_view as live_view_module
+
+    monkeypatch.setattr(
+        live_view_module,
+        "emit_scrollback_block",
+        lambda _console, renderable: emitted.append(renderable),
+    )
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call("sub-a1", "Grep", '{"pattern":"TODO"}'),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolExecutionStarted(tool_call_id="sub-a1"),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a2",
+            subagent_type="explore",
+            description="Count files",
+            event=_sub_tool_call("sub-a2", "Read", '{"file_path":"/repo/src/private.py"}'),
+        )
+    )
+
+    view.dispatch_wire_message(
+        ToolResult(
+            tool_call_id="run-agents-1",
+            return_value=ToolOk(
+                output=(
+                    "tool_status: success\n"
+                    "mode: foreground\n"
+                    "agent_count: 2\n"
+                    "agents:\n"
+                    "- name: todo_scan\n"
+                    "  subagent_type: explore\n"
+                    "  status: completed\n"
+                    "- name: file_count\n"
+                    "  subagent_type: explore\n"
+                    "  status: completed\n"
+                )
+            ),
+        )
+    )
+
+    assert len(emitted) == 1
+    console = Console(width=100, record=True, highlight=False, color_system=None)
+    console.print(emitted[0])
+    output = console.export_text()
+    assert output.count("Agents") == 1
+    assert "2 agents completed" in output
+    assert "waiting" not in output
+    assert "running/background" not in output
+    assert "thinking…" not in output
+    assert "searching…" not in output
+    assert "reading…" not in output
+
+
+def test_run_agents_live_fallback_without_registry_renders_agents_tree():
+    clear_tool_renderers()
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call("sub-a1", "Grep", '{"pattern":"TODO"}'),
+        )
+    )
+
+    output = _render(view, width=100)
+    assert output.count("Agents") == 1
+    assert "Find TODO comments" in output
+    assert "RunAgents(" not in output
+
+
 def test_run_agents_activity_tree_bounds_overflow_and_width():
     view = _LiveView(StatusUpdate(context_tokens=1000))
     view.dispatch_wire_message(TurnBegin(user_input="scan"))
