@@ -132,7 +132,10 @@ def promote_changelog(path: Path, version: str, *, release_date: str) -> None:
 
 
 def rewrite_version_strings(text: str, *, old: str, new: str) -> str:
-    """Replace ONLY release-pattern occurrences of `old` with `new`.
+    """Update release-pattern versions to `new`.
+
+    Most patterns replace `old`; canonical version-bearing commands are
+    normalized even when their current version is already stale.
 
     Deliberately skips `--version <old>` flag examples (the documented
     §3 exception) so they stay shape-only — the lockstep test enforces this.
@@ -145,6 +148,10 @@ def rewrite_version_strings(text: str, *, old: str, new: str) -> str:
         (rf"(pythinker-code_){o}(_[a-z0-9]+\.deb)", rf"\g<1>{new}\g<2>"),
         (rf"(pythinker-code-){o}(\.[a-z0-9_]+\.rpm)", rf"\g<1>{new}\g<2>"),
         (rf"(releases/download/v){o}(/)", rf"\g<1>{new}\g<2>"),
+        (
+            r"(bash packages/linux-installer/build\.sh )\d+\.\d+\.\d+",
+            rf"\g<1>{new}",
+        ),
     ]
     for pat, repl in patterns:
         text = re.sub(pat, repl, text)
