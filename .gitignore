@@ -11,7 +11,7 @@ wheels/
 
 # Project files
 .vscode
-.agents/
+/.agents/
 .env
 .env.local
 AGENTS.local
