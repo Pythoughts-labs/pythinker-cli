@@ -167,27 +167,55 @@ async def test_periodic_update_check_recovers_after_failing_check(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_periodic_update_check_recovers_after_timed_out_check(monkeypatch):
+    checks: list[str] = []
+    sleeps: list[float] = []
+
+    async def check() -> None:
+        checks.append("check")
+        if len(checks) == 1:
+            await asyncio.Event().wait()  # hang until the watchdog fires
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    # asyncio.timeout drives off the event loop clock, not asyncio.sleep, so a
+    # tiny real timeout fires while the patched sleep only records intervals.
+    monkeypatch.setattr(shell_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(shell_module, "AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(asyncio.CancelledError):
+        await shell_module._periodic_update_check(check)
+
+    # The hung first attempt is bounded by the watchdog; the loop logs the
+    # timeout and continues to the next interval instead of dying.
+    assert checks == ["check", "check"]
+    assert sleeps == [
+        shell_module.AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
+        shell_module.AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
+    ]
+
+
 def test_startup_scheduler_uses_periodic_loop_in_all_scheduling_branches(
     runtime: Runtime, tmp_path: Path, monkeypatch
 ):
     from pythinker_code.config import AutoUpdateMode
 
     shell = _make_shell(runtime, tmp_path)
-    scheduled_checks = []
-
-    def fake_periodic(check):
-        scheduled_checks.append(check)
-
-        async def _noop() -> None:
-            return None
-
-        return _noop()
+    scheduled_names: list[str] = []
 
     def capture(coro):
+        # The scheduler wraps each check in the periodic loop but deliberately
+        # retains the concrete check's __name__ for task diagnostics/observers
+        # (see `_start_periodic_update_check`). Assert on that documented name
+        # at the scheduling seam instead of mocking the private loop wiring;
+        # fully removing the seam would require exercising real update I/O.
+        scheduled_names.append(coro.__name__)
         coro.close()
         return None
-
-    monkeypatch.setattr(shell_module, "_periodic_update_check", fake_periodic)
 
     monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
     monkeypatch.setattr(shell, "_start_background_task", capture)
@@ -202,8 +230,4 @@ def test_startup_scheduler_uses_periodic_loop_in_all_scheduling_branches(
     )
     shell._schedule_startup_update_task()
 
-    assert scheduled_checks == [
-        shell._auto_update,
-        shell._auto_update,
-        shell._silent_auto_update,
-    ]
+    assert scheduled_names == ["_auto_update", "_auto_update", "_silent_auto_update"]

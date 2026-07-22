@@ -75,6 +75,15 @@ LAST_SEEN_VERSION_FILE = get_share_dir() / "last_seen_version.txt"
 # that is a wide margin. A throttle miss fails safe: a transient error returns
 # FAILED, which skips the mark and retries next launch.
 AUTO_UPDATE_CHECK_INTERVAL_SECONDS = 30 * 60
+# Backstop watchdog for a single periodic check attempt. The check's own
+# per-socket timeouts already abort network stalls (and the streamed installer
+# download is deliberately not capped by a total timeout so a slow link still
+# completes — see `_maybe_run_native_update`), so this only prevents a
+# non-network hang (stuck subprocess, trickle-forever stream) from killing the
+# session-lifetime loop. Set to 2× the interval so a genuinely slow silent
+# download still finishes before the watchdog fires; worst-case dead-loop
+# recovery is one timeout plus one interval.
+AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS = 2 * AUTO_UPDATE_CHECK_INTERVAL_SECONDS
 PROMPT_UPDATE_REFRESH_TIMEOUT_SECONDS = 2.0
 WINDOWS_UPDATE_STAGING_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 UPGRADE_COMMAND_TIMEOUT_SECONDS = 30 * 60

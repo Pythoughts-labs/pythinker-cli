@@ -69,6 +69,7 @@ from pythinker_code.ui.shell.replay import replay_recent_history
 from pythinker_code.ui.shell.slash import SKILL_COMMAND_PREFIX, shell_mode_registry
 from pythinker_code.ui.shell.slash import registry as shell_slash_registry
 from pythinker_code.ui.shell.update import (
+    AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS,
     AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
     MANAGED_CHANNEL_MARKER,
     UpdateIntent,
@@ -148,12 +149,23 @@ async def _periodic_update_check(check: Callable[[], Awaitable[None]]) -> None:
 
     The check bodies re-consult the shared on-disk throttle, so this loop can
     never poll GitHub faster than the throttle allows across concurrent shells.
+
+    Each attempt is bounded by a generous watchdog timeout so a single hung
+    check (a non-network stall the inner per-socket timeouts cannot catch) can
+    never block every future retry for the session; on timeout the loop logs it
+    distinctly and continues to the next interval.
     """
     while True:
         try:
-            await check()
+            async with asyncio.timeout(AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS):
+                await check()
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            logger.warning(
+                "Periodic update check timed out after %ss; retrying next interval",
+                AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS,
+            )
         except Exception:
             logger.exception("Periodic update check failed:")
         await asyncio.sleep(AUTO_UPDATE_CHECK_INTERVAL_SECONDS)
