@@ -53,6 +53,20 @@ def _agent_call(call_id: str = "agent-1") -> WireToolCall:
     )
 
 
+def _judge_agent_call(call_id: str = "judge-agent-1") -> WireToolCall:
+    return WireToolCall(
+        id=call_id,
+        function=WireToolCall.FunctionBody(
+            name="Agent",
+            arguments=(
+                '{"description":"Judge branch review report",'
+                '"subagent_type":"judge",'
+                '"prompt":"Review this branch and do not leak this prompt"}'
+            ),
+        ),
+    )
+
+
 def _run_agents_call(call_id: str = "run-agents-1") -> WireToolCall:
     return WireToolCall(
         id=call_id,
@@ -79,7 +93,7 @@ def _sub_tool_call(sub_id: str, name: str, args: str) -> ToolCall:
     )
 
 
-def test_subagent_tool_output_part_appears_in_live_view():
+def test_subagent_tool_output_part_updates_single_agent_semantic_activity_without_payload():
     view = _LiveView(StatusUpdate(context_tokens=1000))
     view.dispatch_wire_message(TurnBegin(user_input="scan"))
     view.dispatch_wire_message(_agent_call())
@@ -103,7 +117,9 @@ def test_subagent_tool_output_part_appears_in_live_view():
     )
 
     output = _render(view)
-    assert "src/app.py:42" in output
+    assert "running command…" in output
+    assert "src/app.py:42" not in output
+    assert "grep -r TODO" not in output
 
 
 def test_subagent_tool_execution_started_tracked():
@@ -159,7 +175,9 @@ def test_subagent_tool_call_and_args_request_live_refresh():
         )
     )
     assert view._need_recompose is True
-    assert "src/app.py" in _render(view)
+    output = _render(view)
+    assert "reading…" in output
+    assert "src/app.py" not in output
 
 
 def test_output_part_for_unknown_parent_renders_fallback_without_payload(
@@ -228,6 +246,200 @@ def test_output_cleared_after_sub_tool_call_finishes():
 
     output = _render(view)
     assert "SHOULD_DISAPPEAR" not in output
+
+
+def test_single_judge_agent_uses_stable_semantic_activity_row_without_raw_nested_tools():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="review"))
+    view.dispatch_wire_message(_judge_agent_call())
+
+    for sub_id, tool_name, args in (
+        ("sub-read-raw-id", "Read", '{"file_path":"/repo/src/secret.py"}'),
+        ("sub-search-raw-id", "Search", '{"query":"private needle","path":"/repo"}'),
+        ("sub-shell-raw-id", "Shell", '{"command":"git status --short"}'),
+    ):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="judge-agent-1",
+                agent_id="judge-raw-id",
+                subagent_type="judge",
+                description="Judge branch review report",
+                event=_sub_tool_call(sub_id, tool_name, args),
+            )
+        )
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="judge-agent-1",
+                agent_id="judge-raw-id",
+                subagent_type="judge",
+                description="Judge branch review report",
+                event=ToolExecutionStarted(tool_call_id=sub_id),
+            )
+        )
+        if tool_name != "Shell":
+            view.dispatch_wire_message(
+                SubagentEvent(
+                    parent_tool_call_id="judge-agent-1",
+                    agent_id="judge-raw-id",
+                    subagent_type="judge",
+                    description="Judge branch review report",
+                    event=ToolResult(tool_call_id=sub_id, return_value=ToolOk(output="hidden")),
+                )
+            )
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=ToolOutputPart(tool_call_id="sub-shell-raw-id", text="M src/secret.py\n"),
+        )
+    )
+
+    output = _render(view, width=100)
+    assert output.count("Agent(") == 1
+    assert output.count("● Agent") == 0
+    assert output.count("Judge branch review report") >= 1
+    assert "running command…" in output
+    assert "reading…" not in output
+    assert "searching…" not in output
+    assert "└─" in output
+    assert "│  ⎿" in output or "   ⎿" in output
+    for leaked in (
+        "agent Read",
+        "agent Search",
+        "agent Shell",
+        "/repo/src/secret.py",
+        "private needle",
+        "git status --short",
+        "M src/secret.py",
+        "do not leak this prompt",
+        "judge-raw-id",
+        "sub-read-raw-id",
+        "sub-search-raw-id",
+        "sub-shell-raw-id",
+    ):
+        assert leaked not in output
+
+
+def test_single_agent_activity_states_update_one_row_and_parent_result_suppresses_stale_live_activity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    emitted: list[RenderableType] = []
+    from pythinker_code.ui.shell.visualize import _live_view as live_view_module
+
+    monkeypatch.setattr(
+        live_view_module,
+        "emit_scrollback_block",
+        lambda _console, renderable: emitted.append(renderable),
+    )
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="review"))
+    view.dispatch_wire_message(_judge_agent_call())
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=_sub_tool_call("sub-read", "Read", '{"file_path":"/repo/hidden.py"}'),
+        )
+    )
+    waiting = _render(view)
+    assert "waiting" in waiting
+    assert "reading…" in waiting
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=ToolExecutionStarted(tool_call_id="sub-read"),
+        )
+    )
+    running = _render(view)
+    assert "running" in running
+    assert running.count("Judge branch review report") >= 1
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=ToolResult(tool_call_id="sub-read", return_value=ToolOk(output="hidden")),
+        )
+    )
+    thinking = _render(view)
+    assert "thinking…" in thinking
+    assert "hidden.py" not in thinking
+
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=_sub_tool_call("sub-search", "Grep", '{"pattern":"secret"}'),
+        )
+    )
+    searching = _render(view)
+    assert "searching…" in searching
+    assert "reading…" not in searching
+    assert searching.count("Judge branch review report") >= 1
+
+    view.dispatch_wire_message(
+        ToolResult(tool_call_id="judge-agent-1", return_value=ToolOk(output="Judge result"))
+    )
+
+    assert len(emitted) == 1
+    console = Console(width=100, record=True, highlight=False, color_system=None)
+    console.print(emitted[0])
+    output = console.export_text()
+    assert "Judge result" in output
+    assert "searching…" not in output
+    assert "thinking…" not in output
+    assert "secret" not in output
+
+
+def test_single_agent_activity_render_matrix_hides_raw_details(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("PYTHINKER_REDUCED_MOTION", "1")
+    monkeypatch.setenv("PYTHINKER_TUI_STYLE", "pythinker")
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="review"))
+    view.dispatch_wire_message(_judge_agent_call())
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=_sub_tool_call("sub-shell", "Shell", '{"command":"git status --short"}'),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-agent-1",
+            agent_id="judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=ToolExecutionStarted(tool_call_id="sub-shell"),
+        )
+    )
+
+    output = _render(view, width=44)
+    assert "running command…" in output
+    assert "git status --short" not in output
+    assert "judge-raw-id" not in output
+    assert "sub-shell" not in output
+    for line in output.splitlines():
+        assert cell_width(line) <= 44
 
 
 def test_run_agents_activity_tree_keeps_same_type_agents_separate_and_safe():
@@ -412,6 +624,66 @@ def test_run_agents_activity_preserves_launch_order_across_state_transitions():
         < thinking.index("Second launch")
         < thinking.index("Third launch")
     )
+
+
+def test_run_agents_background_result_is_sole_live_tree_after_nested_activity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PYTHINKER_TUI_STYLE", "card")
+    monkeypatch.setenv("NO_COLOR", "1")
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(_run_agents_call())
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=_sub_tool_call("sub-a1", "Grep", '{"pattern":"TODO"}'),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-1",
+            agent_id="a1",
+            subagent_type="explore",
+            description="Find TODO comments",
+            event=ToolExecutionStarted(tool_call_id="sub-a1"),
+        )
+    )
+    view.dispatch_wire_message(
+        ToolResult(
+            tool_call_id="run-agents-1",
+            return_value=ToolOk(
+                output=(
+                    "tool_status: launched\n"
+                    "mode: background\n"
+                    "agent_count: 2\n"
+                    "agents:\n"
+                    "- name: todo_scan\n"
+                    "  subagent_type: explore\n"
+                    "  status: running\n"
+                    "  task_id: agent-alpha-raw-id\n"
+                    "- name: file_count\n"
+                    "  subagent_type: explore\n"
+                    "  status: running\n"
+                    "  task_id: agent-beta-raw-id\n"
+                )
+            ),
+        )
+    )
+
+    output = _render(view, width=80)
+    assert output.count("Agents") == 1
+    assert "2 agents running/background" in output
+    assert output.count("Find TODO comments") == 1
+    assert "Count files" in output
+    assert "searching…" not in output
+    assert "thinking…" not in output
+    assert "agent-alpha-raw-id" not in output
+    for line in output.splitlines():
+        assert cell_width(line) <= 80
 
 
 def test_run_agents_parent_result_owns_terminal_rows_after_nested_activity(

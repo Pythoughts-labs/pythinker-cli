@@ -1000,7 +1000,7 @@ def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
     assert "Composing" in pinned_tail
 
 
-def test_pinned_tail_prefers_active_subagent_tool_over_composing() -> None:
+def test_pinned_tail_suppresses_active_agent_tool_label_in_favor_of_composing() -> None:
     import re
     import time as _time
     from collections import deque
@@ -1043,8 +1043,8 @@ def test_pinned_tail_prefers_active_subagent_tool_over_composing() -> None:
 
     tail = re.sub(r"\x1b\[[0-9;]*m", "", view.render_pinned_status_tail(100).value)
 
-    assert "agent Read src/pythinker_code/ui/shell/prompt.py" in tail
-    assert "Composing" not in tail
+    assert "agent Read src/pythinker_code/ui/shell/prompt.py" not in tail
+    assert "Composing" in tail
 
 
 def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:

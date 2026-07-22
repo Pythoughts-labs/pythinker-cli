@@ -1400,8 +1400,12 @@ class _ToolCallBlock:
     def has_expandable_card(self) -> bool:
         return self._tui_card is not None and self._tui_card.can_expand
 
+    @property
+    def _owns_agent_activity(self) -> bool:
+        return self._tool_name in {"Agent", "RunAgents"}
+
     def active_subagent_label(self) -> str | None:
-        if self._tool_name == "RunAgents":
+        if self._tool_name in {"Agent", "RunAgents"}:
             return None
         if not self._ongoing_subagent_tool_calls:
             return None
@@ -1486,13 +1490,15 @@ class _ToolCallBlock:
     def append_sub_tool_call(self, tool_call: ToolCall, *, agent_id: str | None = None):
         if tool_call.id in self._finished_subagent_tool_call_ids:
             return
-        if self._tool_name == "RunAgents" and agent_id is not None:
-            self._subagent_tool_call_owner[tool_call.id] = agent_id
-            state = self._subagent_activities.get(agent_id)
-            if state is not None:
-                state.current_tool_name = tool_call.function.name
-                state.state = "waiting"
-                state.observed_at = time.monotonic()
+        if self._owns_agent_activity:
+            owner = agent_id or self._subagent_id
+            if owner is not None:
+                self._subagent_tool_call_owner[tool_call.id] = owner
+                state = self._subagent_activities.get(owner)
+                if state is not None:
+                    state.current_tool_name = tool_call.function.name
+                    state.state = "waiting"
+                    state.observed_at = time.monotonic()
             self._renderable = self._compose()
             return
         self._ongoing_subagent_tool_calls[tool_call.id] = tool_call
@@ -1502,8 +1508,8 @@ class _ToolCallBlock:
     def append_sub_tool_call_part(
         self, tool_call_part: ToolCallPart, *, agent_id: str | None = None
     ):
-        if self._tool_name == "RunAgents":
-            # RunAgents collapsed activity is semantic only; never append or render raw args.
+        if self._owns_agent_activity:
+            # Agent-centric collapsed activity is semantic only; never append or render raw args.
             return
         if self._last_subagent_tool_call is None:
             return
@@ -1518,7 +1524,7 @@ class _ToolCallBlock:
     def finish_sub_tool_call(self, tool_result: ToolResult, *, agent_id: str | None = None):
         if tool_result.tool_call_id in self._finished_subagent_tool_call_ids:
             return
-        if self._tool_name == "RunAgents":
+        if self._owns_agent_activity:
             owner = agent_id or self._subagent_tool_call_owner.get(tool_result.tool_call_id)
             if owner is not None and owner in self._subagent_activities:
                 state = self._subagent_activities[owner]
@@ -1555,6 +1561,8 @@ class _ToolCallBlock:
         self, agent_id: str, subagent_type: str, description: str | None = None
     ) -> None:
         normalized_description = _normalize_subagent_description(description) or None
+        if normalized_description is None and self._tool_name == "Agent":
+            normalized_description = self._agent_argument_description()
         changed = (self._subagent_id, self._subagent_type, self._subagent_description) != (
             agent_id,
             subagent_type,
@@ -1563,7 +1571,7 @@ class _ToolCallBlock:
         self._subagent_id = agent_id
         self._subagent_type = subagent_type
         self._subagent_description = normalized_description
-        if self._tool_name == "RunAgents":
+        if self._owns_agent_activity:
             clean_description = normalized_description or _format_subagent_type(subagent_type)
             state = self._subagent_activities.get(agent_id)
             if state is None:
@@ -1580,7 +1588,7 @@ class _ToolCallBlock:
             self._renderable = self._compose()
 
     def mark_sub_execution_started(self, tool_call_id: str, *, agent_id: str | None = None) -> None:
-        if self._tool_name == "RunAgents":
+        if self._owns_agent_activity:
             owner = agent_id or self._subagent_tool_call_owner.get(tool_call_id)
             if owner is not None and owner in self._subagent_activities:
                 state = self._subagent_activities[owner]
@@ -1599,7 +1607,7 @@ class _ToolCallBlock:
     def append_sub_output_part(
         self, tool_call_id: str, text: str, *, stream: str = "output", agent_id: str | None = None
     ) -> None:
-        if self._tool_name == "RunAgents":
+        if self._owns_agent_activity:
             owner = agent_id or self._subagent_tool_call_owner.get(tool_call_id)
             if owner is not None and owner in self._subagent_activities:
                 state = self._subagent_activities[owner]
@@ -1688,7 +1696,19 @@ class _ToolCallBlock:
             )
         return children
 
-    def _run_agents_requested_count(self) -> int:
+    def _agent_argument_description(self) -> str | None:
+        try:
+            args = json.loads(self._lexer.complete_json() or "{}", strict=False)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(args, dict):
+            return None
+        description = cast(dict[str, Any], args).get("description")
+        return _normalize_subagent_description(description) or None
+
+    def _agent_activity_requested_count(self) -> int:
+        if self._tool_name == "Agent":
+            return max(1, len(self._subagent_activities))
         try:
             args = json.loads(self._lexer.complete_json() or "{}", strict=False)
         except json.JSONDecodeError:
@@ -1721,15 +1741,19 @@ class _ToolCallBlock:
             return tui_rich_style("error")
         return tui_rich_style("muted")
 
-    def _run_agents_activity_children(self, *, include_heading: bool) -> list[RenderableType]:
-        if not self._subagent_activities and self._run_agents_requested_count() <= 0:
+    def _agent_activity_children(self, *, include_heading: bool) -> list[RenderableType]:
+        requested_count = self._agent_activity_requested_count()
+        if not self._subagent_activities and requested_count <= 0:
             return []
         width = current_console_width()
         children: list[RenderableType] = []
         if include_heading:
             heading = Text()
             heading.append("● ", style=tui_rich_style("muted"))
-            heading.append("Agents", style=tui_rich_style("muted") + Style(bold=True))
+            heading.append(
+                "Agents" if self._tool_name == "RunAgents" else "Agent",
+                style=tui_rich_style("muted") + Style(bold=True),
+            )
             children.append(heading)
 
         states = list(self._subagent_activities.values())
@@ -1750,7 +1774,7 @@ class _ToolCallBlock:
                         break
             visible = [states[index] for index in sorted(selected_indices)]
         hidden = max(0, len(states) - len(visible))
-        queued = max(0, self._run_agents_requested_count() - len(self._subagent_activities))
+        queued = max(0, requested_count - len(self._subagent_activities))
         total_rows = len(visible) + (1 if queued else 0) + (1 if hidden else 0)
 
         for index, state in enumerate(visible):
@@ -1803,10 +1827,13 @@ class _ToolCallBlock:
         include_completed_subagent: bool = False,
         include_run_agents_heading: bool = True,
     ) -> list[RenderableType]:
-        if self._tool_name == "RunAgents":
+        if self._owns_agent_activity:
             if self._result is not None:
+                # Parent-result ownership: once Agent/RunAgents returns (including provisional
+                # background launches), the parent renderer is authoritative, so suppress stale
+                # pre-result activity rows to avoid duplicate or misleading live state.
                 return []
-            return self._run_agents_activity_children(include_heading=include_run_agents_heading)
+            return self._agent_activity_children(include_heading=include_run_agents_heading)
         children: list[RenderableType] = []
         should_show_activity = include_completed_subagent or not (
             style_label == "Subagent" and self._result is not None
@@ -1888,7 +1915,7 @@ class _ToolCallBlock:
                 return card_rendered
         children: list[RenderableType] = []
         if (
-            self._tool_name != "RunAgents"
+            self._tool_name not in {"Agent", "RunAgents"}
             and self._subagent_id is not None
             and self._subagent_type is not None
         ):
@@ -2044,7 +2071,7 @@ class _ToolCallBlock:
             self._subagent_activity_children(
                 style_label,
                 include_completed_subagent=style_label == "Subagent" and self._result is not None,
-                include_run_agents_heading=self._tool_name != "RunAgents",
+                include_run_agents_heading=not self._owns_agent_activity,
             )
         )
         if activity_children:

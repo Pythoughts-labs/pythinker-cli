@@ -395,6 +395,102 @@ _RUN_AGENTS_PTY_SCRIPT = dedent(
 )
 
 
+_SINGLE_AGENT_JUDGE_PTY_SCRIPT = dedent(
+    r"""
+    import json
+    import os
+
+    os.environ["PYTHINKER_REDUCED_MOTION"] = "1"
+    os.environ["PYTHINKER_TUI_STYLE"] = "card"
+
+    from rich.console import Group
+    from pythinker_core.tooling import ToolOk
+    from pythinker_code.ui.shell.console import console
+    from pythinker_code.ui.shell.tool_renderers import clear_tool_renderers, register_builtin_renderers
+    from pythinker_code.ui.shell.visualize import _LiveView
+    from pythinker_code.wire.types import (
+        StatusUpdate,
+        SubagentEvent,
+        ToolCall,
+        ToolExecutionStarted,
+        ToolOutputPart,
+        ToolResult,
+        TurnBegin,
+    )
+
+    clear_tool_renderers()
+    register_builtin_renderers()
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="single judge pty smoke"))
+    view.dispatch_wire_message(
+        ToolCall(
+            id="judge-root",
+            function=ToolCall.FunctionBody(
+                name="Agent",
+                arguments=json.dumps(
+                    {
+                        "description": "Judge branch review report",
+                        "subagent_type": "judge",
+                        "prompt": "SECRET_PROMPT_CANARY should never render",
+                    }
+                ),
+            ),
+        )
+    )
+    view.dispatch_wire_message(ToolExecutionStarted(tool_call_id="judge-root"))
+    for sub_id, tool_name, args in (
+        ("sub-read-raw-id", "Read", {"file_path": "/tmp/secret-renderer.py"}),
+        ("sub-search-raw-id", "Search", {"query": "SECRET_PROMPT_CANARY", "path": "/tmp/raw/path.py"}),
+        ("sub-shell-raw-id", "Shell", {"command": "git status --short"}),
+    ):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="judge-root",
+                agent_id="agent-judge-raw-id",
+                subagent_type="judge",
+                description="Judge branch review report",
+                event=ToolCall(
+                    id=sub_id,
+                    function=ToolCall.FunctionBody(name=tool_name, arguments=json.dumps(args)),
+                ),
+            )
+        )
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="judge-root",
+                agent_id="agent-judge-raw-id",
+                subagent_type="judge",
+                description="Judge branch review report",
+                event=ToolExecutionStarted(tool_call_id=sub_id),
+            )
+        )
+        if tool_name != "Shell":
+            view.dispatch_wire_message(
+                SubagentEvent(
+                    parent_tool_call_id="judge-root",
+                    agent_id="agent-judge-raw-id",
+                    subagent_type="judge",
+                    description="Judge branch review report",
+                    event=ToolResult(tool_call_id=sub_id, return_value=ToolOk(output="hidden")),
+                )
+            )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="judge-root",
+            agent_id="agent-judge-raw-id",
+            subagent_type="judge",
+            description="Judge branch review report",
+            event=ToolOutputPart(tool_call_id="sub-shell-raw-id", text="raw command output must stay hidden"),
+        )
+    )
+
+    console.print("PYTHINKER_PTY_SINGLE_AGENT_BEGIN")
+    console.print(Group(*view.compose_agent_output(include_working_indicator=False)))
+    console.print("PYTHINKER_PTY_SINGLE_AGENT_END")
+    """
+)
+
+
 def _run_python_pty(script: str, *, columns: int, rows: int) -> ShellPTYProcess:
     master_fd, slave_fd = pty.openpty()
     _set_window_size(master_fd, columns=columns, lines=rows)
@@ -454,6 +550,54 @@ def _assert_run_agents_pty_tree(*, columns: int, rows: int) -> str:
         return normalized
     finally:
         shell.close()
+
+
+def _assert_single_agent_judge_pty_tree(*, columns: int, rows: int) -> str:
+    shell = _run_python_pty(_SINGLE_AGENT_JUDGE_PTY_SCRIPT, columns=columns, rows=rows)
+    try:
+        assert shell.wait(timeout=10.0) == 0
+        normalized = shell.normalized_text()
+        rendered_rows = _render_sized(shell._raw_chunks, columns, rows)
+        rendered = "\n".join(rendered_rows)
+        assert "PYTHINKER_PTY_SINGLE_AGENT_BEGIN" in normalized
+        assert normalized.count("Agent(") == 1
+        assert "Judge branch review report" in normalized
+        assert "running command…" in normalized
+        assert "└─" in normalized
+        assert "⎿" in normalized
+        for leaked in (
+            "agent Read",
+            "agent Search",
+            "agent Shell",
+            "Read(",
+            "Search(",
+            "Shell(",
+            '"query"',
+            "file_path",
+            "SECRET_PROMPT_CANARY",
+            "/tmp/raw/path.py",
+            "/tmp/secret-renderer.py",
+            "git status --short",
+            "sub-read-raw-id",
+            "sub-search-raw-id",
+            "sub-shell-raw-id",
+            "agent-judge-raw-id",
+            "raw command output must stay hidden",
+        ):
+            assert leaked not in normalized
+        assert all(cell_width(row) <= columns for row in rendered_rows)
+        assert "Agent(" in rendered
+        return normalized
+    finally:
+        shell.close()
+
+
+def test_single_agent_judge_tree_renders_through_real_pty_at_narrow_and_normal_widths() -> None:
+    narrow = _assert_single_agent_judge_pty_tree(columns=64, rows=24)
+    normal = _assert_single_agent_judge_pty_tree(columns=_COLS, rows=24)
+
+    assert "Judge branch review report" in narrow
+    assert "Judge branch review report" in normal
 
 
 def test_run_agents_tree_renders_through_real_pty_at_narrow_and_normal_widths() -> None:

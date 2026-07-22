@@ -747,6 +747,28 @@ def _render_run_agents_text_result(
     return body
 
 
+def _run_agents_requested_titles_by_name(args: dict[str, object]) -> dict[str, str]:
+    raw_agents_value = args.get("agents")
+    if not isinstance(raw_agents_value, list):
+        return {}
+    titles: dict[str, str] = {}
+    for raw_agent in cast("list[object]", raw_agents_value):
+        if not isinstance(raw_agent, dict):
+            continue
+        raw_agent_dict = cast(dict[str, object], raw_agent)
+        name = as_str(raw_agent_dict.get("name"))
+        title = as_str(raw_agent_dict.get("title"))
+        if name and title:
+            titles[name] = title
+    return titles
+
+
+def _run_agents_row_description(agent: dict[str, str], title_by_name: dict[str, str]) -> str:
+    name = agent.get("name") or ""
+    description = agent.get("description") or title_by_name.get(name) or name
+    return _compact_inline(description, max_chars=80) if description else ""
+
+
 def _render_run_agents_result(
     ctx: ToolRenderContext, result: ToolResultPayload
 ) -> RenderableType | None:
@@ -759,15 +781,15 @@ def _render_run_agents_result(
     if not agents:
         return _render_run_agents_text_result(ctx, result)
 
+    title_by_name = _run_agents_requested_titles_by_name(ctx.args or {})
     entries: list[dict[str, str]] = []
-    for index, agent in enumerate(agents):
+    for agent in agents:
         subagent_type = agent.get("subagent_type") or agent.get("actual_subagent_type") or "coder"
-        name = agent.get("name") or f"agent-{index + 1}"
-        extra = "" if name == subagent_type else name
+        extra = _run_agents_row_description(agent, title_by_name)
         entries.append(
             {
                 "subagent_type": subagent_type,
-                "name_extra": extra,
+                "name_extra": "" if extra == subagent_type else extra,
                 "status": agent.get("detail_status") or agent.get("status") or "unknown",
                 "task_id": agent.get("task_id") or "",
                 "summary_preview": agent.get("summary_preview") or "",

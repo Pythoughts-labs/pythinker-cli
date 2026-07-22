@@ -1675,6 +1675,71 @@ def test_run_agents_no_color_keeps_glyphs_and_status_words(monkeypatch: pytest.M
     assert "running/background" not in rendered
 
 
+def test_run_agents_background_result_descriptions_prefer_hydrated_then_title_no_leaks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("NO_COLOR", "1")
+    width = 64
+    rendered = _render(
+        "RunAgents",
+        {
+            "summary": "background fanout",
+            "run_in_background": True,
+            "agents": [
+                {
+                    "name": "internal_worker_alpha",
+                    "title": "Title should be replaced",
+                    "prompt": "SECRET_PROMPT_CANARY alpha",
+                    "subagent_type": "explore",
+                },
+                {
+                    "name": "internal_worker_beta",
+                    "title": "Fallback title beta",
+                    "prompt": "SECRET_PROMPT_CANARY beta",
+                    "subagent_type": "explore",
+                },
+            ],
+        },
+        output=(
+            "tool_status: launched\n"
+            "mode: background\n"
+            "agent_count: 2\n"
+            "agents:\n"
+            "- name: internal_worker_alpha\n"
+            "  subagent_type: explore\n"
+            "  status: running\n"
+            "  task_id: agent-alpha-raw-id\n"
+            "  result: |\n"
+            "    kind: agent\n"
+            "    status: running\n"
+            "    agent_id: sub-alpha-raw-id\n"
+            "    description: Parsed override alpha with extra whitespace\n"
+            "- name: internal_worker_beta\n"
+            "  subagent_type: explore\n"
+            "  status: running\n"
+            "  task_id: agent-beta-raw-id\n"
+        ),
+        width=width,
+    )
+    assert rendered.count("Agents") == 1
+    assert "2 agents running/background" in rendered
+    assert rendered.count("running/background") >= 1
+    assert "Parsed override alpha" in rendered
+    assert "Fallback title beta" in rendered
+    for leaked in (
+        "Title should be replaced",
+        "SECRET_PROMPT_CANARY",
+        "agent-alpha-raw-id",
+        "sub-alpha-raw-id",
+        "agent-beta-raw-id",
+        "internal_worker_alpha",
+        "internal_worker_beta",
+    ):
+        assert leaked not in rendered
+    for line in rendered.splitlines():
+        assert cell_width(line) <= width
+
+
 def test_run_agents_failed_brief_never_leaks_in_collapsed_rows():
     sentinel_brief = "LEAK_BRIEF_COMMAND_SENTINEL /private/secret-token STACK_SECRET_SENTINEL"
     output = (
