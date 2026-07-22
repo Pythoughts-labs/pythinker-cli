@@ -608,6 +608,7 @@ def _tail_lines(text: str, n: int) -> str:
 class _ThinkingSegment:
     summary_index: int | None
     text: str = ""
+    encrypted_boundary: bool = False
 
 
 class _StyleOverrideRenderable:
@@ -762,11 +763,21 @@ class _ContentBlock:
         finally:
             self._report_update.set_expanded(was_expanded)
 
-    def append(self, content: str, *, summary_index: int | None = None) -> None:
+    def append(
+        self,
+        content: str,
+        *,
+        summary_index: int | None = None,
+        encrypted: str | None = None,
+    ) -> None:
         self.raw_text += content
         self._token_count += _estimate_tokens(content)
-        if self.is_think and content:
-            self._append_thinking_segment(content, summary_index=summary_index)
+        if self.is_think and (content or encrypted):
+            self._append_thinking_segment(
+                content,
+                summary_index=summary_index,
+                encrypted=encrypted,
+            )
         self._invalidate_preview_cache()
         if self._paced:
             # Reveal is paced by reveal_tick() for smooth streaming; just buffer
@@ -970,11 +981,30 @@ class _ContentBlock:
 
     # -- Private -------------------------------------------------------------
 
-    def _append_thinking_segment(self, content: str, *, summary_index: int | None) -> None:
-        if self._thinking_segments and self._thinking_segments[-1].summary_index == summary_index:
-            self._thinking_segments[-1].text += content
+    def _append_thinking_segment(
+        self,
+        content: str,
+        *,
+        summary_index: int | None,
+        encrypted: str | None,
+    ) -> None:
+        encrypted_boundary = bool(encrypted)
+        if (
+            self._thinking_segments
+            and self._thinking_segments[-1].summary_index == summary_index
+            and not self._thinking_segments[-1].encrypted_boundary
+        ):
+            segment = self._thinking_segments[-1]
+            segment.text += content
+            segment.encrypted_boundary = encrypted_boundary
             return
-        self._thinking_segments.append(_ThinkingSegment(summary_index=summary_index, text=content))
+        self._thinking_segments.append(
+            _ThinkingSegment(
+                summary_index=summary_index,
+                text=content,
+                encrypted_boundary=encrypted_boundary,
+            )
+        )
 
     def _pending_text(self) -> str:
         return self.raw_text[self._committed_len : self._revealed_len]

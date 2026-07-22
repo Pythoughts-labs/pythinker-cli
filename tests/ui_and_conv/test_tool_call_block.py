@@ -523,9 +523,8 @@ def test_run_agents_background_launch_keeps_live_agent_activity():
     assert "Run Agents completed" not in output
 
 
-def test_run_agents_background_launch_keeps_live_agent_activity_in_card_style(
-    _card_style_with_builtin_renderers,
-):
+@pytest.mark.usefixtures("_card_style_with_builtin_renderers")
+def test_run_agents_background_launch_keeps_live_agent_activity_in_card_style():
     block = _ToolCallBlock(
         _tool_call(
             "RunAgents",
@@ -551,6 +550,7 @@ def test_run_agents_background_launch_keeps_live_agent_activity_in_card_style(
     output = _plain(block.compose())
 
     assert "waiting Explore Audit the renderer" in output
+    assert "Run Agents completed" not in output
 
 
 def test_run_agents_foreground_completion_is_not_background_pending():

@@ -927,7 +927,7 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
     scripts = [
         build_shell_tool_call(
             "tc-c1",
-            "printf started > cancel_started.txt && sleep 30 && "
+            "printf '%s' \"$$\" > cancel_pgid.txt && sleep 30 && "
             "printf should-not-exist > cancel_output.txt",
         ),
         "text: Cancel recovery completed.",
@@ -948,19 +948,14 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
 
         cancel_mark = shell.mark()
         shell.send_line("start cancellable command")
-        started_path = work_dir / "cancel_started.txt"
+        pgid_path = work_dir / "cancel_pgid.txt"
         started_deadline = time.monotonic() + 10.0
-        while not started_path.exists():
+        while not pgid_path.exists():
             if time.monotonic() >= started_deadline:
                 raise AssertionError("Timed out waiting for cancellable command to start.")
             shell.read_available(timeout=0.05)
-        # The child can begin while prompt_toolkit is still switching from the
-        # submitted prompt to the running-turn delegate that owns Escape. Keep
-        # the command alive well beyond this short stabilization window so the
-        # key cannot land in the transition and be discarded.
-        stabilization_deadline = time.monotonic() + 1.0
-        while time.monotonic() < stabilization_deadline:
-            shell.read_available(timeout=0.05)
+        command_pgid = int(pgid_path.read_text(encoding="utf-8"))
+        shell.read_until_contains("esc)", after=cancel_mark, timeout=10.0)
         shell.send_key("escape")
         # The "Interrupted by user" acknowledgement only prints after the soul
         # re-raises the cancellation, which first awaits a shielded, disk-first
@@ -973,7 +968,8 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
         cancel_prompt_mark = shell.mark()
         _read_until_prompt(shell, after=cancel_prompt_mark)
 
-        time.sleep(5.3)
+        with pytest.raises(ProcessLookupError):
+            os.killpg(command_pgid, 0)
         assert not (work_dir / "cancel_output.txt").exists()
 
         recovery_mark = shell.mark()

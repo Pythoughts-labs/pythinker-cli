@@ -92,6 +92,24 @@ def test_live_view_dispatch_preserves_reasoning_summary_boundaries_and_style(
         assert all(style.italic for style in styles)
 
 
+def test_live_view_preserves_encrypted_only_reasoning_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted = _capture_scrollback(monkeypatch)
+    view = _LiveView(StatusUpdate(context_tokens=1000), show_thinking_stream=True)
+
+    view.dispatch_wire_message(ThinkPart(think="**Planning**", summary_index=0))
+    view.dispatch_wire_message(ThinkPart(think="", encrypted="signature", summary_index=0))
+    view.dispatch_wire_message(ThinkPart(think="**Executing**", summary_index=0))
+    view.flush_content()
+
+    output = _render(emitted)
+    lines = [line for line in output.splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert "Planning" in lines[0]
+    assert "Executing" in lines[1]
+
+
 def test_text_media_text_flushes_at_stable_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -680,6 +680,7 @@ def test_run_agents_background_result_keeps_one_semantic_live_tree_after_nested_
     assert "searching…" in output
     assert "2 queued" in output
     assert "agent-alpha-raw-id" not in output
+    assert "agent-beta-raw-id" not in output
     for line in output.splitlines():
         assert cell_width(line) <= 80
 

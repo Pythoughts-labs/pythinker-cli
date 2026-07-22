@@ -1014,6 +1014,9 @@ class _LiveView:
                 elapsed_s=elapsed,
                 tokens=get_turn_output_tokens(),
                 token_rate=self._turn_token_rate(now),
+                interrupt_hint=(
+                    "esc to interrupt" if getattr(self, "_cancel_event", None) is not None else ""
+                ),
             ),
             width=width,
         )
@@ -1695,13 +1698,14 @@ class _LiveView:
 
     def append_content(self, part: ContentPart) -> None:
         match part:
-            case ThinkPart(think=text, summary_index=summary_index):
+            case ThinkPart(think=text, encrypted=encrypted, summary_index=summary_index):
                 is_think = True
             case TextPart(text=text):
                 if not text:
                     return
                 is_think = False
                 summary_index = None
+                encrypted = None
             case ImageURLPart():
                 self._append_content_label("[image]")
                 return
@@ -1739,8 +1743,12 @@ class _LiveView:
                 paced=self._stream_pacing,
             )
             self.refresh_soon()
-        if text:
-            self._current_content_block.append(text, summary_index=summary_index)
+        if text or encrypted:
+            self._current_content_block.append(
+                text,
+                summary_index=summary_index,
+                encrypted=encrypted,
+            )
             self.refresh_soon()
 
     def _append_content_label(self, label: str, *, unknown: bool = False) -> None:
