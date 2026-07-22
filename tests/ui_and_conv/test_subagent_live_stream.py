@@ -626,7 +626,7 @@ def test_run_agents_activity_preserves_launch_order_across_state_transitions():
     )
 
 
-def test_run_agents_background_result_is_sole_live_tree_after_nested_activity(
+def test_run_agents_background_result_keeps_one_semantic_live_tree_after_nested_activity(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("PYTHINKER_TUI_STYLE", "card")
@@ -676,11 +676,9 @@ def test_run_agents_background_result_is_sole_live_tree_after_nested_activity(
 
     output = _render(view, width=80)
     assert output.count("Agents") == 1
-    assert "2 agents running/background" in output
     assert output.count("Find TODO comments") == 1
-    assert "Count files" in output
-    assert "searching…" not in output
-    assert "thinking…" not in output
+    assert "searching…" in output
+    assert "2 queued" in output
     assert "agent-alpha-raw-id" not in output
     for line in output.splitlines():
         assert cell_width(line) <= 80

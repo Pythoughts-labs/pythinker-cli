@@ -2038,7 +2038,11 @@ class _ToolCallBlock:
             self._tui_card.update_args(args)
         if args_complete:
             self._tui_card.set_args_complete()
-        if self._result is not None:
+        if self._result is not None and not (
+            self._tool_name == "RunAgents"
+            and self._owns_agent_activity
+            and self._is_background_pending
+        ):
             self._tui_card.set_result(
                 ToolResultPayload(
                     text=self._card_result_text(self._result),
@@ -2066,16 +2070,13 @@ class _ToolCallBlock:
         activity_children: list[RenderableType] = []
         if style_label == "Subagent" and self._result is not None:
             activity_children.extend(self._subagent_rollup_children())
-        if not (self._owns_agent_activity and self._result is not None):
-            activity_children.extend(
-                self._subagent_activity_children(
-                    style_label,
-                    include_completed_subagent=(
-                        style_label == "Subagent" and self._result is not None
-                    ),
-                    include_run_agents_heading=not self._owns_agent_activity,
-                )
+        activity_children.extend(
+            self._subagent_activity_children(
+                style_label,
+                include_completed_subagent=(style_label == "Subagent" and self._result is not None),
+                include_run_agents_heading=not self._owns_agent_activity,
             )
+        )
         if activity_children:
             return Group(card_rendered, BLANK_ROW, *activity_children)
         return card_rendered

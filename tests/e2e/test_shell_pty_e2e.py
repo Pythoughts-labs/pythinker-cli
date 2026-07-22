@@ -927,7 +927,7 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
     scripts = [
         build_shell_tool_call(
             "tc-c1",
-            "printf started > cancel_started.txt && sleep 5 && "
+            "printf started > cancel_started.txt && sleep 30 && "
             "printf should-not-exist > cancel_output.txt",
         ),
         "text: Cancel recovery completed.",
@@ -948,13 +948,19 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
 
         cancel_mark = shell.mark()
         shell.send_line("start cancellable command")
-        shell.read_until_contains("Bash(printf started", after=cancel_mark)
         started_path = work_dir / "cancel_started.txt"
         started_deadline = time.monotonic() + 10.0
         while not started_path.exists():
             if time.monotonic() >= started_deadline:
                 raise AssertionError("Timed out waiting for cancellable command to start.")
-            time.sleep(0.05)
+            shell.read_available(timeout=0.05)
+        # The child can begin while prompt_toolkit is still switching from the
+        # submitted prompt to the running-turn delegate that owns Escape. Keep
+        # the command alive well beyond this short stabilization window so the
+        # key cannot land in the transition and be discarded.
+        stabilization_deadline = time.monotonic() + 1.0
+        while time.monotonic() < stabilization_deadline:
+            shell.read_available(timeout=0.05)
         shell.send_key("escape")
         # The "Interrupted by user" acknowledgement only prints after the soul
         # re-raises the cancellation, which first awaits a shielded, disk-first
