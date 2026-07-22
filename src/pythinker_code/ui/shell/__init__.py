@@ -69,6 +69,8 @@ from pythinker_code.ui.shell.replay import replay_recent_history
 from pythinker_code.ui.shell.slash import SKILL_COMMAND_PREFIX, shell_mode_registry
 from pythinker_code.ui.shell.slash import registry as shell_slash_registry
 from pythinker_code.ui.shell.update import (
+    AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS,
+    AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
     MANAGED_CHANNEL_MARKER,
     UpdateIntent,
     UpdateResult,
@@ -140,6 +142,33 @@ _BG_AUTO_TRIGGER_INPUT_GRACE_S = 0.75
 
 _VISIBLE_WORKFLOW_SLASH_PREFIXES = (SKILL_COMMAND_PREFIX, FLOW_COMMAND_PREFIX)
 """Explicit skill/flow prefixes that should remain visible in transcript."""
+
+
+async def _periodic_update_check(check: Callable[[], Awaitable[None]]) -> None:
+    """Run an update check immediately and periodically until cancelled.
+
+    The check bodies re-consult the shared on-disk throttle, so this loop can
+    never poll GitHub faster than the throttle allows across concurrent shells.
+
+    Each attempt is bounded by a generous watchdog timeout so a single hung
+    check (a non-network stall the inner per-socket timeouts cannot catch) can
+    never block every future retry for the session; on timeout the loop logs it
+    distinctly and continues to the next interval.
+    """
+    while True:
+        try:
+            async with asyncio.timeout(AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS):
+                await check()
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            logger.warning(
+                "Periodic update check timed out after %ss; retrying next interval",
+                AUTO_UPDATE_CHECK_ATTEMPT_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.exception("Periodic update check failed:")
+        await asyncio.sleep(AUTO_UPDATE_CHECK_INTERVAL_SECONDS)
 
 
 def _background_idle_reminder(active_running: int) -> str:
@@ -597,6 +626,8 @@ class Shell:
         # short TTL so the hot toolbar render path does not stat the update
         # cache on every repaint (mirrors the footer's git-branch TTL).
         self._update_notice_cache: tuple[float, str | None] = (0.0, None)
+        self._update_toast_shown_version: str | None = None
+        self._update_toasts_shown: set[str] = set()
         self._running_input_handler: Callable[[UserInput], None] | None = None
         self._running_interrupt_handler: Callable[[], None] | None = None
         self._active_approval_sink: Any | None = None
@@ -2135,12 +2166,18 @@ class Shell:
         return None
 
     async def _auto_update(self) -> None:
-        # Background-refresh the cached latest version (throttled); never blocks startup.
+        # A target already cached at startup is covered by the welcome-banner chip.
+        before = welcome_update_target()
         await refresh_update_cache_if_due()
-        # The persistent under-input line renders the cached update hint; refresh
-        # it when the cache changes instead of duplicating the text as a toast.
-        if pending_update_notice():
-            self._refresh_update_notice_line()
+        # pending_update_notice() has applied dismissal/skip suppression.
+        notice = pending_update_notice()
+        if not notice:
+            return
+        self._refresh_update_notice_line()
+        target = welcome_update_target()
+        if target and target != before and target != self._update_toast_shown_version:
+            self._update_toast_shown_version = target
+            self._update_toast(notice, style="fg:ansibrightyellow bold")
 
     async def _silent_auto_update(self) -> None:
         """Download and stage a newer release in the background at startup.
@@ -2246,6 +2283,12 @@ class Shell:
         return format_managed_channel_notice(current_version, latest)
 
     def _update_toast(self, notice: str, *, style: str) -> None:
+        # The periodic check loop re-surfaces update outcomes every interval;
+        # dedupe by exact notice text so each is toasted once per session
+        # (a new version produces new text and toasts again).
+        if notice in self._update_toasts_shown:
+            return
+        self._update_toasts_shown.add(notice)
         toast(notice, topic="update", duration=30.0, immediate=True, style=style)
         if self._prompt_session is not None:
             self._prompt_session.invalidate()
@@ -2292,7 +2335,7 @@ class Shell:
         return text
 
     def _schedule_startup_update_task(self) -> None:
-        """Pick the startup update behavior and schedule it (non-blocking).
+        """Pick the update behavior and schedule its session-lifetime loop.
 
         - env kill-switch set → nothing (cache filters already suppress the
           notice, matching today's hard-disable behavior).
@@ -2309,16 +2352,22 @@ class Shell:
             logger.info("Auto-update disabled by PYTHINKER_CLI_NO_AUTO_UPDATE environment variable")
             return
         if not isinstance(self.soul, PythinkerSoul):
-            self._start_background_task(self._auto_update())
+            self._start_periodic_update_check(self._auto_update)
             return
         mode = resolve_auto_update_mode(self.soul.runtime.config)
         if mode is AutoUpdateMode.OFF:
             logger.info("Startup update task disabled by auto_update policy 'off'")
             return
         if mode is AutoUpdateMode.NOTIFY:
-            self._start_background_task(self._auto_update())
+            self._start_periodic_update_check(self._auto_update)
             return
-        self._start_background_task(self._silent_auto_update())
+        self._start_periodic_update_check(self._silent_auto_update)
+
+    def _start_periodic_update_check(self, check: Callable[[], Awaitable[None]]) -> None:
+        task_coro = _periodic_update_check(check)
+        # Retain the concrete check name in task diagnostics and existing observers.
+        task_coro.__name__ = check.__name__
+        self._start_background_task(task_coro)
 
     def _start_background_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
