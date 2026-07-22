@@ -132,7 +132,10 @@ def promote_changelog(path: Path, version: str, *, release_date: str) -> None:
 
 
 def rewrite_version_strings(text: str, *, old: str, new: str) -> str:
-    """Replace ONLY release-pattern occurrences of `old` with `new`.
+    """Update release-pattern versions to `new`.
+
+    Most patterns replace `old`; canonical version-bearing commands are
+    normalized even when their current version is already stale.
 
     Deliberately skips `--version <old>` flag examples (the documented
     §3 exception) so they stay shape-only — the lockstep test enforces this.
