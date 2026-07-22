@@ -494,6 +494,35 @@ def test_run_agents_background_launch_stays_background_pending():
     assert block.is_background_pending
 
 
+def test_run_agents_background_launch_keeps_live_agent_activity():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":true,"agents":[{"name":"a","prompt":"p"}]}',
+        )
+    )
+    block.set_subagent_metadata("agent-abc", "explore", "Audit the renderer")
+    block.finish(
+        ToolOk(
+            output=(
+                "tool_status: launched\n"
+                "mode: background\n"
+                "agent_count: 1\n"
+                "agents:\n"
+                "- name: a\n"
+                "  subagent_type: explore\n"
+                "  status: starting\n"
+                "  task_id: agent-abc\n"
+            )
+        )
+    )
+
+    output = _plain(block.compose())
+
+    assert "waiting Explore Audit the renderer" in output
+    assert "Run Agents completed" not in output
+
+
 def test_run_agents_foreground_completion_is_not_background_pending():
     block = _ToolCallBlock(
         _tool_call(

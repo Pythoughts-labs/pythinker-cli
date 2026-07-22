@@ -1828,10 +1828,9 @@ class _ToolCallBlock:
         include_run_agents_heading: bool = True,
     ) -> list[RenderableType]:
         if self._owns_agent_activity:
-            if self._result is not None:
-                # Parent-result ownership: once Agent/RunAgents returns (including provisional
-                # background launches), the parent renderer is authoritative, so suppress stale
-                # pre-result activity rows to avoid duplicate or misleading live state.
+            if self._result is not None and not self._is_background_pending:
+                # Parent-result ownership: once Agent/RunAgents reaches a terminal result, the
+                # parent renderer is authoritative, so suppress stale pre-result activity rows.
                 return []
             return self._agent_activity_children(include_heading=include_run_agents_heading)
         children: list[RenderableType] = []
@@ -1961,7 +1960,7 @@ class _ToolCallBlock:
             )
         )
 
-        if self._result is None:
+        if self._result is None or self._is_background_pending:
             streamed_output = self._streamed_output_text()
             if streamed_output:
                 preview = _tail_lines(streamed_output.rstrip("\n"), 8)
@@ -2067,13 +2066,16 @@ class _ToolCallBlock:
         activity_children: list[RenderableType] = []
         if style_label == "Subagent" and self._result is not None:
             activity_children.extend(self._subagent_rollup_children())
-        activity_children.extend(
-            self._subagent_activity_children(
-                style_label,
-                include_completed_subagent=style_label == "Subagent" and self._result is not None,
-                include_run_agents_heading=not self._owns_agent_activity,
+        if not (self._owns_agent_activity and self._result is not None):
+            activity_children.extend(
+                self._subagent_activity_children(
+                    style_label,
+                    include_completed_subagent=(
+                        style_label == "Subagent" and self._result is not None
+                    ),
+                    include_run_agents_heading=not self._owns_agent_activity,
+                )
             )
-        )
         if activity_children:
             return Group(card_rendered, BLANK_ROW, *activity_children)
         return card_rendered
