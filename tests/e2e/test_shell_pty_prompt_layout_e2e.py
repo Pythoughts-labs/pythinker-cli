@@ -22,14 +22,20 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
+from pythinker_code.ui.shell.components.render_utils import cell_width
 from tests.e2e.shell_pty_helpers import (
+    ShellPTYProcess,
+    _preexec_for_tty,
     _set_window_size,
     list_turn_begin_inputs,
     make_home_dir,
@@ -229,16 +235,227 @@ def _render_sized(chunks: list[bytes], columns: int, rows: int) -> list[str]:
     return [line.rstrip() for line in screen.display]
 
 
-def test_prompt_scene_survives_shrinking_terminal_heights(tmp_path: Path) -> None:
-    """Mid-turn resizes down to tiny heights never crash or fossilize the card.
+class _ContinuousScreen:
+    """Replay one PTY byte stream into one virtual terminal across resizes."""
 
-    Resizes the live PTY through heights 12 → 8 → 6 → 4 while a slow tool keeps
-    the running prompt on screen. prompt_toolkit fully redraws on SIGWINCH, so
-    each post-resize frame is rendered from only the bytes emitted after that
-    resize, on a pyte screen of the new geometry. After restoring the original
-    size, the turn must still complete and the idle input card must return.
+    def __init__(self, *, columns: int, rows: int) -> None:
+        self._screen = pyte.Screen(columns, rows)
+        self._stream = pyte.ByteStream(self._screen)
+        self._fed_chunks = 0
+
+    def resize(self, *, columns: int, rows: int) -> None:
+        self._screen.resize(lines=rows, columns=columns)
+
+    def feed(self, chunks: list[bytes]) -> list[str]:
+        payload = b"".join(chunks[self._fed_chunks :])
+        self._fed_chunks = len(chunks)
+        if payload:
+            self._stream.feed(payload)
+        return self.rows()
+
+    def rows(self) -> list[str]:
+        return [line.rstrip() for line in self._screen.display]
+
+
+_RUN_AGENTS_PTY_SCRIPT = dedent(
+    r"""
+    import json
+    import os
+
+    os.environ["PYTHINKER_REDUCED_MOTION"] = "1"
+    os.environ["PYTHINKER_TUI_STYLE"] = "card"
+
+    from rich.console import Group
+    from pythinker_core.tooling import ToolOk
+    from pythinker_code.ui.shell.console import console
+    from pythinker_code.ui.shell.tool_renderers import clear_tool_renderers, register_builtin_renderers
+    from pythinker_code.ui.shell.visualize import _LiveView
+    from pythinker_code.wire.types import (
+        StatusUpdate,
+        SubagentEvent,
+        ToolCall,
+        ToolExecutionStarted,
+        ToolOutputPart,
+        ToolResult,
+        TurnBegin,
+    )
+
+    clear_tool_renderers()
+    register_builtin_renderers()
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="run agents pty smoke"))
+    view.dispatch_wire_message(
+        ToolCall(
+            id="run-agents-root",
+            function=ToolCall.FunctionBody(
+                name="RunAgents",
+                arguments=json.dumps(
+                    {
+                        "summary": "Parallel UI smoke",
+                        "run_in_background": False,
+                        "agents": [
+                            {
+                                "title": "Map renderer callbacks",
+                                "name": "mapper",
+                                "subagent_type": "explore",
+                                "prompt": "SECRET_PROMPT_CANARY should never render",
+                            },
+                            {
+                                "title": "Read activity tree",
+                                "name": "reader",
+                                "subagent_type": "review",
+                                "prompt": "SECRET_PROMPT_CANARY should never render either",
+                            },
+                        ],
+                    }
+                ),
+            ),
+        )
+    )
+    view.dispatch_wire_message(ToolExecutionStarted(tool_call_id="run-agents-root"))
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-root",
+            agent_id="agent-alpha-raw-id",
+            subagent_type="explore",
+            description="Map renderer callbacks",
+            event=ToolCall(
+                id="sub-alpha-raw-id",
+                function=ToolCall.FunctionBody(
+                    name="Grep",
+                    arguments='{"pattern":"SECRET_PROMPT_CANARY","path":"/tmp/raw/path.py"}',
+                ),
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-root",
+            agent_id="agent-alpha-raw-id",
+            subagent_type="explore",
+            description="Map renderer callbacks",
+            event=ToolExecutionStarted(tool_call_id="sub-alpha-raw-id"),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-root",
+            agent_id="agent-alpha-raw-id",
+            subagent_type="explore",
+            description="Map renderer callbacks",
+            event=ToolOutputPart(
+                tool_call_id="sub-alpha-raw-id",
+                text="raw command output must stay hidden",
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-root",
+            agent_id="agent-beta-raw-id",
+            subagent_type="review",
+            description="Read activity tree",
+            event=ToolCall(
+                id="sub-beta-raw-id",
+                function=ToolCall.FunctionBody(
+                    name="Read",
+                    arguments='{"file_path":"/tmp/secret-renderer.py"}',
+                ),
+            ),
+        )
+    )
+    view.dispatch_wire_message(
+        SubagentEvent(
+            parent_tool_call_id="run-agents-root",
+            agent_id="agent-beta-raw-id",
+            subagent_type="review",
+            description="Read activity tree",
+            event=ToolResult(tool_call_id="sub-beta-raw-id", return_value=ToolOk(output="done")),
+        )
+    )
+
+    console.print("PYTHINKER_PTY_RUN_AGENTS_BEGIN")
+    console.print(Group(*view.compose_agent_output(include_working_indicator=False)))
+    console.print("PYTHINKER_PTY_RUN_AGENTS_END")
     """
-    slow = {"id": "r1", "name": "Shell", "arguments": json.dumps({"command": "sleep 6"})}
+)
+
+
+def _run_python_pty(script: str, *, columns: int, rows: int) -> ShellPTYProcess:
+    master_fd, slave_fd = pty.openpty()
+    _set_window_size(master_fd, columns=columns, lines=rows)
+    _set_window_size(slave_fd, columns=columns, lines=rows)
+    os.set_blocking(master_fd, False)
+    env = os.environ.copy()
+    env["COLUMNS"] = str(columns)
+    env["LINES"] = str(rows)
+    env["TERM"] = "xterm-256color"
+    env["PYTHONUTF8"] = "1"
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        env=env,
+        preexec_fn=_preexec_for_tty(slave_fd),
+        close_fds=True,
+    )
+    os.close(slave_fd)
+    return ShellPTYProcess(process=process, master_fd=master_fd)
+
+
+def _assert_run_agents_pty_tree(*, columns: int, rows: int) -> str:
+    shell = _run_python_pty(_RUN_AGENTS_PTY_SCRIPT, columns=columns, rows=rows)
+    try:
+        assert shell.wait(timeout=10.0) == 0
+        normalized = shell.normalized_text()
+        rendered_rows = _render_sized(shell._raw_chunks, columns, rows)
+        rendered = "\n".join(rendered_rows)
+        assert "PYTHINKER_PTY_RUN_AGENTS_BEGIN" in normalized
+        assert normalized.count("Agents") == 1
+        assert "├─" in normalized
+        assert "└─" in normalized
+        assert "searching…" in normalized
+        assert "reading…" in normalized or "thinking…" in normalized
+        assert "Map renderer callbacks" in normalized
+        assert "Read activity tree" in normalized
+        for leaked in (
+            "RunAgents(",
+            "SECRET_PROMPT_CANARY",
+            "/tmp/raw/path.py",
+            "/tmp/secret-renderer.py",
+            "sub-alpha-raw-id",
+            "agent-alpha-raw-id",
+            "raw command output must stay hidden",
+        ):
+            assert leaked not in normalized
+        assert all(cell_width(row) <= columns for row in rendered_rows)
+        assert "Agents" in rendered
+        return normalized
+    finally:
+        shell.close()
+
+
+def test_run_agents_tree_renders_through_real_pty_at_narrow_and_normal_widths() -> None:
+    narrow = _assert_run_agents_pty_tree(columns=64, rows=24)
+    normal = _assert_run_agents_pty_tree(columns=_COLS, rows=24)
+
+    assert "Map renderer callbacks" in narrow
+    assert "Read activity tree" in narrow
+    assert "Map renderer callbacks" in normal
+    assert "Read activity tree" in normal
+
+
+def test_prompt_scene_survives_resize_away_and_back_continuously(tmp_path: Path) -> None:
+    """Mid-turn resizes never crash or fossilize prompt rows.
+
+    The oracle replays the complete PTY byte stream into one pyte screen and
+    resizes that same virtual screen with the real PTY. This intentionally does
+    not use post-resize-only bytes: fossilized prompt/sentinel rows are stale
+    state, so the detector must preserve pre-resize screen history.
+    """
+    resize_prompt = "resize prompt sentinel 9d2f"
+    slow = {"id": "r1", "name": "Shell", "arguments": json.dumps({"command": "sleep 3"})}
     config_path = write_scripted_config(
         tmp_path,
         [f"tool_call: {json.dumps(slow)}", "text: Resize turn finished."],
@@ -254,32 +471,37 @@ def test_prompt_scene_survives_shrinking_terminal_heights(tmp_path: Path) -> Non
         columns=_COLS,
         lines=_ROWS,
     )
+    continuous = _ContinuousScreen(columns=_COLS, rows=_ROWS)
+
+    def assert_no_fossils(rows: list[str], *, columns: int) -> None:
+        joined = "\n".join(rows)
+        assert all(cell_width(row) <= columns for row in rows)
+        assert joined.count(resize_prompt) <= 1, "submitted prompt duplicated on screen"
+        assert sum(1 for row in rows if _is_input_card_border(row)) <= 1
+        assert not _has_fossil_border_above_content(rows)
+
     try:
         shell.read_until_contains("think first, then code")
         read_until_prompt_ready(shell, after=shell.mark())
-        shell.send_line(_PROMPT_TEXT)
-        shell.read_until_contains("Bash(sleep 6", timeout=15.0)
+        assert_no_fossils(continuous.feed(shell._raw_chunks), columns=_COLS)
+        shell.send_line(resize_prompt)
+        shell.read_until_contains("Bash(sleep 3", timeout=15.0)
+        assert_no_fossils(continuous.feed(shell._raw_chunks), columns=_COLS)
 
-        for height in (12, 8, 6, 4):
-            resize_chunk_start = len(shell._raw_chunks)
-            _set_window_size(shell.master_fd, columns=_COLS, lines=height)
-            deadline = time.monotonic() + 2.5
+        for columns, height in ((90, 12), (72, 8), (54, 6), (_COLS, 4), (_COLS, _ROWS)):
+            continuous.resize(columns=columns, rows=height)
+            _set_window_size(shell.master_fd, columns=columns, lines=height)
+            deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 shell.read_available(timeout=0.08)
-            assert shell.process.poll() is None, f"shell died after resize to {height} rows"
-            post_resize = shell._raw_chunks[resize_chunk_start:]
-            if post_resize:
-                # pyte always yields exactly `height` lines, so assert observable
-                # behavior instead: the redraw never wraps a row past the terminal
-                # width and never fossilizes an input-card border above content.
-                rows = _render_sized(post_resize, _COLS, height)
-                assert all(len(row) <= _COLS for row in rows)
-                assert not _has_fossil_border_above_content(rows)
+                assert_no_fossils(continuous.feed(shell._raw_chunks), columns=columns)
+            assert shell.process.poll() is None, f"shell died after resize to {columns}x{height}"
 
-        _set_window_size(shell.master_fd, columns=_COLS, lines=_ROWS)
         shell.read_until_contains("Resize turn finished.", timeout=20.0)
         shell.wait_for_quiet(timeout=6.0, quiet_period=0.3)
-        assert any(_is_input_card_border(r) for r in _render(shell._raw_chunks)), (
+        rows = continuous.feed(shell._raw_chunks)
+        assert_no_fossils(rows, columns=_COLS)
+        assert any(_is_input_card_border(r) for r in rows), (
             "idle input-card border did not return after the resize sequence"
         )
     finally:

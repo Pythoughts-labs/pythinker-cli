@@ -204,7 +204,8 @@ class _PromptLiveView(_LiveView):
                     self._resize_recovery_remaining = _RESIZE_RECOVERY_FRAMES
                     self._force_refresh = True
                     _handoff_trace(f"RESIZE\t{columns}x{rows}")
-                    self._reset_prompt_renderer("resize")
+                    if os.name == "nt":
+                        self._reset_prompt_renderer("resize")
             else:
                 _handoff_trace(f"RESIZE_IGNORE\t{columns}x{rows}")
         if self._resize_recovery_remaining > 0:
