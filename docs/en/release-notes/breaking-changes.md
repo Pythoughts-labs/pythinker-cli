@@ -4,6 +4,8 @@ This page documents breaking changes in Pythinker Code releases and provides mig
 
 ## Unreleased
 
+## 0.62.0 (2026-07-22)
+
 ## 0.61.0 (2026-07-22)
 
 Shell-mode `!` commands now run through the configured shell (`<shell> -c`, or PowerShell
