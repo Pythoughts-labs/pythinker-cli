@@ -925,7 +925,11 @@ def test_shell_clear_reloads_without_replaying_old_turns(tmp_path: Path) -> None
 
 def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path) -> None:
     scripts = [
-        build_shell_tool_call("tc-c1", "sleep 5 && printf should-not-exist > cancel_output.txt"),
+        build_shell_tool_call(
+            "tc-c1",
+            "printf started > cancel_started.txt && sleep 5 && "
+            "printf should-not-exist > cancel_output.txt",
+        ),
         "text: Cancel recovery completed.",
     ]
     config_path = write_scripted_config(tmp_path, scripts)
@@ -944,7 +948,13 @@ def test_shell_cancel_running_command_kills_process_and_recovers(tmp_path: Path)
 
         cancel_mark = shell.mark()
         shell.send_line("start cancellable command")
-        shell.read_until_contains("Bash(sleep 5", after=cancel_mark)
+        shell.read_until_contains("Bash(printf started", after=cancel_mark)
+        started_path = work_dir / "cancel_started.txt"
+        started_deadline = time.monotonic() + 10.0
+        while not started_path.exists():
+            if time.monotonic() >= started_deadline:
+                raise AssertionError("Timed out waiting for cancellable command to start.")
+            time.sleep(0.05)
         shell.send_key("escape")
         # The "Interrupted by user" acknowledgement only prints after the soul
         # re-raises the cancellation, which first awaits a shielded, disk-first
