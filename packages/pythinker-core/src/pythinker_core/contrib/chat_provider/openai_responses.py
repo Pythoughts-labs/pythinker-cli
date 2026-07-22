@@ -475,6 +475,18 @@ def _responses_finish_reason(response: Response) -> str | None:
     return response.status
 
 
+def _reasoning_summary_index(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _responses_output_index(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 class OpenAIResponsesStreamedMessage:
     def __init__(self, response: Response | AsyncStream[ResponseStreamEvent]):
         if isinstance(response, Response):
@@ -535,16 +547,30 @@ class OpenAIResponsesStreamedMessage:
                     ),
                 )
             elif item.type == "reasoning":
-                for summary in item.summary:
+                encrypted_content = getattr(item, "encrypted_content", None)
+                emitted_summary = False
+                for summary_index, summary in enumerate(getattr(item, "summary", ())):
+                    emitted_summary = True
                     yield ThinkPart(
                         think=summary.text,
-                        encrypted=item.encrypted_content,
+                        encrypted=encrypted_content,
+                        summary_index=summary_index,
+                    )
+                if not emitted_summary and encrypted_content is not None:
+                    # Mirror the streaming `output_item.done` path: a reasoning item
+                    # can carry encrypted_content with no summary parts, and dropping
+                    # it here would make the reasoning boundary non-replayable.
+                    yield ThinkPart(
+                        think="",
+                        encrypted=encrypted_content,
+                        summary_index=None,
                     )
 
     async def _convert_stream_response(
         self, response: AsyncStream[ResponseStreamEvent]
     ) -> AsyncIterator[StreamedMessagePart]:
         """Convert streaming Responses events into message parts."""
+        reasoning_summary_indices_by_output: dict[int, int | None] = {}
         try:
             async for chunk in response:
                 if isinstance(chunk, ResponseCreatedEvent):
@@ -565,16 +591,40 @@ class OpenAIResponsesStreamedMessage:
                 elif chunk.type == "response.output_item.done":
                     item = chunk.item
                     if item.type == "reasoning":
-                        yield ThinkPart(think="", encrypted=item.encrypted_content)
+                        output_index = _responses_output_index(getattr(chunk, "output_index", None))
+                        summary_index = (
+                            reasoning_summary_indices_by_output.pop(output_index, None)
+                            if output_index is not None
+                            else None
+                        )
+                        yield ThinkPart(
+                            think="",
+                            encrypted=item.encrypted_content,
+                            summary_index=summary_index,
+                        )
                 elif isinstance(chunk, ResponseFunctionCallArgumentsDeltaEvent):
                     yield ToolCallPart(
                         arguments_part=chunk.delta,
                         stream_index=chunk.output_index,
                     )
                 elif chunk.type == "response.reasoning_summary_part.added":
-                    yield ThinkPart(think="")
+                    summary_index = _reasoning_summary_index(getattr(chunk, "summary_index", None))
+                    output_index = _responses_output_index(getattr(chunk, "output_index", None))
+                    if output_index is not None:
+                        reasoning_summary_indices_by_output[output_index] = summary_index
+                    yield ThinkPart(
+                        think="",
+                        summary_index=summary_index,
+                    )
                 elif chunk.type == "response.reasoning_summary_text.delta":
-                    yield ThinkPart(think=chunk.delta)
+                    summary_index = _reasoning_summary_index(getattr(chunk, "summary_index", None))
+                    output_index = _responses_output_index(getattr(chunk, "output_index", None))
+                    if output_index is not None:
+                        reasoning_summary_indices_by_output[output_index] = summary_index
+                    yield ThinkPart(
+                        think=getattr(chunk, "delta", ""),
+                        summary_index=summary_index,
+                    )
                 elif isinstance(chunk, ResponseErrorEvent):
                     self._finish_reason = "failed"
                     return

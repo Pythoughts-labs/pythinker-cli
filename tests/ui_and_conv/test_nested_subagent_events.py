@@ -109,9 +109,12 @@ def test_nested_tool_lifecycle_rolls_up_under_root_and_first_result_wins(
         indexed_block, indexed_depth = view._subagent_tool_call_ancestry[call_id]
         assert indexed_block is root_block
         assert indexed_depth == expected_depth
+    # Nested activity rolls up under the root Agent as payload-free semantic rows;
+    # the leaf's raw output and args never leak into the rendered tree.
     assert leaf_id in root_block._subagent_execution_started
-    assert "STREAMED_NESTED_OUTPUT" in _render([view.compose()])
-    assert "src/module.py" in _render([view.compose()])
+    assert "reading…" in _render([view.compose()])
+    assert "STREAMED_NESTED_OUTPUT" not in _render([view.compose()])
+    assert "src/module.py" not in _render([view.compose()])
 
     view.dispatch_wire_message(
         _nested_event(
@@ -135,13 +138,15 @@ def test_nested_tool_lifecycle_rolls_up_under_root_and_first_result_wins(
         )
     )
 
-    finished = [
-        item for item in root_block._finished_subagent_tool_calls if item.call.id == leaf_id
-    ]
-    assert len(finished) == 1
-    assert finished[0].result.output == "FIRST_RESULT"
-    assert root_block._n_finished_subagent_tool_calls == 1
-    assert leaf_id not in root_block._subagent_execution_started
+    # First-result-wins: the leaf finish is recorded once and the late duplicate
+    # result/output is ignored; neither raw payload is ever surfaced or buffered.
+    assert leaf_id in root_block._finished_subagent_tool_call_ids
+    assert root_block._n_finished_subagent_tool_calls == 0
+    assert not root_block._finished_subagent_tool_calls
+    rendered_after_late = _render([view.compose()])
+    assert "FIRST_RESULT" not in rendered_after_late
+    assert "LATE_OUTPUT" not in rendered_after_late
+    assert "LATE_RESULT" not in rendered_after_late
     assert "LATE_OUTPUT" not in root_block._subagent_output_parts
 
 

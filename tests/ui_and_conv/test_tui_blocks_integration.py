@@ -214,7 +214,7 @@ def test_card_style_finished_subagent_shows_compact_result(_force_card_style, mo
     assert "Agent finished" not in rendered
 
 
-def test_card_style_completed_subagent_has_blank_before_tools_rollup(_force_card_style):
+def test_card_style_completed_agent_shows_result_not_tools_rollup(_force_card_style):
     import json
 
     from pythinker_core.tooling import ToolOk
@@ -241,14 +241,14 @@ def test_card_style_completed_subagent_has_blank_before_tools_rollup(_force_card
 
     rendered = render_plain(block.compose(), width=120)
     lines = [line.rstrip() for line in rendered.splitlines()]
-    expand_idx = next(
-        index
-        for index, line in enumerate(lines)
-        if "expand" in line.lower() and "ctrl" in line.lower()
-    )
-    tools_idx = next(index for index, line in enumerate(lines) if "tools:" in line)
-    assert tools_idx > expand_idx
-    assert any(lines[j] == "" for j in range(expand_idx + 1, tools_idx))
+    # Blessed supersession: a completed single Agent renders its result body with an
+    # expand affordance; the legacy per-tool rollup is gone and raw sub-tool payloads
+    # never leak into the collapsed card.
+    assert any("detail line 0" in line for line in lines)
+    assert any("expand" in line.lower() and "ctrl" in line.lower() for line in lines)
+    assert not any("tools:" in line for line in lines)
+    for leaked in ("Grep", "term0", "term1", "term2"):
+        assert leaked not in rendered
 
 
 def test_card_style_running_task_output_uses_solid_circle(_force_card_style, monkeypatch):

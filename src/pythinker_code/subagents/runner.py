@@ -367,6 +367,7 @@ class ForegroundSubagentRunner:
                 parent_tool_call_id=tool_call.id if tool_call is not None else None,
                 agent_id=agent_id,
                 subagent_type=actual_type,
+                description=req.description.strip() or None,
                 output_writer=output_writer,
             )
 
@@ -536,6 +537,7 @@ class ForegroundSubagentRunner:
         parent_tool_call_id: str | None,
         agent_id: str,
         subagent_type: str,
+        description: str | None,
         output_writer: SubagentOutputWriter,
     ):
         super_wire = get_wire_or_none()
@@ -561,6 +563,7 @@ class ForegroundSubagentRunner:
                         parent_tool_call_id=parent_tool_call_id,
                         agent_id=agent_id,
                         subagent_type=subagent_type,
+                        description=description,
                         event=msg,
                     )
                 )

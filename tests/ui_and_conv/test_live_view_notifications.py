@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from pythinker_core.message import ToolCall
 from pythinker_core.tooling import ToolResult, ToolReturnValue
 from rich.console import Console, Group
@@ -156,6 +158,15 @@ def test_working_indicator_uses_turn_elapsed_time(monkeypatch):
 
     assert "12s" in rendered
     assert "4h" not in rendered
+
+
+def test_working_indicator_exposes_escape_when_turn_is_cancellable():
+    view = _LiveView(StatusUpdate(), asyncio.Event())
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+
+    rendered = _render(view._working_indicator())
+
+    assert "esc)" in rendered
 
 
 def test_working_indicator_uses_rotating_thinking_words(monkeypatch):

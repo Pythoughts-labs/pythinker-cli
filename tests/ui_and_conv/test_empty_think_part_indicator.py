@@ -386,7 +386,7 @@ def test_action_spacer_between_run_agents_and_task_output(monkeypatch):
     assert len(view._tool_call_blocks) == 2
     agent_blocks = view.compose_agent_output(include_working_indicator=False)
     rendered = _render(Group(*agent_blocks))
-    assert "RunAgents(" in rendered
+    assert "Agents(" in rendered
     assert "TaskOutput(" in rendered
 
     spacer_indices = [

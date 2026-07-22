@@ -1000,7 +1000,7 @@ def test_prompt_composing_activity_is_pinned_below_stream_body() -> None:
     assert "Composing" in pinned_tail
 
 
-def test_pinned_tail_prefers_active_subagent_tool_over_composing() -> None:
+def test_pinned_tail_suppresses_active_agent_tool_label_in_favor_of_composing() -> None:
     import re
     import time as _time
     from collections import deque
@@ -1043,8 +1043,8 @@ def test_pinned_tail_prefers_active_subagent_tool_over_composing() -> None:
 
     tail = re.sub(r"\x1b\[[0-9;]*m", "", view.render_pinned_status_tail(100).value)
 
-    assert "agent Read src/pythinker_code/ui/shell/prompt.py" in tail
-    assert "Composing" not in tail
+    assert "agent Read src/pythinker_code/ui/shell/prompt.py" not in tail
+    assert "Composing" in tail
 
 
 def test_render_pinned_status_tail_empty_when_turn_inactive() -> None:
@@ -3414,7 +3414,11 @@ def test_reset_prompt_renderer_survives_no_app_and_renderer_failure(monkeypatch)
     view._reset_prompt_renderer("boom")  # must not raise
 
 
-def test_resize_change_forces_absolute_prompt_repaint(monkeypatch) -> None:
+@pytest.mark.parametrize(("platform", "expected_resets"), [("posix", []), ("nt", ["resize"])])
+def test_resize_change_uses_platform_safe_repaint(
+    monkeypatch, platform: str, expected_resets: list[str]
+) -> None:
+    monkeypatch.setattr(_interactive_mod.os, "name", platform)
     view = object.__new__(_PromptLiveView)
     view._last_terminal_size = (80, 24)
     view._resize_recovery_remaining = 0
@@ -3426,7 +3430,29 @@ def test_resize_change_forces_absolute_prompt_repaint(monkeypatch) -> None:
 
     view._tick_resize_recovery()
 
-    assert resets == ["resize"]
+    assert resets == expected_resets
+    assert view._last_terminal_size == (100, 30)
+    assert view._resize_recovery_remaining == _interactive_mod._RESIZE_RECOVERY_FRAMES - 1
+    assert view._force_refresh is True
+
+
+def test_first_posix_terminal_observation_uses_platform_safe_repaint(monkeypatch) -> None:
+    monkeypatch.setattr(_interactive_mod.os, "name", "posix")
+    view = object.__new__(_PromptLiveView)
+    view._last_terminal_size = None
+    view._resize_recovery_remaining = 0
+    view._force_refresh = False
+    view._current_terminal_size = lambda: (100, 30)  # type: ignore[method-assign]
+
+    resets: list[str] = []
+    monkeypatch.setattr(view, "_reset_prompt_renderer", lambda reason: resets.append(reason))
+
+    view._tick_resize_recovery()
+
+    assert resets == []
+    assert view._last_terminal_size == (100, 30)
+    assert view._resize_recovery_remaining == _interactive_mod._RESIZE_RECOVERY_FRAMES - 1
+    assert view._force_refresh is True
 
 
 @pytest.mark.asyncio

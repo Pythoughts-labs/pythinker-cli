@@ -1,7 +1,7 @@
 import pytest
 
 from pythinker_core.chat_provider import APIStreamProtocolError
-from pythinker_core.message import TextPart, ToolCall, ToolCallPart
+from pythinker_core.message import TextPart, ThinkPart, ToolCall, ToolCallPart
 from pythinker_core.stream_message_assembler import StreamMessageAssembler
 
 
@@ -362,6 +362,71 @@ def test_terminal_failure_reasons_are_rejected(finish_reason: str, category: str
     assert caught.value.category == category
     assert caught.value.output_published is False
     assert "private" not in str(caught.value)
+
+
+def test_same_summary_index_merges_adjacent_think_parts() -> None:
+    assembler = StreamMessageAssembler()
+    assembler.add(ThinkPart(think="Plan", summary_index=0))
+    assembler.add(ThinkPart(think=" next", summary_index=0))
+    assembler.add(ThinkPart(think="Check", summary_index=1))
+
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [
+        ThinkPart(think="Plan next", summary_index=0),
+        ThinkPart(think="Check", summary_index=1),
+    ]
+
+
+def test_different_summary_indices_stay_separate() -> None:
+    assembler = StreamMessageAssembler()
+    assembler.add(ThinkPart(think="Plan", summary_index=0))
+    assembler.add(ThinkPart(think="Check", summary_index=1))
+
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [
+        ThinkPart(think="Plan", summary_index=0),
+        ThinkPart(think="Check", summary_index=1),
+    ]
+
+
+def test_non_adjacent_duplicate_summary_indices_stay_separate() -> None:
+    assembler = StreamMessageAssembler()
+    assembler.add(ThinkPart(think="Plan", summary_index=0))
+    assembler.add(ThinkPart(think="Check", summary_index=1))
+    assembler.add(ThinkPart(think="Finish", summary_index=0))
+
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [
+        ThinkPart(think="Plan", summary_index=0),
+        ThinkPart(think="Check", summary_index=1),
+        ThinkPart(think="Finish", summary_index=0),
+    ]
+
+
+def test_unindexed_legacy_think_parts_still_merge() -> None:
+    assembler = StreamMessageAssembler()
+    assembler.add(ThinkPart(think="Plan"))
+    assembler.add(ThinkPart(think=" next"))
+
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [ThinkPart(think="Plan next")]
+
+
+def test_indexed_and_unindexed_think_parts_do_not_merge() -> None:
+    assembler = StreamMessageAssembler()
+    assembler.add(ThinkPart(think="Plan", summary_index=0))
+    assembler.add(ThinkPart(think=" legacy"))
+
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [
+        ThinkPart(think="Plan", summary_index=0),
+        ThinkPart(think=" legacy"),
+    ]
 
 
 def test_content_parts_assemble_independently_from_tool_calls() -> None:

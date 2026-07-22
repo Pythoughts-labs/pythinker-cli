@@ -15,6 +15,7 @@ from rich.table import Table
 from rich.text import Text
 
 from pythinker_code.ui.shell.components.key_hints import key_hint
+from pythinker_code.ui.shell.components.render_utils import cell_width, truncate_to_width
 from pythinker_code.ui.shell.tool_renderers import (
     ToolRenderContext,
     ToolRenderDefinition,
@@ -406,61 +407,54 @@ def _plural(count: int, singular: str) -> str:
     return f"{count} {singular}" if count == 1 else f"{count} {singular}s"
 
 
-def _run_agent_is_async(mode: str, status: str) -> bool:
-    return mode == "background" or status.lower() == "launched"
-
-
-def _run_agent_is_resolved(status: str, *, is_async: bool) -> bool:
+def _normalize_run_agents_status(status: str, *, mode: str) -> str:
     norm = normalize_agent_status(status)
-    if norm in {"completed", "failed", "timed out", "cancelled"}:
-        return True
-    return is_async and norm in {
+    if norm in {"completed", "success", "done"}:
+        return "completed"
+    if norm in {"failed", "error", "timed out", "cancelled"}:
+        return "failed"
+    if norm in {"deferred", "queued", "pending"}:
+        return "queued"
+    if norm in {
+        "created",
         "starting",
         "running",
-        "created",
         "launched",
         "awaiting approval",
-    }
+    }:
+        return "running/background"
+    if mode == "background" and not norm:
+        return "running/background"
+    return "unknown"
 
 
-def _run_agent_is_backgrounded(*, is_async: bool, is_resolved: bool, status: str) -> bool:
-    if not is_async or not is_resolved:
-        return False
-    return normalize_agent_status(status) not in {"completed", "failed", "timed out", "cancelled"}
+def _run_agents_status_glyph(status: str) -> str:
+    if status == "completed":
+        return "✓"
+    if status == "failed":
+        return "✘"
+    if status == "queued":
+        return "○"
+    if status == "unknown":
+        return "?"
+    return "●"
 
 
-def _run_agent_status_subline(entry: dict[str, str], *, is_resolved: bool) -> str:
-    if not is_resolved:
-        if normalize_agent_status(entry.get("status", "")) == "awaiting approval":
-            return "Awaiting approval…"
-        preview = entry.get("summary_preview") or entry.get("message") or entry.get("brief")
-        if preview:
-            return _compact_inline(preview, max_chars=72)
-        return "Initializing…"
-    return "Done"
+def _run_agents_status_style(status: str) -> RichStyle:
+    if status == "completed":
+        return tui_rich_style("success")
+    if status == "failed":
+        return tui_rich_style("error")
+    return tui_rich_style("dim")
 
 
-def _render_grouped_agents_summary(
-    count: int,
-    *,
-    all_resolved: bool,
-    all_async: bool,
-    common_type: str | None,
-) -> Text:
+def _render_grouped_agents_summary(count: int, statuses: list[str]) -> Text:
+    uniform = bool(statuses) and all(status == statuses[0] for status in statuses)
+    label = statuses[0] if uniform else "mixed"
     text = Text()
-    if all_resolved:
-        if all_async:
-            text.append(str(count), style=RichStyle(bold=True))
-            text.append(" background agents launched", style=tui_rich_style("dim"))
-        else:
-            text.append(str(count), style=RichStyle(bold=True))
-            type_suffix = f" {common_type}" if common_type else ""
-            text.append(f"{type_suffix} agents finished", style=tui_rich_style("dim"))
-    else:
-        text.append("Running ", style=tui_rich_style("dim"))
-        text.append(str(count), style=RichStyle(bold=True))
-        type_suffix = f" {common_type}" if common_type else ""
-        text.append(f"{type_suffix} agents…", style=tui_rich_style("dim"))
+    text.append(str(count), style=RichStyle(bold=True))
+    word = "agent" if count == 1 else "agents"
+    text.append(f" {word} {label}", style=tui_rich_style("dim"))
     return text
 
 
@@ -468,50 +462,50 @@ def _render_agent_progress_line(
     entry: dict[str, str],
     *,
     is_last: bool,
-    hide_type: bool,
     mode: str,
-) -> Group:
-    status = entry["status"]
-    is_async = _run_agent_is_async(mode, status)
-    is_resolved = _run_agent_is_resolved(status, is_async=is_async)
-    is_backgrounded = _run_agent_is_backgrounded(
-        is_async=is_async,
-        is_resolved=is_resolved,
-        status=status,
-    )
-
+    width: int,
+) -> Text:
+    status = _normalize_run_agents_status(entry["status"], mode=mode)
+    glyph = _run_agents_status_glyph(status)
     tree = _TREE_LAST if is_last else _TREE_BRANCH
-    gutter = _TREE_GUTTER_LAST if is_last else _TREE_GUTTER_MID
     subagent_type = entry["subagent_type"]
-    description = entry.get("name_extra") or None
-    label_style = tui_rich_style("tool_title") + RichStyle(bold=True)
+    description = entry.get("name_extra") or ""
+    suffix = ""
+    if status == "completed":
+        suffix = " · Done"
+    elif status == "failed":
+        suffix = " · Failed"
+    elif status == "unknown":
+        suffix = " · Unknown"
+
+    content_width = max(1, width - cell_width("  ⎿  "))
+    wide_status = f" {status} "
+    wide_fixed = f"   {tree} {glyph}{wide_status}{subagent_type}{suffix}"
+    rendered_status = " " if cell_width(wide_fixed) > content_width else wide_status
+
+    fixed_without_type = f"   {tree} {glyph}{rendered_status}{suffix}"
+    type_budget = max(1, content_width - cell_width(fixed_without_type))
+    rendered_type = truncate_to_width(subagent_type, type_budget)
+    rendered_fixed = f"   {tree} {glyph}{rendered_status}{rendered_type}{suffix}"
+    description_budget = content_width - cell_width(rendered_fixed) - 1
 
     row = Text()
-    row.append("   ", style="")
+    row.append("   ")
     row.append(f"{tree} ", style=tui_rich_style("dim"))
-    if hide_type:
-        label = description or subagent_type
-        row.append(label, style=label_style)
-    else:
-        row.append(subagent_type, style=label_style)
-        if description:
-            row.append(" (", style=tui_rich_style("dim"))
-            row.append(description, style=label_style)
-            row.append(")", style=tui_rich_style("dim"))
-    if not is_resolved:
-        row.stylize(tui_rich_style("dim"), 3, len(row))
-
-    children: list[RenderableType] = [row]
-    if not is_backgrounded:
-        sub = Text()
-        sub.append("   ", style="")
-        sub.append(gutter, style=tui_rich_style("dim"))
-        sub.append(
-            _run_agent_status_subline(entry, is_resolved=is_resolved),
-            style=tui_rich_style("dim"),
+    row.append(glyph, style=_run_agents_status_style(status))
+    row.append(rendered_status, style=tui_rich_style("dim"))
+    row.append(rendered_type, style=tui_rich_style("tool_title") + RichStyle(bold=True))
+    if description and description_budget > 0:
+        row.append(" ", style=tui_rich_style("dim"))
+        row.append(
+            truncate_to_width(description, description_budget),
+            style=tui_rich_style("tool_title"),
         )
-        children.append(sub)
-    return Group(*children)
+    if suffix:
+        row.append(suffix, style=tui_rich_style("dim"))
+    row.no_wrap = True
+    row.overflow = "ellipsis"
+    return row
 
 
 def _run_agent_arg_summaries(args: dict[str, object]) -> list[tuple[str, str]] | None:
@@ -525,11 +519,12 @@ def _run_agent_arg_summaries(args: dict[str, object]) -> list[tuple[str, str]] |
             summaries.append((f"agent-{index}", "coder"))
             continue
         raw_agent_dict = cast(dict[str, object], raw_agent)
-        name = as_str(raw_agent_dict.get("name")) or f"agent-{index}"
+        title = as_str(raw_agent_dict.get("title"))
+        name = title or as_str(raw_agent_dict.get("name")) or f"agent-{index}"
         subagent_type = as_str(raw_agent_dict.get("subagent_type")) or "coder"
         summaries.append(
             (
-                _compact_inline(name, max_chars=24),
+                _compact_inline(name, max_chars=32),
                 _compact_inline(subagent_type, max_chars=24),
             )
         )
@@ -542,13 +537,20 @@ def _render_run_agents_call(ctx: ToolRenderContext) -> RenderableType:
     mode = "foreground" if args.get("run_in_background") is False else "background"
     if agent_summaries is None:
         if ctx.has_result:
-            header = tool_call_header(
-                _RUN_AGENTS_TOOL_NAME,
-                missing_required_arg("agents"),
-                style_token="error",
+            summary = as_str(args.get("summary"))
+            if ctx.is_error:
+                return tool_call_header(
+                    "Agents",
+                    missing_required_arg("agents"),
+                    style_token="error",
+                )
+            return tool_call_header(
+                "Agents",
+                summary,
+                style_token="success",
+                summary_style_token="thinking_text",
             )
-            return header
-        line = pending_tool_call_header(_RUN_AGENTS_TOOL_NAME)
+        line = pending_tool_call_header("Agents")
         return running_spinner(
             line,
             execution_started=ctx.execution_started,
@@ -560,19 +562,20 @@ def _render_run_agents_call(ctx: ToolRenderContext) -> RenderableType:
     summary = Text()
     if run_summary:
         summary.append_text(fg("thinking_text", run_summary))
+        summary.append_text(fg("dim", f" · {mode}"))
     else:
         count = len(agent_summaries)
         summary.append_text(fg("border_accent", _plural(count, "agent")))
         summary.append_text(fg("thinking_text", f" · {mode}"))
 
     style_token = "error" if ctx.is_error else "success" if ctx.has_result else "muted"
-    header = tool_call_header(_RUN_AGENTS_TOOL_NAME, summary, style_token=style_token)
+    header = tool_call_header("Agents", summary, style_token=style_token)
 
     children: list[RenderableType] = [header]
     if ctx.has_result and run_summary is None:
         children.append(missing_required_arg("summary"))
 
-    rendered: RenderableType = Group(*children) if len(children) > 1 else header
+    rendered: RenderableType = Group(*children)
     return running_spinner(
         rendered,
         execution_started=ctx.execution_started,
@@ -726,15 +729,45 @@ def _render_run_agents_text_result(
     if not text:
         return None
     ctx.state["__suppress_generic_expand_hint__"] = True
+    ctx.state["__has_expandable_payload__"] = True
+    if not ctx.expanded:
+        status = "failed" if result.is_error else "result unavailable"
+        detail = "raw details preserved"
+        return Group(
+            fg("error" if result.is_error else "muted", f"Agents {status}"),
+            key_hint("app.tools.expand", detail),
+        )
     body, remaining = format_lines_block(
         text,
-        expanded=ctx.expanded,
-        collapsed_max_lines=_RUN_AGENTS_ERROR_COLLAPSED_LINES,
+        expanded=True,
+        collapsed_max_lines=10**9,
         style_token="error" if result.is_error else "tool_output",
     )
     if remaining > 0:
         return Group(body, fg("muted", f"… ({remaining} more lines preserved)"))
     return body
+
+
+def _run_agents_requested_titles_by_name(args: dict[str, object]) -> dict[str, str]:
+    raw_agents_value = args.get("agents")
+    if not isinstance(raw_agents_value, list):
+        return {}
+    titles: dict[str, str] = {}
+    for raw_agent in cast("list[object]", raw_agents_value):
+        if not isinstance(raw_agent, dict):
+            continue
+        raw_agent_dict = cast(dict[str, object], raw_agent)
+        name = as_str(raw_agent_dict.get("name"))
+        title = as_str(raw_agent_dict.get("title"))
+        if name and title:
+            titles[name] = title
+    return titles
+
+
+def _run_agents_row_description(agent: dict[str, str], title_by_name: dict[str, str]) -> str:
+    name = agent.get("name") or ""
+    description = agent.get("description") or title_by_name.get(name) or name
+    return _compact_inline(description, max_chars=80) if description else ""
 
 
 def _render_run_agents_result(
@@ -749,15 +782,15 @@ def _render_run_agents_result(
     if not agents:
         return _render_run_agents_text_result(ctx, result)
 
+    title_by_name = _run_agents_requested_titles_by_name(ctx.args or {})
     entries: list[dict[str, str]] = []
-    for index, agent in enumerate(agents):
+    for agent in agents:
         subagent_type = agent.get("subagent_type") or agent.get("actual_subagent_type") or "coder"
-        name = agent.get("name") or f"agent-{index + 1}"
-        extra = "" if name == subagent_type else name
+        extra = _run_agents_row_description(agent, title_by_name)
         entries.append(
             {
                 "subagent_type": subagent_type,
-                "name_extra": extra,
+                "name_extra": "" if extra == subagent_type else extra,
                 "status": agent.get("detail_status") or agent.get("status") or "unknown",
                 "task_id": agent.get("task_id") or "",
                 "summary_preview": agent.get("summary_preview") or "",
@@ -767,38 +800,27 @@ def _render_run_agents_result(
         )
 
     mode = top.get("mode") or "background"
-    all_resolved = all(
-        _run_agent_is_resolved(
-            entry["status"],
-            is_async=_run_agent_is_async(mode, entry["status"]),
-        )
-        for entry in entries
-    )
-    all_async = all(_run_agent_is_async(mode, entry["status"]) for entry in entries)
-    types = [entry["subagent_type"] for entry in entries]
-    all_same_type = bool(types) and all(t == types[0] for t in types)
-    common_type = types[0] if all_same_type and types[0] not in _RUN_AGENTS_GENERIC_TYPES else None
-    hide_type = all_same_type and common_type is not None
+    normalized_statuses = [
+        _normalize_run_agents_status(entry["status"], mode=mode) for entry in entries
+    ]
 
     children: list[RenderableType] = [
-        _render_grouped_agents_summary(
-            len(entries),
-            all_resolved=all_resolved,
-            all_async=all_async,
-            common_type=common_type,
-        )
+        _render_grouped_agents_summary(len(entries), normalized_statuses)
     ]
     for index, entry in enumerate(entries):
         children.append(
             _render_agent_progress_line(
                 entry,
                 is_last=index == len(entries) - 1,
-                hide_type=hide_type,
                 mode=mode,
+                width=ctx.width,
             )
         )
 
-    if not all_async and not ctx.expanded:
+    has_foreground_terminal = any(
+        status in {"completed", "failed"} for status in normalized_statuses
+    )
+    if has_foreground_terminal and not ctx.expanded:
         ctx.state["__suppress_generic_expand_hint__"] = True
         children.append(key_hint("app.tools.expand", "to expand"))
 

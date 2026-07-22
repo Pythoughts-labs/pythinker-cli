@@ -12,11 +12,14 @@ import random
 import re
 import time
 from collections import Counter, deque
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, NamedTuple, cast
 
 import streamingjson  # type: ignore[reportMissingTypeStubs]
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.measure import Measurement
+from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
 
@@ -31,6 +34,7 @@ from pythinker_code.ui.shell.components.markdown import (
     markdown_commit_boundary,
 )
 from pythinker_code.ui.shell.components.render_utils import (
+    cell_width,
     render_message_response,
     sanitize_ansi,
     truncate_to_width,
@@ -47,6 +51,7 @@ from pythinker_code.ui.shell.markdown.fences import iter_fence_aware_lines
 from pythinker_code.ui.shell.mcp_status import mcp_startup_header
 from pythinker_code.ui.shell.motion import (
     ActivitySnapshot,
+    active_marker_frame,
     activity_status_line,
     append_streaming_caret,
     reduced_motion_enabled,
@@ -126,6 +131,17 @@ _MAX_SUB_OUTPUT_CHARS = 200
 _MAX_SUBAGENT_ROLLUP_TOOLS = 6
 _MAX_SUBAGENT_CHANGED_FILES = 5
 _MAX_FILE_ACTIVITY_ROWS = 5
+_MAX_RUN_AGENTS_ACTIVITY_ROWS = 6
+_SUBAGENT_ACTIVITY_LABELS: dict[str, str] = {
+    "Read": "reading…",
+    "ReadFile": "reading…",
+    "Grep": "searching…",
+    "Glob": "finding files…",
+    "Bash": "running command…",
+    "Shell": "running command…",
+    "WriteFile": "writing…",
+    "StrReplaceFile": "editing…",
+}
 
 # Background-agent statuses that mean "still running" — the tool call result
 # has arrived but the spawned agent has not yet finished.  Blocks with this
@@ -145,6 +161,16 @@ _MUTATING_TOOL_NAMES = frozenset(
 )
 
 
+@dataclass(slots=True)
+class _SubagentActivityState:
+    agent_id: str
+    subagent_type: str
+    description: str
+    observed_at: float
+    current_tool_name: str | None = None
+    state: Literal["waiting", "running", "completed", "failed"] = "waiting"
+
+
 def _parse_tool_result_top_fields(result_text: str) -> dict[str, str]:
     """Parse top-level ``key: value`` lines before nested agent/task sections."""
     top: dict[str, str] = {}
@@ -160,6 +186,21 @@ def _parse_tool_result_top_fields(result_text: str) -> dict[str, str]:
             continue
         top[key] = value.strip()
     return top
+
+
+def _format_subagent_type(subagent_type: str) -> str:
+    cleaned = sanitize_ansi(subagent_type).strip().replace("_", "-") or "agent"
+    return " ".join(part.capitalize() for part in cleaned.split("-") if part) or "Agent"
+
+
+def _normalize_subagent_description(description: str | None) -> str:
+    return " ".join(sanitize_ansi(description or "").split())
+
+
+def _semantic_subagent_activity(tool_name: str | None) -> str:
+    if not tool_name:
+        return "thinking…"
+    return _SUBAGENT_ACTIVITY_LABELS.get(tool_name, "thinking…")
 
 
 def _is_active_background_agent(tool_name: str, result_text: str) -> bool:
@@ -563,11 +604,32 @@ def _tail_lines(text: str, n: int) -> str:
     return text[pos + 1 :]
 
 
+@dataclass(slots=True)
+class _ThinkingSegment:
+    summary_index: int | None
+    text: str = ""
+    encrypted_boundary: bool = False
+
+
+class _StyleOverrideRenderable:
+    def __init__(self, renderable: RenderableType, style: Style) -> None:
+        self._renderable = renderable
+        self._style = style
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+        return Measurement.get(console, options, self._renderable)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        for segment in console.render(self._renderable, options):
+            style = self._style if segment.style is None else segment.style + self._style
+            yield Segment(segment.text, style, segment.control)
+
+
 _COMPLETE_HTML_COMMENT_BLOCK_RE = re.compile(r"(?ms)^[ \t]*<!--(?:(?!-->).)*?-->[ \t]*(?=\r?$)")
 
 
-def _render_thinking_preview(preview: str) -> RenderableType | None:
-    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
+def _clean_thinking_markdown(text: str) -> str:
+    """Strip complete top-level HTML comment lines outside fenced code."""
     segments: list[str] = []
     unfenced: list[str] = []
 
@@ -577,18 +639,26 @@ def _render_thinking_preview(preview: str) -> RenderableType | None:
         segments.append(_COMPLETE_HTML_COMMENT_BLOCK_RE.sub("", "".join(unfenced)))
         unfenced.clear()
 
-    for line, inside_fence in iter_fence_aware_lines(preview):
+    for line, inside_fence in iter_fence_aware_lines(text):
         if inside_fence:
             flush_unfenced()
             segments.append(line)
         else:
             unfenced.append(line)
     flush_unfenced()
+    return "".join(segments)
 
-    cleaned = "".join(segments)
+
+def _render_thinking_markdown(text: str) -> RenderableType | None:
+    cleaned = _clean_thinking_markdown(text)
     if not cleaned.strip():
         return None
     return render_agent_body(cleaned)
+
+
+def _render_thinking_preview(preview: str) -> RenderableType | None:
+    """Bounded thinking preview as Markdown, top-level HTML comments stripped; None if empty."""
+    return _render_thinking_markdown(preview)
 
 
 def _advance_by_display_cells(text: str, start: int, cell_budget: int) -> int:
@@ -632,6 +702,7 @@ class _ContentBlock:
         # instead of all at once on each delta, for smooth streaming.
         self._paced = paced and not is_think
         self.raw_text = ""
+        self._thinking_segments: list[_ThinkingSegment] = []
         # Accumulated float estimate — avoids per-chunk int truncation.
         self._token_count: float = 0.0
         self._start_time = time.monotonic()
@@ -692,9 +763,21 @@ class _ContentBlock:
         finally:
             self._report_update.set_expanded(was_expanded)
 
-    def append(self, content: str) -> None:
+    def append(
+        self,
+        content: str,
+        *,
+        summary_index: int | None = None,
+        encrypted: str | None = None,
+    ) -> None:
         self.raw_text += content
         self._token_count += _estimate_tokens(content)
+        if self.is_think and (content or encrypted):
+            self._append_thinking_segment(
+                content,
+                summary_index=summary_index,
+                encrypted=encrypted,
+            )
         self._invalidate_preview_cache()
         if self._paced:
             # Reveal is paced by reveal_tick() for smooth streaming; just buffer
@@ -825,15 +908,16 @@ class _ContentBlock:
         """Render the remaining uncommitted content when the block ends."""
         if self.is_think:
             if self._show_thinking_stream:
-                remaining = self._pending_text()
-                if not remaining:
+                thinking_style = tui_rich_style("thinking_text") + Style(italic=True)
+                rendered_segments = [
+                    _StyleOverrideRenderable(rendered, thinking_style)
+                    for segment in self._thinking_segments
+                    if (rendered := _render_thinking_markdown(segment.text)) is not None
+                ]
+                if not rendered_segments:
                     return Text("")
-                thinking_style = tui_rich_style("thinking_text")
-                # Render reasoning as plain muted text — not themed Markdown — so
-                # it reads as uniform grey rather than picking up bright heading /
-                # purple emphasis colors.
                 return BulletColumns(
-                    Text(remaining, style=thinking_style + Style(italic=True)),
+                    Group(*rendered_segments),
                     bullet=Text(TRANSCRIPT_ASSISTANT_MARKER, style=thinking_style),
                 )
             elapsed_str = format_elapsed(time.monotonic() - self._start_time)
@@ -896,6 +980,31 @@ class _ContentBlock:
         return renderables
 
     # -- Private -------------------------------------------------------------
+
+    def _append_thinking_segment(
+        self,
+        content: str,
+        *,
+        summary_index: int | None,
+        encrypted: str | None,
+    ) -> None:
+        encrypted_boundary = bool(encrypted)
+        if (
+            self._thinking_segments
+            and self._thinking_segments[-1].summary_index == summary_index
+            and not self._thinking_segments[-1].encrypted_boundary
+        ):
+            segment = self._thinking_segments[-1]
+            segment.text += content
+            segment.encrypted_boundary = encrypted_boundary
+            return
+        self._thinking_segments.append(
+            _ThinkingSegment(
+                summary_index=summary_index,
+                text=content,
+                encrypted_boundary=encrypted_boundary,
+            )
+        )
 
     def _pending_text(self) -> str:
         return self.raw_text[self._committed_len : self._revealed_len]
@@ -1252,7 +1361,10 @@ class _ToolCallBlock:
         self._result: ToolReturnValue | None = None
         self._subagent_id: str | None = None
         self._subagent_type: str | None = None
+        self._subagent_description: str | None = None
 
+        self._subagent_activities: dict[str, _SubagentActivityState] = {}
+        self._subagent_tool_call_owner: dict[str, str] = {}
         self._ongoing_subagent_tool_calls: dict[str, ToolCall] = {}
         self._finished_subagent_tool_call_ids: set[str] = set()
         self._last_subagent_tool_call: ToolCall | None = None
@@ -1318,7 +1430,13 @@ class _ToolCallBlock:
     def has_expandable_card(self) -> bool:
         return self._tui_card is not None and self._tui_card.can_expand
 
+    @property
+    def _owns_agent_activity(self) -> bool:
+        return self._tool_name in {"Agent", "RunAgents"}
+
     def active_subagent_label(self) -> str | None:
+        if self._tool_name in {"Agent", "RunAgents"}:
+            return None
         if not self._ongoing_subagent_tool_calls:
             return None
         call = next(reversed(self._ongoing_subagent_tool_calls.values()))
@@ -1399,14 +1517,30 @@ class _ToolCallBlock:
         self._is_background_pending = _is_active_background_agent(self._tool_name, result_text)
         self._renderable = self._compose()
 
-    def append_sub_tool_call(self, tool_call: ToolCall):
+    def append_sub_tool_call(self, tool_call: ToolCall, *, agent_id: str | None = None) -> None:
         if tool_call.id in self._finished_subagent_tool_call_ids:
+            return
+        if self._owns_agent_activity:
+            owner = agent_id or self._subagent_id
+            if owner is not None:
+                self._subagent_tool_call_owner[tool_call.id] = owner
+                state = self._subagent_activities.get(owner)
+                if state is not None:
+                    state.current_tool_name = tool_call.function.name
+                    state.state = "waiting"
+                    state.observed_at = time.monotonic()
+            self._renderable = self._compose()
             return
         self._ongoing_subagent_tool_calls[tool_call.id] = tool_call
         self._last_subagent_tool_call = tool_call
         self._renderable = self._compose()
 
-    def append_sub_tool_call_part(self, tool_call_part: ToolCallPart):
+    def append_sub_tool_call_part(
+        self, tool_call_part: ToolCallPart, *, agent_id: str | None = None
+    ) -> None:
+        if self._owns_agent_activity:
+            # Agent-centric collapsed activity is semantic only; never append or render raw args.
+            return
         if self._last_subagent_tool_call is None:
             return
         if not tool_call_part.arguments_part:
@@ -1417,8 +1551,22 @@ class _ToolCallBlock:
             self._last_subagent_tool_call.function.arguments += tool_call_part.arguments_part
         self._renderable = self._compose()
 
-    def finish_sub_tool_call(self, tool_result: ToolResult):
+    def finish_sub_tool_call(self, tool_result: ToolResult, *, agent_id: str | None = None) -> None:
         if tool_result.tool_call_id in self._finished_subagent_tool_call_ids:
+            return
+        if self._owns_agent_activity:
+            owner = agent_id or self._subagent_tool_call_owner.get(tool_result.tool_call_id)
+            if owner is not None and owner in self._subagent_activities:
+                state = self._subagent_activities[owner]
+                state.current_tool_name = None
+                state.state = "running"
+                state.observed_at = time.monotonic()
+            self._finished_subagent_tool_call_ids.add(tool_result.tool_call_id)
+            self._subagent_tool_call_owner.pop(tool_result.tool_call_id, None)
+            self._subagent_output_parts.pop(tool_result.tool_call_id, None)
+            self._subagent_output_had_stderr.pop(tool_result.tool_call_id, None)
+            self._subagent_execution_started.discard(tool_result.tool_call_id)
+            self._renderable = self._compose()
             return
         self._last_subagent_tool_call = None
         sub_tool_call = self._ongoing_subagent_tool_calls.pop(tool_result.tool_call_id, None)
@@ -1439,14 +1587,46 @@ class _ToolCallBlock:
         self._n_finished_subagent_tool_calls += 1
         self._renderable = self._compose()
 
-    def set_subagent_metadata(self, agent_id: str, subagent_type: str) -> None:
-        changed = (self._subagent_id, self._subagent_type) != (agent_id, subagent_type)
+    def set_subagent_metadata(
+        self, agent_id: str, subagent_type: str, description: str | None = None
+    ) -> None:
+        normalized_description = _normalize_subagent_description(description) or None
+        if normalized_description is None and self._tool_name == "Agent":
+            normalized_description = self._agent_argument_description()
+        changed = (self._subagent_id, self._subagent_type, self._subagent_description) != (
+            agent_id,
+            subagent_type,
+            normalized_description,
+        )
         self._subagent_id = agent_id
         self._subagent_type = subagent_type
+        self._subagent_description = normalized_description
+        if self._owns_agent_activity:
+            clean_description = normalized_description or _format_subagent_type(subagent_type)
+            state = self._subagent_activities.get(agent_id)
+            if state is None:
+                self._subagent_activities[agent_id] = _SubagentActivityState(
+                    agent_id=agent_id,
+                    subagent_type=subagent_type,
+                    description=clean_description,
+                    observed_at=time.monotonic(),
+                )
+            else:
+                state.subagent_type = subagent_type
+                state.description = clean_description
         if changed:
             self._renderable = self._compose()
 
-    def mark_sub_execution_started(self, tool_call_id: str) -> None:
+    def mark_sub_execution_started(self, tool_call_id: str, *, agent_id: str | None = None) -> None:
+        if self._owns_agent_activity:
+            owner = agent_id or self._subagent_tool_call_owner.get(tool_call_id)
+            if owner is not None and owner in self._subagent_activities:
+                state = self._subagent_activities[owner]
+                state.state = "running"
+                state.observed_at = time.monotonic()
+            self._subagent_execution_started.add(tool_call_id)
+            self._renderable = self._compose()
+            return
         if tool_call_id not in self._ongoing_subagent_tool_calls:
             return
         if tool_call_id in self._subagent_execution_started:
@@ -1455,8 +1635,16 @@ class _ToolCallBlock:
         self._renderable = self._compose()
 
     def append_sub_output_part(
-        self, tool_call_id: str, text: str, *, stream: str = "output"
+        self, tool_call_id: str, text: str, *, stream: str = "output", agent_id: str | None = None
     ) -> None:
+        if self._owns_agent_activity:
+            owner = agent_id or self._subagent_tool_call_owner.get(tool_call_id)
+            if owner is not None and owner in self._subagent_activities:
+                state = self._subagent_activities[owner]
+                state.state = "running"
+                state.observed_at = time.monotonic()
+                self._renderable = self._compose()
+            return
         if tool_call_id not in self._ongoing_subagent_tool_calls:
             return
         if not text:
@@ -1538,9 +1726,143 @@ class _ToolCallBlock:
             )
         return children
 
+    def _agent_argument_description(self) -> str | None:
+        try:
+            args = json.loads(self._lexer.complete_json() or "{}", strict=False)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(args, dict):
+            return None
+        description = cast(dict[str, Any], args).get("description")
+        return _normalize_subagent_description(description) or None
+
+    def _agent_activity_requested_count(self) -> int:
+        if self._tool_name == "Agent":
+            return max(1, len(self._subagent_activities))
+        try:
+            args = json.loads(self._lexer.complete_json() or "{}", strict=False)
+        except json.JSONDecodeError:
+            return len(self._subagent_activities)
+        if not isinstance(args, dict):
+            return len(self._subagent_activities)
+        raw_agents = cast(dict[str, Any], args).get("agents")
+        if isinstance(raw_agents, list):
+            agents = cast(list[Any], raw_agents)
+            return len(agents)
+        return len(self._subagent_activities)
+
+    @staticmethod
+    def _subagent_status_glyph(state: Literal["waiting", "running", "completed", "failed"]) -> str:
+        if state == "running":
+            return active_marker_frame(time.monotonic())
+        if state == "completed":
+            return "✓"
+        if state == "failed":
+            return "✘"
+        return "○"
+
+    @staticmethod
+    def _subagent_status_style(
+        state: Literal["waiting", "running", "completed", "failed"],
+    ) -> Style:
+        if state == "completed":
+            return tui_rich_style("success")
+        if state == "failed":
+            return tui_rich_style("error")
+        return tui_rich_style("muted")
+
+    def _agent_activity_children(self, *, include_heading: bool) -> list[RenderableType]:
+        requested_count = self._agent_activity_requested_count()
+        if not self._subagent_activities and requested_count <= 0:
+            return []
+        width = current_console_width()
+        children: list[RenderableType] = []
+        if include_heading:
+            heading = Text()
+            heading.append("● ", style=tui_rich_style("muted"))
+            heading.append(
+                "Agents" if self._tool_name == "RunAgents" else "Agent",
+                style=tui_rich_style("muted") + Style(bold=True),
+            )
+            children.append(heading)
+
+        states = list(self._subagent_activities.values())
+        if len(states) <= _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+            visible = states
+        else:
+            selected_indices: list[int] = [
+                index for index, state in enumerate(states) if state.state == "running"
+            ][:_MAX_RUN_AGENTS_ACTIVITY_ROWS]
+            if len(selected_indices) < _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+                selected_index_set = set(selected_indices)
+                for index, state in enumerate(states):
+                    if state.state == "running" or index in selected_index_set:
+                        continue
+                    selected_indices.append(index)
+                    selected_index_set.add(index)
+                    if len(selected_indices) >= _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+                        break
+            visible = [states[index] for index in sorted(selected_indices)]
+        hidden = max(0, len(states) - len(visible))
+        queued = max(0, requested_count - len(self._subagent_activities))
+        total_rows = len(visible) + (1 if queued else 0) + (1 if hidden else 0)
+
+        for index, state in enumerate(visible):
+            is_last = index == total_rows - 1
+            branch = "└─" if is_last else "├─"
+            gutter = "   ⎿  " if is_last else "│  ⎿  "
+            type_label = _format_subagent_type(state.subagent_type)
+            status = state.state
+            glyph = self._subagent_status_glyph(status)
+            prefix = f"{branch} {glyph} {status} {type_label} "
+            description_budget = max(1, width - cell_width(prefix))
+            row = Text()
+            row.append(f"{branch} ", style=tui_rich_style("muted"))
+            row.append(glyph, style=self._subagent_status_style(status))
+            row.append(f" {status} ", style=tui_rich_style("muted"))
+            row.append(type_label, style=tui_rich_style("tool_title") + Style(bold=True))
+            row.append(" ", style=tui_rich_style("muted"))
+            row.append(
+                truncate_to_width(state.description, description_budget),
+                style=tui_rich_style("text"),
+            )
+            row.no_wrap = True
+            row.overflow = "ellipsis"
+            children.append(row)
+
+            activity = _semantic_subagent_activity(state.current_tool_name)
+            activity_budget = max(1, width - cell_width(gutter))
+            children.append(
+                Text(
+                    gutter + truncate_to_width(activity, activity_budget),
+                    style=tui_rich_style("muted"),
+                )
+            )
+
+        extra_index = len(visible)
+        if queued:
+            is_last = extra_index == total_rows - 1
+            branch = "└─" if is_last else "├─"
+            children.append(Text(f"{branch} ○ {queued} queued", style=tui_rich_style("muted")))
+            extra_index += 1
+        if hidden:
+            branch = "└─" if extra_index == total_rows - 1 else "├─"
+            children.append(Text(f"{branch} … {hidden} more agents", style=tui_rich_style("muted")))
+        return children
+
     def _subagent_activity_children(
-        self, style_label: str, *, include_completed_subagent: bool = False
+        self,
+        style_label: str,
+        *,
+        include_completed_subagent: bool = False,
+        include_run_agents_heading: bool = True,
     ) -> list[RenderableType]:
+        if self._owns_agent_activity:
+            if self._result is not None and not self._is_background_pending:
+                # Parent-result ownership: once Agent/RunAgents reaches a terminal result, the
+                # parent renderer is authoritative, so suppress stale pre-result activity rows.
+                return []
+            return self._agent_activity_children(include_heading=include_run_agents_heading)
         children: list[RenderableType] = []
         should_show_activity = include_completed_subagent or not (
             style_label == "Subagent" and self._result is not None
@@ -1621,7 +1943,11 @@ class _ToolCallBlock:
             if card_rendered is not None:
                 return card_rendered
         children: list[RenderableType] = []
-        if self._subagent_id is not None and self._subagent_type is not None:
+        if (
+            self._tool_name not in {"Agent", "RunAgents"}
+            and self._subagent_id is not None
+            and self._subagent_type is not None
+        ):
             children.append(
                 BulletColumns(
                     Text(
@@ -1664,12 +1990,14 @@ class _ToolCallBlock:
             )
         )
 
-        if self._result is None:
+        if self._result is None or self._is_background_pending:
             streamed_output = self._streamed_output_text()
             if streamed_output:
                 preview = _tail_lines(streamed_output.rstrip("\n"), 8)
                 output_style = "error" if self._streamed_output_had_stderr else "muted"
                 children.append(Text(preview, style=tui_rich_style(output_style)))
+            if self._tool_name == "RunAgents" and children:
+                return Group(*children)
             return render_worklog_entry(
                 label=style.label,
                 target=self._argument,
@@ -1711,6 +2039,8 @@ class _ToolCallBlock:
         """
         definition = get_tool_renderer(self._tool_name)
         if definition is None:
+            if self._tool_name == "RunAgents":
+                return None
             definition = generic_renderer()
         if self._tui_card is None:
             self._tui_card = ToolExecutionComponent(
@@ -1738,7 +2068,11 @@ class _ToolCallBlock:
             self._tui_card.update_args(args)
         if args_complete:
             self._tui_card.set_args_complete()
-        if self._result is not None:
+        if self._result is not None and not (
+            self._tool_name == "RunAgents"
+            and self._owns_agent_activity
+            and self._is_background_pending
+        ):
             self._tui_card.set_result(
                 ToolResultPayload(
                     text=self._card_result_text(self._result),
@@ -1769,7 +2103,8 @@ class _ToolCallBlock:
         activity_children.extend(
             self._subagent_activity_children(
                 style_label,
-                include_completed_subagent=style_label == "Subagent" and self._result is not None,
+                include_completed_subagent=(style_label == "Subagent" and self._result is not None),
+                include_run_agents_heading=not self._owns_agent_activity,
             )
         )
         if activity_children:

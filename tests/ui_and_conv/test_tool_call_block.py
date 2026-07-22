@@ -24,8 +24,8 @@ def _legacy_tui_style(monkeypatch):
     monkeypatch.setenv("PYTHINKER_TUI_STYLE", "pythinker")
 
 
-def _plain(renderable) -> str:
-    console = Console(record=True, width=120, color_system=None)
+def _plain(renderable, *, width: int = 120) -> str:
+    console = Console(record=True, width=width, color_system=None)
     console.print(renderable)
     return console.export_text()
 
@@ -158,96 +158,107 @@ def test_tool_call_block_renders_display_cards_under_completed_entry():
     assert "Tests passed" in output
 
 
-def test_completed_subagent_renders_compact_summary():
+def test_completed_agent_shows_completion_without_legacy_tool_rollup():
+    # A completed single Agent renders its result (via the result renderer in card
+    # style, a plain "completed" label otherwise). The old per-tool rollup
+    # ("N tool calls", "tools: Read ×N") is superseded, and raw nested tool
+    # payloads never leak into the collapsed view.
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"Audit UI"}'))
-    block.set_subagent_metadata("a143aa989", "explore")
+    block.set_subagent_metadata("a143aa989", "explore", "Audit UI")
     for index in range(7):
         call = _tool_call_with_id(
             f"sub-{index}",
             "ReadFile",
             json.dumps({"path": f"web/src/components/file-{index}.tsx"}),
         )
-        block.append_sub_tool_call(call)
-        block.finish_sub_tool_call(ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")))
+        block.append_sub_tool_call(call, agent_id="a143aa989")
+        block.finish_sub_tool_call(
+            ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")),
+            agent_id="a143aa989",
+        )
 
     block.finish(ToolOk(output=""))
     output = _plain(block.compose())
 
-    assert "Subagent" in output
     assert "completed" in output.lower()
-    assert "7 tool calls" in output
-    assert "tools: Read ×7" in output
-    assert output.count("ReadFile") <= 4
+    assert "7 tool calls" not in output
+    assert "tools:" not in output
+    assert "Read ×7" not in output
+    for leaked in ("ReadFile", "file-0.tsx", "web/src/components"):
+        assert leaked not in output
 
 
-def test_completed_subagent_summarizes_changed_files_and_tool_counts():
+def test_completed_agent_hides_changed_files_and_tool_counts():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"Implement UI"}'))
+    block.set_subagent_metadata("agent-impl", "coder", "Implement UI")
     calls = [
         _tool_call_with_id("read-1", "ReadFile", json.dumps({"path": "src/app.py"})),
-        _tool_call_with_id("read-2", "ReadFile", json.dumps({"path": "src/ui.py"})),
         _tool_call_with_id("write-1", "WriteFile", json.dumps({"path": "src/new.py"})),
         _tool_call_with_id("edit-1", "StrReplaceFile", json.dumps({"path": "src/existing.py"})),
         _tool_call_with_id("shell-1", "Shell", json.dumps({"command": "pytest"})),
     ]
     for call in calls:
-        block.append_sub_tool_call(call)
-        block.finish_sub_tool_call(ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")))
+        block.append_sub_tool_call(call, agent_id="agent-impl")
+        block.finish_sub_tool_call(
+            ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")),
+            agent_id="agent-impl",
+        )
 
     block.finish(ToolOk(output="done"))
     output = _plain(block.compose())
 
-    assert "tools:" in output
-    assert "Read ×2" in output
-    assert "Write" in output
-    assert "Edit" in output
-    assert "Shell" in output
-    assert "changed: src/new.py, src/existing.py" in output
+    assert "completed" in output.lower()
+    assert "tools:" not in output
+    assert "changed:" not in output
+    for leaked in ("WriteFile", "StrReplaceFile", "src/new.py", "src/existing.py", "pytest"):
+        assert leaked not in output
 
 
-def test_append_sub_output_part_accumulates_text():
+def test_agent_sub_output_updates_activity_without_buffering_raw_text():
+    # Single Agent uses the payload-free semantic model: streamed sub-output moves
+    # the owner's activity to "running" but the raw text is never buffered or shown.
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"ls"}')
-    block.append_sub_tool_call(call)
-    block.append_sub_output_part("sub-1", "file1.py\n")
-    block.append_sub_output_part("sub-1", "file2.py\n")
-    combined = "".join(block._subagent_output_parts["sub-1"])
-    assert "file1.py" in combined
-    assert "file2.py" in combined
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "file1.py\n", agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "file2.py\n", agent_id="agent-1")
+
+    assert "sub-1" not in block._subagent_output_parts
+    output = _plain(block.compose())
+    assert "running command…" in output
+    for leaked in ("file1.py", "file2.py"):
+        assert leaked not in output
 
 
 def test_append_sub_output_part_discards_unknown_call_id():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
-    # no append_sub_tool_call — id is unknown
+    # no append_sub_tool_call / no owner — id is unknown, nothing is buffered
     block.append_sub_output_part("ghost-id", "should be ignored\n")
     assert "ghost-id" not in block._subagent_output_parts
 
 
-def test_append_sub_output_part_caps_buffer_at_200_chars():
+def test_agent_sub_output_never_leaks_regardless_of_volume():
+    # No raw payload is ever surfaced for a single Agent, even for large output.
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"find ."}')
-    block.append_sub_tool_call(call)
-    # Fill with >200 chars in one shot
-    block.append_sub_output_part("sub-1", "x" * 300)
-    combined = "".join(block._subagent_output_parts["sub-1"])
-    assert len(combined) <= 200
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "SECRET_" + "x" * 300, agent_id="agent-1")
+
+    assert "sub-1" not in block._subagent_output_parts
+    assert "SECRET_" not in _plain(block.compose())
 
 
-def test_append_sub_output_part_caps_buffer_across_multiple_appends():
+def test_agent_sub_stderr_does_not_buffer_raw_text():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
-    call = _tool_call_with_id("sub-1", "Bash", '{"command":"ls"}')
-    block.append_sub_tool_call(call)
-    for _ in range(30):
-        block.append_sub_output_part("sub-1", "x" * 10)  # 300 chars total, 10 at a time
-    combined = "".join(block._subagent_output_parts["sub-1"])
-    assert len(combined) <= 200
-
-
-def test_append_sub_output_part_tracks_stderr():
-    block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"cat missing"}')
-    block.append_sub_tool_call(call)
-    block.append_sub_output_part("sub-1", "No such file\n", stream="stderr")
-    assert block._subagent_output_had_stderr.get("sub-1") is True
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "No such file\n", stream="stderr", agent_id="agent-1")
+
+    assert "sub-1" not in block._subagent_output_had_stderr
+    assert "No such file" not in _plain(block.compose())
 
 
 def test_mark_sub_execution_started_records_id():
@@ -258,10 +269,12 @@ def test_mark_sub_execution_started_records_id():
     assert "sub-1" in block._subagent_execution_started
 
 
-def test_mark_sub_execution_started_discards_unknown_id():
+def test_mark_sub_execution_started_unknown_id_renders_no_phantom_activity():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
     block.mark_sub_execution_started("ghost-id")  # should not raise
-    assert "ghost-id" not in block._subagent_execution_started
+    # An unknown id creates no semantic activity row for the single Agent.
+    assert "ghost-id" not in block._subagent_activities
+    assert "ghost-id" not in _plain(block.compose())
 
 
 def test_finish_sub_tool_call_cleans_up_output_state():
@@ -276,79 +289,101 @@ def test_finish_sub_tool_call_cleans_up_output_state():
     assert "sub-1" not in block._subagent_execution_started
 
 
-def test_running_agent_shows_ongoing_sub_tool_calls():
+def test_running_agent_shows_semantic_activity_not_raw_tool_calls():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Read", '{"file_path":"src/app.py"}')
-    block.append_sub_tool_call(call)
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.mark_sub_execution_started("sub-1", agent_id="agent-1")
     output = _plain(block.compose())
-    assert "Read" in output
-    assert "src/app.py" in output
+    assert "reading…" in output
+    assert "Read" not in output
+    assert "src/app.py" not in output
 
 
-def test_running_agent_shows_streamed_output_preview():
+def test_running_agent_suppresses_streamed_output_preview():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"grep -r TODO ."}')
-    block.append_sub_tool_call(call)
-    block.append_sub_output_part("sub-1", "src/app.py:42: # TODO: fix\n")
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "src/app.py:42: # TODO: fix\n", agent_id="agent-1")
     output = _plain(block.compose())
-    assert "src/app.py:42" in output
+    assert "running command…" in output
+    assert "src/app.py:42" not in output
+    assert "grep -r TODO" not in output
 
 
-def test_running_agent_card_style_shows_ongoing_sub_tool_calls(monkeypatch):
+def test_running_agent_card_style_shows_semantic_activity_not_raw_tool_calls(monkeypatch):
     monkeypatch.setenv("PYTHINKER_TUI_STYLE", "card")
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan","prompt":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Read", '{"file_path":"src/app.py"}')
-    block.append_sub_tool_call(call)
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.mark_sub_execution_started("sub-1", agent_id="agent-1")
     output = _plain(block.compose())
-    assert "Read" in output
-    assert "src/app.py" in output
+    assert "reading…" in output
+    assert "src/app.py" not in output
 
 
-def test_running_agent_card_style_shows_streamed_output_preview(monkeypatch):
+def test_running_agent_card_style_suppresses_streamed_output_preview(monkeypatch):
     monkeypatch.setenv("PYTHINKER_TUI_STYLE", "card")
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan","prompt":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"grep -r TODO ."}')
-    block.append_sub_tool_call(call)
-    block.mark_sub_execution_started("sub-1")
-    block.append_sub_output_part("sub-1", "src/app.py:42: # TODO: fix\n")
+    block.append_sub_tool_call(call, agent_id="agent-1")
+    block.mark_sub_execution_started("sub-1", agent_id="agent-1")
+    block.append_sub_output_part("sub-1", "src/app.py:42: # TODO: fix\n", agent_id="agent-1")
     output = _plain(block.compose())
-    assert "src/app.py:42" in output
+    assert "running command…" in output
+    assert "src/app.py:42" not in output
 
 
-def test_running_agent_shows_only_last_4_output_lines():
+def test_running_agent_never_leaks_streamed_output_lines():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     call = _tool_call_with_id("sub-1", "Bash", '{"command":"find ."}')
-    block.append_sub_tool_call(call)
+    block.append_sub_tool_call(call, agent_id="agent-1")
     lines = [f"line{i}\n" for i in range(10)]
-    block.append_sub_output_part("sub-1", "".join(lines))
+    block.append_sub_output_part("sub-1", "".join(lines), agent_id="agent-1")
     output = _plain(block.compose())
-    assert "line9" in output
-    assert "line6" in output
-    assert "line5" not in output
-    assert "line0" not in output
+    assert "running command…" in output
+    for i in range(10):
+        assert f"line{i}" not in output
 
 
-def test_running_agent_caps_visible_running_rows_at_2():
+def test_running_agent_renders_one_payload_free_row_per_active_agent():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
     for i in range(5):
+        agent_id = f"agent-{i}"
+        block.set_subagent_metadata(agent_id, "coder", f"task {i}")
         call = _tool_call_with_id(f"sub-{i}", "Read", f'{{"file_path":"src/file{i}.py"}}')
-        block.append_sub_tool_call(call)
+        block.append_sub_tool_call(call, agent_id=agent_id)
+        block.mark_sub_execution_started(f"sub-{i}", agent_id=agent_id)
     output = _plain(block.compose())
-    assert "more running" in output
+    assert output.count("reading…") >= 1
+    for i in range(5):
+        assert f"src/file{i}.py" not in output
 
 
-def test_running_agent_rows_stay_visible_with_finished_sub_tool_calls():
+def test_running_agent_activity_survives_finished_sub_tool_calls():
     block = _ToolCallBlock(_tool_call("Agent", '{"description":"scan"}'))
+    block.set_subagent_metadata("agent-1", "coder", "scan")
     for i in range(4):
         call = _tool_call_with_id(f"done-{i}", "Read", f'{{"file_path":"src/done{i}.py"}}')
-        block.append_sub_tool_call(call)
-        block.finish_sub_tool_call(ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")))
+        block.append_sub_tool_call(call, agent_id="agent-1")
+        block.finish_sub_tool_call(
+            ToolResult(tool_call_id=call.id, return_value=ToolOk(output="")),
+            agent_id="agent-1",
+        )
 
     running = _tool_call_with_id("live-1", "Read", '{"file_path":"src/live.py"}')
-    block.append_sub_tool_call(running)
+    block.append_sub_tool_call(running, agent_id="agent-1")
+    block.mark_sub_execution_started("live-1", agent_id="agent-1")
 
     output = _plain(block.compose())
-    assert "src/live.py" in output
+    assert "reading…" in output
+    assert "src/live.py" not in output
+    assert "src/done0.py" not in output
 
 
 def test_finished_sub_tool_calls_not_shown_in_output_preview():
@@ -459,6 +494,65 @@ def test_run_agents_background_launch_stays_background_pending():
     assert block.is_background_pending
 
 
+def test_run_agents_background_launch_keeps_live_agent_activity():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":true,"agents":[{"name":"a","prompt":"p"}]}',
+        )
+    )
+    block.set_subagent_metadata("agent-abc", "explore", "Audit the renderer")
+    block.finish(
+        ToolOk(
+            output=(
+                "tool_status: launched\n"
+                "mode: background\n"
+                "agent_count: 1\n"
+                "agents:\n"
+                "- name: a\n"
+                "  subagent_type: explore\n"
+                "  status: starting\n"
+                "  task_id: agent-abc\n"
+            )
+        )
+    )
+
+    output = _plain(block.compose())
+
+    assert "waiting Explore Audit the renderer" in output
+    assert "Run Agents completed" not in output
+
+
+@pytest.mark.usefixtures("_card_style_with_builtin_renderers")
+def test_run_agents_background_launch_keeps_live_agent_activity_in_card_style():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":true,"agents":[{"name":"a","prompt":"p"}]}',
+        )
+    )
+    block.set_subagent_metadata("agent-abc", "explore", "Audit the renderer")
+    block.finish(
+        ToolOk(
+            output=(
+                "tool_status: launched\n"
+                "mode: background\n"
+                "agent_count: 1\n"
+                "agents:\n"
+                "- name: a\n"
+                "  subagent_type: explore\n"
+                "  status: starting\n"
+                "  task_id: agent-abc\n"
+            )
+        )
+    )
+
+    output = _plain(block.compose())
+
+    assert "waiting Explore Audit the renderer" in output
+    assert "Run Agents completed" not in output
+
+
 def test_run_agents_foreground_completion_is_not_background_pending():
     block = _ToolCallBlock(
         _tool_call(
@@ -481,6 +575,39 @@ def test_run_agents_foreground_completion_is_not_background_pending():
     )
     assert block.finished
     assert not block.is_background_pending
+
+
+def test_run_agents_sanitizes_multiline_descriptions_without_breaking_same_type_activity():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":false,"agents":[{"name":"a"},{"name":"b"}]}',
+        )
+    )
+    block.set_subagent_metadata(
+        "agent-alpha",
+        "explore",
+        "Map\trenderer\ncallbacks\x1b[31m now\x1b[0m\r",
+    )
+    block.set_subagent_metadata("agent-beta", "explore", "Read activity tree")
+    block.append_sub_tool_call(
+        _tool_call_with_id("sub-alpha", "ReadFile", '{"path":"src/renderer.py"}'),
+        agent_id="agent-alpha",
+    )
+    block.mark_sub_execution_started("sub-alpha", agent_id="agent-alpha")
+
+    output = _plain(block.compose(), width=52)
+    lines = output.splitlines()
+
+    assert output.count("running Explore") == 1
+    assert "Map renderer callbacks now" in output
+    assert "Map\trenderer" not in output
+    assert "\r" not in output
+    assert "\x1b" not in output
+    assert "reading…" in output
+    assert "thinking…" in output
+    assert "callbacks now" not in lines
+    assert all(len(line) <= 52 for line in lines)
 
 
 def test_lsp_card_boundary_passes_nested_count_extras_to_renderer(

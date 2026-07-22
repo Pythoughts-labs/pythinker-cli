@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Sequence
+from types import SimpleNamespace
 from typing import Literal, Self, cast
 
 import pytest
@@ -23,7 +24,9 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionToolCall,
+    ResponseOutputItem,
     ResponseOutputItemAddedEvent,
+    ResponseReasoningItem,
     ResponseStreamEvent,
 )
 from openai.types.responses.response import IncompleteDetails
@@ -39,7 +42,8 @@ from pythinker_core.chat_provider.pythinker import PythinkerStreamedMessage
 from pythinker_core.contrib.chat_provider.anthropic import AnthropicStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_legacy import OpenAILegacyStreamedMessage
 from pythinker_core.contrib.chat_provider.openai_responses import OpenAIResponsesStreamedMessage
-from pythinker_core.message import Message, ToolCall, ToolCallPart
+from pythinker_core.message import Message, ThinkPart, ToolCall, ToolCallPart
+from pythinker_core.stream_message_assembler import StreamMessageAssembler
 from pythinker_core.tooling import Tool
 
 
@@ -71,13 +75,14 @@ def _response(
     response_id: str = "response_1",
     status: Literal["completed", "failed", "cancelled", "incomplete"] = "completed",
     incomplete_reason: Literal["max_output_tokens", "content_filter"] | None = None,
+    output: list[ResponseOutputItem] | None = None,
 ) -> Response:
     return Response(
         id=response_id,
         created_at=1,
         model="gpt-5",
         object="response",
-        output=[],
+        output=[] if output is None else output,
         parallel_tool_calls=True,
         tool_choice="auto",
         tools=[],
@@ -90,6 +95,10 @@ def _response(
 
 async def _collect(stream: object) -> list[ToolCall | ToolCallPart]:
     return [part async for part in cast(AsyncIterator[ToolCall | ToolCallPart], stream)]
+
+
+async def _collect_parts(stream: object) -> list[StreamedMessagePart]:
+    return [part async for part in cast(AsyncIterator[StreamedMessagePart], stream)]
 
 
 class _StaticStreamProvider:
@@ -356,6 +365,320 @@ async def test_openai_responses_uses_output_index_and_semantic_call_id() -> None
             stream_call_id=None,
         ),
     ]
+
+
+async def test_openai_responses_preserves_reasoning_summary_order_and_indices() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=0),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Plan",
+                summary_index=0,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=2),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Check",
+                summary_index=2,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Evaluate",
+                summary_index=1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="Finish",
+                summary_index=2,
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert [(part.think, part.summary_index) for part in parts] == [
+        ("", 0),
+        ("Plan", 0),
+        ("", 2),
+        ("Check", 2),
+        ("Evaluate", 1),
+        ("Finish", 2),
+    ]
+
+
+async def test_openai_responses_streamed_reasoning_done_encrypts_last_summary() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_part.added",
+                item_id="reasoning_1",
+                output_index=0,
+                summary_index=0,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                item_id="reasoning_1",
+                output_index=0,
+                delta="Plan",
+                summary_index=0,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_part.added",
+                item_id="reasoning_1",
+                output_index=0,
+                summary_index=1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                item_id="reasoning_1",
+                output_index=0,
+                delta="Check",
+                summary_index=1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=0,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="reasoning_1",
+                    encrypted_content="enc_last",
+                ),
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+    assembler = StreamMessageAssembler()
+
+    for part in await _collect_parts(stream):
+        assembler.add(part)
+    message = assembler.finish(response_id=None, finish_reason="completed")
+
+    assert message.content == [
+        ThinkPart(think="Plan", summary_index=0),
+        ThinkPart(think="Check", encrypted="enc_last", summary_index=1),
+    ]
+
+
+async def test_openai_responses_done_without_summary_emits_encrypted_part() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=4,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="reasoning_4",
+                    encrypted_content="enc_orphan",
+                ),
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [ThinkPart(think="", encrypted="enc_orphan", summary_index=None)]
+
+
+async def test_openai_responses_streamed_reasoning_done_indices_do_not_leak_between_items() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                item_id="reasoning_1",
+                output_index=0,
+                delta="First",
+                summary_index=0,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                item_id="reasoning_2",
+                output_index=1,
+                delta="Second",
+                summary_index=2,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=0,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="reasoning_1",
+                    encrypted_content="enc_first",
+                ),
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index="bad",
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id=None,
+                    encrypted_content="enc_untracked",
+                ),
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="reasoning_2",
+                    encrypted_content="enc_second",
+                ),
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [
+        ThinkPart(think="First", summary_index=0),
+        ThinkPart(think="Second", summary_index=2),
+        ThinkPart(think="", encrypted="enc_first", summary_index=0),
+        ThinkPart(think="", encrypted="enc_untracked"),
+        ThinkPart(think="", encrypted="enc_second", summary_index=2),
+    ]
+
+
+async def test_openai_responses_reasoning_summary_invalid_indices_fallback_to_none() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_part.added", summary_index=True),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="bool",
+                summary_index=True,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="negative",
+                summary_index=-1,
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.reasoning_summary_text.delta",
+                delta="string",
+                summary_index="3",
+            ),
+        ),
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(type="response.reasoning_summary_text.delta", delta="missing"),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert [(part.think, part.summary_index) for part in parts] == [
+        ("", None),
+        ("bool", None),
+        ("negative", None),
+        ("string", None),
+        ("missing", None),
+    ]
+
+
+async def test_openai_responses_completed_reasoning_summaries_keep_order_and_encryption() -> None:
+    response = _response(
+        output=[
+            ResponseReasoningItem.model_validate(
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_1",
+                    "summary": [
+                        {"type": "summary_text", "text": "Plan"},
+                        {"type": "summary_text", "text": "Check"},
+                    ],
+                    "encrypted_content": "enc_abc",
+                }
+            )
+        ]
+    )
+    stream = OpenAIResponsesStreamedMessage(response)
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [
+        ThinkPart(think="Plan", encrypted="enc_abc", summary_index=0),
+        ThinkPart(think="Check", encrypted="enc_abc", summary_index=1),
+    ]
+
+
+async def test_openai_responses_completed_reasoning_without_summary_keeps_encryption() -> None:
+    # A non-streaming reasoning item can return encrypted_content with an empty
+    # summary; it must still emit an encrypted ThinkPart so the boundary is
+    # replayable, matching the streaming `output_item.done` behavior.
+    response = _response(
+        output=[
+            ResponseReasoningItem.model_validate(
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_1",
+                    "summary": [],
+                    "encrypted_content": "enc_orphan",
+                }
+            )
+        ]
+    )
+    stream = OpenAIResponsesStreamedMessage(response)
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [ThinkPart(think="", encrypted="enc_orphan", summary_index=None)]
 
 
 async def test_openai_responses_empty_streamed_call_id_is_deterministic(

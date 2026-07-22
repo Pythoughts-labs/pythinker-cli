@@ -262,6 +262,7 @@ class _LiveView:
         self._current_content_block: _ContentBlock | None = None
         self._tool_call_blocks: dict[str, _ToolCallBlock] = {}
         self._subagent_tool_call_ancestry: dict[str, tuple[_ToolCallBlock, int]] = {}
+        self._subagent_tool_call_owners: dict[str, str] = {}
         # Per-view so the "log an unknown content-part type once" guarantee is
         # scoped to this session/view rather than the whole process (keeps the
         # log-once behavior deterministic and test-isolated).
@@ -1013,6 +1014,9 @@ class _LiveView:
                 elapsed_s=elapsed,
                 tokens=get_turn_output_tokens(),
                 token_rate=self._turn_token_rate(now),
+                interrupt_hint=(
+                    "esc to interrupt" if getattr(self, "_cancel_event", None) is not None else ""
+                ),
             ),
             width=width,
         )
@@ -1553,6 +1557,7 @@ class _LiveView:
         self._btw_spinner = None
         self._hook_blocks.clear()
         self._subagent_tool_call_ancestry.clear()
+        self._subagent_tool_call_owners.clear()
         self._current_step_retry = None
 
         if is_interrupt:
@@ -1579,6 +1584,7 @@ class _LiveView:
         self._current_content_block = None
         self._tool_call_blocks.clear()
         self._subagent_tool_call_ancestry.clear()
+        self._subagent_tool_call_owners.clear()
         self._last_tool_call_block = None
         self._held_tool_search_block = None
         self._current_step_retry = retry
@@ -1681,6 +1687,7 @@ class _LiveView:
         ]
         for tool_call_id in stale_ids:
             del self._subagent_tool_call_ancestry[tool_call_id]
+            self._subagent_tool_call_owners.pop(tool_call_id, None)
 
     def flush_notifications(self) -> None:
         """Flush rendered notifications to terminal history."""
@@ -1691,42 +1698,24 @@ class _LiveView:
 
     def append_content(self, part: ContentPart) -> None:
         match part:
-            case ThinkPart(think=text) | TextPart(text=text):
-                is_think = isinstance(part, ThinkPart)
-                # Skip empty TextPart, but still create the block for empty
-                # ThinkPart so the "Thinking" indicator shows immediately
-                # (e.g. Anthropic/OpenAI block-start events yield think="").
-                if not text and not is_think:
+            case ThinkPart(think=text, encrypted=encrypted, summary_index=summary_index):
+                is_think = True
+            case TextPart(text=text):
+                if not text:
                     return
-                self._current_step_retry = None
-                if self._current_content_block is None:
-                    self._current_content_block = _ContentBlock(
-                        is_think,
-                        show_thinking_stream=self._show_thinking_stream,
-                        paced=self._stream_pacing,
-                    )
-                    self.refresh_soon()
-                elif self._current_content_block.is_think != is_think:
-                    transition = (
-                        FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT
-                    )
-                    self.flush_content(transition)
-                    self._current_content_block = _ContentBlock(
-                        is_think,
-                        show_thinking_stream=self._show_thinking_stream,
-                        paced=self._stream_pacing,
-                    )
-                    self.refresh_soon()
-                if text:
-                    self._current_content_block.append(text)
-                    self.refresh_soon()
+                is_think = False
+                summary_index = None
+                encrypted = None
             case ImageURLPart():
                 self._append_content_label("[image]")
+                return
             case AudioURLPart(audio_url=audio):
                 suffix = f":{sanitize_ansi(audio.id)}" if audio.id else ""
                 self._append_content_label(f"[audio{suffix}]")
+                return
             case VideoURLPart():
                 self._append_content_label("[video]")
+                return
             case _:
                 part_type = part.type
                 if part_type not in self._seen_unknown_content_part_types:
@@ -1736,6 +1725,31 @@ class _LiveView:
                         part_type=part_type,
                     )
                 self._append_content_label(f"[{sanitize_ansi(part_type)}]", unknown=True)
+                return
+
+        self._current_step_retry = None
+        if self._current_content_block is None:
+            self._current_content_block = _ContentBlock(
+                is_think,
+                show_thinking_stream=self._show_thinking_stream,
+                paced=self._stream_pacing,
+            )
+            self.refresh_soon()
+        elif self._current_content_block.is_think != is_think:
+            self.flush_content(FlushReason.TEXT_TO_THINK if is_think else FlushReason.THINK_TO_TEXT)
+            self._current_content_block = _ContentBlock(
+                is_think,
+                show_thinking_stream=self._show_thinking_stream,
+                paced=self._stream_pacing,
+            )
+            self.refresh_soon()
+        if text or encrypted:
+            self._current_content_block.append(
+                text,
+                summary_index=summary_index,
+                encrypted=encrypted,
+            )
+            self.refresh_soon()
 
     def _append_content_label(self, label: str, *, unknown: bool = False) -> None:
         """Render a payload-free media or future-content placeholder."""
@@ -1974,7 +1988,7 @@ class _LiveView:
             block, parent_depth = ancestry
 
         if event.agent_id is not None and event.subagent_type is not None:
-            block.set_subagent_metadata(event.agent_id, event.subagent_type)
+            block.set_subagent_metadata(event.agent_id, event.subagent_type, event.description)
 
         match event.event:
             case SubagentEvent() as nested_event:
@@ -1999,22 +2013,40 @@ class _LiveView:
                     )
                     return
                 self._subagent_tool_call_ancestry[tool_call.id] = (block, tool_depth)
-                block.append_sub_tool_call(tool_call)
+                if event.agent_id is not None:
+                    self._subagent_tool_call_owners[tool_call.id] = event.agent_id
+                block.append_sub_tool_call(tool_call, agent_id=event.agent_id)
                 self.refresh_soon()
             case ToolCallPart() as tool_call_part:
-                block.append_sub_tool_call_part(tool_call_part)
+                owner_agent_id = event.agent_id
+                if owner_agent_id is None and tool_call_part.stream_call_id is not None:
+                    owner_agent_id = self._subagent_tool_call_owners.get(
+                        tool_call_part.stream_call_id
+                    )
+                block.append_sub_tool_call_part(tool_call_part, agent_id=owner_agent_id)
                 self.refresh_soon()
             case ToolResult() as tool_result:
-                block.finish_sub_tool_call(tool_result)
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    tool_result.tool_call_id
+                )
+                block.finish_sub_tool_call(tool_result, agent_id=owner_agent_id)
+                self._subagent_tool_call_owners.pop(tool_result.tool_call_id, None)
                 self.refresh_soon()
             case ToolExecutionStarted() as started:
-                block.mark_sub_execution_started(started.tool_call_id)
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    started.tool_call_id
+                )
+                block.mark_sub_execution_started(started.tool_call_id, agent_id=owner_agent_id)
                 self.refresh_soon()
             case ToolOutputPart() as output_part:
+                owner_agent_id = event.agent_id or self._subagent_tool_call_owners.get(
+                    output_part.tool_call_id
+                )
                 block.append_sub_output_part(
                     output_part.tool_call_id,
                     output_part.text,
                     stream=output_part.stream,
+                    agent_id=owner_agent_id,
                 )
                 self.refresh_soon()
             case _:

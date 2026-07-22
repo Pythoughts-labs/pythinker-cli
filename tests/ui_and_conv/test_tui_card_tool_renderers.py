@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from pythinker_code.tools.display import DiffDisplayBlock
 from pythinker_code.ui.shell.components import (
     ToolExecutionComponent,
+    cell_width,
     compute_edit_diff_string,
     render_diff,
     render_plain,
@@ -869,7 +870,7 @@ def test_running_tool_headers_do_not_duplicate_status_bullets():
                 "summary": "audit",
                 "agents": [{"name": "scan", "prompt": "check", "subagent_type": "explore"}],
             },
-            "RunAgents(",
+            "Agents",
         ),
         ("AskUserQuestion", {"questions": [{"question": "Continue?"}]}, "Ask("),
         ("Think", {"thought": "check"}, "Think"),
@@ -901,7 +902,7 @@ def test_streaming_missing_args_use_preparing_rows_not_tool_ellipsis_placeholder
         ("AskUserQuestion", "Ask"),
         ("TaskOutput", "TaskOutput"),
         ("TaskStop", "TaskStop"),
-        ("RunAgents", "RunAgents"),
+        ("RunAgents", "Agents"),
     ]
 
     for tool, label in cases:
@@ -1488,12 +1489,13 @@ def test_run_agents_renders_compact_professional_summary():
         ),
         width=120,
     )
-    assert "⏺ RunAgents(" in rendered
+    assert "Agents" in rendered
+    assert "RunAgents(" not in rendered
     assert "Run code and security scans" in rendered
     assert "code-reviewer" in rendered
     assert "security-reviewer" in rendered
-    assert "2 code-reviewer agents finished" in rendered or "2 agents finished" in rendered
-    assert "Done" in rendered
+    assert "2 agents completed" in rendered
+    assert "completed" in rendered
     # Successful agent summaries are suppressed — only the findings table shows
     assert "No correctness findings" not in rendered
     assert "No exploitable security issues" not in rendered
@@ -1533,11 +1535,308 @@ def test_run_agents_rows_align_columns_and_drop_redundant_name():
         ),
         width=120,
     )
-    assert "2 background agents launched" in rendered
+    assert "2 agents running/background" in rendered
     assert "qa" in rendered
     assert "code-reviewer" in rendered
+    assert "running/background" in rendered
     assert "Initializing" not in rendered
     assert "Mode" not in rendered
+
+
+def test_run_agents_call_header_does_not_speculate_child_rows_or_leak_prompts():
+    rendered = _render_running(
+        "RunAgents",
+        {
+            "summary": "Inspect repo",
+            "run_in_background": False,
+            "agents": [
+                {
+                    "title": "Find TODO comments",
+                    "name": "todo_scan",
+                    "prompt": "grep -r TODO /repo/src/private.py",
+                    "subagent_type": "explore",
+                },
+                {"name": "count_files", "prompt": "ls /repo", "subagent_type": "explore"},
+            ],
+        },
+        width=100,
+    )
+    assert rendered.count("Agents") == 1
+    assert "Inspect repo" in rendered
+    assert "Find TODO comments" not in rendered
+    assert "count_files" not in rendered
+    assert "todo_scan" not in rendered
+    assert "grep -r TODO" not in rendered
+    assert "/repo/src/private.py" not in rendered
+
+
+@pytest.mark.parametrize("width", [40, 80, 120])
+def test_run_agents_result_fits_width_and_normalizes_statuses(width: int):
+    rendered = _render(
+        "RunAgents",
+        {"summary": "mixed", "agents": [{"title": "done"}, {"title": "failed"}]},
+        output=(
+            "tool_status: success\n"
+            "mode: foreground\n"
+            "agent_count: 4\n"
+            "agents:\n"
+            "- name: done\n"
+            "  subagent_type: explore\n"
+            "  status: completed\n"
+            "- name: failed\n"
+            "  subagent_type: explore\n"
+            "  status: failed\n"
+            "  brief: failed hard\n"
+            "- name: running\n"
+            "  subagent_type: explore\n"
+            "  status: running\n"
+            "- name: deferred\n"
+            "  subagent_type: explore\n"
+            "  status: deferred\n"
+        ),
+        width=width,
+    )
+    assert "completed" in rendered
+    assert "failed" in rendered
+    assert "running/background" in rendered
+    assert "queued" in rendered
+    for line in rendered.splitlines():
+        assert cell_width(line) <= width
+
+
+def test_run_agents_suffix_rows_stay_width_safe_in_narrow_layout():
+    width = 28
+    defn = get_tool_renderer("RunAgents")
+    assert defn is not None
+    comp = ToolExecutionComponent("RunAgents", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"summary": "mixed", "agents": [{"title": "done"}, {"title": "failed"}]})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(
+        ToolResultPayload(
+            text=(
+                "tool_status: success\n"
+                "mode: foreground\n"
+                "agent_count: 3\n"
+                "agents:\n"
+                "- name: done\n"
+                "  subagent_type: x\n"
+                "  status: completed\n"
+                "- name: failed\n"
+                "  subagent_type: x\n"
+                "  status: failed\n"
+                "- name: lost\n"
+                "  subagent_type: x\n"
+                "  status: vortex\n"
+            )
+        )
+    )
+    rendered = render_plain(comp.render(width=width), width=width)
+    assert "· Done" in rendered
+    assert "· Failed" in rendered
+    assert "· Unknown" in rendered
+    assert " completed " not in rendered
+    assert " failed " not in rendered
+    assert " unknown " not in rendered
+    for line in rendered.splitlines():
+        assert cell_width(line) <= width
+
+
+def test_run_agents_no_color_keeps_glyphs_and_status_words(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    rendered = _render(
+        "RunAgents",
+        {"summary": "mixed", "agents": [{"title": "done"}, {"title": "failed"}]},
+        output=(
+            "tool_status: success\n"
+            "mode: foreground\n"
+            "agent_count: 4\n"
+            "agents:\n"
+            "- name: done\n"
+            "  subagent_type: explore\n"
+            "  status: completed\n"
+            "- name: failed\n"
+            "  subagent_type: explore\n"
+            "  status: failed\n"
+            "- name: queued\n"
+            "  subagent_type: explore\n"
+            "  status: deferred\n"
+            "- name: lost\n"
+            "  subagent_type: explore\n"
+            "  status: vortex\n"
+        ),
+        width=100,
+    )
+    assert "✓" in rendered and "completed" in rendered
+    assert "✘" in rendered and "failed" in rendered
+    assert "○" in rendered and "queued" in rendered
+    assert "?" in rendered and "unknown" in rendered
+    assert "lost" in rendered
+    assert "running/background" not in rendered
+
+
+def test_run_agents_background_result_descriptions_prefer_hydrated_then_title_no_leaks(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("NO_COLOR", "1")
+    width = 64
+    rendered = _render(
+        "RunAgents",
+        {
+            "summary": "background fanout",
+            "run_in_background": True,
+            "agents": [
+                {
+                    "name": "internal_worker_alpha",
+                    "title": "Title should be replaced",
+                    "prompt": "SECRET_PROMPT_CANARY alpha",
+                    "subagent_type": "explore",
+                },
+                {
+                    "name": "internal_worker_beta",
+                    "title": "Fallback title beta",
+                    "prompt": "SECRET_PROMPT_CANARY beta",
+                    "subagent_type": "explore",
+                },
+            ],
+        },
+        output=(
+            "tool_status: launched\n"
+            "mode: background\n"
+            "agent_count: 2\n"
+            "agents:\n"
+            "- name: internal_worker_alpha\n"
+            "  subagent_type: explore\n"
+            "  status: running\n"
+            "  task_id: agent-alpha-raw-id\n"
+            "  result: |\n"
+            "    kind: agent\n"
+            "    status: running\n"
+            "    agent_id: sub-alpha-raw-id\n"
+            "    description: Parsed override alpha with extra whitespace\n"
+            "- name: internal_worker_beta\n"
+            "  subagent_type: explore\n"
+            "  status: running\n"
+            "  task_id: agent-beta-raw-id\n"
+        ),
+        width=width,
+    )
+    assert rendered.count("Agents") == 1
+    assert "2 agents running/background" in rendered
+    assert rendered.count("running/background") >= 1
+    assert "Parsed override alpha" in rendered
+    assert "Fallback title beta" in rendered
+    for leaked in (
+        "Title should be replaced",
+        "SECRET_PROMPT_CANARY",
+        "agent-alpha-raw-id",
+        "sub-alpha-raw-id",
+        "agent-beta-raw-id",
+        "internal_worker_alpha",
+        "internal_worker_beta",
+    ):
+        assert leaked not in rendered
+    for line in rendered.splitlines():
+        assert cell_width(line) <= width
+
+
+def test_run_agents_failed_brief_never_leaks_in_collapsed_rows():
+    sentinel_brief = "LEAK_BRIEF_COMMAND_SENTINEL /private/secret-token STACK_SECRET_SENTINEL"
+    output = (
+        "tool_status: success\n"
+        "mode: foreground\n"
+        "agent_count: 1\n"
+        "agents:\n"
+        "- name: failed_agent\n"
+        "  subagent_type: explore\n"
+        "  status: failed\n"
+        f"  brief: {sentinel_brief}\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "failed_agent"}]},
+        output=output,
+        width=120,
+    )
+    assert "failed_agent" in collapsed
+    assert "failed" in collapsed
+    assert sentinel_brief not in collapsed
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "failed_agent"}]},
+        output=output,
+        expanded=True,
+        width=120,
+    )
+    assert sentinel_brief in expanded
+
+
+def test_run_agents_error_result_collapsed_hides_raw_text_until_expanded():
+    raw_error = (
+        "Traceback (most recent call last):\n"
+        '  File "/private/secret-token/tool.py", line 7, in run\n'
+        "RuntimeError: STACK_SECRET_SENTINEL agent-id-secret-123\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "agent"}]},
+        output=raw_error,
+        is_error=True,
+        width=120,
+    )
+    assert "Agents" in collapsed
+    assert "failed" in collapsed.lower()
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+    assert "agent-id-secret-123" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "failed", "agents": [{"title": "agent"}]},
+        output=raw_error,
+        is_error=True,
+        expanded=True,
+        width=120,
+    )
+    assert "/private/secret-token" in expanded
+    assert "STACK_SECRET_SENTINEL" in expanded
+    assert "agent-id-secret-123" in expanded
+
+
+def test_run_agents_parse_fallback_collapsed_hides_raw_text_until_expanded():
+    raw_result = (
+        "malformed RunAgents result /private/secret-token\n"
+        "internal id agent-id-secret-123\n"
+        "STACK_SECRET_SENTINEL\n"
+    )
+
+    collapsed = _render(
+        "RunAgents",
+        {"summary": "malformed", "agents": [{"title": "agent"}]},
+        output=raw_result,
+        width=120,
+    )
+    assert "Agents" in collapsed
+    assert "result unavailable" in collapsed
+    assert "/private/secret-token" not in collapsed
+    assert "STACK_SECRET_SENTINEL" not in collapsed
+    assert "agent-id-secret-123" not in collapsed
+
+    expanded = _render(
+        "RunAgents",
+        {"summary": "malformed", "agents": [{"title": "agent"}]},
+        output=raw_result,
+        expanded=True,
+        width=120,
+    )
+    assert "/private/secret-token" in expanded
+    assert "STACK_SECRET_SENTINEL" in expanded
+    assert "agent-id-secret-123" in expanded
 
 
 # ---------------------------------------------------------------------------
