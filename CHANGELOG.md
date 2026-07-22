@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Treat the repository-root `.agents/` directory as local agent configuration and keep it out of version control.
 - Show an update notice when a newer Pythinker version becomes available mid-session.
 
 ## 0.61.0 (2026-07-22)
