@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.61.0 (2026-07-22)
+
 - Fixed reasoning summaries exposing Markdown delimiters and duplicate terminal rows after refocus, and redesigned agent progress (single `Agent` calls and parallel `RunAgents` fan-outs) as a compact, payload-free agent activity tree.
 - Retain a non-streaming OpenAI Responses reasoning item's encrypted content when it carries no summary, matching the streaming path so the reasoning boundary stays replayable.
 - Reduce the shell prompt session to a compatibility façade over deep `prompting/` modules (config, keybindings, completion menus, narrow shell-facing methods), with Unicode cell-width coverage and documented module ownership in the architecture guide.

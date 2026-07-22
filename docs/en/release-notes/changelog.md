@@ -17,6 +17,22 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+## 0.61.0 (2026-07-22)
+
+- Fixed reasoning summaries exposing Markdown delimiters and duplicate terminal rows after refocus, and redesigned agent progress (single `Agent` calls and parallel `RunAgents` fan-outs) as a compact, payload-free agent activity tree.
+- Retain a non-streaming OpenAI Responses reasoning item's encrypted content when it carries no summary, matching the streaming path so the reasoning boundary stays replayable.
+- Reduce the shell prompt session to a compatibility façade over deep `prompting/` modules (config, keybindings, completion menus, narrow shell-facing methods), with Unicode cell-width coverage and documented module ownership in the architecture guide.
+- Render image/audio/video and unknown content parts as payload-free labels in the live view, roll nested subagent activity (up to 16 levels) under the correct root tool card, and stop provider-remapped tool results from starting replay user turns.
+- **Behavior change:** `!` shell commands now run through the detected configured shell (`<shell> -c`, PowerShell `-command` on Windows) instead of the implicit `/bin/sh`/`cmd.exe`, with separate 1 MiB stdout/stderr caps and cancellation cleanup; existing `cmd.exe`-syntax commands on Windows may need updating.
+- Distinguish background auto-trigger grace expiry from user input activity with typed prompt events, and bound streamed tool-argument label scans to 1 KiB growth boundaries.
+- Scope prompt Git status, toasts, history, and clipboard to each shell session with a new `/prompt-history status|clear` command, bounded locked history storage, and cross-session isolation.
+- Unify the shell footer behind one per-frame view model shared by the legacy and card renderers, and key theme style-resolver caching by terminal capabilities.
+- Fix a rare queued-follow-up "ghost card": echoing a drained queued command now commits through the scrollback handoff (which hides the input card before the terminal teardown erases the prompt), so the input-card border can no longer fossilize into scrollback above the echoed command under heavy load.
+- Freeze the public shell prompt compatibility contract with constructor and rendering coverage.
+- Unify slash and file-mention completion behind one canonical completion context, adding quoted `@"path with spaces"` file mentions.
+- Index workspace file mentions asynchronously with a cwd-aware, generation-owned snapshot index so completion never blocks on disk or Git scans.
+- Harden prompt completion: Escape now dismisses the slash-argument menu (not just draft commands), file-mention highlighting no longer swallows trailing prose punctuation, scoped `@dir/name` completions rank basename-prefix matches first, workspace Git scans drain stdout/stderr concurrently to avoid a pipe deadlock, and a mid-session working-directory removal no longer crashes the prompt turn.
+- Keep the interactive prompt scene within the terminal height with a priority-ordered row allocator, and shut prompt background tasks/processes down with an awaited lifecycle.
 - Add xAI Grok OAuth login (browser loopback and device-code).
 - Add GitHub Copilot device-code OAuth login for individual github.com accounts.
 - Add DigitalOcean Gradient AI browser OAuth login with dynamically discovered Inference Routers; router-discovery failures (unauthorized, outage, malformed, empty) are now reported distinctly instead of silently yielding no models.
@@ -26,6 +42,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 - Fix queued follow-up input showing a bordered ghost; pressing Enter during an active turn now shows one intentional queued row.
 - Harden provider OAuth credential handling: scope token refresh to the active/selected provider, serialize persistence under a lock with atomic config replacement, roll back replaced credentials when a save fails, fail closed on credential migration, and validate OAuth token and implicit-state responses.
 - Fix an intermittent doubled/"ghost" copy of the running-prompt block (agent tree, spinner, and tip) on long streaming turns: after a scrollback handoff the suppressed live body now waits for the terminal's re-requested absolute cursor position to settle before it re-expands, so it repaints against a correct cursor model instead of the mis-anchored frame left behind by `run_in_terminal`.
+- Fix the "update available" footer notice being suppressed on shell-mode frames (and a stale agent-mode notice replaying after a mode switch): the shell prompt render now refreshes the per-frame update-notice snapshot like the agent path, and the snapshot is cleared with the frame.
 
 ## 0.60.0 (2026-07-18)
 
