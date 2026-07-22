@@ -615,6 +615,7 @@ class Shell:
         # cache on every repaint (mirrors the footer's git-branch TTL).
         self._update_notice_cache: tuple[float, str | None] = (0.0, None)
         self._update_toast_shown_version: str | None = None
+        self._update_toasts_shown: set[str] = set()
         self._running_input_handler: Callable[[UserInput], None] | None = None
         self._running_interrupt_handler: Callable[[], None] | None = None
         self._active_approval_sink: Any | None = None
@@ -2270,6 +2271,12 @@ class Shell:
         return format_managed_channel_notice(current_version, latest)
 
     def _update_toast(self, notice: str, *, style: str) -> None:
+        # The periodic check loop re-surfaces update outcomes every interval;
+        # dedupe by exact notice text so each is toasted once per session
+        # (a new version produces new text and toasts again).
+        if notice in self._update_toasts_shown:
+            return
+        self._update_toasts_shown.add(notice)
         toast(notice, topic="update", duration=30.0, immediate=True, style=style)
         if self._prompt_session is not None:
             self._prompt_session.invalidate()

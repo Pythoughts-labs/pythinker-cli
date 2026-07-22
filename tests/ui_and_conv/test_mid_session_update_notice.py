@@ -100,6 +100,20 @@ async def test_suppressed_notice_does_not_toast(
     assert shell._update_toast_shown_version is None
 
 
+def test_update_toast_dedupes_repeated_notices(runtime: Runtime, tmp_path: Path, _toasts):
+    """The periodic loop re-surfaces outcomes; each notice text toasts once."""
+    shell = _make_shell(runtime, tmp_path)
+
+    shell._update_toast("Update available: 9.9.9", style="bold")
+    shell._update_toast("Update available: 9.9.9", style="bold")
+    shell._update_toast("Update available: 10.0.0", style="bold")
+
+    assert [msg for msg, _ in _toasts] == [
+        "Update available: 9.9.9",
+        "Update available: 10.0.0",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_periodic_update_check_runs_immediately_then_at_interval(monkeypatch):
     checks: list[str] = []
@@ -125,6 +139,34 @@ async def test_periodic_update_check_runs_immediately_then_at_interval(monkeypat
     ]
 
 
+@pytest.mark.asyncio
+async def test_periodic_update_check_recovers_after_failing_check(monkeypatch):
+    checks: list[str] = []
+    sleeps: list[float] = []
+
+    async def check() -> None:
+        checks.append("check")
+        if len(checks) == 1:
+            raise RuntimeError("transient check failure")
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(shell_module.asyncio, "sleep", sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await shell_module._periodic_update_check(check)
+
+    # The first failure is swallowed (logged) and the loop keeps re-checking.
+    assert checks == ["check", "check"]
+    assert sleeps == [
+        shell_module.AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
+        shell_module.AUTO_UPDATE_CHECK_INTERVAL_SECONDS,
+    ]
+
+
 def test_startup_scheduler_uses_periodic_loop_in_all_scheduling_branches(
     runtime: Runtime, tmp_path: Path, monkeypatch
 ):
@@ -133,12 +175,19 @@ def test_startup_scheduler_uses_periodic_loop_in_all_scheduling_branches(
     shell = _make_shell(runtime, tmp_path)
     scheduled_checks = []
 
+    def fake_periodic(check):
+        scheduled_checks.append(check)
+
+        async def _noop() -> None:
+            return None
+
+        return _noop()
+
     def capture(coro):
-        assert coro.cr_code.co_name == "_periodic_update_check"
-        assert coro.cr_frame is not None
-        scheduled_checks.append(coro.cr_frame.f_locals["check"])
         coro.close()
         return None
+
+    monkeypatch.setattr(shell_module, "_periodic_update_check", fake_periodic)
 
     monkeypatch.delenv("PYTHINKER_CLI_NO_AUTO_UPDATE", raising=False)
     monkeypatch.setattr(shell, "_start_background_task", capture)
