@@ -490,6 +490,28 @@ async def test_openai_responses_streamed_reasoning_done_encrypts_last_summary() 
     ]
 
 
+async def test_openai_responses_done_without_summary_emits_encrypted_part() -> None:
+    events = _async_events(
+        cast(
+            ResponseStreamEvent,
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=4,
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="reasoning_4",
+                    encrypted_content="enc_orphan",
+                ),
+            ),
+        ),
+    )
+    stream = OpenAIResponsesStreamedMessage(cast(AsyncStream[ResponseStreamEvent], events))
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [ThinkPart(think="", encrypted="enc_orphan", summary_index=None)]
+
+
 async def test_openai_responses_streamed_reasoning_done_indices_do_not_leak_between_items() -> None:
     events = _async_events(
         cast(

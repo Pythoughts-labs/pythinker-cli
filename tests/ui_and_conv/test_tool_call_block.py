@@ -24,8 +24,8 @@ def _legacy_tui_style(monkeypatch):
     monkeypatch.setenv("PYTHINKER_TUI_STYLE", "pythinker")
 
 
-def _plain(renderable) -> str:
-    console = Console(record=True, width=120, color_system=None)
+def _plain(renderable, *, width: int = 120) -> str:
+    console = Console(record=True, width=width, color_system=None)
     console.print(renderable)
     return console.export_text()
 
@@ -481,6 +481,39 @@ def test_run_agents_foreground_completion_is_not_background_pending():
     )
     assert block.finished
     assert not block.is_background_pending
+
+
+def test_run_agents_sanitizes_multiline_descriptions_without_breaking_same_type_activity():
+    block = _ToolCallBlock(
+        _tool_call(
+            "RunAgents",
+            '{"summary":"scan","run_in_background":false,"agents":[{"name":"a"},{"name":"b"}]}',
+        )
+    )
+    block.set_subagent_metadata(
+        "agent-alpha",
+        "explore",
+        "Map\trenderer\ncallbacks\x1b[31m now\x1b[0m\r",
+    )
+    block.set_subagent_metadata("agent-beta", "explore", "Read activity tree")
+    block.append_sub_tool_call(
+        _tool_call_with_id("sub-alpha", "ReadFile", '{"path":"src/renderer.py"}'),
+        agent_id="agent-alpha",
+    )
+    block.mark_sub_execution_started("sub-alpha", agent_id="agent-alpha")
+
+    output = _plain(block.compose(), width=52)
+    lines = output.splitlines()
+
+    assert output.count("running Explore") == 1
+    assert "Map renderer callbacks now" in output
+    assert "Map\trenderer" not in output
+    assert "\r" not in output
+    assert "\x1b" not in output
+    assert "reading…" in output
+    assert "thinking…" in output
+    assert "callbacks now" not in lines
+    assert all(len(line) <= 52 for line in lines)
 
 
 def test_lsp_card_boundary_passes_nested_count_extras_to_renderer(

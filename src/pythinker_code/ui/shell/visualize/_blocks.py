@@ -193,6 +193,10 @@ def _format_subagent_type(subagent_type: str) -> str:
     return " ".join(part.capitalize() for part in cleaned.split("-") if part) or "Agent"
 
 
+def _normalize_subagent_description(description: str | None) -> str:
+    return " ".join(sanitize_ansi(description or "").split())
+
+
 def _semantic_subagent_activity(tool_name: str | None) -> str:
     if not tool_name:
         return "thinking…"
@@ -1550,18 +1554,17 @@ class _ToolCallBlock:
     def set_subagent_metadata(
         self, agent_id: str, subagent_type: str, description: str | None = None
     ) -> None:
+        normalized_description = _normalize_subagent_description(description) or None
         changed = (self._subagent_id, self._subagent_type, self._subagent_description) != (
             agent_id,
             subagent_type,
-            description,
+            normalized_description,
         )
         self._subagent_id = agent_id
         self._subagent_type = subagent_type
-        self._subagent_description = description
+        self._subagent_description = normalized_description
         if self._tool_name == "RunAgents":
-            clean_description = sanitize_ansi(description or "").strip()
-            if not clean_description:
-                clean_description = _format_subagent_type(subagent_type)
+            clean_description = normalized_description or _format_subagent_type(subagent_type)
             state = self._subagent_activities.get(agent_id)
             if state is None:
                 self._subagent_activities[agent_id] = _SubagentActivityState(
