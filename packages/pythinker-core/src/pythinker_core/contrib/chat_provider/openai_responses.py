@@ -548,11 +548,22 @@ class OpenAIResponsesStreamedMessage:
                 )
             elif item.type == "reasoning":
                 encrypted_content = getattr(item, "encrypted_content", None)
+                emitted_summary = False
                 for summary_index, summary in enumerate(getattr(item, "summary", ())):
+                    emitted_summary = True
                     yield ThinkPart(
                         think=summary.text,
                         encrypted=encrypted_content,
                         summary_index=summary_index,
+                    )
+                if not emitted_summary and encrypted_content is not None:
+                    # Mirror the streaming `output_item.done` path: a reasoning item
+                    # can carry encrypted_content with no summary parts, and dropping
+                    # it here would make the reasoning boundary non-replayable.
+                    yield ThinkPart(
+                        think="",
+                        encrypted=encrypted_content,
+                        summary_index=None,
                     )
 
     async def _convert_stream_response(

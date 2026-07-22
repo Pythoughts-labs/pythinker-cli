@@ -449,11 +449,12 @@ def _run_agents_status_style(status: str) -> RichStyle:
 
 
 def _render_grouped_agents_summary(count: int, statuses: list[str]) -> Text:
-    uniform = statuses and all(status == statuses[0] for status in statuses)
+    uniform = bool(statuses) and all(status == statuses[0] for status in statuses)
     label = statuses[0] if uniform else "mixed"
     text = Text()
     text.append(str(count), style=RichStyle(bold=True))
-    text.append(f" agents {label}", style=tui_rich_style("dim"))
+    word = "agent" if count == 1 else "agents"
+    text.append(f" {word} {label}", style=tui_rich_style("dim"))
     return text
 
 

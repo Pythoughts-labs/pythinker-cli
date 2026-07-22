@@ -658,6 +658,29 @@ async def test_openai_responses_completed_reasoning_summaries_keep_order_and_enc
     ]
 
 
+async def test_openai_responses_completed_reasoning_without_summary_keeps_encryption() -> None:
+    # A non-streaming reasoning item can return encrypted_content with an empty
+    # summary; it must still emit an encrypted ThinkPart so the boundary is
+    # replayable, matching the streaming `output_item.done` behavior.
+    response = _response(
+        output=[
+            ResponseReasoningItem.model_validate(
+                {
+                    "type": "reasoning",
+                    "id": "reasoning_1",
+                    "summary": [],
+                    "encrypted_content": "enc_orphan",
+                }
+            )
+        ]
+    )
+    stream = OpenAIResponsesStreamedMessage(response)
+
+    parts = [part for part in await _collect_parts(stream) if isinstance(part, ThinkPart)]
+
+    assert parts == [ThinkPart(think="", encrypted="enc_orphan", summary_index=None)]
+
+
 async def test_openai_responses_empty_streamed_call_id_is_deterministic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

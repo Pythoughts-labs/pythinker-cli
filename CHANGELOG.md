@@ -16,6 +16,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 ## Unreleased
 
 - Fixed reasoning summaries exposing Markdown delimiters and duplicate terminal rows after refocus, and redesigned agent progress (single `Agent` calls and parallel `RunAgents` fan-outs) as a compact, payload-free agent activity tree.
+- Retain a non-streaming OpenAI Responses reasoning item's encrypted content when it carries no summary, matching the streaming path so the reasoning boundary stays replayable.
 - Reduce the shell prompt session to a compatibility façade over deep `prompting/` modules (config, keybindings, completion menus, narrow shell-facing methods), with Unicode cell-width coverage and documented module ownership in the architecture guide.
 - Render image/audio/video and unknown content parts as payload-free labels in the live view, roll nested subagent activity (up to 16 levels) under the correct root tool card, and stop provider-remapped tool results from starting replay user turns.
 - **Behavior change:** `!` shell commands now run through the detected configured shell (`<shell> -c`, PowerShell `-command` on Windows) instead of the implicit `/bin/sh`/`cmd.exe`, with separate 1 MiB stdout/stderr caps and cancellation cleanup; existing `cmd.exe`-syntax commands on Windows may need updating.
