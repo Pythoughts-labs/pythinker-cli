@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Show an update notice when a newer Pythinker version becomes available mid-session.
+
 ## 0.61.0 (2026-07-22)
 
 - Fixed reasoning summaries exposing Markdown delimiters and duplicate terminal rows after refocus, and redesigned agent progress (single `Agent` calls and parallel `RunAgents` fan-outs) as a compact, payload-free agent activity tree.
