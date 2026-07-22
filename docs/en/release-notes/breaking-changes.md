@@ -4,6 +4,8 @@ This page documents breaking changes in Pythinker Code releases and provides mig
 
 ## Unreleased
 
+## 0.61.0 (2026-07-22)
+
 ## 0.60.0 (2026-07-18)
 
 No breaking changes. This release is compatible with 0.59.0 user configuration, native installs, and session data.
