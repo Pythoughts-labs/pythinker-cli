@@ -1604,6 +1604,44 @@ def test_run_agents_result_fits_width_and_normalizes_statuses(width: int):
         assert cell_width(line) <= width
 
 
+def test_run_agents_suffix_rows_stay_width_safe_in_narrow_layout():
+    width = 28
+    defn = get_tool_renderer("RunAgents")
+    assert defn is not None
+    comp = ToolExecutionComponent("RunAgents", "tc-1", definition=defn, cwd="/repo")
+    comp.update_args({"summary": "mixed", "agents": [{"title": "done"}, {"title": "failed"}]})
+    comp.set_args_complete()
+    comp.mark_execution_started()
+    comp.set_result(
+        ToolResultPayload(
+            text=(
+                "tool_status: success\n"
+                "mode: foreground\n"
+                "agent_count: 3\n"
+                "agents:\n"
+                "- name: done\n"
+                "  subagent_type: x\n"
+                "  status: completed\n"
+                "- name: failed\n"
+                "  subagent_type: x\n"
+                "  status: failed\n"
+                "- name: lost\n"
+                "  subagent_type: x\n"
+                "  status: vortex\n"
+            )
+        )
+    )
+    rendered = render_plain(comp.render(width=width), width=width)
+    assert "· Done" in rendered
+    assert "· Failed" in rendered
+    assert "· Unknown" in rendered
+    assert " completed " not in rendered
+    assert " failed " not in rendered
+    assert " unknown " not in rendered
+    for line in rendered.splitlines():
+        assert cell_width(line) <= width
+
+
 def test_run_agents_no_color_keeps_glyphs_and_status_words(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("NO_COLOR", "1")
     rendered = _render(

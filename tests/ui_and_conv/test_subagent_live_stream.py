@@ -550,3 +550,61 @@ def test_run_agents_activity_tree_bounds_overflow_and_width():
     assert "hidden 7" not in output
     for line in output.splitlines():
         assert cell_width(line) <= 40
+
+
+def test_run_agents_activity_overflow_prioritizes_running_agents_without_reordering_visible_rows():
+    view = _LiveView(StatusUpdate(context_tokens=1000))
+    view.dispatch_wire_message(TurnBegin(user_input="scan"))
+    view.dispatch_wire_message(
+        WireToolCall(
+            id="run-agents-priority",
+            function=WireToolCall.FunctionBody(
+                name="RunAgents",
+                arguments=(
+                    '{"summary":"many","agents":['
+                    + ",".join(
+                        f'{{"title":"Worker {i}","subagent_type":"explore","prompt":"hidden {i}"}}'
+                        for i in range(8)
+                    )
+                    + "]}"
+                ),
+            ),
+        )
+    )
+    for i in range(8):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="run-agents-priority",
+                agent_id=f"agent-{i}",
+                subagent_type="explore",
+                description=f"Worker {i}",
+                event=_sub_tool_call(f"sub-{i}", "Read", "{}"),
+            )
+        )
+
+    for i in (6, 7):
+        view.dispatch_wire_message(
+            SubagentEvent(
+                parent_tool_call_id="run-agents-priority",
+                agent_id=f"agent-{i}",
+                subagent_type="explore",
+                description=f"Worker {i}",
+                event=ToolExecutionStarted(tool_call_id=f"sub-{i}"),
+            )
+        )
+
+    output = _render(view, width=80)
+    assert output.count("Agents") == 1
+    assert "2 more agents" in output
+    assert "Worker 4" not in output
+    assert "Worker 5" not in output
+    assert "Worker 6" in output
+    assert "Worker 7" in output
+    assert (
+        output.index("Worker 0")
+        < output.index("Worker 1")
+        < output.index("Worker 2")
+        < output.index("Worker 3")
+        < output.index("Worker 6")
+        < output.index("Worker 7")
+    )

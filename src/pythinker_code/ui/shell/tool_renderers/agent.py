@@ -469,24 +469,39 @@ def _render_agent_progress_line(
     tree = _TREE_LAST if is_last else _TREE_BRANCH
     subagent_type = entry["subagent_type"]
     description = entry.get("name_extra") or ""
-    prefix = f"   {tree} {glyph} {status} {subagent_type} "
-    budget = max(1, width - cell_width(prefix) - 4)
+    suffix = ""
+    if status == "completed":
+        suffix = " · Done"
+    elif status == "failed":
+        suffix = " · Failed"
+    elif status == "unknown":
+        suffix = " · Unknown"
+
+    content_width = max(1, width - cell_width("  ⎿  "))
+    wide_status = f" {status} "
+    wide_fixed = f"   {tree} {glyph}{wide_status}{subagent_type}{suffix}"
+    rendered_status = " " if cell_width(wide_fixed) > content_width else wide_status
+
+    fixed_without_type = f"   {tree} {glyph}{rendered_status}{suffix}"
+    type_budget = max(1, content_width - cell_width(fixed_without_type))
+    rendered_type = truncate_to_width(subagent_type, type_budget)
+    rendered_fixed = f"   {tree} {glyph}{rendered_status}{rendered_type}{suffix}"
+    description_budget = content_width - cell_width(rendered_fixed) - 1
 
     row = Text()
     row.append("   ")
     row.append(f"{tree} ", style=tui_rich_style("dim"))
     row.append(glyph, style=_run_agents_status_style(status))
-    row.append(f" {status} ", style=tui_rich_style("dim"))
-    row.append(subagent_type, style=tui_rich_style("tool_title") + RichStyle(bold=True))
-    if description:
+    row.append(rendered_status, style=tui_rich_style("dim"))
+    row.append(rendered_type, style=tui_rich_style("tool_title") + RichStyle(bold=True))
+    if description and description_budget > 0:
         row.append(" ", style=tui_rich_style("dim"))
-        row.append(truncate_to_width(description, budget), style=tui_rich_style("tool_title"))
-    if status == "completed":
-        row.append(" · Done", style=tui_rich_style("dim"))
-    elif status == "failed":
-        row.append(" · Failed", style=tui_rich_style("dim"))
-    elif status == "unknown":
-        row.append(" · Status unknown", style=tui_rich_style("dim"))
+        row.append(
+            truncate_to_width(description, description_budget),
+            style=tui_rich_style("tool_title"),
+        )
+    if suffix:
+        row.append(suffix, style=tui_rich_style("dim"))
     row.no_wrap = True
     row.overflow = "ellipsis"
     return row

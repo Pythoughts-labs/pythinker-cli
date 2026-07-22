@@ -1730,7 +1730,22 @@ class _ToolCallBlock:
             children.append(heading)
 
         states = list(self._subagent_activities.values())
-        visible = states[:_MAX_RUN_AGENTS_ACTIVITY_ROWS]
+        if len(states) <= _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+            visible = states
+        else:
+            selected_indices: list[int] = [
+                index for index, state in enumerate(states) if state.state == "running"
+            ][:_MAX_RUN_AGENTS_ACTIVITY_ROWS]
+            if len(selected_indices) < _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+                selected_index_set = set(selected_indices)
+                for index, state in enumerate(states):
+                    if state.state == "running" or index in selected_index_set:
+                        continue
+                    selected_indices.append(index)
+                    selected_index_set.add(index)
+                    if len(selected_indices) >= _MAX_RUN_AGENTS_ACTIVITY_ROWS:
+                        break
+            visible = [states[index] for index in sorted(selected_indices)]
         hidden = max(0, len(states) - len(visible))
         queued = max(0, self._run_agents_requested_count() - len(self._subagent_activities))
         total_rows = len(visible) + (1 if queued else 0) + (1 if hidden else 0)
