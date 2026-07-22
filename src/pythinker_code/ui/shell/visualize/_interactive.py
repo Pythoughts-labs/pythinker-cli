@@ -194,7 +194,13 @@ class _PromptLiveView(_LiveView):
         return (size.columns, size.rows)
 
     def _tick_resize_recovery(self) -> None:
-        """Detect terminal geometry changes and force a hard preamble invalidation."""
+        """Track bounded terminal-geometry recovery after resize.
+
+        Any platform starts a short recovery window that forces redraw and hides
+        tips while prompt_toolkit settles at the new size. Only Windows also
+        hard-resets the prompt renderer on resize, because ConPTY can leave the
+        renderer's diff model out of sync with the real screen after a rewrap.
+        """
         size = self._current_terminal_size()
         if size is not None:
             columns, rows = size

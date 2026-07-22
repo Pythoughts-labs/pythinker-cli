@@ -82,10 +82,10 @@ def _is_input_card_border(row: str) -> bool:
     return "─" in row and bool(_INPUT_CARD_EFFORT_LABEL.search(row))
 
 
-def _has_fossil_border_above_content(rows: list[str]) -> bool:
+def _has_fossil_border_above_content(rows: list[str], *, prompt_text: str = _PROMPT_TEXT) -> bool:
     """True if an input-card border sits between the echoed prompt and the first
     committed ``⏺`` content row — i.e. a fossilized ghost card above the stream."""
-    echo_i = next((i for i, r in enumerate(rows) if _PROMPT_TEXT in r), None)
+    echo_i = next((i for i, r in enumerate(rows) if prompt_text in r), None)
     content_i = next((i for i, r in enumerate(rows) if r.strip().startswith("⏺")), None)
     if echo_i is None or content_i is None or content_i <= echo_i:
         return False
@@ -114,6 +114,20 @@ def _queued_text_fossilized_as_card(rows: list[str], text: str) -> bool:
         if border_above and content_below:
             return True
     return False
+
+
+def test_has_fossil_border_above_content_uses_supplied_prompt_text() -> None:
+    resize_prompt = "resize prompt sentinel 9d2f"
+    rows = [
+        "header",
+        f"echo: {resize_prompt}",
+        "──────── ● off",
+        "⏺ committed output",
+        f"echo: {_PROMPT_TEXT}",
+    ]
+
+    assert _has_fossil_border_above_content(rows) is False
+    assert _has_fossil_border_above_content(rows, prompt_text=resize_prompt) is True
 
 
 def test_focus_tui_hides_files_and_never_fossilizes_prompt(tmp_path: Path) -> None:
@@ -421,11 +435,17 @@ def _assert_run_agents_pty_tree(*, columns: int, rows: int) -> str:
         assert "Read activity tree" in normalized
         for leaked in (
             "RunAgents(",
+            "Grep(",
+            "Read(",
+            '"pattern"',
+            "file_path",
             "SECRET_PROMPT_CANARY",
             "/tmp/raw/path.py",
             "/tmp/secret-renderer.py",
             "sub-alpha-raw-id",
             "agent-alpha-raw-id",
+            "sub-beta-raw-id",
+            "agent-beta-raw-id",
             "raw command output must stay hidden",
         ):
             assert leaked not in normalized
@@ -478,7 +498,7 @@ def test_prompt_scene_survives_resize_away_and_back_continuously(tmp_path: Path)
         assert all(cell_width(row) <= columns for row in rows)
         assert joined.count(resize_prompt) <= 1, "submitted prompt duplicated on screen"
         assert sum(1 for row in rows if _is_input_card_border(row)) <= 1
-        assert not _has_fossil_border_above_content(rows)
+        assert not _has_fossil_border_above_content(rows, prompt_text=resize_prompt)
 
     try:
         shell.read_until_contains("think first, then code")
