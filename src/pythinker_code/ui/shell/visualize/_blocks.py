@@ -1487,7 +1487,7 @@ class _ToolCallBlock:
         self._is_background_pending = _is_active_background_agent(self._tool_name, result_text)
         self._renderable = self._compose()
 
-    def append_sub_tool_call(self, tool_call: ToolCall, *, agent_id: str | None = None):
+    def append_sub_tool_call(self, tool_call: ToolCall, *, agent_id: str | None = None) -> None:
         if tool_call.id in self._finished_subagent_tool_call_ids:
             return
         if self._owns_agent_activity:
@@ -1507,7 +1507,7 @@ class _ToolCallBlock:
 
     def append_sub_tool_call_part(
         self, tool_call_part: ToolCallPart, *, agent_id: str | None = None
-    ):
+    ) -> None:
         if self._owns_agent_activity:
             # Agent-centric collapsed activity is semantic only; never append or render raw args.
             return
@@ -1521,7 +1521,7 @@ class _ToolCallBlock:
             self._last_subagent_tool_call.function.arguments += tool_call_part.arguments_part
         self._renderable = self._compose()
 
-    def finish_sub_tool_call(self, tool_result: ToolResult, *, agent_id: str | None = None):
+    def finish_sub_tool_call(self, tool_result: ToolResult, *, agent_id: str | None = None) -> None:
         if tool_result.tool_call_id in self._finished_subagent_tool_call_ids:
             return
         if self._owns_agent_activity:
