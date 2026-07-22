@@ -88,6 +88,13 @@ def test_asset_names_match_version_across_files() -> None:
                 assert found == VERSION, f"{path}: {found} != {VERSION}"
 
 
+def test_linux_installer_build_example_matches_version() -> None:
+    readme = (REPO_ROOT / "packages" / "linux-installer" / "README.md").read_text(encoding="utf-8")
+    versions = re.findall(r"bash packages/linux-installer/build\.sh (\d+\.\d+\.\d+)", readme)
+    assert versions, "missing Linux installer build example"
+    assert versions == [VERSION]
+
+
 def test_no_hardcoded_version_badge_in_readme() -> None:
     # Guard the contract's "badges" clause: the only version-bearing badge is the
     # shields.io-live PyPI badge (img.shields.io/pypi/v/...). Fail if a future edit

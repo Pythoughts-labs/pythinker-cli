@@ -52,9 +52,8 @@ It speaks the [**Agent Client Protocol (ACP)**](https://github.com/agentclientpr
 
 ## 🆕 What's New in 0.62.0
 
-- **A faster, steadier interactive prompt.** Slash commands and file mentions now share one completion engine, workspace indexing runs asynchronously, prompt resources are isolated per session, and awaited lifecycle cleanup prevents stale background work. The prompt also stays within the terminal height and avoids queued-input ghost borders.
-- **More provider login options with safer persistence.** Pythinker adds OAuth login for xAI Grok, GitHub Copilot, DigitalOcean Gradient AI, and Snowflake Cortex, backed by a provider-neutral models.dev catalog with curated fallbacks. Credential changes are saved atomically and rolled back if persistence fails.
-- **Cleaner reasoning and agent activity.** Reasoning summaries no longer expose Markdown delimiters or duplicate terminal rows after refocus, while individual agents and parallel `RunAgents` calls render as a compact, payload-free activity tree with correctly nested subagent work.
+- **Updates surface during long-running sessions.** Pythinker now checks periodically for newly available releases, shows each new update notice once per session, and bounds every check with a watchdog so a stalled attempt cannot prevent later retries.
+- **Repository-local agent workflows stay local.** This checkout now treats its root `.agents/` directory as local agent configuration instead of version-controlled project content.
 
 Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.62.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 

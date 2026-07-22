@@ -250,6 +250,7 @@ def test_rewrite_version_strings_targets_only_release_patterns() -> None:
         "pythinker-code_0.27.0_amd64.deb\n"
         "pythinker-code-0.27.0.x86_64.rpm\n"
         "releases/download/v0.27.0/pythinker-code_0.27.0_arm64.deb\n"
+        "bash packages/linux-installer/build.sh 0.26.0\n"
         "bash -s -- --version 0.27.0\n"  # flag example: MUST be preserved
     )
     out = release_tool.rewrite_version_strings(text, old="0.27.0", new="0.28.0")
@@ -259,6 +260,7 @@ def test_rewrite_version_strings_targets_only_release_patterns() -> None:
     assert "pythinker-code_0.28.0_amd64.deb" in out
     assert "pythinker-code-0.28.0.x86_64.rpm" in out
     assert "releases/download/v0.28.0/pythinker-code_0.28.0_arm64.deb" in out
+    assert "bash packages/linux-installer/build.sh 0.28.0" in out
     # the flag example is the documented exception — untouched
     assert "--version 0.27.0" in out
     assert "--version 0.28.0" not in out
