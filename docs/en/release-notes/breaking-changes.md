@@ -6,6 +6,11 @@ This page documents breaking changes in Pythinker Code releases and provides mig
 
 ## 0.61.0 (2026-07-22)
 
+Shell-mode `!` commands now run through the configured shell (`<shell> -c`, or PowerShell
+`-command` on Windows) instead of the platform's implicit `/bin/sh` or `cmd.exe`. Windows users
+with commands written specifically for `cmd.exe` may need to rewrite them for their configured
+PowerShell or explicitly invoke `cmd.exe /c ...`.
+
 ## 0.60.0 (2026-07-18)
 
 No breaking changes. This release is compatible with 0.59.0 user configuration, native installs, and session data.

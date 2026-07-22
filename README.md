@@ -52,9 +52,9 @@ It speaks the [**Agent Client Protocol (ACP)**](https://github.com/agentclientpr
 
 ## 🆕 What's New in 0.61.0
 
-- **Leaner leaf subagent prompts.** All 12 built-in subagent roles now render a dedicated `system_leaf.md` prompt from shared Jinja partials instead of the full root system prompt, dropping root-only orchestration prose from every spawn (implementer prompt: ~7,270 → ~4,240 words) while keeping the root render byte-identical.
-- **Typed, fail-closed coding-artifact handoff.** The `<coding_artifact>` contract is now rendered and extracted from a single `CodingArtifact` schema — exactly one end-of-message block, duplicate/undeclared keys rejected, and malformed artifacts surfaced distinctly to the judge instead of passing through as valid.
-- **Auto-updates never interrupt a running session.** Updates are downloaded and staged with a verified manifest and applied before the next session (or at clean exit) instead of force-closing the active session mid-run; `auto_update` becomes a policy enum (`off`, `notify`, `download`, `apply_on_exit`) with legacy booleans still accepted, and the post-update smoke check verifies the upgraded binary and version.
+- **A faster, steadier interactive prompt.** Slash commands and file mentions now share one completion engine, workspace indexing runs asynchronously, prompt resources are isolated per session, and awaited lifecycle cleanup prevents stale background work. The prompt also stays within the terminal height and avoids queued-input ghost borders.
+- **More provider login options with safer persistence.** Pythinker adds OAuth login for xAI Grok, GitHub Copilot, DigitalOcean Gradient AI, and Snowflake Cortex, backed by a provider-neutral models.dev catalog with curated fallbacks. Credential changes are saved atomically and rolled back if persistence fails.
+- **Cleaner reasoning and agent activity.** Reasoning summaries no longer expose Markdown delimiters or duplicate terminal rows after refocus, while individual agents and parallel `RunAgents` calls render as a compact, payload-free activity tree with correctly nested subagent work.
 
 Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.61.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
 
