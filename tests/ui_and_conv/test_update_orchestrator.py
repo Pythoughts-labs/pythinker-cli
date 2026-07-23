@@ -237,6 +237,48 @@ async def test_update_job_smoke_check_retry_absorbs_launcher_relink_race(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_update_job_cancellation_records_terminal_status_and_releases_lock(
+    monkeypatch, tmp_path
+):
+    """Cancelling the job mid-await must not leave a stale RUNNING status."""
+    import asyncio
+
+    _isolate_update_files(monkeypatch, tmp_path)
+
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
+        return update.UpdateResult.UPDATED
+
+    monkeypatch.setattr(update, "do_update", fake_do_update)
+
+    started = asyncio.Event()
+
+    async def hanging_smoke_check(**_kw):
+        started.set()
+        await asyncio.sleep(60)
+        return (True, "unreachable")
+
+    monkeypatch.setattr(orchestrator, "_run_smoke_check_with_retry", hanging_smoke_check)
+
+    task = asyncio.create_task(
+        orchestrator.run_update_job(
+            print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+        )
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not orchestrator.UPDATE_LOCK_FILE.exists()
+    status = orchestrator.read_update_status()
+    assert status is not None
+    assert status.state is orchestrator.UpdateJobState.FAILED
+    assert "cancelled" in (status.message or "").lower()
+
+
+@pytest.mark.asyncio
 async def test_run_update_prompt_routes_check_through_runner(monkeypatch):
     calls: list[update.UpdateIntent] = []
 

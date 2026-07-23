@@ -443,6 +443,27 @@ async def run_update_job(
             )
         )
         return reported_result
+    except asyncio.CancelledError:
+        # Cancellation lands on the await points (do_update, the smoke-check
+        # thread, retry sleeps) and would otherwise skip the failure handler
+        # below, releasing the lock with the job still recorded as RUNNING —
+        # a stale "in progress" status with no process behind it. Record a
+        # terminal state, then propagate. The smoke-check subprocess is not
+        # interrupted mid-flight, but its own timeout bounds it.
+        message = "Update job cancelled."
+        append_update_log(message)
+        write_update_status(
+            _new_status(
+                job_id=job_id,
+                state=UpdateJobState.FAILED,
+                source=source,
+                started_at=started_at,
+                finished_at=time.time(),
+                result=UpdateResult.FAILED.name,
+                message=message,
+            )
+        )
+        raise
     except Exception as exc:
         message = f"Update failed: {exc}"
         append_update_log(message)
