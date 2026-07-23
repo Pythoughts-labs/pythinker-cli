@@ -914,12 +914,17 @@ async def test_compose_equals_panels_plus_agent_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compose_agent_output_includes_spinners_and_tool_calls() -> None:
+async def test_compose_agent_output_includes_spinners_and_tool_calls(monkeypatch) -> None:
     """compose_agent_output() should include activity indicators and tool call blocks."""
     from rich.text import Text
 
+    from pythinker_code.ui.shell.visualize import _live_view
     from pythinker_code.wire.types import ToolCall
 
+    # The spinner verb rotates on wall-clock over a list that legitimately
+    # includes "Working"; pin it so the static-"Working…" regression guard
+    # below cannot false-positive during that verb's rotation window.
+    monkeypatch.setattr(_live_view, "spinner_message", lambda now=None, **_kw: "Composing…")
     view = _LiveView(StatusUpdate())
     view._active_turn_depth = 1  # working fallback requires active turn
 

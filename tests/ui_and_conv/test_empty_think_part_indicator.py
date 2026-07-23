@@ -213,10 +213,16 @@ def test_moon_fallback_during_active_turn():
     assert agent_blocks[0].plain.strip() == ""
 
 
-def test_working_indicator_stays_visible_when_content_block_visible():
+def test_working_indicator_stays_visible_when_content_block_visible(monkeypatch):
     """The activity spinner stays visible while content streams."""
     from rich.text import Text
 
+    from pythinker_code.ui.shell.visualize import _live_view
+
+    # The verb rotates on wall-clock over a list that legitimately includes
+    # "Working"; pin it so the static-"Working…" regression guard below cannot
+    # false-positive during that verb's 10-minute rotation window.
+    monkeypatch.setattr(_live_view, "spinner_message", lambda now=None, **_kw: "Composing…")
     view = _LiveView(StatusUpdate())
     view.dispatch_wire_message(TurnBegin(user_input="test"))
     view.dispatch_wire_message(StepBegin(n=1))
@@ -286,7 +292,10 @@ def test_moon_fallback_after_all_tools_flushed(monkeypatch):
 def test_working_indicator_stays_visible_while_parallel_tool_still_running(monkeypatch):
     """The activity spinner stays visible while tool blocks are visible."""
     from pythinker_code.ui.shell.console import console as shell_console
+    from pythinker_code.ui.shell.visualize import _live_view
 
+    # Pin the wall-clock-rotated verb; see the content-block variant above.
+    monkeypatch.setattr(_live_view, "spinner_message", lambda now=None, **_kw: "Composing…")
     view = _LiveView(StatusUpdate())
     monkeypatch.setattr(shell_console, "print", lambda *args, **kwargs: None)
 
