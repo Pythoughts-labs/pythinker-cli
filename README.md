@@ -374,6 +374,10 @@ For hosted Pythinker models or ACP terminal auth:
 pythinker login
 ```
 
+<div align="center">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/setup.png" alt="Pythinker login provider picker" width="860">
+</div>
+
 Z.AI exposes two independent OpenAI-compatible routes. Choose the route that owns your key;
 both may coexist, and Pythinker never infers, migrates, falls back, or retries across them:
 
