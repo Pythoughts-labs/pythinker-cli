@@ -9,16 +9,14 @@
 
 <br />
 
-[![PyPI](https://img.shields.io/pypi/v/pythinker-code?style=for-the-badge&logo=pypi&logoColor=white&color=2563eb&label=pythinker-code&cacheSeconds=60)](https://pypi.org/project/pythinker-code/)
-[![Downloads](https://img.shields.io/pepy/dt/pythinker-code?style=for-the-badge&logo=python&logoColor=white&color=16a34a&label=downloads)](https://pepy.tech/projects/pythinker-code)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/pyproject.toml)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-16a34a.svg?style=for-the-badge)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/Pythoughts-labs/pythinker-code/ci-pythinker-cli.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/actions/workflows/ci-pythinker-cli.yml?query=branch%3Amain)
+[![PyPI](https://img.shields.io/pypi/v/pythinker-code?style=for-the-badge&logo=pypi&logoColor=white&color=2563eb&label=pythinker-code)](https://pypi.org/project/pythinker-code/)
+[![Downloads](https://img.shields.io/pepy/dt/pythinker-code?style=for-the-badge&logo=python&logoColor=white&color=f97316&label=downloads)](https://pepy.tech/projects/pythinker-code)
+[![License](https://img.shields.io/badge/License-Apache--2.0-16a34a.svg?style=for-the-badge)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/LICENSE)
 
-[![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-f59e0b.svg?style=flat-square&logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
-[![ACP ready](https://img.shields.io/badge/ACP-ready-7c3aed.svg?style=flat-square)](https://github.com/agentclientprotocol/agent-client-protocol)
-[![MCP tools](https://img.shields.io/badge/MCP-tools-0891b2.svg?style=flat-square)](https://modelcontextprotocol.io/)
-[![Homepage](https://img.shields.io/badge/home-pythinker.com-ec4899.svg?style=flat-square)](https://pythinker.com)
+[![Ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg?style=for-the-badge&logo=ruff&logoColor=d7ff64)](https://docs.astral.sh/ruff/)
+[![Homepage](https://img.shields.io/badge/home-pythinker.com-ec4899.svg?style=for-the-badge&logo=globe&logoColor=white)](https://pythinker.com)
+[![CI](https://img.shields.io/github/actions/workflow/status/Pythoughts-labs/pythinker-code/ci-pythinker-cli.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/actions/workflows/ci-pythinker-cli.yml?query=branch%3Amain)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/pyproject.toml)
 
 <br />
 
