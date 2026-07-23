@@ -173,23 +173,67 @@ async def test_update_job_reports_failure_when_post_install_smoke_check_fails(
         return update.UpdateResult.UPDATED
 
     monkeypatch.setattr(update, "do_update", fake_do_update)
-    monkeypatch.setattr(
-        orchestrator,
-        "run_post_install_smoke_check",
-        lambda **_kw: (False, "Smoke check failed: broken"),
-    )
+    monkeypatch.setattr(orchestrator, "_SMOKE_CHECK_RETRY_DELAY_SECONDS", 0.0)
+    attempts = 0
+
+    def fake_smoke(**_kw):
+        nonlocal attempts
+        attempts += 1
+        return (False, "Smoke check failed: broken")
+
+    monkeypatch.setattr(orchestrator, "run_post_install_smoke_check", fake_smoke)
 
     result = await orchestrator.run_update_job(
         print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
     )
 
     assert result is update.UpdateResult.VERIFICATION_FAILED
+    # A hard failure is retried before being reported — every attempt failed.
+    assert attempts == orchestrator._SMOKE_CHECK_ATTEMPTS
     status = orchestrator.read_update_status()
     assert status is not None
     assert status.state is orchestrator.UpdateJobState.FAILED
     assert status.result == "VERIFICATION_FAILED"
     assert "smoke check did not pass" in (status.message or "").lower()
     assert not orchestrator.UPDATE_LAST_SUCCESS_FILE.exists()
+
+
+@pytest.mark.asyncio
+async def test_update_job_smoke_check_retry_absorbs_launcher_relink_race(monkeypatch, tmp_path):
+    """A transiently stale launcher (e.g. brew's opt link mid-relink) must not
+    record VERIFICATION_FAILED when a later attempt passes."""
+    _isolate_update_files(monkeypatch, tmp_path)
+
+    async def fake_do_update(
+        *, print_output: bool, intent: update.UpdateIntent, output_callback=None
+    ):
+        return update.UpdateResult.UPDATED
+
+    monkeypatch.setattr(update, "do_update", fake_do_update)
+    monkeypatch.setattr(orchestrator, "_SMOKE_CHECK_RETRY_DELAY_SECONDS", 0.0)
+    attempts = 0
+
+    def fake_smoke(**_kw):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return (False, "Smoke check reported 0.60.0, expected 0.62.0")
+        return (True, "Smoke check passed: pythinker, version 0.62.0")
+
+    monkeypatch.setattr(orchestrator, "run_post_install_smoke_check", fake_smoke)
+
+    result = await orchestrator.run_update_job(
+        print_output=False, intent=update.UpdateIntent.INSTALL, source="test"
+    )
+
+    assert result is update.UpdateResult.UPDATED
+    assert attempts == 2
+    status = orchestrator.read_update_status()
+    assert status is not None
+    assert status.state is orchestrator.UpdateJobState.UPDATED
+    assert orchestrator.UPDATE_LAST_SUCCESS_FILE.exists()
+    log = "\n".join(orchestrator.read_update_log_tail())
+    assert "retrying" in log
 
 
 @pytest.mark.asyncio

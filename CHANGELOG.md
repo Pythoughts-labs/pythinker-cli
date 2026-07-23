@@ -15,6 +15,8 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Retry the post-update smoke check briefly before recording `VERIFICATION_FAILED`, absorbing the Homebrew launcher-relink race that falsely failed successful upgrades, and print the verification failure on screen instead of leaving "Updated successfully!" as the last word when verification genuinely fails.
+
 ## 0.62.0 (2026-07-22)
 
 - Treat the repository-root `.agents/` directory as local agent configuration and keep it out of version control.

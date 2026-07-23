@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -408,7 +409,7 @@ async def run_update_job(
                 append_update_log(message)
                 _write_last_success(job_id=job_id, message=message)
             else:
-                smoke_ok, smoke_message = run_post_install_smoke_check(
+                smoke_ok, smoke_message = await _run_smoke_check_with_retry(
                     target_version=_read_target_version()
                 )
                 append_update_log(smoke_message)
@@ -422,6 +423,13 @@ async def run_update_job(
                     final_state = _result_state(reported_result)
                     # Never promote a staged binary that can't even print --version.
                     _finalize_native_staging(promote=False)
+                    # The install step has already printed its own success line;
+                    # leaving the screen at "Updated successfully!" while the
+                    # recorded state is VERIFICATION_FAILED would misreport the
+                    # outcome (the footer keeps the update notice for the same
+                    # reason). Surface the failure where the success was shown.
+                    if print_output:
+                        console.print(f"[{_get_tui_tokens().warning}]{message}[/]")
 
         write_update_status(
             _new_status(
@@ -546,6 +554,35 @@ def _smoke_check_env() -> dict[str, str]:
     env["PYTHONSAFEPATH"] = "1"
     env.pop("PYTHONPATH", None)
     return env
+
+
+_SMOKE_CHECK_ATTEMPTS = 3
+_SMOKE_CHECK_RETRY_DELAY_SECONDS = 1.0
+
+
+async def _run_smoke_check_with_retry(target_version: str | None) -> tuple[bool, str]:
+    """Run the post-install smoke check, retrying transient failures.
+
+    Package managers can report success moments before the launcher they manage
+    is repointed at the new install (observed with Homebrew's ``opt`` symlink):
+    an immediate probe then exercises the OLD binary, reports the old version,
+    and records a false ``VERIFICATION_FAILED``. A short retry window absorbs
+    that race; a real bad install still fails every attempt. The subprocess
+    probe runs off the event loop so a slow/hung binary cannot stall the shell.
+    """
+    smoke_ok, smoke_message = False, "Smoke check did not run."
+    for attempt in range(1, _SMOKE_CHECK_ATTEMPTS + 1):
+        smoke_ok, smoke_message = await asyncio.to_thread(
+            run_post_install_smoke_check, target_version=target_version
+        )
+        if smoke_ok or attempt == _SMOKE_CHECK_ATTEMPTS:
+            break
+        append_update_log(
+            f"Smoke check attempt {attempt}/{_SMOKE_CHECK_ATTEMPTS} failed "
+            f"({smoke_message}); retrying in {_SMOKE_CHECK_RETRY_DELAY_SECONDS:g}s..."
+        )
+        await asyncio.sleep(_SMOKE_CHECK_RETRY_DELAY_SECONDS)
+    return smoke_ok, smoke_message
 
 
 def run_post_install_smoke_check(target_version: str | None = None) -> tuple[bool, str]:
