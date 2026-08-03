@@ -70,6 +70,12 @@ Upgrade to the latest version:
 pythinker update
 ```
 
+Uninstall on Windows (native installer):
+
+```powershell
+irm https://pythinker.com/uninstall.ps1 | iex
+```
+
 Uninstall a curl-bash install:
 
 ```sh

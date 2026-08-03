@@ -15,6 +15,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
 
 ## Unreleased
 
+- Add `scripts/uninstall.ps1`, a Windows uninstaller served at `https://pythinker.com/uninstall.ps1` (`irm https://pythinker.com/uninstall.ps1 | iex`): runs the registered Inno uninstaller silently, sweeps validated install dirs/PATH entries/Start Menu shortcuts/uninstall registry keys/stale installer temp dirs, and verifies final state with fail-closed semantics. Registry-provided paths are never deleted or executed without validation (named `Pythinker` + on-disk evidence, no reparse points, trusted `unins<N>.exe` only), processes are killed per-PID only from validated dirs, and the script never self-elevates or calls `exit`, so piping through `iex` cannot close the host. User data under `%USERPROFILE%\.pythinker` is kept unless `PYTHINKER_PURGE_DATA=1` is set.
 - Update all repository URLs and repo-slug constants to `Pythoughts-labs/pythinker-cli` after the GitHub repository rename (install scripts, updater, feedback default repo, docs, workflows, packaging).
 - Retry the post-update smoke check briefly before recording `VERIFICATION_FAILED`, absorbing the Homebrew launcher-relink race that falsely failed successful upgrades, and print the verification failure on screen instead of leaving "Updated successfully!" as the last word when verification genuinely fails.
 

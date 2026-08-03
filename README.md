@@ -212,8 +212,12 @@ installs to `%ProgramFiles%\Pythinker` and writes PATH to HKLM (requires admin).
 the newest installer, verifies SHA-256, and launches the Inno installer
 with visible progress (`/SILENT /NORESTART /CURRENTUSER /CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS`).
 
-**Uninstall:** Apps & Features → *Pythinker Code* → Uninstall reverts both
-the files and the PATH edit.
+**Uninstall:** `irm https://pythinker.com/uninstall.ps1 | iex` — runs the
+registered uninstaller, then sweeps leftover files, PATH edits (user + system),
+Start Menu shortcuts, and uninstall registry keys, and verifies the result.
+Your config/sessions in `%USERPROFILE%\.pythinker` are kept unless you set
+`$env:PYTHINKER_PURGE_DATA = "1"` first. Apps & Features → *Pythinker Code* →
+Uninstall works too and reverts both the files and the PATH edit.
 
 > 🛡 **First-launch SmartScreen warning** — Until Authenticode secrets are
 > configured in CI for a release, the installer ships unsigned and Windows shows

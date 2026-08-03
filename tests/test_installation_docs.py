@@ -152,11 +152,14 @@ def test_native_shell_installers_are_parseable_when_bash_is_available() -> None:
 def test_public_install_scripts_match_native_sources_of_truth() -> None:
     native_sh = (ROOT / "scripts" / "install-native.sh").read_bytes()
     native_ps1 = (ROOT / "scripts" / "install.ps1").read_bytes()
+    native_uninstall_ps1 = (ROOT / "scripts" / "uninstall.ps1").read_bytes()
 
     assert (ROOT / "docs" / "public" / "install.sh").read_bytes() == native_sh
     assert (ROOT / "web" / "public" / "install.sh").read_bytes() == native_sh
     assert (ROOT / "docs" / "public" / "install.ps1").read_bytes() == native_ps1
     assert (ROOT / "web" / "public" / "install.ps1").read_bytes() == native_ps1
+    assert (ROOT / "docs" / "public" / "uninstall.ps1").read_bytes() == native_uninstall_ps1
+    assert (ROOT / "web" / "public" / "uninstall.ps1").read_bytes() == native_uninstall_ps1
 
     expected_sh_headers = (
         "/install.sh\n"
@@ -168,10 +171,49 @@ def test_public_install_scripts_match_native_sources_of_truth() -> None:
         "  Content-Type: text/plain; charset=utf-8\n"
         "  Cache-Control: public, max-age=300, s-maxage=900, stale-if-error=86400\n"
     )
+    expected_uninstall_ps1_headers = (
+        "/uninstall.ps1\n"
+        "  Content-Type: text/plain; charset=utf-8\n"
+        "  Cache-Control: public, max-age=300, s-maxage=900, stale-if-error=86400\n"
+    )
     assert expected_sh_headers in (ROOT / "docs" / "public" / "_headers").read_text()
     assert expected_sh_headers in (ROOT / "web" / "public" / "_headers").read_text()
     assert expected_ps1_headers in (ROOT / "docs" / "public" / "_headers").read_text()
     assert expected_ps1_headers in (ROOT / "web" / "public" / "_headers").read_text()
+    assert expected_uninstall_ps1_headers in (ROOT / "docs" / "public" / "_headers").read_text()
+    assert expected_uninstall_ps1_headers in (ROOT / "web" / "public" / "_headers").read_text()
+
+
+def test_windows_readme_documents_uninstall_one_liner() -> None:
+    readme = (ROOT / "README.md").read_text()
+    guide = (ROOT / "docs" / "en" / "guides" / "getting-started.md").read_text()
+
+    assert "irm https://pythinker.com/uninstall.ps1 | iex" in readme
+    assert "irm https://pythinker.com/uninstall.ps1 | iex" in guide
+
+
+def test_native_powershell_uninstaller_is_parseable_when_pwsh_is_available() -> None:
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        return
+    uninstaller = (ROOT / "scripts" / "uninstall.ps1").resolve()
+    result = subprocess.run(
+        [
+            pwsh,
+            "-NoProfile",
+            "-Command",
+            (
+                "$errs = $null;"
+                f"[System.Management.Automation.Language.Parser]::ParseFile('{uninstaller}',"
+                " [ref]$null, [ref]$errs) | Out-Null;"
+                " if ($errs) { $errs | ForEach-Object { $_.Message }; exit 1 }"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_installation_docs_do_not_use_placeholder_package_artifacts() -> None:
