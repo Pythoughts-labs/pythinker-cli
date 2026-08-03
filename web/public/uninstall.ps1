@@ -1,58 +1,30 @@
 # Pythinker Code — native Windows uninstaller.
 #
-# Reverses everything `irm https://pythinker.com/install.ps1 | iex` sets up:
-#   1. Runs registered Inno Setup uninstallers (unins000.exe) silently.
-#   2. Sweeps installer artifacts: validated install dirs, PATH entries (user +
-#      system, value kind preserved), Start Menu shortcuts, uninstall registry
-#      keys (both 32/64-bit views), stale installer temp dirs, session PATH.
-#
-# Session model:
-#   - Everything runs inside one anonymous child scope: no functions, variables,
-#     or preference settings leak into the caller's session when piped through
-#     `irm ... | iex`. Console encoding is restored on exit; TLS settings are
-#     never touched. The script never calls `exit` — failure surfaces as a
-#     thrown error, so iex cannot close the user's window while
-#     `powershell.exe -File` still gets a non-zero exit code.
-#
-# Safety model:
-#   - Registry-provided paths are NEVER deleted or executed blindly. A directory
-#     is only touched after Get-SafeInstallDirectory proves it is a plausible
-#     Pythinker install: absolute, not a filesystem root, not a critical
-#     directory, leaf named "Pythinker", containing no reparse-point component,
-#     and either the default location or containing pythinker.exe / unins000.exe.
-#   - Uninstaller executables must additionally be named unins<N>.exe and live
-#     directly in a validated install dir.
-#   - The script NEVER elevates a registry-selected executable (no -Verb RunAs):
-#     machine-scope work requires re-running the whole script elevated, which
-#     keeps a tampered user-writable file from becoming a privilege escalation.
-#   - Recursive deletion refuses any path that contains, or sits beneath, a
-#     reparse point (junction/symlink), and never descends into nested ones.
-#   - Processes are killed only when their executable path resolves inside a
-#     validated install dir; escalation is per-PID with StartTime+Path
-#     revalidation, never machine-wide by image name.
-#   - Registry uninstall keys are removed only for installations that were
-#     actually handled (files gone or pending reboot); keys for unvalidated
-#     installations are left in place and reported.
-#
-# Failure model:
-#   - Step failures are recorded as WARNINGS and the run continues.
-#   - A final verification phase inspects real machine state and FAILS CLOSED:
-#     anything it cannot confirm clean becomes an UNRESOLVED item, and the
-#     result succeeds only when zero items are unresolved.
-#   - Locked paths scheduled for deletion on next reboot are tracked separately.
-#
-# Usage (paste into PowerShell, or host and pipe like the installer):
+# Usage:
 #   irm https://pythinker.com/uninstall.ps1 | iex
 #
-# User data (config, sessions, logs under $HOME\.pythinker):
-#   $env:PYTHINKER_PURGE_DATA = "1"  -> delete it without asking (verified)
-#   $env:PYTHINKER_PURGE_DATA = "0"  -> keep it without asking
-#   unset                            -> ask once when interactive; keep otherwise
+# User data policy:
+#   $env:PYTHINKER_PURGE_DATA = "1"  # delete $HOME\.pythinker without asking
+#   $env:PYTHINKER_PURGE_DATA = "0"  # keep it without asking
+#   unset                             # ask once when interactive; keep otherwise
+#
+# Safety and failure model:
+#   - Runs inside an anonymous child scope and restores console encoding.
+#   - Never calls exit and never executes a registry-selected binary while elevated.
+#   - Never recursively deletes a registry-selected custom directory.
+#   - Only known installation directories are eligible for manual recursive sweep.
+#   - Registry-selected custom installations are never executed or recursively
+#     swept automatically; they are left intact and reported for manual action.
+#   - Elevated runs never execute HKCU or user-writable uninstallers.
+#   - Recursive deletion fails closed on roots, UNC/device paths, reparse points,
+#     incomplete tree inspection, and malformed paths.
+#   - Process escalation is per-PID with StartTime and executable-path revalidation.
+#   - Final verification fails closed: unknown state is unresolved, not success.
+#   - Requires Windows PowerShell 5.1+ or PowerShell 7+ on Windows.
 
 & {
   $ErrorActionPreference = "Stop"
 
-  # Save/restore console encoding so the caller's session is untouched.
   $originalEncoding = $null
   try {
     $originalEncoding = [Console]::OutputEncoding
@@ -60,22 +32,51 @@
   } catch {}
 
   try {
-    $AppId     = "{4F4F2EAE-9D55-4E8E-92BC-7C1FA38B6F02}_is1"
-    $PurgeData = $env:PYTHINKER_PURGE_DATA
-    $NoColor   = $env:NO_COLOR
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+      throw "This uninstaller is for Windows."
+    }
 
-    # --- Color detection (RawUI access can throw in some hosts; probe defensively)
+    # -------------------------------------------------------------------------
+    # Constants and state
+    # -------------------------------------------------------------------------
+
+    $AppId = "{4F4F2EAE-9D55-4E8E-92BC-7C1FA38B6F02}_is1"
+    $PurgeDataSetting = $env:PYTHINKER_PURGE_DATA
+    $NoColor = $env:NO_COLOR
+
+    $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Pythinker"
+    $DataDir = Join-Path $HOME ".pythinker"
+    $TempRoot = [System.IO.Path]::GetTempPath()
+
+    $State = [pscustomobject]@{
+      RemovedCount       = 0
+      Warnings           = New-Object System.Collections.Generic.List[string]
+      Unresolved         = New-Object System.Collections.Generic.List[string]
+      PendingReboot      = New-Object System.Collections.Generic.List[string]
+      TempCleanupTargets = New-Object System.Collections.Generic.List[string]
+      PurgeDataRequested = $false
+      EnvironmentChanged = $false
+    }
+
+    # -------------------------------------------------------------------------
+    # Output helpers
+    # -------------------------------------------------------------------------
+
     $ESC = [char]27
     $useColor = $false
     if (-not $NoColor) {
       try {
-        if ($null -ne $Host.UI.RawUI) {
-          $vt = $Host.UI.PSObject.Properties["SupportsVirtualTerminal"]
-          if ($vt) { $useColor = [bool]$Host.UI.SupportsVirtualTerminal }
-          else { $useColor = ([Environment]::OSVersion.Version.Major -ge 10) } # Win10+ conhost parses ANSI
+        $vtProperty = $Host.UI.PSObject.Properties["SupportsVirtualTerminal"]
+        if ($vtProperty) {
+          $useColor = [bool]$Host.UI.SupportsVirtualTerminal
+        } elseif ($env:WT_SESSION -or $env:TERM_PROGRAM) {
+          $useColor = $true
         }
-      } catch { $useColor = $false }
+      } catch {
+        $useColor = $false
+      }
     }
+
     if ($useColor) {
       $NAVY  = "$ESC[38;5;24m"
       $FACE  = "$ESC[38;5;255m"
@@ -88,47 +89,63 @@
       $NAVY = $FACE = $IRIS = $CORAL = $DIM = $BOLD = $RESET = ""
     }
 
-    # --- All mutable state lives in one reference object inside this child
-    # scope; functions read it via normal (dynamic) scope lookup. No $script:
-    # variables exist, so nothing can leak into an iex caller's session.
-    $State = [pscustomobject]@{
-      RemovedCount  = 0
-      Warnings      = New-Object System.Collections.Generic.List[string]
-      Unresolved    = New-Object System.Collections.Generic.List[string]
-      PendingReboot = New-Object System.Collections.Generic.List[string]
-      DefaultInstallDir = $null
+    function Step($Message) { Write-Host "  $IRIS⠿$RESET $Message" }
+    function OK($Message)   { Write-Host "  $IRIS✓$RESET $Message" }
+    function Warn($Message) { Write-Host "  $CORAL!$RESET $Message" }
+    function Dim($Message)  { Write-Host "  ${DIM}$Message${RESET}" }
+
+    function Format-ErrorMessage($ErrorObject) {
+      if ($null -eq $ErrorObject) { return "" }
+      if ($ErrorObject -is [System.Management.Automation.ErrorRecord]) {
+        return [string]$ErrorObject.Exception.Message
+      }
+      return [string]$ErrorObject
     }
 
-    function Step($msg) { Write-Host "  $IRIS⠿$RESET $msg" }
-    function OK($msg)   { Write-Host "  $IRIS✓$RESET $msg" }
-    function Warn($msg) { Write-Host "  $CORAL!$RESET $msg" }
-    function Dim($msg)  { Write-Host "  ${DIM}$msg${RESET}" }
-
-    function Record-Removed($what) { $State.RemovedCount++; OK $what }
-
-    function Format-Err($err) {
-      if ($null -eq $err) { return "" }
-      if ($err -is [System.Management.Automation.ErrorRecord]) { return $err.Exception.Message }
-      return [string]$err
+    function Test-ListContainsInsensitive($List, [string]$Value) {
+      foreach ($item in $List) {
+        if ([string]::Equals([string]$item, $Value, [System.StringComparison]::OrdinalIgnoreCase)) {
+          return $true
+        }
+      }
+      return $false
     }
 
-    function Record-Warning($what, $err) {
-      $detail = $what
-      $message = Format-Err $err
-      if ($message) { $detail = "$what — $message" }
-      $State.Warnings.Add($detail)
-      Warn $detail
+    function Add-UniqueString($List, [string]$Value) {
+      if (-not (Test-ListContainsInsensitive $List $Value)) {
+        [void]$List.Add($Value)
+      }
     }
 
-    function Record-Unresolved($what) {
-      $State.Unresolved.Add($what)
-      Warn $what
+    function Record-Removed([string]$What) {
+      $State.RemovedCount = [int]$State.RemovedCount + 1
+      OK $What
     }
 
-    # Isolated step runner: a throwing step becomes a warning, never an abort.
-    function Invoke-Step($Name, [scriptblock]$Action) {
-      try { return & $Action }
-      catch { Record-Warning $Name $_; return $null }
+    function Record-Warning([string]$What, $ErrorObject = $null) {
+      $detail = $What
+      $message = Format-ErrorMessage $ErrorObject
+      if ($message) { $detail = "$What — $message" }
+      if (-not (Test-ListContainsInsensitive $State.Warnings $detail)) {
+        [void]$State.Warnings.Add($detail)
+        Warn $detail
+      }
+    }
+
+    function Record-Unresolved([string]$What) {
+      if (-not (Test-ListContainsInsensitive $State.Unresolved $What)) {
+        [void]$State.Unresolved.Add($What)
+        Warn $What
+      }
+    }
+
+    function Invoke-Step([string]$Name, [scriptblock]$Action) {
+      try {
+        return & $Action
+      } catch {
+        Record-Warning $Name $_
+        return $null
+      }
     }
 
     function Write-Header {
@@ -143,491 +160,927 @@
       Write-Host ""
     }
 
-    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-      throw "This uninstaller is for Windows."
-    }
-
-    $State.DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\Pythinker"
-    $DataDir   = Join-Path $HOME ".pythinker"
-    $TempRoot  = [System.IO.Path]::GetTempPath()
+    # -------------------------------------------------------------------------
+    # Platform and path helpers
+    # -------------------------------------------------------------------------
 
     function Test-IsAdmin {
       try {
-        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-        return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-      } catch { return $false }
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object -TypeName Security.Principal.WindowsPrincipal -ArgumentList $identity
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+      } catch {
+        return $false
+      }
     }
 
     function Test-Interactive {
       if ($env:CI -eq "true" -or $env:CI -eq "1") { return $false }
-      try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
-      return ($Host.UI.RawUI -ne $null)
+      try {
+        if ([Console]::IsInputRedirected) { return $false }
+        return ($null -ne $Host.UI.RawUI)
+      } catch {
+        return $false
+      }
     }
 
-    # Canonical form for PATH comparisons ONLY: trims quotes, expands env vars,
-    # canonicalizes rooted paths (. / ..), strips trailing separators. Relative
-    # tokens are returned un-canonicalized (never resolved against the cwd).
-    # Original registry tokens are never rewritten — this is only a match key.
+    function Get-CanonicalPath($Path) {
+      if ([string]::IsNullOrWhiteSpace([string]$Path)) { return $null }
+      $clean = [Environment]::ExpandEnvironmentVariables(([string]$Path).Trim().Trim('"'))
+      if ($clean -match '^[A-Za-z]:(?:$|[^\x5c/])') { return $null } # reject drive-relative paths such as C:foo
+      if (-not [IO.Path]::IsPathRooted($clean)) { return $null }
+      try {
+        return ([IO.Path]::GetFullPath($clean)).TrimEnd('\', '/')
+      } catch {
+        return $null
+      }
+    }
+
+    function Test-LocalDrivePath($Path) {
+      $full = Get-CanonicalPath $Path
+      if (-not $full) { return $false }
+      try {
+        $root = [IO.Path]::GetPathRoot($full)
+        return ($root -match '^[A-Za-z]:\\$')
+      } catch {
+        return $false
+      }
+    }
+
     function Get-NormalizedPathToken($Value) {
       if ($null -eq $Value) { return "" }
-      $clean = $Value.Trim().Trim('"')
+      $clean = ([string]$Value).Trim().Trim('"')
       if ($clean -eq "") { return "" }
       $expanded = [Environment]::ExpandEnvironmentVariables($clean)
-      if ([IO.Path]::IsPathRooted($expanded)) {
-        try { $expanded = [IO.Path]::GetFullPath($expanded) } catch { }
+      $driveRelative = ($expanded -match '^[A-Za-z]:(?:$|[^\x5c/])')
+      if (-not $driveRelative -and [IO.Path]::IsPathRooted($expanded)) {
+        try { $expanded = [IO.Path]::GetFullPath($expanded) } catch {}
       }
       return $expanded.TrimEnd('\', '/')
     }
 
-    # True when the path itself or any existing ancestor is a reparse point
-    # (junction/symlink). Fails CLOSED when inspection is impossible.
-    function Test-PathHasReparseComponent($Path) {
-      $p = $Path
-      while ($p -and -not (Test-Path -LiteralPath $p)) {
-        $p = Split-Path -Parent $p
-      }
-      if (-not $p) { return $false }
-      try {
-        $current = Get-Item -LiteralPath $p -Force -ErrorAction Stop
-        while ($current) {
-          if ($current.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $true }
-          $current = $current.Parent
+    function Test-PathEqual($Left, $Right) {
+      $a = Get-NormalizedPathToken $Left
+      $b = Get-NormalizedPathToken $Right
+      if ($a -eq "" -or $b -eq "") { return $false }
+      return [string]::Equals($a, $b, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    function Test-PathUnderDirs($Path, $Directories) {
+      $full = Get-CanonicalPath $Path
+      if (-not $full) { return $false }
+      foreach ($directory in $Directories) {
+        $parent = Get-CanonicalPath $directory
+        if (-not $parent) { continue }
+        if ([string]::Equals($full, $parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+          return $true
         }
-        return $false
-      } catch {
-        Record-Warning "could not inspect reparse status of $Path — treating it as unsafe" $_
-        return $true
-      }
-    }
-
-    # Reparse-point directories inside a tree, without ever descending into
-    # them (raw .NET enumeration; PS 5.1 provider traversal is not trusted).
-    function Get-NestedReparsePoints($Root) {
-      $found = New-Object System.Collections.Generic.List[string]
-      $stack = New-Object System.Collections.Generic.Stack[string]
-      $stack.Push($Root)
-      while ($stack.Count -gt 0) {
-        $dir = $stack.Pop()
-        $entries = $null
-        try { $entries = [IO.Directory]::EnumerateFileSystemEntries($dir) } catch { continue }
-        foreach ($e in $entries) {
-          $attrs = $null
-          try { $attrs = [IO.File]::GetAttributes($e) } catch { continue }
-          $isDir = [bool]($attrs -band [IO.FileAttributes]::Directory)
-          if ($isDir -and ($attrs -band [IO.FileAttributes]::ReparsePoint)) { $found.Add($e); continue }
-          if ($isDir) { $stack.Push($e) }
+        $prefix = $parent.TrimEnd('\') + [IO.Path]::DirectorySeparatorChar
+        if ($full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+          return $true
         }
-      }
-      return $found
-    }
-
-    # Full tree listing (files + dirs) that never descends into reparse-point
-    # directories; the links themselves are returned as leaf directories.
-    function Get-TreeSafe($Root) {
-      $files = New-Object System.Collections.Generic.List[string]
-      $dirs = New-Object System.Collections.Generic.List[string]
-      $stack = New-Object System.Collections.Generic.Stack[string]
-      $stack.Push($Root)
-      while ($stack.Count -gt 0) {
-        $dir = $stack.Pop()
-        $entries = $null
-        try { $entries = [IO.Directory]::EnumerateFileSystemEntries($dir) } catch { continue }
-        foreach ($e in $entries) {
-          $attrs = $null
-          try { $attrs = [IO.File]::GetAttributes($e) } catch { continue }
-          $isDir = [bool]($attrs -band [IO.FileAttributes]::Directory)
-          if (-not $isDir) { $files.Add($e); continue }
-          $dirs.Add($e)
-          if ($attrs -band [IO.FileAttributes]::ReparsePoint) { continue } # link is a leaf
-          $stack.Push($e)
-        }
-      }
-      return [pscustomobject]@{ Files = $files; Dirs = $dirs }
-    }
-
-    # --- Path safety: the ONLY guard between a registry value and recursive
-    # deletion / execution. Returns the canonical dir or $null.
-    function Get-SafeInstallDirectory($Candidate) {
-      if (-not $Candidate) { return $null }
-      $expanded = [Environment]::ExpandEnvironmentVariables(($Candidate.Trim().Trim('"')))
-      if (-not [IO.Path]::IsPathRooted($expanded)) {
-        Record-Warning "ignoring non-absolute install path: $Candidate" $null
-        return $null
-      }
-      try { $raw = [IO.Path]::GetFullPath($expanded) }
-      catch { Record-Warning "ignoring malformed install path: $Candidate" $_; return $null }
-
-      $root = ([IO.Path]::GetPathRoot($raw)).TrimEnd('\', '/')
-      $full = $raw.TrimEnd('\', '/')
-      if ($full -eq "" -or $full -ieq $root) {
-        Record-Warning "refusing filesystem root as install dir: $raw" $null
-        return $null
-      }
-
-      # Never touch critical directories or any ancestor of them.
-      $critical = @(
-        [Environment]::GetFolderPath("Windows"),
-        [Environment]::GetFolderPath("ProgramFiles"),
-        [Environment]::GetFolderPath("ProgramFilesX86"),
-        [Environment]::GetFolderPath("UserProfile"),
-        [Environment]::GetFolderPath("CommonApplicationData"),
-        $env:SystemDrive
-      ) | Where-Object { $_ }
-      foreach ($c in $critical) {
-        $cc = ([IO.Path]::GetFullPath($c)).TrimEnd('\', '/')
-        if ($full -ieq $cc -or $cc.StartsWith($full + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-          Record-Warning "refusing critical directory as install dir: $full" $null
-          return $null
-        }
-      }
-
-      if ([IO.Path]::GetFileName($full) -ine "Pythinker") {
-        Record-Warning "refusing directory not named 'Pythinker': $full" $null
-        return $null
-      }
-
-      if (Test-PathHasReparseComponent $full) {
-        Record-Warning "refusing path with a reparse-point component: $full" $null
-        return $null
-      }
-
-      # The default location is always plausible; custom locations must contain
-      # on-disk evidence of a real install.
-      if ($full -ieq $State.DefaultInstallDir) { return $full }
-      if ((Test-Path -LiteralPath (Join-Path $full "pythinker.exe")) -or
-          (Test-Path -LiteralPath (Join-Path $full "unins000.exe"))) {
-        return $full
-      }
-      Record-Warning "ignoring unrecognized install directory (no pythinker.exe or unins000.exe inside): $full" $null
-      return $null
-    }
-
-    # An uninstaller executable is trusted only when it looks like an Inno
-    # uninstaller (unins<N>.exe) AND lives directly in a validated install dir.
-    function Test-TrustedUninstaller($Exe, $Dir) {
-      if (-not $Exe -or -not (Test-Path -LiteralPath $Exe -PathType Leaf)) { return $false }
-      if ([IO.Path]::GetFileName($Exe) -notmatch '^unins\d+\.exe$') { return $false }
-      try {
-        $parent = ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Exe))).TrimEnd('\', '/')
-        $dd = ([IO.Path]::GetFullPath($Dir)).TrimEnd('\', '/')
-      } catch { return $false }
-      return ($parent -ieq $dd)
-    }
-
-    function Test-PathUnderDirs($ProcessPath, $Dirs) {
-      if (-not $ProcessPath) { return $false }
-      try { $full = ([IO.Path]::GetFullPath($ProcessPath)).TrimEnd('\', '/') } catch { return $false }
-      foreach ($d in $Dirs) {
-        $dd = ([IO.Path]::GetFullPath($d)).TrimEnd('\', '/')
-        if ($full.StartsWith($dd + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or $full -ieq $dd) { return $true }
       }
       return $false
     }
 
-    # --- 1. Registry discovery (both hives, 32/64-bit views; handles always disposed)
-    function Find-UninstallEntries {
-      $uninstallPath = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId"
-      $entries = @()
-      foreach ($hive in @("CurrentUser", "LocalMachine")) {
-        foreach ($view in @("Registry64", "Registry32")) {
-          $base = $null; $key = $null
-          try {
-            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
-            $key = $base.OpenSubKey($uninstallPath)
-            if ($key) {
-              $uninstall = $key.GetValue("UninstallString")
-              $quiet = $key.GetValue("QuietUninstallString")
-              $location = $key.GetValue("InstallLocation")
-              if ($uninstall -or $quiet) {
-                $entries += [pscustomobject]@{
-                  Hive = $hive; View = $view
-                  UninstallString = $uninstall; QuietUninstallString = $quiet
-                  InstallLocation = $location
-                }
-              }
+    function Add-UniquePath($List, $Path) {
+      $full = Get-CanonicalPath $Path
+      if (-not $full) { return }
+      foreach ($existing in $List) {
+        if (Test-PathEqual $existing $full) { return }
+      }
+      [void]$List.Add($full)
+    }
+
+    function Test-PendingReboot($Path) {
+      foreach ($pending in $State.PendingReboot) {
+        if (Test-PathEqual $pending $Path) { return $true }
+      }
+      return $false
+    }
+
+    function Add-PendingReboot($Path) {
+      $full = Get-CanonicalPath $Path
+      if (-not $full) { $full = [string]$Path }
+      Add-UniquePath $State.PendingReboot $full
+    }
+
+    function Get-KnownInstallDirectories {
+      $directories = New-Object System.Collections.Generic.List[string]
+      Add-UniquePath $directories $DefaultInstallDir
+
+      $programFiles = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::ProgramFiles)
+      if ($programFiles) { Add-UniquePath $directories (Join-Path $programFiles "Pythinker") }
+
+      $programFilesX86 = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::ProgramFilesX86)
+      if ($programFilesX86) { Add-UniquePath $directories (Join-Path $programFilesX86 "Pythinker") }
+
+      return $directories
+    }
+
+    $KnownInstallDirs = Get-KnownInstallDirectories
+
+    function Test-KnownInstallDirectory($Path) {
+      foreach ($known in $KnownInstallDirs) {
+        if (Test-PathEqual $Path $known) { return $true }
+      }
+      return $false
+    }
+
+    function Test-PathHasReparseComponent($Path) {
+      $full = Get-CanonicalPath $Path
+      if (-not $full) { return $true }
+
+      $current = $full
+      while ($current) {
+        try {
+          if (Test-Path -LiteralPath $current -ErrorAction Stop) {
+            $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              return $true
             }
-            # key absent = not installed at this scope/view; not an error.
+          }
+        } catch {
+          Record-Warning "could not inspect reparse status of $Path — treating it as unsafe" $_
+          return $true
+        }
+
+        $parent = Split-Path -Parent $current
+        if (-not $parent -or (Test-PathEqual $parent $current)) { break }
+        $current = $parent
+      }
+
+      return $false
+    }
+
+    function Get-SafeTreeSnapshot($Root) {
+      $files = New-Object System.Collections.Generic.List[string]
+      $directories = New-Object System.Collections.Generic.List[string]
+      $reparsePoints = New-Object System.Collections.Generic.List[string]
+      $errors = New-Object System.Collections.Generic.List[string]
+      $complete = $true
+      $rootIsDirectory = $false
+
+      $fullRoot = Get-CanonicalPath $Root
+      if (-not $fullRoot) {
+        [void]$errors.Add("invalid or non-local root path")
+        return [pscustomobject]@{
+          Complete      = $false
+          Root          = [string]$Root
+          RootIsDirectory = $false
+          Files         = $files
+          Dirs          = $directories
+          ReparsePoints = $reparsePoints
+          Errors        = $errors
+        }
+      }
+
+      try {
+        $rootItem = Get-Item -LiteralPath $fullRoot -Force -ErrorAction Stop
+        if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+          [void]$reparsePoints.Add($fullRoot)
+        }
+        $rootIsDirectory = [bool]($rootItem.Attributes -band [IO.FileAttributes]::Directory)
+        if (-not $rootIsDirectory) {
+          [void]$files.Add($fullRoot)
+          return [pscustomobject]@{
+            Complete        = $true
+            Root            = $fullRoot
+            RootIsDirectory = $false
+            Files           = $files
+            Dirs            = $directories
+            ReparsePoints   = $reparsePoints
+            Errors          = $errors
+          }
+        }
+      } catch {
+        [void]$errors.Add((Format-ErrorMessage $_))
+        return [pscustomobject]@{
+          Complete        = $false
+          Root            = $fullRoot
+          RootIsDirectory = $false
+          Files           = $files
+          Dirs            = $directories
+          ReparsePoints   = $reparsePoints
+          Errors          = $errors
+        }
+      }
+
+      $stack = New-Object System.Collections.Generic.Stack[string]
+      $stack.Push($fullRoot)
+
+      while ($stack.Count -gt 0) {
+        $directory = $stack.Pop()
+        $entries = $null
+        try {
+          $entries = @([IO.Directory]::EnumerateFileSystemEntries($directory))
+        } catch {
+          $complete = $false
+          [void]$errors.Add("$directory — $(Format-ErrorMessage $_)")
+          continue
+        }
+
+        foreach ($entry in $entries) {
+          $attributes = $null
+          try {
+            $attributes = [IO.File]::GetAttributes($entry)
           } catch {
-            Record-Warning "could not inspect $hive\$view uninstall registry" $_
-          } finally {
-            if ($key) { $key.Dispose() }
-            if ($base) { $base.Dispose() }
+            $complete = $false
+            [void]$errors.Add("$entry — $(Format-ErrorMessage $_)")
+            continue
+          }
+
+          if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
+            [void]$reparsePoints.Add($entry)
+            continue
+          }
+
+          if ($attributes -band [IO.FileAttributes]::Directory) {
+            [void]$directories.Add($entry)
+            $stack.Push($entry)
+          } else {
+            [void]$files.Add($entry)
           }
         }
       }
-      return $entries
+
+      return [pscustomobject]@{
+        Complete        = $complete
+        Root            = $fullRoot
+        RootIsDirectory = $rootIsDirectory
+        Files           = $files
+        Dirs            = $directories
+        ReparsePoints   = $reparsePoints
+        Errors          = $errors
+      }
     }
 
-    function Get-UninstallerPath($entry) {
-      $raw = $entry.QuietUninstallString
-      if (-not $raw) { $raw = $entry.UninstallString }
-      if ($raw) {
-        $match = [regex]::Match($raw, '^"([^"]+)"')
-        if ($match.Success) { return $match.Groups[1].Value }
-        $match = [regex]::Match($raw, '^(.*?\.exe)')
-        if ($match.Success) { return $match.Groups[1].Value }
+    function Get-SafeInstallDirectory($Candidate) {
+      if ([string]::IsNullOrWhiteSpace([string]$Candidate)) { return $null }
+
+      $full = Get-CanonicalPath $Candidate
+      if (-not $full) {
+        Record-Warning "ignoring malformed or non-absolute install path: $Candidate" $null
+        return $null
       }
+
+      if (-not (Test-LocalDrivePath $full)) {
+        Record-Warning "ignoring non-local, UNC, or device install path: $full" $null
+        return $null
+      }
+
+      $root = ([IO.Path]::GetPathRoot($full)).TrimEnd('\', '/')
+      if ($full -ieq $root) {
+        Record-Warning "refusing filesystem root as install directory: $full" $null
+        return $null
+      }
+
+      if ([IO.Path]::GetFileName($full) -ine "Pythinker") {
+        Record-Warning "refusing install directory not named 'Pythinker': $full" $null
+        return $null
+      }
+
+      if (Test-PathHasReparseComponent $full) {
+        Record-Warning "refusing install path with a reparse-point component: $full" $null
+        return $null
+      }
+
+      $windowsDir = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)
+      $programData = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonApplicationData)
+      $forbiddenRoots = @($windowsDir, $programData) | Where-Object { $_ }
+      if (Test-PathUnderDirs $full $forbiddenRoots) {
+        Record-Warning "refusing install path below a protected Windows directory: $full" $null
+        return $null
+      }
+
+      $criticalTargets = @(
+        $windowsDir,
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::ProgramFiles),
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::ProgramFilesX86),
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile),
+        $programData,
+        [IO.Path]::GetPathRoot($env:SystemRoot)
+      ) | Where-Object { $_ }
+
+      foreach ($critical in $criticalTargets) {
+        if (Test-PathUnderDirs $critical @($full)) {
+          Record-Warning "refusing install path that is an ancestor of a critical directory: $full" $null
+          return $null
+        }
+      }
+
+      $exists = $false
+      $isDirectory = $false
+      try {
+        $exists = Test-Path -LiteralPath $full -ErrorAction Stop
+        if ($exists) { $isDirectory = Test-Path -LiteralPath $full -PathType Container -ErrorAction Stop }
+      } catch {
+        Record-Warning "could not inspect install directory: $full" $_
+        return $null
+      }
+
+      if (-not $exists) {
+        # A missing, lexically safe directory can represent a stale registry entry.
+        return $full
+      }
+      if (-not $isDirectory) {
+        Record-Warning "refusing install path that is not a directory: $full" $null
+        return $null
+      }
+
+      if (Test-KnownInstallDirectory $full) { return $full }
+
+      $evidence = @(
+        (Join-Path $full "pythinker.exe"),
+        (Join-Path $full "pythinker-code.exe")
+      )
+      foreach ($candidateFile in $evidence) {
+        if (Test-Path -LiteralPath $candidateFile -PathType Leaf -ErrorAction SilentlyContinue) {
+          return $full
+        }
+      }
+
+      $innoFiles = @(Get-ChildItem -LiteralPath $full -File -Filter "unins*.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^unins\d+\.exe$' })
+      if ($innoFiles.Count -gt 0) { return $full }
+
+      Record-Warning "ignoring unrecognized custom install directory with no product evidence: $full" $null
       return $null
     }
 
-    # Each registry entry becomes an installation record: hive/view, validated
-    # dir (or $null), uninstaller exe, and whether that exe is trusted.
-    # HKCU views alias the same key (no WOW64 redirection there), so user-scope
-    # records are deduplicated across views.
-    function Get-InstallationRecords($Entries) {
-      $records = @()
-      $seen = @{}
-      foreach ($e in $Entries) {
-        $dedupe = if ($e.Hive -eq "CurrentUser") {
-          "CU|$($e.UninstallString)|$($e.QuietUninstallString)|$($e.InstallLocation)"
-        } else {
-          "LM|$($e.View)|$($e.UninstallString)|$($e.QuietUninstallString)|$($e.InstallLocation)"
-        }
-        if ($seen.ContainsKey($dedupe)) { continue }
-        $seen[$dedupe] = $true
+    function Test-TrustedUninstaller($Exe, $Directory) {
+      if (-not $Exe -or -not $Directory) { return $false }
+      if (-not (Test-Path -LiteralPath $Exe -PathType Leaf -ErrorAction SilentlyContinue)) { return $false }
+      if ([IO.Path]::GetFileName($Exe) -notmatch '^unins\d+\.exe$') { return $false }
+      if (Test-PathHasReparseComponent $Exe) { return $false }
 
-        $exe = Get-UninstallerPath $e
-        $dir = $null
-        $candidates = @($e.InstallLocation)
-        if ($exe) { $candidates += (Split-Path -Parent $exe) }
-        foreach ($c in $candidates) {
-          if (-not $c) { continue }
-          $dir = Get-SafeInstallDirectory $c
-          if ($dir) { break }
-        }
-        $trusted = $false
-        if ($exe -and $dir) { $trusted = Test-TrustedUninstaller $exe $dir }
-        $records += [pscustomobject]@{
-          Hive = $e.Hive; View = $e.View
-          Dir = $dir; Uninstaller = $exe; Trusted = $trusted
+      try {
+        $item = Get-Item -LiteralPath $Exe -Force -ErrorAction Stop
+        if ($item.Length -le 0) { return $false }
+        $parent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Exe))
+      } catch {
+        return $false
+      }
+
+      return (Test-PathEqual $parent $Directory)
+    }
+
+    # -------------------------------------------------------------------------
+    # Registry discovery and installation records
+    # -------------------------------------------------------------------------
+
+    function Get-NativeRegistryView {
+      if ([Environment]::Is64BitOperatingSystem) {
+        return [Microsoft.Win32.RegistryView]::Registry64
+      }
+      return [Microsoft.Win32.RegistryView]::Registry32
+    }
+
+    function Get-UninstallRegistryCombos {
+      $combos = New-Object System.Collections.Generic.List[object]
+      $nativeView = Get-NativeRegistryView
+      [void]$combos.Add([pscustomobject]@{ Hive = "CurrentUser"; View = $nativeView })
+      if ([Environment]::Is64BitOperatingSystem) {
+        [void]$combos.Add([pscustomobject]@{ Hive = "LocalMachine"; View = [Microsoft.Win32.RegistryView]::Registry64 })
+        [void]$combos.Add([pscustomobject]@{ Hive = "LocalMachine"; View = [Microsoft.Win32.RegistryView]::Registry32 })
+      } else {
+        [void]$combos.Add([pscustomobject]@{ Hive = "LocalMachine"; View = [Microsoft.Win32.RegistryView]::Registry32 })
+      }
+      return $combos
+    }
+
+    function Get-RegistryHiveEnum([string]$Hive) {
+      if ($Hive -eq "CurrentUser") { return [Microsoft.Win32.RegistryHive]::CurrentUser }
+      return [Microsoft.Win32.RegistryHive]::LocalMachine
+    }
+
+    function Find-UninstallEntries {
+      $uninstallPath = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId"
+      $entries = New-Object System.Collections.Generic.List[object]
+
+      foreach ($combo in (Get-UninstallRegistryCombos)) {
+        $base = $null
+        $key = $null
+        try {
+          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $combo.Hive), $combo.View)
+          $key = $base.OpenSubKey($uninstallPath, $false)
+          if ($null -eq $key) { continue }
+
+          [void]$entries.Add([pscustomobject]@{
+            Hive                 = $combo.Hive
+            View                 = $combo.View
+            UninstallString      = $key.GetValue("UninstallString")
+            QuietUninstallString = $key.GetValue("QuietUninstallString")
+            InstallLocation      = $key.GetValue("InstallLocation")
+            DisplayName          = $key.GetValue("DisplayName")
+          })
+        } catch {
+          Record-Warning "could not inspect $($combo.Hive)\$($combo.View) uninstall registry" $_
+        } finally {
+          if ($key) { $key.Dispose() }
+          if ($base) { $base.Dispose() }
         }
       }
+
+      return $entries
+    }
+
+    function Get-UninstallerPath($Entry) {
+      $raw = $Entry.QuietUninstallString
+      if (-not $raw) { $raw = $Entry.UninstallString }
+      if (-not $raw) { return $null }
+
+      $rawText = [string]$raw
+      $match = [regex]::Match($rawText, '^\s*"([^"]+)"')
+      if ($match.Success) {
+        return [Environment]::ExpandEnvironmentVariables($match.Groups[1].Value)
+      }
+
+      $match = [regex]::Match($rawText, "^\s*'([^']+)'")
+      if ($match.Success) {
+        return [Environment]::ExpandEnvironmentVariables($match.Groups[1].Value)
+      }
+
+      $match = [regex]::Match($rawText, '^\s*(.*?\.exe)(?:\s|$)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+      if ($match.Success) {
+        return [Environment]::ExpandEnvironmentVariables($match.Groups[1].Value.Trim())
+      }
+
+      return $null
+    }
+
+    function Get-InstallationRecords($Entries) {
+      $records = New-Object System.Collections.Generic.List[object]
+
+      foreach ($entry in $Entries) {
+        $exe = Get-UninstallerPath $entry
+        $validDirs = New-Object System.Collections.Generic.List[string]
+        $candidates = New-Object System.Collections.Generic.List[string]
+
+        if ($entry.InstallLocation) { [void]$candidates.Add([string]$entry.InstallLocation) }
+        if ($exe) {
+          try { [void]$candidates.Add((Split-Path -Parent $exe)) } catch {}
+        }
+
+        foreach ($candidate in $candidates) {
+          $safe = Get-SafeInstallDirectory $candidate
+          if ($safe) { Add-UniquePath $validDirs $safe }
+        }
+
+        $dir = $null
+        $conflict = $false
+        if ($validDirs.Count -eq 1) {
+          $dir = $validDirs[0]
+        } elseif ($validDirs.Count -gt 1) {
+          $conflict = $true
+          Record-Warning "conflicting install directories in $($entry.Hive)\$($entry.View) registration; refusing automatic handling" $null
+        }
+
+        $trusted = $false
+        if ($exe -and $dir -and -not $conflict) {
+          $trusted = Test-TrustedUninstaller $exe $dir
+        }
+
+        [void]$records.Add([pscustomobject]@{
+          Hive        = $entry.Hive
+          View        = $entry.View
+          Dir         = $dir
+          CanSweep    = ($dir -and (Test-KnownInstallDirectory $dir))
+          Uninstaller = $exe
+          Trusted     = $trusted
+          Conflict    = $conflict
+        })
+      }
+
       return $records
     }
 
-    # --- 2. Stop processes, but only ones rooted in a validated install dir.
-    function Stop-PythinkerProcesses($Dirs) {
-      $procs = @(Get-Process -Name "pythinker*" -ErrorAction SilentlyContinue)
-      if ($procs.Count -eq 0) { return }
+    # -------------------------------------------------------------------------
+    # Process shutdown
+    # -------------------------------------------------------------------------
 
-      foreach ($p in $procs) {
-        $procPath = $null
-        try { $procPath = $p.Path } catch { $procPath = $null }
-        if (-not $procPath) {
-          Record-Warning "cannot inspect $($p.ProcessName) (PID $($p.Id)) — likely elevated; leaving it running rather than killing an unidentified process" $null
-          continue
-        }
-        if (-not (Test-PathUnderDirs $procPath $Dirs)) {
-          Dim "skipping $($p.ProcessName) (PID $($p.Id)) — $procPath is outside the install dir"
-          continue
-        }
-        $start = $null
-        try { $start = $p.StartTime } catch { $start = $null }
-
-        Step "Stopping $($p.ProcessName) (PID $($p.Id))"
-        Invoke-Step "could not stop $($p.ProcessName) (PID $($p.Id))" {
-          Stop-Process -Id $p.Id -Force -ErrorAction Stop
-        } | Out-Null
-
-        $survivor = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-        if (-not $survivor) { continue }
-
-        # Revalidate identity before per-PID escalation (PID reuse race).
-        $sameStart = $false
-        if ($start) { try { $sameStart = ($survivor.StartTime -eq $start) } catch { $sameStart = $false } }
-        $survivorPath = $null
-        try { $survivorPath = $survivor.Path } catch { $survivorPath = $null }
-        $samePath = ($survivorPath -and ($survivorPath -ieq $procPath))
-        if (-not ($sameStart -and $samePath)) {
-          Record-Warning "PID $($p.Id) identity changed after the stop attempt — refusing taskkill escalation (possible PID reuse)" $null
-          continue
-        }
-        $taskkill = Get-Command taskkill.exe -ErrorAction SilentlyContinue
-        if ($taskkill) {
-          Invoke-Step "taskkill failed for PID $($p.Id)" {
-            $out = & taskkill.exe /F /T /PID $p.Id 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "$out" }
-          } | Out-Null
-        }
-      }
-    }
-
-    # --- 3. Run a trusted Inno uninstaller silently. NEVER elevates a
-    # registry-selected executable: machine-scope runs require an elevated shell.
-    function Invoke-InnoUninstaller($Exe, $Scope) {
-      if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
-        Record-Warning "registered uninstaller missing on disk: $Exe — using manual cleanup" $null
-        return
-      }
-      if ([IO.Path]::GetFileName($Exe) -notmatch '^unins\d+\.exe$') {
-        Record-Warning "refusing to run an executable that is not an Inno uninstaller: $Exe" $null
-        return
-      }
-      $parent = Split-Path -Parent $Exe
-      if (-not (Get-SafeInstallDirectory $parent)) {
-        Record-Warning "refusing to run uninstaller from an unvalidated directory: $Exe" $null
-        return
-      }
-      if ($Scope -eq "LocalMachine" -and -not (Test-IsAdmin)) {
-        Record-Warning "machine-scope uninstall requires elevation — re-run this script from an Administrator PowerShell instead of elevating a registry-selected executable" $null
-        return
-      }
-
-      Step "Running Pythinker uninstaller ($Scope scope)"
-      $uninstArgs = @("/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES")
+    function Get-ProcessExecutablePath($Process) {
       try {
-        $process = Start-Process -FilePath $Exe -ArgumentList $uninstArgs -Wait -PassThru -ErrorAction Stop
-        if ($process.ExitCode -ne 0) {
-          Record-Warning "uninstaller exited with code $($process.ExitCode) — sweeping what remains" $null
-          return
+        $path = $Process.Path
+        if ($path) { return [string]$path }
+      } catch {}
+      try {
+        $path = $Process.MainModule.FileName
+        if ($path) { return [string]$path }
+      } catch {}
+      return $null
+    }
+
+    function Stop-PythinkerProcesses($Directories) {
+      $names = @("pythinker", "pythinker-code")
+      $processes = @(Get-Process -Name $names -ErrorAction SilentlyContinue)
+      if ($processes.Count -eq 0) { return }
+
+      foreach ($process in $processes) {
+        $path = Get-ProcessExecutablePath $process
+
+        if (-not $path) {
+          Record-Warning "cannot inspect $($process.ProcessName) PID $($process.Id); leaving an unidentified process running" $null
+          continue
         }
-        OK "Uninstaller completed"
-      } catch {
-        Record-Warning "could not launch uninstaller $Exe — using manual cleanup" $_
+
+        if (-not (Test-PathUnderDirs $path $Directories)) {
+          Dim "skipping $($process.ProcessName) PID $($process.Id) — executable is outside a validated install directory"
+          continue
+        }
+
+        $startTime = $null
+        try { $startTime = $process.StartTime } catch { $startTime = $null }
+
+        Step "Stopping $($process.ProcessName) (PID $($process.Id))"
+        $stopError = $null
+        try {
+          Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        } catch {
+          $stopError = $_
+        }
+
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+          if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) { break }
+          Start-Sleep -Milliseconds 200
+        }
+
+        $survivor = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $survivor) {
+          OK "Stopped $($process.ProcessName) (PID $($process.Id))"
+          continue
+        }
+
+        $survivorPath = Get-ProcessExecutablePath $survivor
+        $sameStart = $false
+        if ($startTime) {
+          try { $sameStart = ($survivor.StartTime -eq $startTime) } catch { $sameStart = $false }
+        }
+
+        if (-not ($sameStart -and $survivorPath -and (Test-PathEqual $survivorPath $path))) {
+          Record-Warning "PID $($process.Id) identity changed after stop attempt; refusing taskkill escalation" $stopError
+          continue
+        }
+
+        $taskkill = Get-Command taskkill.exe -ErrorAction SilentlyContinue
+        if (-not $taskkill) {
+          Record-Warning "taskkill.exe is unavailable; process PID $($process.Id) may remain running" $stopError
+          continue
+        }
+
+        try {
+          $output = & taskkill.exe /F /T /PID $process.Id 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "$output" }
+        } catch {
+          Record-Warning "taskkill failed for PID $($process.Id)" $_
+        }
       }
     }
 
-    # --- 4. Removal helpers
+    # -------------------------------------------------------------------------
+    # Inno uninstaller execution
+    # -------------------------------------------------------------------------
 
-    # MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT) — best-effort last resort for
-    # locked paths. Idempotent across repeated runs in the same session.
+    function Test-CanExecuteUninstaller($Record) {
+      if (-not $Record.Trusted) { return $false }
+
+      if (-not $Record.CanSweep) {
+        Record-Warning "refusing execution of uninstaller from a custom registry-selected directory: $($Record.Uninstaller)" $null
+        return $false
+      }
+
+      # Never execute a registry-selected binary with an elevated token. Known
+      # directories are handled by the controlled cleanup below.
+      if (Test-IsAdmin) {
+        Record-Warning "refusing elevated execution of registry-selected uninstaller: $($Record.Uninstaller)" $null
+        return $false
+      }
+
+      if ($Record.Hive -eq "LocalMachine") {
+        Record-Warning "machine-scope uninstaller was not executed from a non-elevated shell: $($Record.Uninstaller)" $null
+        return $false
+      }
+
+      return $true
+    }
+
+    function Invoke-InnoUninstaller($Record) {
+      Step "Running Pythinker uninstaller ($($Record.Hive) scope)"
+      $process = $null
+      try {
+        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $processInfo.FileName = $Record.Uninstaller
+        $processInfo.Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+        $processInfo.WorkingDirectory = Split-Path -Parent $Record.Uninstaller
+        $processInfo.UseShellExecute = $false
+        $processInfo.CreateNoWindow = $false
+
+        $process = [System.Diagnostics.Process]::Start($processInfo)
+        if ($null -eq $process) { throw "Process.Start returned null." }
+        if (-not $process.WaitForExit(600000)) {
+          try { $process.Kill() } catch {}
+          Record-Warning "uninstaller exceeded the 10-minute timeout and was stopped: $($Record.Uninstaller)" $null
+          return $false
+        }
+
+        if ($process.ExitCode -ne 0) {
+          Record-Warning "uninstaller exited with code $($process.ExitCode); continuing with controlled cleanup" $null
+          return $false
+        }
+
+        OK "Uninstaller completed"
+        return $true
+      } catch {
+        Record-Warning "could not launch uninstaller $($Record.Uninstaller); continuing with controlled cleanup" $_
+        return $false
+      } finally {
+        if ($process) { $process.Dispose() }
+      }
+    }
+
+    # -------------------------------------------------------------------------
+    # Robust deletion
+    # -------------------------------------------------------------------------
+
     function Initialize-PendingDelete {
       if ("Win32.PendingDelete" -as [type]) { return $true }
       try {
-        $sig = '[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
-        Add-Type -Namespace Win32 -Name PendingDelete -MemberDefinition $sig -ErrorAction Stop
-      } catch { }
+        $signature = '[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
+        Add-Type -Namespace Win32 -Name PendingDelete -MemberDefinition $signature -ErrorAction Stop
+      } catch {}
       return ($null -ne ("Win32.PendingDelete" -as [type]))
     }
 
-    function Register-PendingDeleteTree($Path) {
+    function Register-PendingDeleteSnapshot($Path, $Snapshot) {
       if (-not (Initialize-PendingDelete)) { return $false }
+      if (-not $Snapshot.Complete -or $Snapshot.ReparsePoints.Count -gt 0) { return $false }
+
       $MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
       $ok = $true
-      $tree = Get-TreeSafe $Path
-      foreach ($f in $tree.Files) {
+
+      if (-not $Snapshot.RootIsDirectory) {
         try {
-          if (-not [Win32.PendingDelete]::MoveFileEx($f, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
-        } catch { $ok = $false }
+          return [Win32.PendingDelete]::MoveFileEx($Snapshot.Root, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)
+        } catch {
+          return $false
+        }
       }
-      # Deepest directories first so they are empty when their turn comes.
-      foreach ($d in @($tree.Dirs | Sort-Object { $_.Length } -Descending)) {
+
+      foreach ($file in $Snapshot.Files) {
         try {
-          if (-not [Win32.PendingDelete]::MoveFileEx($d, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
-        } catch { $ok = $false }
+          if (-not [Win32.PendingDelete]::MoveFileEx($file, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
+        } catch {
+          $ok = $false
+        }
       }
+
+      foreach ($directory in @($Snapshot.Dirs | Sort-Object { $_.Length } -Descending)) {
+        try {
+          if (-not [Win32.PendingDelete]::MoveFileEx($directory, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
+        } catch {
+          $ok = $false
+        }
+      }
+
       try {
-        if (-not [Win32.PendingDelete]::MoveFileEx($Path, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
-      } catch { $ok = $false }
+        if (-not [Win32.PendingDelete]::MoveFileEx($Snapshot.Root, $null, $MOVEFILE_DELAY_UNTIL_REBOOT)) { $ok = $false }
+      } catch {
+        $ok = $false
+      }
+
       return $ok
     }
 
-    # Remove a file/dir with retry + backoff, pending-delete-on-reboot fallback,
-    # an absolute refusal to touch a filesystem root, and fail-closed reparse
-    # protection (never recurse through junctions/symlinks).
-    function Remove-PathRobust($Path, $What) {
-      if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
-      try {
-        $pathRoot = ([IO.Path]::GetPathRoot($Path)).TrimEnd('\', '/')
-        if ($Path.TrimEnd('\', '/') -ieq $pathRoot) {
-          Record-Unresolved "refusing to remove filesystem root: $Path"
+
+    function Remove-SafeSnapshotNow($Snapshot) {
+      if (-not $Snapshot.Complete -or $Snapshot.ReparsePoints.Count -gt 0) {
+        throw "Unsafe or incomplete tree snapshot."
+      }
+
+      if (-not $Snapshot.RootIsDirectory) {
+        Remove-Item -LiteralPath $Snapshot.Root -Force -ErrorAction Stop
+        return
+      }
+
+      foreach ($file in $Snapshot.Files) {
+        if (Test-Path -LiteralPath $file -ErrorAction SilentlyContinue) {
+          Remove-Item -LiteralPath $file -Force -ErrorAction Stop
+        }
+      }
+
+      foreach ($directory in @($Snapshot.Dirs | Sort-Object { $_.Length } -Descending)) {
+        if (Test-Path -LiteralPath $directory -ErrorAction SilentlyContinue) {
+          # Deliberately non-recursive: a directory that changed after the safe
+          # snapshot remains non-empty and fails rather than being traversed.
+          Remove-Item -LiteralPath $directory -Force -ErrorAction Stop
+        }
+      }
+
+      if (Test-Path -LiteralPath $Snapshot.Root -ErrorAction SilentlyContinue) {
+        Remove-Item -LiteralPath $Snapshot.Root -Force -ErrorAction Stop
+      }
+    }
+
+    function Remove-PathRobust($Path, [string]$What) {
+      if ([string]::IsNullOrWhiteSpace([string]$Path)) { return }
+
+      $full = Get-CanonicalPath $Path
+      if (-not $full) {
+        Record-Unresolved "refusing malformed deletion path: $Path"
+        return
+      }
+
+      if (-not (Test-LocalDrivePath $full)) {
+        Record-Unresolved "refusing non-local, UNC, or device deletion path: $full"
+        return
+      }
+
+      $exists = $false
+      try { $exists = Test-Path -LiteralPath $full -ErrorAction Stop } catch {
+        Record-Unresolved "could not determine whether $What exists: $full"
+        return
+      }
+      if (-not $exists) { return }
+
+      $root = ([IO.Path]::GetPathRoot($full)).TrimEnd('\', '/')
+      if ($full -ieq $root) {
+        Record-Unresolved "refusing to remove filesystem root: $full"
+        return
+      }
+
+      if (Test-PathHasReparseComponent $full) {
+        Record-Unresolved "refusing recursive deletion through a reparse point: $full"
+        return
+      }
+
+      $lastError = $null
+      for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $snapshot = Get-SafeTreeSnapshot $full
+        if (-not $snapshot.Complete) {
+          $firstError = ""
+          if ($snapshot.Errors.Count -gt 0) { $firstError = " (first error: $($snapshot.Errors[0]))" }
+          Record-Unresolved "could not safely inspect the complete directory tree for $What at $full$firstError"
           return
         }
-      } catch { Record-Unresolved "refusing malformed path: $Path"; return }
 
-      if (Test-PathHasReparseComponent $Path) {
-        Record-Unresolved "refusing recursive deletion through a reparse point: $Path — inspect and remove it manually"
-        return
-      }
-      $nested = @(Get-NestedReparsePoints $Path)
-      if ($nested.Count -gt 0) {
-        Record-Unresolved "refusing recursive deletion: $($nested.Count) reparse point(s) inside $Path (first: $($nested[0])) — remove them manually"
-        return
-      }
+        if ($snapshot.ReparsePoints.Count -gt 0) {
+          Record-Unresolved "refusing controlled deletion because $($snapshot.ReparsePoints.Count) reparse point(s) exist inside $full (first: $($snapshot.ReparsePoints[0]))"
+          return
+        }
 
-      $lastErr = $null
-      for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
-          Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
-          if (-not (Test-Path -LiteralPath $Path)) { Record-Removed $What; return }
+          Remove-SafeSnapshotNow $snapshot
+          if (-not (Test-Path -LiteralPath $full -ErrorAction SilentlyContinue)) {
+            Record-Removed $What
+            return
+          }
+          throw "Deletion snapshot completed but the root still exists."
         } catch {
-          $lastErr = $_
+          $lastError = $_
           if ($attempt -lt 3) { Start-Sleep -Milliseconds (400 * $attempt) }
         }
       }
-      if (Register-PendingDeleteTree $Path) {
-        $State.PendingReboot.Add($Path)
+
+      # Re-inspect before scheduling deletion; the tree may have changed.
+      $pendingSnapshot = Get-SafeTreeSnapshot $full
+      if (-not $pendingSnapshot.Complete -or $pendingSnapshot.ReparsePoints.Count -gt 0) {
+        Record-Unresolved "could not safely inspect the complete directory tree before reboot scheduling: $full"
+        return
+      }
+
+      if (Register-PendingDeleteSnapshot $full $pendingSnapshot) {
+        Add-PendingReboot $full
         OK "$What — locked now; scheduled for deletion on next reboot"
         return
       }
-      $hint = $lastErr
-      if (-not (Test-IsAdmin)) { $hint = "$lastErr (retry from an Administrator PowerShell may succeed)" }
+
+      $hint = Format-ErrorMessage $lastError
+      if (-not (Test-IsAdmin)) { $hint = "$hint; an Administrator PowerShell may be required" }
       Record-Warning "could not remove $What" $hint
     }
 
-    # Remove one directory from a registry PATH value via the .NET registry API:
-    # missing value = NotFound (not an error), original value kind preserved,
-    # non-matching entries kept verbatim. Comparison expands env vars + quotes.
-    function Remove-PathEntry($Dir, $Hive) {
-      $subkey = if ($Hive -eq "CurrentUser") { "Environment" } else { "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" }
+    # -------------------------------------------------------------------------
+    # PATH cleanup
+    # -------------------------------------------------------------------------
+
+    function Get-EnvironmentRegistryView {
+      return (Get-NativeRegistryView)
+    }
+
+    function Split-PathValue([string]$Value) {
+      if ($null -eq $Value) { return @() }
+      return @($Value.Split([char[]]@(';'), [System.StringSplitOptions]::None))
+    }
+
+    function Remove-PathEntry($Directory, [string]$Hive) {
+      $subkey = if ($Hive -eq "CurrentUser") {
+        "Environment"
+      } else {
+        "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+      }
       $label = if ($Hive -eq "CurrentUser") { "user PATH" } else { "system PATH" }
-      $base = $null; $key = $null
+      $target = Get-NormalizedPathToken $Directory
+      if ($target -eq "") { return "NotFound" }
+
+      $base = $null
+      $readKey = $null
       try {
-        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, "Registry64")
-        $key = $base.OpenSubKey($subkey, $false)
-        if ($null -eq $key) { return "NotFound" }
-        $current = $key.GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        if ($null -eq $current) { return "NotFound" } # no user/system Path value is normal
-        $kind = $key.GetValueKind("Path")
-        $key.Dispose(); $key = $null
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $Hive), (Get-EnvironmentRegistryView))
+        $readKey = $base.OpenSubKey($subkey, $false)
+        if ($null -eq $readKey) { return "NotFound" }
+        $current = $readKey.GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $current) { return "NotFound" }
 
-        $target = Get-NormalizedPathToken $Dir
         $matched = $false
-        $kept = @(
-          foreach ($e in ([string]$current -split ';')) {
-            if ((Get-NormalizedPathToken $e) -ieq $target) { $matched = $true } else { $e }
+        foreach ($token in (Split-PathValue ([string]$current))) {
+          if ((Get-NormalizedPathToken $token) -ieq $target) {
+            $matched = $true
+            break
           }
-        )
+        }
         if (-not $matched) { return "NotFound" }
-        $newPath = $kept -join ';'
+      } catch {
+        Record-Warning "could not inspect $label" $_
+        return "InspectionFailed"
+      } finally {
+        if ($readKey) { $readKey.Dispose() }
+        if ($base) { $base.Dispose() }
+      }
 
-        if ($Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
-          Record-Warning "$label still contains $Dir — re-run from an Administrator PowerShell to clean it" $null
+      if ($Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
+        Record-Warning "$label still contains $Directory; re-run from an Administrator PowerShell to remove it" $null
+        return "Failed"
+      }
+
+      $base = $null
+      $writeKey = $null
+      try {
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $Hive), (Get-EnvironmentRegistryView))
+        $writeKey = $base.OpenSubKey($subkey, $true)
+        if ($null -eq $writeKey) {
+          Record-Warning "could not open $label for writing" $null
           return "Failed"
         }
-        $key = $base.OpenSubKey($subkey, $true)
-        if ($null -eq $key) { Record-Warning "could not open $label for writing" $null; return "Failed" }
-        $key.SetValue("Path", $newPath, $kind)
-        Record-Removed "removed $Dir from $label"
+
+        # Re-read under the writable handle so a concurrent PATH update is not
+        # overwritten with the stale value from the read-only inspection phase.
+        $latest = $writeKey.GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $latest) { return "NotFound" }
+        $kind = $writeKey.GetValueKind("Path")
+
+        $kept = New-Object System.Collections.Generic.List[string]
+        $foundLatest = $false
+        foreach ($token in (Split-PathValue ([string]$latest))) {
+          if ((Get-NormalizedPathToken $token) -ieq $target) {
+            $foundLatest = $true
+          } else {
+            [void]$kept.Add($token)
+          }
+        }
+
+        if (-not $foundLatest) { return "NotFound" }
+        $newValue = ($kept.ToArray() -join ";")
+        $writeKey.SetValue("Path", $newValue, $kind)
+        $State.EnvironmentChanged = $true
+        Record-Removed "removed $Directory from $label"
         return "Removed"
       } catch {
-        if ($Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
-          Record-Warning "$label could not be inspected without elevation — if it contains $Dir, re-run from an Administrator PowerShell" $_
-        } else {
-          Record-Warning "could not update $label" $_
-        }
+        Record-Warning "could not update $label" $_
         return "Failed"
       } finally {
-        if ($key) { $key.Dispose() }
+        if ($writeKey) { $writeKey.Dispose() }
         if ($base) { $base.Dispose() }
       }
     }
 
-    # True when a registry PATH value still contains any of $Dirs; $null when it
-    # could not be determined (caller must treat $null as UNRESOLVED).
-    function Test-PathEntryPresent($Dirs, $Hive) {
-      $subkey = if ($Hive -eq "CurrentUser") { "Environment" } else { "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" }
-      $base = $null; $key = $null
+    function Test-PathEntryPresent($Directories, [string]$Hive) {
+      $subkey = if ($Hive -eq "CurrentUser") {
+        "Environment"
+      } else {
+        "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+      }
+
+      $targets = New-Object System.Collections.Generic.List[string]
+      foreach ($directory in $Directories) {
+        $target = Get-NormalizedPathToken $directory
+        if ($target) { Add-UniqueString $targets $target }
+      }
+
+      $base = $null
+      $key = $null
       try {
-        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, "Registry64")
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $Hive), (Get-EnvironmentRegistryView))
         $key = $base.OpenSubKey($subkey, $false)
         if ($null -eq $key) { return $false }
         $current = $key.GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if ($null -eq $current) { return $false }
-        $targets = @($Dirs | ForEach-Object { Get-NormalizedPathToken $_ })
-        foreach ($e in ([string]$current -split ';')) {
-          $probe = Get-NormalizedPathToken $e
-          foreach ($t in $targets) { if ($probe -ieq $t) { return $true } }
+
+        foreach ($token in (Split-PathValue ([string]$current))) {
+          $probe = Get-NormalizedPathToken $token
+          foreach ($target in $targets) {
+            if ($probe -ieq $target) { return $true }
+          }
         }
         return $false
       } catch {
@@ -638,65 +1091,103 @@
       }
     }
 
-    # Strip the install dirs from this session's PATH so the current window is
-    # usable immediately. Non-matching tokens (including empty ones) are kept verbatim.
-    function Remove-SessionPathEntries($Dirs) {
+    function Remove-SessionPathEntries($Directories) {
+      if ($null -eq $env:PATH) { return }
       try {
-        $targets = @($Dirs | Where-Object { $_ } | ForEach-Object { Get-NormalizedPathToken $_ })
+        $targets = New-Object System.Collections.Generic.List[string]
+        foreach ($directory in $Directories) {
+          $target = Get-NormalizedPathToken $directory
+          if ($target) { Add-UniqueString $targets $target }
+        }
         if ($targets.Count -eq 0) { return }
-        $kept = @($env:PATH -split ';' | Where-Object {
-            $probe = Get-NormalizedPathToken $_
-            ($targets | Where-Object { $probe -ieq $_ }).Count -eq 0
-          })
-        $newPath = $kept -join ';'
-        if ($newPath -ne $env:PATH) { $env:PATH = $newPath; OK "Cleaned PATH for this session" }
-      } catch { Record-Warning "could not clean this session's PATH" $_ }
+
+        $kept = New-Object System.Collections.Generic.List[string]
+        $changed = $false
+        foreach ($token in (Split-PathValue ([string]$env:PATH))) {
+          $probe = Get-NormalizedPathToken $token
+          $match = $false
+          foreach ($target in $targets) {
+            if ($probe -ieq $target) { $match = $true; break }
+          }
+          if ($match) {
+            $changed = $true
+          } else {
+            [void]$kept.Add($token)
+          }
+        }
+
+        if ($changed) {
+          $env:PATH = ($kept.ToArray() -join ";")
+          OK "Cleaned PATH for this session"
+        }
+      } catch {
+        Record-Warning "could not clean this session's PATH" $_
+      }
     }
 
-    # Tell Explorer & new processes the PATH changed. Idempotent across repeated runs.
     function Send-EnvironmentBroadcast {
+      if (-not $State.EnvironmentChanged) { return }
       try {
         if (-not ("Win32.UninstallNativeMethods" -as [type])) {
-          $sig = '[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
-          Add-Type -Namespace Win32 -Name UninstallNativeMethods -MemberDefinition $sig -ErrorAction Stop
+          $signature = '[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+          Add-Type -Namespace Win32 -Name UninstallNativeMethods -MemberDefinition $signature -ErrorAction Stop
         }
         $result = [UIntPtr]::Zero
-        [void][Win32.UninstallNativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, "Environment", 0x0002, 5000, [ref]$result)
-      } catch { Record-Warning "could not broadcast the environment change to the desktop" $_ }
+        [void][Win32.UninstallNativeMethods]::SendMessageTimeout(
+          [IntPtr]0xffff,
+          0x001A,
+          [UIntPtr]::Zero,
+          "Environment",
+          0x0002,
+          5000,
+          [ref]$result
+        )
+      } catch {
+        Record-Warning "could not broadcast the environment change to the desktop" $_
+      }
     }
 
-    # Delete registry keys ONLY for installations that were actually handled:
-    # validated dir and (files gone or pending reboot). Keys for unvalidated or
-    # unfinished installations stay in place and are reported as unresolved.
+    # -------------------------------------------------------------------------
+    # Registry cleanup
+    # -------------------------------------------------------------------------
+
     function Remove-HandledRegistryEntries($Records) {
       $uninstallPath = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId"
-      foreach ($r in $Records) {
-        if (-not $r.Dir) {
-          Record-Unresolved "registry entry for an unvalidated installation was left in place ($($r.Hive)\$($r.View)) — handle its files manually, then remove the key"
+
+      foreach ($record in $Records) {
+        if (-not $record.Dir) {
+          Record-Unresolved "registry entry for an unvalidated installation was left in place ($($record.Hive)\$($record.View))"
           continue
         }
-        if ((Test-Path -LiteralPath $r.Dir) -and -not $State.PendingReboot.Contains($r.Dir)) {
-          Record-Unresolved "registry entry left in place because files remain at $($r.Dir) ($($r.Hive)\$($r.View))"
+
+        $exists = $null
+        try { $exists = Test-Path -LiteralPath $record.Dir -ErrorAction Stop } catch { $exists = $null }
+        if ($null -eq $exists) {
+          Record-Unresolved "could not verify installation directory before registry cleanup: $($record.Dir)"
           continue
         }
-        $base = $null; $key = $null
+        if ($exists -and -not (Test-PendingReboot $record.Dir)) {
+          Record-Unresolved "registry entry left in place because files remain at $($record.Dir) ($($record.Hive)\$($record.View))"
+          continue
+        }
+
+        $base = $null
+        $key = $null
         try {
-          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($r.Hive, $r.View)
-          $key = $base.OpenSubKey($uninstallPath)
-          if ($null -eq $key) { continue } # absent = already clean
-          $key.Dispose(); $key = $null
-          try {
-            $base.DeleteSubKeyTree($uninstallPath, $false)
-            Record-Removed "removed uninstall registry entry ($($r.Hive)\$($r.View))"
-          } catch {
-            if ($r.Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
-              Record-Warning "machine uninstall registry entry remains — re-run from an Administrator PowerShell to remove it" $null
-            } else {
-              Record-Warning "could not remove uninstall registry entry ($($r.Hive)\$($r.View))" $_
-            }
-          }
+          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $record.Hive), $record.View)
+          $key = $base.OpenSubKey($uninstallPath, $false)
+          if ($null -eq $key) { continue }
+          $key.Dispose()
+          $key = $null
+
+          $base.DeleteSubKeyTree($uninstallPath, $false)
+          Record-Removed "removed uninstall registry entry ($($record.Hive)\$($record.View))"
         } catch {
-          Record-Warning "could not access $($r.Hive)\$($r.View) uninstall registry for cleanup" $_
+          if ($record.Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
+            Record-Warning "machine uninstall registry entry remains; re-run from an Administrator PowerShell" $_
+          } else {
+            Record-Warning "could not remove uninstall registry entry ($($record.Hive)\$($record.View))" $_
+          }
         } finally {
           if ($key) { $key.Dispose() }
           if ($base) { $base.Dispose() }
@@ -704,38 +1195,106 @@
       }
     }
 
-    # Stale installer bootstrap temp dirs left by interrupted installs. Removed
-    # only when ALL ownership signals hold: strict name shape (GUID suffix),
-    # older than 1 hour, no setup process running, and contents limited to the
-    # exact installer asset names (PythinkerSetup-x.y.z.exe[.sha256]).
+    # -------------------------------------------------------------------------
+    # Owned stale installer temp directories
+    # -------------------------------------------------------------------------
+
+    function Test-InstallerTempDirectoryOwned($Directory) {
+      if (Test-PathHasReparseComponent $Directory) { return $false }
+      $snapshot = Get-SafeTreeSnapshot $Directory
+      if (-not $snapshot.Complete -or $snapshot.ReparsePoints.Count -gt 0 -or $snapshot.Dirs.Count -gt 0) {
+        return $false
+      }
+
+      $files = @($snapshot.Files)
+      $markerPath = Join-Path $Directory ".pythinker-installer"
+      $markerValid = $false
+      if (Test-Path -LiteralPath $markerPath -PathType Leaf -ErrorAction SilentlyContinue) {
+        try {
+          $markerValid = ((Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim() -eq $AppId)
+        } catch {
+          $markerValid = $false
+        }
+      }
+
+      $setupFiles = @($files | Where-Object { [IO.Path]::GetFileName($_) -match '^PythinkerSetup-[0-9]+(?:\.[0-9]+){1,3}\.exe$' })
+      if ($setupFiles.Count -ne 1) { return $false }
+
+      $setupPath = $setupFiles[0]
+      $checksumPath = "${setupPath}.sha256"
+      $checksumValid = $false
+      if (Test-Path -LiteralPath $checksumPath -PathType Leaf -ErrorAction SilentlyContinue) {
+        try {
+          $expectedText = (Get-Content -LiteralPath $checksumPath -Raw -ErrorAction Stop).Trim()
+          $expectedMatch = [regex]::Match($expectedText, '^[0-9a-fA-F]{64}')
+          if ($expectedMatch.Success) {
+            $actual = (Get-FileHash -LiteralPath $setupPath -Algorithm SHA256 -ErrorAction Stop).Hash
+            $checksumValid = ($actual -ieq $expectedMatch.Value)
+          }
+        } catch {
+          $checksumValid = $false
+        }
+      }
+
+      foreach ($file in $files) {
+        $name = [IO.Path]::GetFileName($file)
+        if ($name -eq ".pythinker-installer") { continue }
+        if (Test-PathEqual $file $setupPath) { continue }
+        if (Test-PathEqual $file $checksumPath) { continue }
+        return $false
+      }
+
+      return ($markerValid -or $checksumValid)
+    }
+
     function Remove-StaleInstallerTempDirs {
       $setupRunning = @(Get-Process -Name "PythinkerSetup*" -ErrorAction SilentlyContinue).Count -gt 0
       if ($setupRunning) {
-        Dim "a Pythinker setup is currently running — leaving installer temp dirs alone"
+        Dim "a Pythinker setup is running; leaving installer temp directories untouched"
         return
       }
-      $cutoff = (Get-Date).AddHours(-1)
-      $candidates = @(Get-ChildItem -LiteralPath $TempRoot -Directory -ErrorAction SilentlyContinue |
-          Where-Object { $_.Name -match '^pythinker-install-[0-9a-fA-F]{32}$' -and $_.LastWriteTime -lt $cutoff })
-      foreach ($t in $candidates) {
-        $children = @(Get-ChildItem -LiteralPath $t.FullName -Force -ErrorAction SilentlyContinue)
-        $foreign = @($children | Where-Object { $_.Name -notmatch '^PythinkerSetup-[\d.]+\.exe(\.sha256)?$' })
-        if ($foreign.Count -gt 0) {
-          Dim "skipping $($t.FullName) — contents do not match Pythinker installer assets"
+
+      $cutoff = (Get-Date).AddHours(-2)
+      $guidPattern = '^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$'
+      $candidates = @()
+      try {
+        $candidates = @(Get-ChildItem -LiteralPath $TempRoot -Directory -Filter "pythinker-install-*" -ErrorAction Stop |
+          Where-Object {
+            $_.Name.Substring("pythinker-install-".Length) -match $guidPattern -and
+            $_.LastWriteTime -lt $cutoff
+          })
+      } catch {
+        Record-Warning "could not inspect installer temp directory root" $_
+        return
+      }
+
+      foreach ($candidate in $candidates) {
+        if (-not (Test-InstallerTempDirectoryOwned $candidate.FullName)) {
+          Dim "skipping unverified installer temp directory: $($candidate.FullName)"
           continue
         }
-        Remove-PathRobust $t.FullName "installer temp dir $($t.FullName)"
+        Add-UniquePath $State.TempCleanupTargets $candidate.FullName
+        Remove-PathRobust $candidate.FullName "installer temp directory $($candidate.FullName)"
       }
     }
 
-    # --- 5. Optional user-data purge (verified by Test-FinalState)
+    # -------------------------------------------------------------------------
+    # Optional user-data purge
+    # -------------------------------------------------------------------------
+
     function Invoke-DataPurge {
-      if (-not (Test-Path -LiteralPath $DataDir)) { return }
+      if ($PurgeDataSetting -eq "1") { $State.PurgeDataRequested = $true }
+      $exists = $false
+      try { $exists = Test-Path -LiteralPath $DataDir -ErrorAction Stop } catch {
+        Record-Warning "could not inspect user data directory $DataDir" $_
+        return
+      }
+      if (-not $exists) { return }
 
       $purge = $false
-      if ($PurgeData -eq "1") {
+      if ($PurgeDataSetting -eq "1") {
         $purge = $true
-      } elseif ($PurgeData -eq "0") {
+      } elseif ($PurgeDataSetting -eq "0") {
         $purge = $false
       } elseif (Test-Interactive) {
         Write-Host ""
@@ -743,10 +1302,13 @@
         try {
           $answer = Read-Host "  Delete it too? [y/N]"
           $purge = ($answer -match '^(?i)y(es)?$')
-        } catch { $purge = $false }
+        } catch {
+          $purge = $false
+        }
       }
 
       if ($purge) {
+        $State.PurgeDataRequested = $true
         Remove-PathRobust $DataDir "user data $DataDir"
       } else {
         Write-Host ""
@@ -754,179 +1316,226 @@
       }
     }
 
-    # --- 6. Final verification, FAIL CLOSED: anything that cannot be confirmed
-    # clean becomes unresolved. The result succeeds only at zero unresolved.
-    function Test-FinalState($Dirs, $Records) {
-      foreach ($dir in $Dirs) {
-        if ((Test-Path -LiteralPath $dir) -and -not $State.PendingReboot.Contains($dir)) {
-          Record-Unresolved "install directory still present: $dir"
-        }
+    # -------------------------------------------------------------------------
+    # Final verification — unknown state is unresolved
+    # -------------------------------------------------------------------------
+
+    function Test-PathFinalState($Path, [string]$Label) {
+      $exists = $null
+      try { $exists = Test-Path -LiteralPath $Path -ErrorAction Stop } catch { $exists = $null }
+      if ($null -eq $exists) {
+        Record-Unresolved "could not verify $Label state: $Path"
+        return
+      }
+      if ($exists -and -not (Test-PendingReboot $Path)) {
+        Record-Unresolved "$Label still present: $Path"
+      }
+    }
+
+    function Test-FinalState($InstallDirectories, $UserPathDirectories, $MachinePathDirectories, $Records, $StartDirectories) {
+      foreach ($directory in $InstallDirectories) {
+        Test-PathFinalState $directory "install directory"
       }
 
-      foreach ($hive in @("CurrentUser", "LocalMachine")) {
-        $present = Test-PathEntryPresent $Dirs $hive
-        $label = if ($hive -eq "CurrentUser") { "user PATH" } else { "system PATH" }
-        if ($null -eq $present) {
-          Record-Unresolved "could not verify $label state"
-        } elseif ($present) {
-          $msg = "$label still contains a Pythinker entry"
-          if ($hive -eq "LocalMachine" -and -not (Test-IsAdmin)) { $msg += " — re-run from an Administrator PowerShell" }
-          Record-Unresolved $msg
-        }
+      $userPathPresent = Test-PathEntryPresent $UserPathDirectories "CurrentUser"
+      if ($null -eq $userPathPresent) {
+        Record-Unresolved "could not verify user PATH state"
+      } elseif ($userPathPresent) {
+        Record-Unresolved "user PATH still contains a Pythinker entry"
       }
 
-      # HKCU has no WOW64 redirection here, so one view is authoritative there.
-      $combos = @(
-        @("CurrentUser", "Registry64"),
-        @("LocalMachine", "Registry64"),
-        @("LocalMachine", "Registry32")
-      )
+      $machinePathPresent = Test-PathEntryPresent $MachinePathDirectories "LocalMachine"
+      if ($null -eq $machinePathPresent) {
+        Record-Unresolved "could not verify system PATH state"
+      } elseif ($machinePathPresent) {
+        $message = "system PATH still contains a Pythinker entry"
+        if (-not (Test-IsAdmin)) { $message += "; re-run from an Administrator PowerShell" }
+        Record-Unresolved $message
+      }
+
       $uninstallPath = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppId"
-      foreach ($combo in $combos) {
-        $hive = $combo[0]; $view = $combo[1]
-        $base = $null; $key = $null
-        $exists = $null
+      foreach ($combo in (Get-UninstallRegistryCombos)) {
+        $base = $null
+        $key = $null
         try {
-          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
-          $key = $base.OpenSubKey($uninstallPath)
-          $exists = ($null -ne $key)
+          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey((Get-RegistryHiveEnum $combo.Hive), $combo.View)
+          $key = $base.OpenSubKey($uninstallPath, $false)
+          if ($key) {
+            $message = "uninstall registry entry still present ($($combo.Hive)\$($combo.View))"
+            if ($combo.Hive -eq "LocalMachine" -and -not (Test-IsAdmin)) {
+              $message += "; re-run from an Administrator PowerShell"
+            }
+            Record-Unresolved $message
+          }
         } catch {
-          Record-Unresolved "could not verify $hive\$view uninstall registry state"
-          continue
+          Record-Unresolved "could not verify $($combo.Hive)\$($combo.View) uninstall registry state"
         } finally {
           if ($key) { $key.Dispose() }
           if ($base) { $base.Dispose() }
         }
-        if ($exists) {
-          $rec = @($Records | Where-Object { $_.Hive -eq $hive -and $_.View -eq $view } | Select-Object -First 1)
-          if ($rec.Count -gt 0 -and -not $rec[0].Dir) { continue } # already reported as left-in-place
-          $msg = "uninstall registry entry still present ($hive\$view)"
-          if ($hive -eq "LocalMachine" -and -not (Test-IsAdmin)) { $msg += " — re-run from an Administrator PowerShell" }
-          Record-Unresolved $msg
+      }
+
+      foreach ($directory in $StartDirectories) {
+        Test-PathFinalState $directory "Start Menu shortcut directory"
+      }
+
+      foreach ($process in @(Get-Process -Name @("pythinker", "pythinker-code") -ErrorAction SilentlyContinue)) {
+        $path = Get-ProcessExecutablePath $process
+        if (-not $path) {
+          Record-Unresolved "could not verify remaining $($process.ProcessName) process PID $($process.Id)"
+          continue
+        }
+        if (Test-PathUnderDirs $path $InstallDirectories) {
+          Record-Unresolved "Pythinker process still running from an install directory (PID $($process.Id))"
         }
       }
 
-      $startDirs = @(
-        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pythinker"),
-        (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Pythinker")
-      )
-      foreach ($dir in $startDirs) {
-        if ((Test-Path -LiteralPath $dir) -and -not $State.PendingReboot.Contains($dir)) {
-          Record-Unresolved "Start Menu shortcuts still present: $dir"
-        }
+      if ($State.PurgeDataRequested) {
+        Test-PathFinalState $DataDir "requested user data"
       }
 
-      foreach ($p in @(Get-Process -Name "pythinker*" -ErrorAction SilentlyContinue)) {
-        $procPath = $null
-        try { $procPath = $p.Path } catch { $procPath = $null }
-        if ($procPath -and (Test-PathUnderDirs $procPath $Dirs)) {
-          Record-Unresolved "pythinker process still running from install dir (PID $($p.Id))"
-        }
+      foreach ($directory in $State.TempCleanupTargets) {
+        Test-PathFinalState $directory "owned stale installer temp directory"
       }
 
-      if ($PurgeData -eq "1" -and (Test-Path -LiteralPath $DataDir) -and -not $State.PendingReboot.Contains($DataDir)) {
-        Record-Unresolved "requested user-data purge did not complete: $DataDir"
+      foreach ($record in $Records) {
+        if (-not $record.Dir) {
+          Record-Unresolved "installation registration could not be safely associated with a directory ($($record.Hive)\$($record.View))"
+        }
       }
     }
 
-    # --- Main (function-wrapped: returns a structured result, never calls exit)
-    function Invoke-PythinkerUninstall {
-      # Last-resort safety net for anything no step caught. Scoped INSIDE this
-      # function so it can never swallow the top-level failure signal below.
-      trap { Record-Warning "unexpected error" $_; continue }
+    # -------------------------------------------------------------------------
+    # Main workflow
+    # -------------------------------------------------------------------------
 
+    function Invoke-PythinkerUninstall {
       Write-Header
       Step "Uninstalling Pythinker Code"
 
-      $entries = @(Invoke-Step "could not read uninstall registry entries" { Find-UninstallEntries })
-      if ($null -eq $entries) { $entries = @() }
-      $records = @(Invoke-Step "installation record validation failed" { Get-InstallationRecords $entries })
-
+      $entries = @()
+      $records = @()
       $installDirs = New-Object System.Collections.Generic.List[string]
-      $defaultSafe = Get-SafeInstallDirectory $State.DefaultInstallDir
-      if ($defaultSafe) {
-        $installDirs.Add($defaultSafe)
-      } else {
-        Record-Unresolved "default install directory failed safety validation ($($State.DefaultInstallDir)) — manual removal may be required"
-      }
-      foreach ($r in $records) {
-        if ($r.Dir -and -not $installDirs.Contains($r.Dir)) { $installDirs.Add($r.Dir) }
-      }
+      $sweepDirs = New-Object System.Collections.Generic.List[string]
+      $userPathDirs = New-Object System.Collections.Generic.List[string]
+      $machinePathDirs = New-Object System.Collections.Generic.List[string]
+      $startDirs = New-Object System.Collections.Generic.List[string]
 
-      if ($records.Count -eq 0) {
-        Dim "No registered Pythinker uninstaller found — running manual cleanup only"
-      }
-
-      Invoke-Step "process shutdown failed" { Stop-PythinkerProcesses $installDirs } | Out-Null
-
-      foreach ($r in $records) {
-        if (-not $r.Uninstaller) { continue }
-        if (-not $r.Trusted) {
-          Record-Warning "uninstaller failed trust validation (must be unins<N>.exe inside a validated install dir): $($r.Uninstaller)" $null
-          continue
-        }
-        Invoke-Step "uninstaller run failed for $($r.Uninstaller)" { Invoke-InnoUninstaller $r.Uninstaller $r.Hive } | Out-Null
-      }
-
-      # Sweep everything, whether or not an uninstaller ran (idempotent).
-      Step "Removing leftover files, PATH entries, shortcuts, and registry keys"
-
-      foreach ($dir in $installDirs) {
-        Remove-PathRobust $dir "install directory $dir"
-        Invoke-Step "PATH cleanup failed for $dir" {
-          [void](Remove-PathEntry $dir "CurrentUser")
-          [void](Remove-PathEntry $dir "LocalMachine")
-        } | Out-Null
-      }
-      Remove-SessionPathEntries $installDirs
-
-      $startDirs = @(
-        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pythinker"),
-        (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Pythinker")
-      )
-      foreach ($dir in $startDirs) { Remove-PathRobust $dir "Start Menu shortcuts ($dir)" }
-
-      Invoke-Step "registry entry handling failed" { Remove-HandledRegistryEntries $records } | Out-Null
-      Invoke-Step "temp cleanup failed" { Remove-StaleInstallerTempDirs } | Out-Null
-
-      Send-EnvironmentBroadcast
-      Invoke-Step "user data step failed" { Invoke-DataPurge } | Out-Null
-
-      # Final verification must never degrade to a warning: unknown = unresolved.
-      Step "Verifying final state"
       try {
-        Test-FinalState $installDirs $records
+        $entriesResult = Invoke-Step "could not read uninstall registry entries" { Find-UninstallEntries }
+        if ($null -ne $entriesResult) { $entries = @($entriesResult) }
+
+        $recordsResult = Invoke-Step "installation record validation failed" { Get-InstallationRecords $entries }
+        if ($null -ne $recordsResult) { $records = @($recordsResult) }
+
+        foreach ($known in $KnownInstallDirs) {
+          $safe = Get-SafeInstallDirectory $known
+          if ($safe) {
+            Add-UniquePath $installDirs $safe
+            Add-UniquePath $sweepDirs $safe
+            Add-UniquePath $userPathDirs $safe
+            Add-UniquePath $machinePathDirs $safe
+          } else {
+            Record-Unresolved "known installation directory failed safety validation: $known"
+          }
+        }
+
+        foreach ($record in $records) {
+          if ($record.Dir) {
+            Add-UniquePath $installDirs $record.Dir
+            if ($record.Hive -eq "CurrentUser") {
+              Add-UniquePath $userPathDirs $record.Dir
+            } else {
+              Add-UniquePath $machinePathDirs $record.Dir
+            }
+          }
+          if ($record.Dir -and $record.CanSweep) { Add-UniquePath $sweepDirs $record.Dir }
+        }
+
+        if ($records.Count -eq 0) {
+          Dim "No registered Pythinker uninstaller found — running controlled manual cleanup only"
+        }
+
+        Invoke-Step "process shutdown failed" { Stop-PythinkerProcesses $installDirs } | Out-Null
+
+        $executedUninstallers = New-Object System.Collections.Generic.List[string]
+        foreach ($record in $records) {
+          if (-not $record.Uninstaller) { continue }
+          if (-not $record.Trusted) {
+            Record-Warning "uninstaller failed trust validation: $($record.Uninstaller)" $null
+            continue
+          }
+          if (-not (Test-CanExecuteUninstaller $record)) { continue }
+          if (Test-ListContainsInsensitive $executedUninstallers $record.Uninstaller) { continue }
+          [void]$executedUninstallers.Add($record.Uninstaller)
+          Invoke-InnoUninstaller $record | Out-Null
+        }
+
+        Step "Removing leftover files, PATH entries, shortcuts, and registry keys"
+
+        # Only known installation directories are recursively swept. A custom
+        # registry-selected path is never passed to Remove-PathRobust.
+        foreach ($directory in $sweepDirs) {
+          Remove-PathRobust $directory "known installation directory $directory"
+        }
+
+        # Removing an exact PATH token is safe for both known and validated custom
+        # installations, even when the custom directory itself is not swept.
+        foreach ($directory in $userPathDirs) {
+          [void](Remove-PathEntry $directory "CurrentUser")
+        }
+        foreach ($directory in $machinePathDirs) {
+          [void](Remove-PathEntry $directory "LocalMachine")
+        }
+        Remove-SessionPathEntries $installDirs
+
+        Add-UniquePath $startDirs (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pythinker")
+        Add-UniquePath $startDirs (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Pythinker")
+        foreach ($directory in $startDirs) {
+          Remove-PathRobust $directory "Start Menu shortcut directory $directory"
+        }
+
+        Invoke-Step "registry entry handling failed" { Remove-HandledRegistryEntries $records } | Out-Null
+        Invoke-Step "temp cleanup failed" { Remove-StaleInstallerTempDirs } | Out-Null
+        Send-EnvironmentBroadcast
+        Invoke-Step "user data step failed" { Invoke-DataPurge } | Out-Null
+
+        Step "Verifying final state"
+        try {
+          Test-FinalState $installDirs $userPathDirs $machinePathDirs $records $startDirs
+        } catch {
+          Record-Unresolved "final verification did not complete — $(Format-ErrorMessage $_)"
+        }
       } catch {
-        Record-Unresolved "final verification did not complete — $(Format-Err $_)"
+        Record-Unresolved "unexpected uninstall failure — $(Format-ErrorMessage $_)"
       }
 
-      # --- Summary
       Write-Host ""
       Write-Host "  ${BOLD}${FACE}Uninstall summary${RESET}"
       Write-Host "    $IRIS$($State.RemovedCount) item(s) removed$RESET"
 
       if ($State.PendingReboot.Count -gt 0) {
         Write-Host "    $CORAL$($State.PendingReboot.Count) item(s) scheduled for deletion on next reboot:${RESET}"
-        foreach ($p in $State.PendingReboot) { Write-Host "      $CORAL•$RESET $p" }
+        foreach ($path in $State.PendingReboot) { Write-Host "      $CORAL•$RESET $path" }
       }
 
       if ($State.Warnings.Count -gt 0) {
-        Write-Host "    ${DIM}$($State.Warnings.Count) transient warning(s) during the run:${RESET}"
-        foreach ($w in $State.Warnings) { Dim "      • $w" }
+        Write-Host "    ${DIM}$($State.Warnings.Count) warning(s) during the run:${RESET}"
+        foreach ($warning in $State.Warnings) { Dim "      • $warning" }
       }
 
       Write-Host ""
       if ($State.Unresolved.Count -gt 0) {
-        Write-Host "  $CORAL$($State.Unresolved.Count) thing(s) could not be fully removed or verified:${RESET}"
-        foreach ($u in $State.Unresolved) { Write-Host "      $CORAL•$RESET $u" }
+        Write-Host "  $CORAL$($State.Unresolved.Count) item(s) could not be fully removed or verified:${RESET}"
+        foreach ($issue in $State.Unresolved) { Write-Host "      $CORAL•$RESET $issue" }
         Write-Host ""
         Dim "Most permission issues resolve by re-running this script from an Administrator PowerShell."
         Write-Host ""
       } elseif ($State.PendingReboot.Count -gt 0) {
-        Write-Host "  ${BOLD}${IRIS}pythinker$RESET cleanup complete — ${BOLD}a reboot is required${RESET} to finish removing $($State.PendingReboot.Count) locked item(s)."
+        Write-Host "  ${BOLD}${IRIS}pythinker$RESET cleanup complete — ${BOLD}a reboot is required${RESET} to finish removing locked items."
         Write-Host ""
       } else {
-        Write-Host "  ${BOLD}${IRIS}pythinker$RESET has been uninstalled. Open a fresh PowerShell for PATH changes to apply."
+        Write-Host "  ${BOLD}${IRIS}pythinker$RESET has been uninstalled. Open a fresh PowerShell for persistent PATH changes to appear."
         Write-Host ""
       }
 
@@ -941,14 +1550,10 @@
 
     $result = Invoke-PythinkerUninstall
     if ($null -eq $result) {
-      # The function's trap should make this unreachable, but a swallowed
-      # failure must never look like success.
       throw "Pythinker uninstall did not produce a result."
     }
     if (-not $result.Success) {
-      # Top-level throw, OUTSIDE the function trap: `irm | iex` shows the error
-      # and the host stays open; `powershell.exe -File` exits non-zero.
-      throw "Pythinker uninstall completed with $($result.Unresolved.Count) unresolved issue(s) — see summary above."
+      throw "Pythinker uninstall completed with $($result.Unresolved.Count) unresolved issue(s) — see the summary above."
     }
   } finally {
     if ($originalEncoding) {
