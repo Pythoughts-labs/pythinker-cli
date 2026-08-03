@@ -435,7 +435,7 @@
         return $null
       }
 
-      if ([IO.Path]::GetFileName($full) -ine "Pythinker") {
+      if (-not [string]::Equals([IO.Path]::GetFileName($full), "Pythinker", [System.StringComparison]::OrdinalIgnoreCase)) {
         Record-Warning "refusing install directory not named 'Pythinker': $full" $null
         return $null
       }
