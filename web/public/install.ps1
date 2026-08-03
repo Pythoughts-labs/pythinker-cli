@@ -14,7 +14,7 @@ $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$Repo = "Pythoughts-labs/pythinker-code"
+$Repo = "Pythoughts-labs/pythinker-cli"
 $Version = $env:PYTHINKER_VERSION
 $NoColor = $env:NO_COLOR
 

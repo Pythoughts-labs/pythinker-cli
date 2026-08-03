@@ -45,7 +45,7 @@ jobs:
           if (-not $env:WINGET_TOKEN) {
             throw "WINGET_SUBMIT_TOKEN is not configured"
           }
-          $installerUrl = "https://github.com/Pythoughts-labs/pythinker-code/releases/download/v$env:VERSION/PythinkerSetup-$env:VERSION.exe"
+          $installerUrl = "https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v$env:VERSION/PythinkerSetup-$env:VERSION.exe"
           $wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v1.12.8.0/wingetcreate.exe"
           $wingetCreateSha256 = "8BD738851B524885410112678E3771B341C5C716DE60FBBECB88AB0A363ED85D"
           Invoke-WebRequest -Uri $wingetCreateUrl -OutFile wingetcreate.exe

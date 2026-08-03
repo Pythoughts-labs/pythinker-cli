@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-GITHUB_REPO = "Pythoughts-labs/pythinker-code"
+GITHUB_REPO = "Pythoughts-labs/pythinker-cli"
 GITHUB_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{{version}}"
 
 

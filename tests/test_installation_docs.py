@@ -24,7 +24,7 @@ def test_windows_readme_documents_powershell_one_liner() -> None:
 
     assert "irm https://pythinker.com/install.ps1 \\| iex" in readme
     assert (
-        "raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/scripts/install.ps1"
+        "raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/scripts/install.ps1"
         not in readme
     )
     assert "-File $installer" not in readme
@@ -38,7 +38,7 @@ def test_getting_started_uses_canonical_native_installer_url() -> None:
     assert "curl -fsSL https://pythinker.com/install.sh | bash" in guide
     assert "irm https://pythinker.com/install.ps1 | iex" in guide
     assert (
-        "https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/scripts/install.ps1"
+        "https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/scripts/install.ps1"
     ) not in guide
 
 
@@ -62,7 +62,7 @@ def test_readme_downloads_rpm_before_local_install() -> None:
 
     rpm = f"pythinker-code-{version}.x86_64.rpm"
     checksum = f"{rpm}.sha256"
-    release_url = f"https://github.com/Pythoughts-labs/pythinker-code/releases/download/v{version}"
+    release_url = f"https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v{version}"
 
     assert f"curl -LO {release_url}/{rpm}" in readme
     assert f"curl -LO {release_url}/{checksum}" in readme

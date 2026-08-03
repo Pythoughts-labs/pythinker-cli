@@ -22,10 +22,10 @@ classifiers = [
 dependencies = ["pythinker-core==1.2.0", "mcp>=1.23,<2", "httpx>=0.28.1"]
 
 [project.urls]
-Homepage      = "https://github.com/Pythoughts-labs/pythinker-code"
-Repository    = "https://github.com/Pythoughts-labs/pythinker-code"
-Issues        = "https://github.com/Pythoughts-labs/pythinker-code/issues"
-Changelog     = "https://github.com/Pythoughts-labs/pythinker-code/blob/main/sdks/pythinker-sdk/CHANGELOG.md"
+Homepage      = "https://github.com/Pythoughts-labs/pythinker-cli"
+Repository    = "https://github.com/Pythoughts-labs/pythinker-cli"
+Issues        = "https://github.com/Pythoughts-labs/pythinker-cli/issues"
+Changelog     = "https://github.com/Pythoughts-labs/pythinker-cli/blob/main/sdks/pythinker-sdk/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

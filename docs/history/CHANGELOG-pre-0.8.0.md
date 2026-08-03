@@ -22,7 +22,7 @@ Packaging fix: pin `pythinker-core[contrib]==1.1.0` so the Kimi K2.x / DeepSeek 
 
 ### Why 2.6.0 lands the same day as 2.5.0
 
-The runtime fix for the strict-interleaved `thinking is enabled but reasoning_content is missing in assistant tool call message at index N` rejection landed in the `pythinker-core` source tree on 2026-05-11 (released in `pythinker-code` 2.4.0 source), but **the published `pythinker-core==1.0.0` on PyPI predates that change** (uploaded 2026-05-07). `pythinker-code` 2.4.0 and 2.5.0 both pinned `pythinker-core[contrib]==1.0.0`, so PyPI users on Kimi K2.5 / K2.6 / DeepSeek through OpenCode Go (and elsewhere) kept hitting the bug even on the latest CLI. Reported in [#37](https://github.com/Pythoughts-labs/pythinker-code/issues/37).
+The runtime fix for the strict-interleaved `thinking is enabled but reasoning_content is missing in assistant tool call message at index N` rejection landed in the `pythinker-core` source tree on 2026-05-11 (released in `pythinker-code` 2.4.0 source), but **the published `pythinker-core==1.0.0` on PyPI predates that change** (uploaded 2026-05-07). `pythinker-code` 2.4.0 and 2.5.0 both pinned `pythinker-core[contrib]==1.0.0`, so PyPI users on Kimi K2.5 / K2.6 / DeepSeek through OpenCode Go (and elsewhere) kept hitting the bug even on the latest CLI. Reported in [#37](https://github.com/Pythoughts-labs/pythinker-cli/issues/37).
 
 ### The fix
 

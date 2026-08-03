@@ -50,7 +50,7 @@ class TestFeedbackFallback:
 
         open_mock.assert_called_once()
         url = open_mock.call_args.args[0]
-        assert "Pythoughts-labs/pythinker-code" in url
+        assert "Pythoughts-labs/pythinker-cli" in url
         assert "new" in url
 
     async def test_prints_success_when_browser_opens(self, monkeypatch) -> None:
@@ -75,7 +75,7 @@ class TestFeedbackFallback:
         await _run_feedback(Mock(), "ux confusing prompt")
 
         output = " ".join(str(c) for c in print_mock.call_args_list)
-        assert "Pythoughts-labs/pythinker-code" in output
+        assert "Pythoughts-labs/pythinker-cli" in output
 
     async def test_invalid_args_without_soul_still_offer_github_fallback(self, monkeypatch) -> None:
         open_mock = Mock(return_value=True)
@@ -146,7 +146,7 @@ class TestFeedbackSubmission:
         soul.runtime.session.subagents_dir = tmp_path / "subagents"
         soul.runtime.session.subagents_dir.mkdir()
         soul.runtime.role = "root"
-        soul.runtime.config.feedback.github_repo = "Pythoughts-labs/pythinker-code"
+        soul.runtime.config.feedback.github_repo = "Pythoughts-labs/pythinker-cli"
         soul.name = "default"
         soul.context.history = [
             Message(role="user", content=[TextPart(text="please fix this")]),
@@ -200,7 +200,7 @@ class TestFeedbackSubmission:
 
         soul = Mock(spec=PythinkerSoul)
         soul.runtime.session.id = "sess-123"
-        soul.runtime.config.feedback.github_repo = "Pythoughts-labs/pythinker-code"
+        soul.runtime.config.feedback.github_repo = "Pythoughts-labs/pythinker-cli"
         app = Mock()
         app.soul = soul
         payload = {
@@ -225,7 +225,7 @@ class TestFeedbackSubmission:
 
         output = " ".join(str(c) for c in print_mock.call_args_list)
         assert "No report link was returned" in output
-        assert "github.com/Pythoughts-labs/pythinker-code" in output
+        assert "github.com/Pythoughts-labs/pythinker-cli" in output
 
     async def test_prompts_before_submitting_by_default(self, monkeypatch) -> None:
         from pythinker_code.soul.pythinkersoul import PythinkerSoul
@@ -302,7 +302,7 @@ class TestFeedbackHelpers:
 
         url = build_feedback_issue_url(payload, old_owner + "/Pythinker-Code")
 
-        assert "github.com/Pythoughts-labs/pythinker-code/issues/new" in url
+        assert "github.com/Pythoughts-labs/pythinker-cli/issues/new" in url
         assert old_owner not in url
 
     def test_feedback_issue_url_uses_compact_body_for_large_payload(self) -> None:

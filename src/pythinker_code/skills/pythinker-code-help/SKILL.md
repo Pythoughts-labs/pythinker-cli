@@ -45,7 +45,7 @@ https://pythoughts-labs.github.io/pythinker-code/llms.txt
 
 ## Source Code
 
-Repository: `https://github.com/Pythoughts-labs/pythinker-code`
+Repository: `https://github.com/Pythoughts-labs/pythinker-cli`
 
 When to read source:
 

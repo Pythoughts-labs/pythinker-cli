@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-DEFAULT_FEEDBACK_GITHUB_REPO = "Pythoughts-labs/pythinker-code"
+DEFAULT_FEEDBACK_GITHUB_REPO = "Pythoughts-labs/pythinker-cli"
 _LEGACY_FEEDBACK_GITHUB_OWNER = "mohamed-elkholy95"
 
 _LEGACY_DEFAULT_FEEDBACK_GITHUB_REPOS = {

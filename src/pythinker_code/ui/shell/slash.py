@@ -733,7 +733,7 @@ async def feedback(app: Shell, args: str):
         issue_url = (
             build_feedback_issue_url(payload, soul.runtime.config.feedback.github_repo)
             if payload is not None and soul is not None
-            else "https://github.com/Pythoughts-labs/pythinker-code/issues/new/choose"
+            else "https://github.com/Pythoughts-labs/pythinker-cli/issues/new/choose"
         )
         if open_url_in_browser(issue_url):
             console.print(f"[{_t_fb.success}]Opening GitHub feedback in your browser...[/]")
@@ -860,7 +860,7 @@ async def report_error(app: Shell, args: str):
 
     _t_re = _get_tok_re()
 
-    ISSUE_URL = "https://github.com/Pythoughts-labs/pythinker-code/issues"
+    ISSUE_URL = "https://github.com/Pythoughts-labs/pythinker-cli/issues"
 
     def _fallback_to_issues() -> None:
         if not open_url_in_browser(ISSUE_URL):

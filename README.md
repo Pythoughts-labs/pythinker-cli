@@ -1,6 +1,6 @@
 <div align="center">
 
-# <img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/logo.png" alt="Pythinker logo" width="42" align="top"> Pythinker Code
+# <img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/logo.png" alt="Pythinker logo" width="42" align="top"> Pythinker Code
 
 ### *Think first, then code. Your terminal-native review-first AI engineering agent.*
 
@@ -11,12 +11,12 @@
 
 [![PyPI](https://img.shields.io/pypi/v/pythinker-code?style=for-the-badge&logo=pypi&logoColor=white&color=2563eb&label=pythinker-code)](https://pypi.org/project/pythinker-code/)
 [![Downloads](https://img.shields.io/pepy/dt/pythinker-code?style=for-the-badge&logo=python&logoColor=white&color=f97316&label=downloads)](https://pepy.tech/projects/pythinker-code)
-[![License](https://img.shields.io/badge/License-Apache--2.0-16a34a.svg?style=for-the-badge)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache--2.0-16a34a.svg?style=for-the-badge)](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/LICENSE)
 
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg?style=for-the-badge&logo=ruff&logoColor=d7ff64)](https://docs.astral.sh/ruff/)
 [![Homepage](https://img.shields.io/badge/home-pythinker.com-ec4899.svg?style=for-the-badge&logo=globe&logoColor=white)](https://pythinker.com)
-[![CI](https://img.shields.io/github/actions/workflow/status/Pythoughts-labs/pythinker-code/ci-pythinker-cli.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/actions/workflows/ci-pythinker-cli.yml?query=branch%3Amain)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-code/blob/main/pyproject.toml)
+[![CI](https://img.shields.io/github/actions/workflow/status/Pythoughts-labs/pythinker-cli/ci-pythinker-cli.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-cli/actions/workflows/ci-pythinker-cli.yml?query=branch%3Amain)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/pyproject.toml)
 
 <br />
 
@@ -30,7 +30,7 @@
 
 <br /><br />
 
-<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/pythinker_cli.gif" alt="Pythinker Code terminal demo" width="860">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/pythinker_cli.gif" alt="Pythinker Code terminal demo" width="860">
 
 </div>
 
@@ -53,7 +53,7 @@ It speaks the [**Agent Client Protocol (ACP)**](https://github.com/agentclientpr
 - **Updates surface during long-running sessions.** Pythinker now checks periodically for newly available releases, shows each new update notice once per session, and bounds every check with a watchdog so a stalled attempt cannot prevent later retries.
 - **Repository-local agent workflows stay local.** This checkout now treats its root `.agents/` directory as local agent configuration instead of version-controlled project content.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.62.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.62.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 
 ---
@@ -147,7 +147,7 @@ Run trusted local JSONL fixtures with `/benchmark:swe --dataset <path> --trusted
 > Built-in shell commands such as `cd` are not yet supported in shell command mode.
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/shell-mode.gif" alt="Shell command mode demo" width="860">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/shell-mode.gif" alt="Shell command mode demo" width="860">
 </div>
 
 ---
@@ -159,13 +159,13 @@ matches your OS — no Python, Node, or `uv` prerequisite.
 
 | Platform | Recommended install | Artifact source |
 |---|---|---|
-| **🪟 Windows** | `irm https://pythinker.com/install.ps1 \| iex` | `PythinkerSetup-0.62.0.exe` from [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
-| **<img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"> / <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">** | `curl -fsSL https://pythinker.com/install.sh \| bash` | native tarball from [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
+| **🪟 Windows** | `irm https://pythinker.com/install.ps1 \| iex` | `PythinkerSetup-0.62.0.exe` from [Releases](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest) |
+| **<img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"> / <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">** | `curl -fsSL https://pythinker.com/install.sh \| bash` | native tarball from [Releases](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest) |
 | **<img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS"> — Homebrew** | `brew install Pythoughts-labs/pythinker/pythinker-code` | auto-published Homebrew tap |
 | **🐳 Docker** | `docker run --rm -it ghcr.io/pythoughts-labs/pythinker-code` | GHCR multi-arch image |
 | **🪟 Windows — Scoop** | `scoop bucket add pythinker https://github.com/Pythoughts-labs/scoop-pythinker && scoop install pythinker-code` | auto-published Scoop bucket |
-| **❄️ Nix** | `nix run github:Pythoughts-labs/pythinker-code` | flake `apps.default` |
-| **<img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"> — system package** | Download the `.deb` or `.rpm` for your distro below | [Releases](https://github.com/Pythoughts-labs/pythinker-code/releases/latest) |
+| **❄️ Nix** | `nix run github:Pythoughts-labs/pythinker-cli` | flake `apps.default` |
+| **<img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux"> — system package** | Download the `.deb` or `.rpm` for your distro below | [Releases](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest) |
 | **🐍 Python fallback** | `pip install pythinker-code` | PyPI |
 
 Every artifact ships with a matching `.sha256` file — verify before install on
@@ -270,8 +270,8 @@ sudo apt-get install -f       # only if dpkg reports missing deps
 sudo dpkg -i pythinker-code_0.62.0_arm64.deb
 
 # Fedora / RHEL / openSUSE (x86_64)
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.62.0/pythinker-code-0.62.0.x86_64.rpm
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.62.0/pythinker-code-0.62.0.x86_64.rpm.sha256
+curl -LO https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v0.62.0/pythinker-code-0.62.0.x86_64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v0.62.0/pythinker-code-0.62.0.x86_64.rpm.sha256
 sha256sum -c pythinker-code-0.62.0.x86_64.rpm.sha256
 # Fedora / RHEL:
 sudo dnf install ./pythinker-code-0.62.0.x86_64.rpm
@@ -279,8 +279,8 @@ sudo dnf install ./pythinker-code-0.62.0.x86_64.rpm
 sudo zypper install ./pythinker-code-0.62.0.x86_64.rpm
 
 # Fedora / RHEL (aarch64)
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.62.0/pythinker-code-0.62.0.aarch64.rpm
-curl -LO https://github.com/Pythoughts-labs/pythinker-code/releases/download/v0.62.0/pythinker-code-0.62.0.aarch64.rpm.sha256
+curl -LO https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v0.62.0/pythinker-code-0.62.0.aarch64.rpm
+curl -LO https://github.com/Pythoughts-labs/pythinker-cli/releases/download/v0.62.0/pythinker-code-0.62.0.aarch64.rpm.sha256
 sha256sum -c pythinker-code-0.62.0.aarch64.rpm.sha256
 sudo dnf install ./pythinker-code-0.62.0.aarch64.rpm
 ```
@@ -373,7 +373,7 @@ pythinker login
 ```
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/setup.png" alt="Pythinker login provider picker" width="860">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/setup.png" alt="Pythinker login provider picker" width="860">
 </div>
 
 Z.AI exposes two independent OpenAI-compatible routes. Choose the route that owns your key;
@@ -582,7 +582,7 @@ The ACP server provides:
 | 🔄 **Hot model swap** | Change models for a running ACP session |
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/acp-integration.gif" alt="ACP IDE integration demo" width="860">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/acp-integration.gif" alt="ACP IDE integration demo" width="860">
 </div>
 
 ---
@@ -658,7 +658,7 @@ Pythinker is a small, extensible runtime — not a monolith. Build on it.
 ## 🏗️ Architecture
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/docs/media/Architecture.webp" alt="Pythinker Code architecture diagram" width="860">
+<img src="https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/docs/media/Architecture.webp" alt="Pythinker Code architecture diagram" width="860">
 </div>
 
 ---
@@ -738,7 +738,7 @@ are used automatically unless you turn telemetry off.
 ### 🏁 Prepare the workspace
 
 ```sh
-git clone https://github.com/Pythoughts-labs/pythinker-code.git
+git clone https://github.com/Pythoughts-labs/pythinker-cli.git
 cd pythinker-code
 make prepare
 ```
@@ -819,9 +819,9 @@ pythinker-code/
 
 Contributions are warmly welcome — bug reports, PRs, plugins, skills, and docs all help.
 
-- 📖 Start with [`CONTRIBUTING.md`](https://github.com/Pythoughts-labs/pythinker-code/blob/main/CONTRIBUTING.md)
-- 🔐 See [`SECURITY.md`](https://github.com/Pythoughts-labs/pythinker-code/blob/main/SECURITY.md) for responsible disclosure
-- 📜 Skim [`AGENTS.md`](https://github.com/Pythoughts-labs/pythinker-code/blob/main/AGENTS.md) for the agent design notes
+- 📖 Start with [`CONTRIBUTING.md`](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/CONTRIBUTING.md)
+- 🔐 See [`SECURITY.md`](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/SECURITY.md) for responsible disclosure
+- 📜 Skim [`AGENTS.md`](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/AGENTS.md) for the agent design notes
 
 If Pythinker helps you, **a ⭐ on GitHub goes a long way.**
 
@@ -829,7 +829,7 @@ If Pythinker helps you, **a ⭐ on GitHub goes a long way.**
 
 ## 📜 License
 
-Distributed under the **Apache-2.0 License**. See [`LICENSE`](https://github.com/Pythoughts-labs/pythinker-code/blob/main/LICENSE) for the full text and [`NOTICE`](https://github.com/Pythoughts-labs/pythinker-code/blob/main/NOTICE) for attributions.
+Distributed under the **Apache-2.0 License**. See [`LICENSE`](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/LICENSE) for the full text and [`NOTICE`](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/NOTICE) for attributions.
 
 <br />
 
@@ -839,7 +839,7 @@ Distributed under the **Apache-2.0 License**. See [`LICENSE`](https://github.com
 
 [🌐 pythinker.com](https://pythinker.com) &nbsp;·&nbsp;
 [📦 PyPI](https://pypi.org/project/pythinker-code/) &nbsp;·&nbsp;
-[🐙 GitHub](https://github.com/Pythoughts-labs/pythinker-code) &nbsp;·&nbsp;
+[🐙 GitHub](https://github.com/Pythoughts-labs/pythinker-cli) &nbsp;·&nbsp;
 [🧩 ACP](https://github.com/agentclientprotocol/agent-client-protocol) &nbsp;·&nbsp;
 [🔌 MCP](https://modelcontextprotocol.io/)
 
