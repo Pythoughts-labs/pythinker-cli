@@ -30,7 +30,7 @@ dependencies = [
     # notify-py (via batrachian-toad) caps loguru at <=0.6.0 on 3.14+.
     "loguru>=0.6.0,<0.7",
     "prompt-toolkit==3.0.52",
-    "pillow==12.2.0",
+    "pillow==12.3.0",
     "pyyaml==6.0.3",
     "rich==15.0.0",
     "certifi>=2025.10.5",
