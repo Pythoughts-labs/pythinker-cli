@@ -10,7 +10,7 @@
     }
   ],
   "vars": {
-    "GITHUB_REPO": "Pythoughts-labs/pythinker-code",
+    "GITHUB_REPO": "Pythoughts-labs/pythinker-cli",
     "GITHUB_LABELS": "feedback,pythinker-cli",
     "SUPPORT_EMAIL": "support@pythinker.com",
     "FROM_EMAIL": "Pythinker Feedback <feedback@pythinker.com>"

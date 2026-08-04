@@ -129,7 +129,7 @@ jobs:
             cat > README.md <<'EOF'
           # scoop-pythinker
 
-          Scoop bucket for [Pythinker Code](https://github.com/Pythoughts-labs/pythinker-code).
+          Scoop bucket for [Pythinker Code](https://github.com/Pythoughts-labs/pythinker-cli).
 
           ```pwsh
           scoop bucket add pythinker https://github.com/Pythoughts-labs/scoop-pythinker
@@ -137,7 +137,7 @@ jobs:
           ```
 
           This bucket is auto-updated by the
-          [scoop-bucket.yml](https://github.com/Pythoughts-labs/pythinker-code/blob/main/.github/workflows/scoop-bucket.yml)
+          [scoop-bucket.yml](https://github.com/Pythoughts-labs/pythinker-cli/blob/main/.github/workflows/scoop-bucket.yml)
           workflow on every semver release tag. Do not hand-edit `bucket/*` — your
           edits will be overwritten on the next release.
           EOF

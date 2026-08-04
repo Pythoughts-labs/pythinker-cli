@@ -88,7 +88,7 @@ GitHub Releases page; `0.8.0` is the new starting line.
   (`true` → `download`, `false` → `notify`); `pythinker info` now reports the
   mode string, and `/update auto` accepts the new mode names.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.60.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.60.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.59.0 (2026-07-17)
 
@@ -100,7 +100,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.60.0`,
 - **Provider compatibility and Z.AI routing are now explicit.** Immutable compatibility profiles keep request-format quirks behind the chat-provider boundary, while independent Z.AI Coding Plan and API login routes use separate credentials, endpoints, model identities, catalog refresh, logout, and usage/rate-limit state. Curated GLM requests now apply exact context/output limits, thinking controls, reasoning replay, and tool-stream support without activating for local or unknown models.
 - **Tool execution is now supervised as a terminal batch.** A private execution engine preserves the Toolset registry and legacy per-call API while centralizing ordered results, deduplication, callbacks, and batch summaries; cancellation is bounded, late work stays owned, and new batches fail closed until timed-out cleanup drains.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.59.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.59.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.58.0 (2026-07-11)
 
@@ -147,7 +147,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.59.0`,
   recorded as failed (never blurred to not-applicable), and request-assembly telemetry no
   longer emits unbounded per-request token values as metric attributes.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.58.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.58.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.57.0 (2026-07-05)
 
@@ -173,7 +173,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.58.0`,
   later turns through a compact reminder until stopped by name or
   "normal mode".
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.57.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.57.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.56.0 (2026-07-02)
 
@@ -192,7 +192,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.57.0`,
   an older Homebrew install no longer leaves a permanent "Restart to apply"
   banner — the `/update` command surfaces again as expected.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.56.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.56.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.55.0 (2026-06-30)
 
@@ -208,7 +208,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.56.0`,
   regardless of whether each call reports success — catching loops where a tool
   falsely reports success on a call that never made progress.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.55.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.55.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.54.0 (2026-06-30)
 
@@ -220,7 +220,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.55.0`,
   structured-schema output per agent call, enforce an optional token budget, and
   require a single up-front approval rather than one per spawned subagent.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.54.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.54.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.53.0 (2026-06-23)
 
@@ -326,7 +326,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.54.0`,
   so brew can't delete the in-use Cellar version mid-session; the new build is
   staged side-by-side and goes live on restart.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.51.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.51.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.50.0 (2026-06-20)
 
@@ -512,7 +512,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.51.0`,
   version tracking for `didChange`, open-document state cleared on server restart, empty
   diagnostics payloads clear stale entries, and tightened `/usage` activity-argument validation.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.48.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.48.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.47.0 (2026-06-16)
 
@@ -602,7 +602,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.48.0`,
   receive the goal, scope, expected output contract, and verification criteria; the Haiku-style
   tool-use summary from the upstream reference was deliberately not ported.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.47.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.47.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.46.0 (2026-06-14)
 
@@ -610,7 +610,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.47.0`,
 - **The welcome banner now keeps the robot mark visible in compact terminals.** Below ~68 columns the robot was dropped (it could not sit beside the welcome copy); it now stacks centered above the copy instead, so the mark stays on screen at any width that can render its Unicode glyphs. ASCII-only terminals are unaffected.
 - **A persistent update notice now sits directly under the prompt input.** When a newer release is available the footer shows a yellow `↑ Update available — vX · /update` line; once a release has been installed in the background it switches to a restart-to-apply message instead of pointing at `/update`, and it clears after you restart onto the new version. The line is suppressed for dismissed versions, disabled auto-update, and source checkouts.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.46.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.46.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.45.0 (2026-06-14)
 
@@ -699,7 +699,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.46.0`,
   to `loop_control.max_truncation_recoveries` times per turn (default 3; `0` disables).
   pythinker-core now surfaces the provider's truncation signal so the loop can detect it.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.45.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.45.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.44.0 (2026-06-13)
 
@@ -707,7 +707,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.45.0`,
 - **Windows in-app update no longer shows a spurious "could not close the program" error.** The native installer now waits for the launching `pythinker.exe` to fully exit (its PID is passed via `/PID`) before its Restart Manager scan runs, so the scan no longer races the launcher's teardown into a false "close the program and retry" dialog. The update already succeeded in that case; now it completes cleanly without the alarming prompt.
 - **Simplified the Windows pip/uv/pipx update path.** Now that every shipped Windows install updates through the native installer, the Windows-only detached-spawn upgrade helper is removed; the remaining pip/uv/pipx path (a Windows source checkout, or any macOS/Linux install) runs the upgrade inline like POSIX, surfacing real command output and errors instead of a fire-and-forget process.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.44.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.44.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.43.0 (2026-06-13)
 
@@ -725,7 +725,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.44.0`,
 - **Scratch cleanup on exit.** Sessions that end via an exception now clean up their scratch files instead of orphaning them.
 - **Error telemetry is emitted at ERROR severity.** `error`/`crash`/`api_error` events were forwarded to OpenTelemetry logs at INFO, so severity filters and the error saved-views never matched them; they now map to ERROR (`session_load_failed` to WARN) with canonical `error.*` attributes, and a startup crash before the telemetry sink attaches is still flushed. Opt-out telemetry behavior is unchanged.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.43.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.43.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.42.0 (2026-06-12)
 
@@ -746,7 +746,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.43.0`,
 - **Inline `/command` references get acted on, not just explained away.** When a message mentions a slash command mid-sentence (e.g. "your `/goal` today is to `/plan` and build the page"), the command doesn't auto-run — but the agent no longer leads its reply by reporting it as failed. The per-turn reminder and the system prompt now steer the agent to act on the intent: call the real `EnterPlanMode` tool for `/plan` (clarified as a genuine, callable tool so models stop doubting it exists), pursue the described objective for `/goal`, load `/skill:<name>` via `ReadSkill`, and apply equivalent guidance for other commands — only surfacing how to invoke the literal command when genuinely needed.
 - **The "thinking" shimmer no longer runs while a foreground command does.** When the agent started a long-running foreground process — a dev server via `npm`/`docker`, a watch task — the shimmering verb spinner ("Working…/Thinking…") kept animating for the whole turn, implying the agent was busy when it was really just awaiting the subprocess. The spinner is now suppressed while any foreground tool is mid-execution; the tool card's own animated running marker (and its streaming output) carries the liveness, so the shimmer means "the agent is thinking" again and reappears the moment the command returns.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.42.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.42.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.41.0 (2026-06-11)
 
@@ -765,14 +765,14 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.42.0`,
 - **TUI polish.** No more transient red `<invalid>` flash while tool-call arguments stream (incomplete `None`-valued keys are dropped before rendering); flicker-free streaming on terminals with synchronized output (DEC mode 2026, capability-gated, `PYTHINKER_NO_SYNC_OUTPUT=1` kill switch); slash commands ghost-complete inline with Tab to accept; finished tool-call rows are monotonic (a late or duplicated wire event can't flip a failed row to successful); shell error briefs show the trailing output of a failed command as plain text; and the cursor-position probe can no longer leave the terminal wedged in raw mode on exit.
 - **`compact_prompt` config override.** A new optional top-level config key replaces the built-in compaction summarization prompt for both manual and automatic compaction; a `/compact` focus argument is still appended on top, and leaving it unset preserves current behavior.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.41.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.41.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.40.1 (2026-06-10)
 
 - **Windows/Linux native installers: web UI no longer 404s on `/`.** The installer CI froze the app without building the gitignored web/vis frontend bundles, so `pythinker web` opened a browser onto `GET /?token=… → 404 Not Found`. Both installer workflows now build the bundles before PyInstaller (matching the PyPI release flow — pip/wheel installs were never affected), every PyInstaller spec refuses to freeze when the bundles are missing, and a build that still lacks them serves an explanatory page on `/` (with the REST API still reachable under `/api`) instead of a bare 404.
 - **Startup banner renders on legacy Windows consoles.** The `pythinker web` / `pythinker vis` PYTHINKER banner raw-printed Unicode block art, which garbled on legacy code pages (e.g. PowerShell with cp1252) and raised `UnicodeEncodeError` when output was redirected. The banner now honors the existing ASCII-glyph detection (`PYTHINKER_ASCII_UI` / `PYTHINKER_TUI_GLYPHS=ascii` opt-ins included) with width-preserving ASCII fallbacks, and degrades per line instead of crashing when a stream rejects Unicode.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.1`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.1`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.40.0 (2026-06-10)
 
@@ -784,7 +784,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.1`,
 - **Qwen models treated as native-thinking across both plans.** Qwen3.x/3.7 (e.g. `qwen3.7-max`, `qwen3.6-plus`, the Qwen3 Coder models) now carry the `always_thinking` capability on both the Alibaba Model Studio and OpenCode Go plans, matching GLM/MiniMax: reasoning is built in and always on, with no user effort dial and no top-border effort label. Reasoning still flows over the Anthropic `thinking` block that both Anthropic-compatible routes accept.
 - **TUI enhancements: adaptive theme, layout, and agent prompt overhaul.** Adaptive terminal-background probe + color-depth blending; reference-CLI layout and palette refinements; unified todo-list renderer; white running-task titles with consistent diff palette; elapsed/tokens/t-s metadata on the background status line; transcript-row bullet fix; renderer guards and markdown fence table unwrapping. All default agent prompts restructured with explicit Mission / Hard Constraints / Workflow / Output Contract sections. Background manager and subagent runner hardened with stale-record reconciliation and resume contract enforcement. Automatic turn recaps disabled by default.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.39.0 (2026-06-09)
 
@@ -797,7 +797,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.40.0`,
 - **The agent sets up and removes MCP servers on request instead of refusing.** Asked to add, remove, or set up an MCP server, the default agent now knows it runs in Pythinker: it configures the server with the `pythinker mcp add`/`remove` CLI (or by editing `~/.pythinker/mcp.json` / `./.pythinker/mcp.json`), verifies with `pythinker mcp list`/`test`, and tells you to restart or `/reload` to load the change — rather than refusing or citing Claude Code/Desktop config paths (`~/.claude.json`) it cannot use. The prompt now also hard-steers the agent away from writing `mcpServers` into `~/.pythinker/config.yaml` (YAML is never parsed for MCP, so such an entry is silently dropped and the server never appears in `/mcp`). As a backstop, MCP config loading now logs a warning when it finds an `mcpServers` block in a `config.yaml` (global or project), so a human or agent that misplaces it gets a diagnosable trace instead of a silent drop.
 - **Security: dependency vulnerability remediation.** Cleared the open Dependabot advisories across all manifests. Python: `asyncssh` 2.22.0 → 2.23.0 (path-traversal in `AuthorizedKeysFile %u`) in the `pythinker-host` pin and both lockfiles, and `starlette` 1.0.0 → 1.2.1 (Host-header path poisoning). JS: regenerated the `web`, `vis`, and `install-counter-worker` lockfiles and bumped the worker's `vitest` to `^3.2.6` (critical Vitest UI arbitrary file read/exec), clearing all critical/high/moderate advisories. The only residual is a handful of low-severity transitive `elliptic`/`bn.js` advisories in `web`'s browser crypto polyfill chain, left unforced because the fix downgrades `vite-plugin-node-polyfills` and majors `ai`, breaking the build for marginal benefit.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.39.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.39.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.38.0 (2026-06-08)
 
@@ -806,7 +806,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.39.0`,
 - **Live model pricing from models.dev.** Cost estimates in `/usage` and the session stats panel now pull per-model input/output pricing from the models.dev catalog (fetched once and cached for 24 hours), improving cost accuracy across providers.
 - **More robust ripgrep resolution.** File search now verifies that a bundled `rg` binary can actually execute on the host platform and architecture before using it, falling back to a system or freshly downloaded ripgrep when the bundled one cannot run — fixing search failures on mismatched-architecture installs.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.38.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.38.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.37.0 (2026-06-07)
 
@@ -817,7 +817,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.38.0`,
 - **Recon-first `planner` subagent.** A new read-only `planner` built-in agent type decomposes open-ended tasks into distinct parallel seed descriptions emitted as `<recon_seeds>` JSON, enabling structured fan-out before parallel workers start.
 - **Coder artifact contract.** The `coder` subagent now emits a `<coding_artifact>` JSON block at the end of every response, providing structured handoff data (`files_changed`, `test_command`, `expected_behavior`, optional `edge_cases_claimed`) that the `verifier` subagent can consume directly.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.37.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.37.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.36.0 (2026-06-05)
 
@@ -825,7 +825,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.37.0`,
 - **Alibaba Token Plan compatibility (`sk-ws-`).** `/login alibaba` now requires the dedicated workspace Base URL shown in the Token Plan console instead of accepting a public `/models` response as credential validation. Dedicated workspace endpoints hide Kimi K2.6 when Alibaba advertises it without a working route, and use non-streaming Chat Completions for DeepSeek V3.2 because those endpoints return an empty SSE stream. Kimi requests on other Alibaba routes use DashScope's `enable_thinking` parameter.
 - **Alibaba model catalog refresh.** Added Qwen3.7 Plus (1M context), Qwen3 Coder Plus, and Qwen3 Coder Flash. Removed `kimi-k2.5`, `glm-5`, and `MiniMax-M2.5` (absent from the live endpoint). Corrected Qwen3.7 Max context window to 1M tokens.
 
-Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.36.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.36.0`, or use the native installer for your platform from the [Releases page](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 ## 0.35.0 (2026-06-04)
 
@@ -914,7 +914,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.29.0`,
 
 ### What changed in this release
 
-- **Repository moved to the Pythoughts-labs GitHub org.** All GitHub URLs, install scripts, CI configuration, and the default `/feedback` repository now point to `github.com/Pythoughts-labs/pythinker-code`; existing configs that still reference the previous owner are auto-migrated to the new default.
+- **Repository moved to the Pythoughts-labs GitHub org.** All GitHub URLs, install scripts, CI configuration, and the default `/feedback` repository now point to `github.com/Pythoughts-labs/pythinker-cli`; existing configs that still reference the previous owner are auto-migrated to the new default.
 - **Broadened distribution channels for releases.** Releases now include best-effort Docker/GHCR, Scoop, Nix, and manual WinGet distribution plumbing with channel-native update markers where the installer format supports them.
 - **Release preparation now uses a version single source of truth.** `scripts/release.py` rewrites derived release files from `pyproject.toml`, verifies version lockstep on every PR, enforces the frozen `pythinker-review==0.1.0` pin, and managed-channel installs now show channel-native update guidance instead of trying to self-update.
 - **Node.js 24 CI with pinned, credential-checked workflows.** CI and release workflows now run on Node.js 24-backed GitHub Actions, pin action revisions to immutable commits, and preflight optional website/tap GitHub App credentials with clear errors or notices instead of opaque token failures.
@@ -993,7 +993,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.25.0`,
 - **Complete native installer `Fetch` fix.** The 0.23.0 release bundled trafilatura's data files but missed `justext`'s stoplists directory, so the `Fetch` tool still crashed with `FileNotFoundError: ./_MEIxxxx/justext/stoplists` on `.exe`, `.deb`, and `.rpm` installs. All three installer specs now bundle both `trafilatura` and `justext` data files. PyPI / `pip install` was unaffected.
 - **Atomic "latest" release gating.** The GitHub Release is no longer marked "latest" until every platform asset (4 archives, 1 `.exe`, 4 `.deb`/`.rpm`) is attached. A dispatch workflow polls for completeness before flipping the flag, so `/releases/latest` and the in-app updater no longer serve a partially-built release during the publish window.
 - **Smarter `/update` command.** `run_update_prompt` now routes through `do_update(check_only=True)` to get a fresh PyPI version before showing the update modal, and verifies that the expected binary asset for your platform exists on the GitHub Release before initiating a native upgrade.
-- **Repository transferred to Pythoughts-labs.** All GitHub URLs, install script references, and CI configuration now point to `github.com/Pythoughts-labs/pythinker-code`.
+- **Repository transferred to Pythoughts-labs.** All GitHub URLs, install script references, and CI configuration now point to `github.com/Pythoughts-labs/pythinker-cli`.
 
 Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.24.0`, or use the native installer for your OS (see the README install table).
 
@@ -1107,7 +1107,7 @@ Upgrade with `pythinker update`, `pip install --upgrade pythinker-code==0.14.0`,
 ### What changed in this release
 
 - **Native installers for macOS and Linux.** `brew install Pythoughts-labs/pythinker/pythinker-code` (Homebrew tap) covers both macOS (Intel + Apple Silicon) and Linux brew installs from a single auto-generated formula. Debian/Ubuntu users get `pythinker-code_x.y.z_<arch>.deb` and Fedora/RHEL/openSUSE users get `pythinker-code-x.y.z.<arch>.rpm`, both attached to every GitHub Release for `x86_64` and `aarch64`. Together with the Windows `PythinkerSetup-x.y.z.exe` shipped in 0.12.0, Pythinker now ships native installers for every supported platform — no Python, Node, or `uv` prerequisite.
-- **Cross-OS curl-bash native installer.** `curl -fsSL https://raw.githubusercontent.com/Pythoughts-labs/pythinker-code/main/scripts/install-native.sh | bash` detects your OS + arch, downloads the matching PyInstaller-frozen tarball from the latest Release, verifies its SHA-256, and lands the binary at `~/.local/bin/pythinker`. Supports `linux-x86_64`, `linux-aarch64`, and `macos-arm64`. Honors `--version`, `--prefix`, and `NO_COLOR`.
+- **Cross-OS curl-bash native installer.** `curl -fsSL https://raw.githubusercontent.com/Pythoughts-labs/pythinker-cli/main/scripts/install-native.sh | bash` detects your OS + arch, downloads the matching PyInstaller-frozen tarball from the latest Release, verifies its SHA-256, and lands the binary at `~/.local/bin/pythinker`. Supports `linux-x86_64`, `linux-aarch64`, and `macos-arm64`. Honors `--version`, `--prefix`, and `NO_COLOR`.
 - **Homebrew tap auto-published on every release.** A new `.github/workflows/homebrew-tap.yml` waits for the PyPI publish to land, runs an in-tree formula generator (replaces the unmaintained `homebrew-pypi-poet` — see release notes for the why), and pushes `Formula/pythinker-code.rb` to the `homebrew-pythinker` tap repo. 132 transitive deps are enumerated automatically — no hand-curation per release.
 - **Tag-triggered Linux package pipeline.** A new `.github/workflows/linux-installer.yml` matrix-builds `.deb` and `.rpm` for `x86_64` and `aarch64` (the latter via QEMU on `ubuntu-latest`), then uploads all six artifacts to the GitHub Release via `softprops/action-gh-release@v2`.
 - **Frozen-binary data-files fix.** The PyInstaller specs for both the Windows and Linux pipelines now call `collect_data_files(pkg, include_py_files=False)` per package, so `pythinker_code/prompts/*.md`, `agents/default/*.yaml`, `tools/*/description.md`, `skills/*/SKILL.md`, and similar package resources are bundled into `_internal/`. Without this fix the frozen binary crashed the first time it tried to load `init.md` or an agent yaml. The Windows installer that shipped in 0.12.0 is affected; users on that build should upgrade to 0.13.0.

@@ -315,7 +315,7 @@ async def test_openai_legacy_auto_reasoning_effort_when_history_has_think_part()
     """When reasoning_effort is not set but history contains ThinkPart and reasoning_key is
     configured, reasoning_effort should be auto-set to avoid server validation errors.
 
-    Reproduces: https://github.com/Pythoughts-labs/pythinker-code/issues/1616
+    Reproduces: https://github.com/Pythoughts-labs/pythinker-cli/issues/1616
     """
     with respx.mock(base_url="https://api.openai.com") as mock:
         mock.post("/v1/chat/completions").mock(

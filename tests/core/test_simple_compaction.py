@@ -249,8 +249,8 @@ def test_prepare_only_keeps_text_parts_in_compaction():
     Non-text parts (media, think, etc.) are filtered out because the compaction
     API endpoint only supports text content.
 
-    Fixes: https://github.com/Pythoughts-labs/pythinker-code/issues/1395
-    Fixes: https://github.com/Pythoughts-labs/pythinker-code/issues/1390
+    Fixes: https://github.com/Pythoughts-labs/pythinker-cli/issues/1395
+    Fixes: https://github.com/Pythoughts-labs/pythinker-cli/issues/1390
     """
     messages = [
         Message(

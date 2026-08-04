@@ -15,17 +15,17 @@ Help users with Pythinker CLI questions by consulting documentation and source c
 
 ## Documentation
 
-Base URL: `https://pythoughts-labs.github.io/pythinker-code/`
+Base URL: `https://pythoughts-labs.github.io/pythinker-cli/`
 
 Fetch documentation index to find relevant pages:
 
-```
-https://pythoughts-labs.github.io/pythinker-code/llms.txt
+```text
+https://pythoughts-labs.github.io/pythinker-cli/llms.txt
 ```
 
 ### Page URL Pattern
 
-- Pages: `https://pythoughts-labs.github.io/pythinker-code/en/...`
+- Pages: `https://pythoughts-labs.github.io/pythinker-cli/en/...`
 
 ### Topic Mapping
 
@@ -45,7 +45,7 @@ https://pythoughts-labs.github.io/pythinker-code/llms.txt
 
 ## Source Code
 
-Repository: `https://github.com/Pythoughts-labs/pythinker-code`
+Repository: `https://github.com/Pythoughts-labs/pythinker-cli`
 
 When to read source:
 

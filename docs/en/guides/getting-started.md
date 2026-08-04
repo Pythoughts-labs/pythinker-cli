@@ -17,7 +17,7 @@ Pythinker Code supports the following usage modes:
 - **[Agent integration (`pythinker acp`)](../reference/pythinker-acp.md)**: Run as a service and integrate with [IDEs](./ides.md) and other local agent clients via the [Agent Client Protocol]
 
 ::: info Tip
-If you encounter issues or have suggestions, please provide feedback on [GitHub Issues](https://github.com/Pythoughts-labs/pythinker-code/issues).
+If you encounter issues or have suggestions, please provide feedback on [GitHub Issues](https://github.com/Pythoughts-labs/pythinker-cli/issues).
 :::
 
 [Agent Client Protocol]: https://agentclientprotocol.com/
@@ -44,7 +44,7 @@ On Windows, run the PowerShell bootstrap. It downloads the native installer, ver
 irm https://pythinker.com/install.ps1 | iex
 ```
 
-You can also download `PythinkerSetup-0.62.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-code/releases/latest).
+You can also download `PythinkerSetup-0.62.0.exe` manually from the [latest release](https://github.com/Pythoughts-labs/pythinker-cli/releases/latest).
 
 Verify the installation:
 
@@ -68,6 +68,12 @@ Upgrade to the latest version:
 
 ```sh
 pythinker update
+```
+
+Uninstall on Windows (native installer):
+
+```powershell
+irm https://pythinker.com/uninstall.ps1 | iex
 ```
 
 Uninstall a curl-bash install:

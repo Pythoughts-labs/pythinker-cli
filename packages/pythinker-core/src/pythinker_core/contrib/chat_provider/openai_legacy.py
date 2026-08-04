@@ -145,7 +145,7 @@ class OpenAILegacy:
         # Auto-enable reasoning_effort when the history contains ThinkPart but reasoning
         # was not explicitly configured. This prevents server validation errors from APIs
         # (e.g. One API) that require reasoning_effort when messages contain reasoning_content.
-        # See: https://github.com/Pythoughts-labs/pythinker-code/issues/1616
+        # See: https://github.com/Pythoughts-labs/pythinker-cli/issues/1616
         if (
             self._auto_reasoning_effort
             and isinstance(reasoning_effort, Omit)

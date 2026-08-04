@@ -38,10 +38,10 @@ contrib = [
 ]
 
 [project.urls]
-Homepage      = "https://github.com/Pythoughts-labs/pythinker-code"
-Repository    = "https://github.com/Pythoughts-labs/pythinker-code"
-Issues        = "https://github.com/Pythoughts-labs/pythinker-code/issues"
-Changelog     = "https://github.com/Pythoughts-labs/pythinker-code/blob/main/packages/pythinker-core/CHANGELOG.md"
+Homepage      = "https://github.com/Pythoughts-labs/pythinker-cli"
+Repository    = "https://github.com/Pythoughts-labs/pythinker-cli"
+Issues        = "https://github.com/Pythoughts-labs/pythinker-cli/issues"
+Changelog     = "https://github.com/Pythoughts-labs/pythinker-cli/blob/main/packages/pythinker-core/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

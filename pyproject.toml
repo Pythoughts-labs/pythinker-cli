@@ -113,11 +113,11 @@ pythinker = "pythinker_code.__main__:main"
 pythinker-code = "pythinker_code.__main__:main"
 
 [project.urls]
-Homepage      = "https://github.com/Pythoughts-labs/pythinker-code"
-Repository    = "https://github.com/Pythoughts-labs/pythinker-code"
-Issues        = "https://github.com/Pythoughts-labs/pythinker-code/issues"
-Changelog     = "https://github.com/Pythoughts-labs/pythinker-code/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/Pythoughts-labs/pythinker-code#readme"
+Homepage      = "https://github.com/Pythoughts-labs/pythinker-cli"
+Repository    = "https://github.com/Pythoughts-labs/pythinker-cli"
+Issues        = "https://github.com/Pythoughts-labs/pythinker-cli/issues"
+Changelog     = "https://github.com/Pythoughts-labs/pythinker-cli/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Pythoughts-labs/pythinker-cli#readme"
 
 [tool.ruff]
 line-length = 100

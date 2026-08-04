@@ -9,7 +9,7 @@ body:
       value: |
         Thank you for submitting a bug report! It helps make Pythinker Code better for everyone.
 
-        If you need help or support using Pythinker Code, and are not reporting a bug, please post on [pythinker-code/discussions](https://github.com/Pythoughts-labs/pythinker-code/discussions), where you can ask questions or engage with others on ideas for how to improve Pythinker Code.
+        If you need help or support using Pythinker Code, and are not reporting a bug, please post on [pythinker-cli/discussions](https://github.com/Pythoughts-labs/pythinker-cli/discussions), where you can ask questions or engage with others on ideas for how to improve Pythinker Code.
 
         Make sure you are running the latest version of Pythinker Code (`uv tool upgrade pythinker-code` to upgrade). The bug you are experiencing may already have been fixed.
 
