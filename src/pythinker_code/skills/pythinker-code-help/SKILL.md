@@ -19,7 +19,7 @@ Base URL: `https://pythoughts-labs.github.io/pythinker-cli/`
 
 Fetch documentation index to find relevant pages:
 
-```
+```text
 https://pythoughts-labs.github.io/pythinker-cli/llms.txt
 ```
 
