@@ -743,7 +743,7 @@ are used automatically unless you turn telemetry off.
 
 ```sh
 git clone https://github.com/Pythoughts-labs/pythinker-cli.git
-cd pythinker-code
+cd pythinker-cli
 make prepare
 ```
 

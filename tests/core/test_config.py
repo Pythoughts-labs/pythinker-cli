@@ -211,6 +211,12 @@ def test_load_config_migrates_legacy_org_feedback_repo_default():
     assert config.feedback.github_repo == "Pythoughts-labs/pythinker-cli"
 
 
+def test_load_config_migrates_pre_rename_feedback_repo_default():
+    config = load_config_from_string('[feedback]\ngithub_repo = "Pythoughts-labs/pythinker-code"\n')
+
+    assert config.feedback.github_repo == "Pythoughts-labs/pythinker-cli"
+
+
 def test_agent_execution_profile_autonomous_sets_autonomy_defaults():
     config = load_config_from_string('agent_execution_profile = "autonomous_coding"')
 

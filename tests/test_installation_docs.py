@@ -3,6 +3,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -195,7 +197,7 @@ def test_windows_readme_documents_uninstall_one_liner() -> None:
 def test_native_powershell_uninstaller_is_parseable_when_pwsh_is_available() -> None:
     pwsh = shutil.which("pwsh")
     if pwsh is None:
-        return
+        pytest.skip("pwsh is not available")
     uninstaller = (ROOT / "scripts" / "uninstall.ps1").resolve()
     result = subprocess.run(
         [

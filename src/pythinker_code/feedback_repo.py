@@ -7,6 +7,7 @@ _LEGACY_DEFAULT_FEEDBACK_GITHUB_REPOS = {
     _LEGACY_FEEDBACK_GITHUB_OWNER + "/Pythinker-Code",
     _LEGACY_FEEDBACK_GITHUB_OWNER + "/pythinker-code",
     "TechMatrix-labs/pythinker-code",
+    "Pythoughts-labs/pythinker-code",
 }
 _LEGACY_DEFAULT_FEEDBACK_GITHUB_REPOS_LOWER = {
     repo.lower() for repo in _LEGACY_DEFAULT_FEEDBACK_GITHUB_REPOS
