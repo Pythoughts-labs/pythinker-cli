@@ -46,7 +46,7 @@
     "embla-carousel-react": "^8.6.0",
     "gitdiff-parser": "^0.3.1",
     "js-md5": "^0.8.3",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^4.3.1",
     "lucide-react": "^0.561.0",
     "motion": "^12.23.24",
     "nanoid": "^5.1.6",
