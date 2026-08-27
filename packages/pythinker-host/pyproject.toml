@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "aiofiles>=24.0,<26.0",
-    "asyncssh==2.23.0",
+    "asyncssh==2.23.1",
 ]
 
 [project.urls]
